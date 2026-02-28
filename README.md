@@ -1,6 +1,6 @@
-# Svelte + Vite
+# SOPHIA
 
-This template should help get you started developing with Svelte in Vite.
+Philosophical reasoning engine deploying via GitHub Actions to Google Cloud Run.
 
 ## Recommended IDE Setup
 
