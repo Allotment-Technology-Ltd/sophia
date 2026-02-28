@@ -1,13 +1,13 @@
 # Stage 1: Builder
-FROM node:20-slim AS builder
+FROM node:20 AS builder
 
 WORKDIR /app
 
 # Copy dependency and config files
 COPY package.json package-lock.json .npmrc ./
 
-# Install dependencies
-RUN npm install
+# Install dependencies with increased timeout
+RUN npm install --prefer-offline --no-audit
 
 # Copy source code
 COPY . .
@@ -16,7 +16,7 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Runtime
-FROM node:20-slim
+FROM node:20
 
 WORKDIR /app
 
@@ -24,7 +24,7 @@ WORKDIR /app
 COPY package.json package-lock.json .npmrc ./
 
 # Install production dependencies only
-RUN npm install --omit=dev
+RUN npm install --omit=dev --prefer-offline --no-audit
 
 # Copy built app from builder
 COPY --from=builder /app/build ./build
