@@ -1,0 +1,49 @@
+{
+  "source": {
+    "title": "Auth Smoke Test",
+    "author": [
+      "Local Test"
+    ],
+    "source_type": "article",
+    "url": "local://auth-smoke-test",
+    "fetched_at": "2026-02-28T00:00:00.000Z",
+    "word_count": 49,
+    "char_count": 337,
+    "estimated_tokens": 90
+  },
+  "stage_completed": "extraction",
+  "claims": [
+    {
+      "text": "Actions are right when they maximize overall well-being.",
+      "claim_type": "thesis",
+      "domain": "ethics",
+      "section_context": "main text",
+      "position_in_source": 1,
+      "confidence": 1
+    },
+    {
+      "text": "Utilitarianism can justify harming an individual for greater aggregate benefit.",
+      "claim_type": "objection",
+      "domain": "ethics",
+      "section_context": "main text",
+      "position_in_source": 2,
+      "confidence": 1
+    },
+    {
+      "text": "Following general rules that promote trust and safety tends to maximize welfare in the long run.",
+      "claim_type": "premise",
+      "domain": "ethics",
+      "section_context": "main text",
+      "position_in_source": 3,
+      "confidence": 1
+    },
+    {
+      "text": "Rule utilitarianism responds to the objection that utilitarianism justifies harming individuals by arguing that rule-following maximizes long-term welfare.",
+      "claim_type": "response",
+      "domain": "ethics",
+      "section_context": "main text",
+      "position_in_source": 4,
+      "confidence": 0.9
+    }
+  ]
+}

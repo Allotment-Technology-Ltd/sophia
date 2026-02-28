@@ -1,14 +1,15 @@
 import { anthropic, MODEL, trackTokens } from './anthropic';
-import { ANALYSIS_SYSTEM_PROMPT, buildAnalysisUserPrompt } from './prompts/analysis';
-import { CRITIQUE_SYSTEM_PROMPT, buildCritiqueUserPrompt } from './prompts/critique';
-import { SYNTHESIS_SYSTEM_PROMPT, buildSynthesisUserPrompt } from './prompts/synthesis';
+import { getAnalysisSystemPrompt, buildAnalysisUserPrompt } from './prompts/analysis';
+import { getCritiqueSystemPrompt, buildCritiqueUserPrompt } from './prompts/critique';
+import { getSynthesisSystemPrompt, buildSynthesisUserPrompt } from './prompts/synthesis';
+import { retrieveContext, buildContextBlock } from './retrieval';
 import type { PassType } from '$lib/types/passes';
 
 export interface EngineCallbacks {
   onPassStart(pass: PassType): void;
   onPassChunk(pass: PassType, content: string): void;
   onPassComplete(pass: PassType): void;
-  onMetadata(inputTokens: number, outputTokens: number, durationMs: number): void;
+  onMetadata(inputTokens: number, outputTokens: number, durationMs: number, retrieval?: { claims_retrieved: number; arguments_retrieved: number }): void;
   onError(error: string): void;
 }
 
@@ -25,6 +26,30 @@ export async function runDialecticalEngine(
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
+  // ── Retrieve argument-graph context ────────────────────────────────
+  let contextBlock = '';
+  let claimsRetrieved = 0;
+  let argumentsRetrieved = 0;
+
+  try {
+    const retrievalResult = await retrieveContext(query);
+    contextBlock = buildContextBlock(retrievalResult);
+    claimsRetrieved = retrievalResult.claims.length;
+    argumentsRetrieved = retrievalResult.arguments.length;
+
+    if (claimsRetrieved > 0) {
+      console.log(`[ENGINE] Retrieved ${claimsRetrieved} claims, ${argumentsRetrieved} arguments from graph`);
+    }
+  } catch (err) {
+    console.error('[ENGINE] Retrieval failed (continuing without graph context):', err instanceof Error ? err.message : err);
+    contextBlock = '';
+  }
+
+  // Build system prompts with contextual knowledge injected
+  const analysisSystem = getAnalysisSystemPrompt(contextBlock);
+  const critiqueSystem = getCritiqueSystemPrompt(contextBlock);
+  const synthesisSystem = getSynthesisSystemPrompt(contextBlock);
+
   // ── PASS 1: Analysis (Proponent) ──────────────────────────────────
   let analysisOutput = '';
   try {
@@ -33,7 +58,7 @@ export async function runDialecticalEngine(
     const analysisStream = anthropic.messages.stream({
       model: MODEL,
       max_tokens: 2048,
-      system: ANALYSIS_SYSTEM_PROMPT,
+      system: analysisSystem,
       messages: [
         { role: 'user', content: buildAnalysisUserPrompt(query, options?.lens) }
       ]
@@ -70,7 +95,7 @@ export async function runDialecticalEngine(
     const critiqueStream = anthropic.messages.stream({
       model: MODEL,
       max_tokens: 1536,
-      system: CRITIQUE_SYSTEM_PROMPT,
+      system: critiqueSystem,
       messages: [
         { role: 'user', content: buildCritiqueUserPrompt(query, analysisOutput) }
       ]
@@ -106,7 +131,7 @@ export async function runDialecticalEngine(
     const synthesisStream = anthropic.messages.stream({
       model: MODEL,
       max_tokens: 2560,
-      system: SYNTHESIS_SYSTEM_PROMPT,
+      system: synthesisSystem,
       messages: [
         { role: 'user', content: buildSynthesisUserPrompt(query, analysisOutput, critiqueOutput) }
       ]
@@ -136,5 +161,8 @@ export async function runDialecticalEngine(
 
   // ── Metadata ──────────────────────────────────────────────────────
   const durationMs = Date.now() - startTime;
-  callbacks.onMetadata(totalInputTokens, totalOutputTokens, durationMs);
+  callbacks.onMetadata(totalInputTokens, totalOutputTokens, durationMs, {
+    claims_retrieved: claimsRetrieved,
+    arguments_retrieved: argumentsRetrieved
+  });
 }

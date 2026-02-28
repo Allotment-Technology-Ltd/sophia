@@ -31,6 +31,19 @@ FORMAT YOUR RESPONSE WITH THESE SECTIONS:
 
 CRITICAL: Your role is to strengthen the discourse by honest critique, not to reach a final verdict. That happens in Pass 3.`;
 
+/**
+ * Get the critique system prompt with optional contextual knowledge from the argument graph.
+ * @param contextBlock - Structured context retrieved from the knowledge base
+ */
+export function getCritiqueSystemPrompt(contextBlock: string): string {
+  // Skip appending if no context available
+  if (!contextBlock || contextBlock === 'No knowledge base context available for this query.') {
+    return CRITIQUE_SYSTEM_PROMPT;
+  }
+  
+  return CRITIQUE_SYSTEM_PROMPT + '\n\nCONTEXTUAL KNOWLEDGE FROM ARGUMENT GRAPH:\n' + contextBlock;
+}
+
 export function buildCritiqueUserPrompt(originalQuery: string, analysisOutput: string): string {
   return `ORIGINAL QUERY
 ${originalQuery}

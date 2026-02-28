@@ -36,12 +36,13 @@ export const POST: RequestHandler = async ({ request }) => {
           onPassComplete(pass) {
             sendEvent({ type: 'pass_complete', pass });
           },
-          onMetadata(totalInputTokens, totalOutputTokens, durationMs) {
+          onMetadata(totalInputTokens, totalOutputTokens, durationMs, retrieval) {
             sendEvent({
               type: 'metadata',
               total_input_tokens: totalInputTokens,
               total_output_tokens: totalOutputTokens,
-              duration_ms: durationMs
+              duration_ms: durationMs,
+              ...(retrieval ? { claims_retrieved: retrieval.claims_retrieved, arguments_retrieved: retrieval.arguments_retrieved } : {})
             });
           },
           onError(error) {

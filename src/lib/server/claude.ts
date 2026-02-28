@@ -5,6 +5,36 @@ const client = new Anthropic({
   apiKey: env.ANTHROPIC_API_KEY
 });
 
+const CLAUDE_MODEL = env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929';
+const CLAUDE_MODELS = parseModelList(env.CLAUDE_MODELS, [
+  CLAUDE_MODEL,
+  'claude-sonnet-4-5-20250929'
+]);
+
+function parseModelList(envValue: string | undefined, defaults: string[]): string[] {
+  const fromEnv = (envValue || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  const unique: string[] = [];
+  for (const model of [...fromEnv, ...defaults]) {
+    if (!unique.includes(model)) unique.push(model);
+  }
+  return unique;
+}
+
+function isModelUnavailableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return (
+    message.includes('not_found') ||
+    message.includes('model:') ||
+    message.includes('not available') ||
+    message.includes('unsupported model') ||
+    message.includes('invalid model')
+  );
+}
+
 export async function* analyzePhilosophical(
   query: string,
   contextualClaims: string,
@@ -22,26 +52,41 @@ export async function* analyzePhilosophical(
     3: SYNTHESIS_SYSTEM_PROMPT
   };
 
-  const stream = await client.messages.stream({
-    model: 'claude-sonnet-4-5-20250929',
-    max_tokens: 2000,
-    system: systemPrompts[passNumber],
-    messages: [
-      {
-        role: 'user',
-        content: prompts[passNumber]
-      }
-    ]
-  });
+  let lastError: Error | null = null;
 
-  for await (const chunk of stream) {
-    if (
-      chunk.type === 'content_block_delta' &&
-      chunk.delta.type === 'text_delta'
-    ) {
-      yield chunk.delta.text;
+  for (const model of CLAUDE_MODELS) {
+    try {
+      const stream = await client.messages.stream({
+        model,
+        max_tokens: 2000,
+        system: systemPrompts[passNumber],
+        messages: [
+          {
+            role: 'user',
+            content: prompts[passNumber]
+          }
+        ]
+      });
+
+      for await (const chunk of stream) {
+        if (
+          chunk.type === 'content_block_delta' &&
+          chunk.delta.type === 'text_delta'
+        ) {
+          yield chunk.delta.text;
+        }
+      }
+
+      return;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (!isModelUnavailableError(lastError)) {
+        throw lastError;
+      }
     }
   }
+
+  throw lastError || new Error('No available Claude model found');
 }
 
 function getAnalysisPrompt(query: string, context: string): string {

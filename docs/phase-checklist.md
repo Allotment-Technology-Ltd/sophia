@@ -1,36 +1,62 @@
-# SOPHIA Phase 2: MVP Checklist
+# SOPHIA Phase 3a: Ethics Knowledge Base Checklist
 
 ## Infrastructure
-- [x] SvelteKit project scaffolded with TypeScript
-- [x] Tailwind CSS configured with design tokens
-- [x] Environment variables set up
-- [x] .rules.yaml in project root
+- [ ] SurrealDB running locally via Docker
+- [ ] Schema created (run setup-schema.ts)
+- [ ] Voyage AI API key obtained and configured
+- [ ] Gemini API key obtained and configured
 
-## Core Engine
-- [x] TypeScript types (domains, passes, api)
-- [x] Claude API client with token tracking
-- [x] Three-pass prompt templates (analysis, critique, synthesis)
-- [x] Dialectical engine with streaming callbacks
-- [x] SSE streaming API endpoint
+## Ingestion Pipeline
+- [ ] Source fetcher script working (fetch-source.ts)
+- [ ] Extraction prompt producing valid JSON
+- [ ] Relation extraction prompt producing valid JSON
+- [ ] Argument grouping prompt producing valid JSON
+- [ ] Zod validation passing on all outputs
+- [ ] Embedding generation working (Voyage AI)
+- [ ] Gemini validation producing scored results
+- [ ] Full pipeline (ingest.ts) runs end-to-end on one source
+- [ ] SurrealDB correctly stores claims, relations, arguments with edges
 
-## UI
-- [x] Root layout with global styles
-- [x] Conversation store (Svelte 5 runes)
-- [x] Main chat page with streaming display
-- [x] Pass toggle (expand/collapse individual passes)
-- [x] Token/cost metadata display
-- [ ] Responsive design testing
-- [ ] Keyboard accessibility audit
+## Wave 1 Ingestion (8 foundational sources)
+- [ ] Source 1: SEP Utilitarianism — fetched & ingested
+- [ ] Source 2: Mill Utilitarianism — fetched & ingested
+- [ ] Source 3: Singer Famine/Affluence — fetched & ingested
+- [ ] Source 4: SEP Deontological Ethics — fetched & ingested
+- [ ] Source 5: Kant Groundwork — fetched & ingested
+- [ ] Source 6: Ross Right and Good — fetched & ingested
+- [ ] Source 7: SEP Virtue Ethics — fetched & ingested
+- [ ] Source 8: Aristotle Nicomachean Ethics — fetched & ingested
+- [ ] Manual review: spot-check 30+ claims from Wave 1 for accuracy
+- [ ] Prompt adjustments based on Wave 1 review
+
+## Wave 2 Ingestion (10 sources)
+- [ ] Sources 9-18 ingested with updated prompts
+- [ ] Spot-check 10% of claims
+- [ ] Cross-source relations emerging in graph
+
+## Wave 3 Ingestion (11 sources)
+- [ ] Sources 19-29 ingested
+- [ ] Full Gemini validation on all sources
+- [ ] Quarantined items reviewed
+
+## Retrieval Integration
+- [ ] Argument-aware retrieval returning structured context
+- [ ] Context block formatting correct
+- [ ] Engine integration: graph context injected into all three passes
+- [ ] Graceful degradation: engine works without SurrealDB
+
+## Quality Gates (ALL must pass before Phase 3b)
+- [ ] Extraction accuracy >80% (spot-checked claims are atomic, correctly typed)
+- [ ] Relation accuracy >75% (spot-checked relations are genuine logical connections)
+- [ ] Retrieval quality: 5 ethics queries return relevant graph context
+- [ ] Three-pass improvement: with graph beats without on ≥6/10 test cases
+- [ ] Cross-argument traversal: trolley problem retrieves Foot, DDE, utilitarian counterarguments
+
+## Admin
+- [ ] Admin dashboard showing knowledge base stats
+- [ ] Source list visible with status
 
 ## Deployment
-- [x] Dockerfile for Cloud Run
-- [x] docker-compose.yml for local dev
-- [x] GitHub Actions CI/CD pipeline
-- [ ] First deploy to Cloud Run
-- [ ] Custom domain (usesophia.app) pointed to Cloud Run
-
-## Post-Deploy
-- [ ] Test 5 queries end-to-end on production
-- [ ] Share with 3-5 people for feedback
-- [ ] Document any prompt adjustments needed
-- [ ] Phase 2 go/no-go decision
+- [ ] SurrealDB accessible in production (Cloud Run or managed)
+- [ ] New secrets in Secret Manager (Voyage, Gemini)
+- [ ] Deploy.yml updated

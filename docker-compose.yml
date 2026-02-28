@@ -1,41 +1,21 @@
-version: '3.8'
-
 services:
   sophia-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     ports:
       - "3000:8080"
-    env_file:
-      - .env
+    env_file: .env
+    depends_on:
+      - surrealdb
     environment:
-      - PORT=8080
-    # Uncomment when Phase 3 adds SurrealDB
-    # depends_on:
-    #   - surrealdb
+      - SURREAL_URL=http://surrealdb:8000/rpc
 
-  # Phase 3: Add SurrealDB for persistent storage
-  # surrealdb:
-  #   image: surrealdb/surrealdb:v2
-  #   ports:
-  #     - "8000:8000"
-  #   command:
-  #     - start
-  #     - --user
-  #     - root
-  #     - --pass
-  #     - root
-  #     - file:/data/sophia.db
-  #   volumes:
-  #     - surrealdb-data:/data
-  #   networks:
-  #     - sophia-network
+  surrealdb:
+    image: surrealdb/surrealdb:v2
+    ports:
+      - "8000:8000"
+    command: start --user root --pass root file:/data/sophia.db
+    volumes:
+      - surrealdb-data:/data
 
-# Uncomment when Phase 3 adds SurrealDB
-# volumes:
-#   surrealdb-data:
-
-# networks:
-#   sophia-network:
-#     driver: bridge
+volumes:
+  surrealdb-data:

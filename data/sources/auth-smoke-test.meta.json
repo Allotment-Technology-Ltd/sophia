@@ -1,0 +1,10 @@
+{
+  "title": "Auth Smoke Test",
+  "author": ["Local Test"],
+  "source_type": "article",
+  "url": "local://auth-smoke-test",
+  "fetched_at": "2026-02-28T00:00:00.000Z",
+  "word_count": 49,
+  "char_count": 337,
+  "estimated_tokens": 90
+}

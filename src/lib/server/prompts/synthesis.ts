@@ -30,6 +30,19 @@ FORMAT YOUR RESPONSE WITH THESE SECTIONS:
 
 CRITICAL: Do NOT merely summarise the Proponent and Adversary. Synthesise. Take a considered stance. Show your reasoning. Be honest about what you do and do not know.`;
 
+/**
+ * Get the synthesis system prompt with optional contextual knowledge from the argument graph.
+ * @param contextBlock - Structured context retrieved from the knowledge base
+ */
+export function getSynthesisSystemPrompt(contextBlock: string): string {
+  // Skip appending if no context available
+  if (!contextBlock || contextBlock === 'No knowledge base context available for this query.') {
+    return SYNTHESIS_SYSTEM_PROMPT;
+  }
+  
+  return SYNTHESIS_SYSTEM_PROMPT + '\n\nCONTEXTUAL KNOWLEDGE FROM ARGUMENT GRAPH:\n' + contextBlock;
+}
+
 export function buildSynthesisUserPrompt(
   originalQuery: string,
   analysisOutput: string,

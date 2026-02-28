@@ -28,6 +28,19 @@ FORMAT YOUR RESPONSE WITH THESE SECTIONS:
 
 CRITICAL: Do NOT resolve the tensions or reach a verdict. That is the Synthesiser's job in Pass 3. Your role is to lay out the landscape of serious argument.`;
 
+/**
+ * Get the analysis system prompt with optional contextual knowledge from the argument graph.
+ * @param contextBlock - Structured context retrieved from the knowledge base
+ */
+export function getAnalysisSystemPrompt(contextBlock: string): string {
+  // Skip appending if no context available
+  if (!contextBlock || contextBlock === 'No knowledge base context available for this query.') {
+    return ANALYSIS_SYSTEM_PROMPT;
+  }
+  
+  return ANALYSIS_SYSTEM_PROMPT + '\n\nCONTEXTUAL KNOWLEDGE FROM ARGUMENT GRAPH:\n' + contextBlock;
+}
+
 export function buildAnalysisUserPrompt(query: string, lens?: string): string {
   let prompt = `QUERY: ${query}`;
   if (lens) {
