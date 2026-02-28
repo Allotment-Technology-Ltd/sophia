@@ -1,4 +1,4 @@
-import { VOYAGE_API_KEY } from '$env/static/private';
+// ...existing code...
 import { VoyageAIClient } from 'voyageai';
 
 export const EMBEDDING_MODEL = process.env.VOYAGE_MODEL || 'voyage-3-lite';
@@ -11,7 +11,7 @@ const EMBEDDING_MODELS = parseModelList(process.env.VOYAGE_MODELS, [
 ]);
 
 const client = new VoyageAIClient({
-	apiKey: VOYAGE_API_KEY
+	apiKey: process.env.VOYAGE_API_KEY
 });
 
 let totalTokensUsed = 0;
