@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Environment
+.env.local
+.env*.local
+
+# Build
+build/
+.svelte-kit/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
+# SurrealDB
+surreal.log
+surreal.db
+
+# Temporary
+temp/
+tmp/
