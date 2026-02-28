@@ -7,7 +7,7 @@ WORKDIR /app
 COPY package.json package-lock.json .npmrc ./
 
 # Install dependencies with increased timeout
-RUN npm install --prefer-offline --no-audit
+RUN npm install --prefer-offline --no-audit --legacy-peer-deps
 
 # Copy source code
 COPY . .
@@ -24,7 +24,7 @@ WORKDIR /app
 COPY package.json package-lock.json .npmrc ./
 
 # Install production dependencies only
-RUN npm install --omit=dev --prefer-offline --no-audit
+RUN npm install --omit=dev --prefer-offline --no-audit --legacy-peer-deps
 
 # Copy built app from builder
 COPY --from=builder /app/build ./build
