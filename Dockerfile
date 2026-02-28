@@ -1,36 +1,30 @@
 # Stage 1: Builder
 FROM node:20-slim AS builder
 
-# Enable corepack for pnpm
-RUN corepack enable
-
 WORKDIR /app
 
-# Copy dependency files
-COPY package.json pnpm-lock.yaml* ./
+# Copy dependency and config files
+COPY package.json package-lock.json .npmrc ./
 
 # Install dependencies
-RUN pnpm install --frozen-lockfile
+RUN npm install
 
 # Copy source code
 COPY . .
 
 # Build the app
-RUN pnpm build
+RUN npm run build
 
 # Stage 2: Runtime
 FROM node:20-slim
 
-# Enable corepack for pnpm
-RUN corepack enable
-
 WORKDIR /app
 
-# Copy package files
-COPY package.json pnpm-lock.yaml* ./
+# Copy package files and config
+COPY package.json package-lock.json .npmrc ./
 
 # Install production dependencies only
-RUN pnpm install --frozen-lockfile --prod
+RUN npm install --omit=dev
 
 # Copy built app from builder
 COPY --from=builder /app/build ./build

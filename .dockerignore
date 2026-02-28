@@ -1,0 +1,12 @@
+node_modules
+build
+.svelte-kit
+.env
+.env.local
+.env*.local
+*.log
+.git
+.gitignore
+README.md
+docker-compose.yml
+docs/

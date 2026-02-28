@@ -1,12 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { ANTHROPIC_API_KEY } from '$env/static/private';
-
-if (!ANTHROPIC_API_KEY) {
-  throw new Error('ANTHROPIC_API_KEY environment variable is not set');
-}
+import { env } from '$env/dynamic/private';
 
 export const anthropic = new Anthropic({
-  apiKey: ANTHROPIC_API_KEY
+  apiKey: env.ANTHROPIC_API_KEY
 });
 
 export const MODEL = 'claude-sonnet-4-5-20250929';

@@ -1,0 +1,19 @@
+# Cloud Build ignore - intentionally does NOT include .gitignore
+# (we need package-lock.json in the build context)
+
+node_modules/
+.svelte-kit/
+build/
+.env
+.env.local
+.env.example
+.env*.local
+.git/
+.vscode/
+.idea/
+docs/
+*.log
+*.swp
+*.swo
+*~
+.DS_Store
