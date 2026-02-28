@@ -31,3 +31,4 @@ surreal.db
 # Temporary
 temp/
 tmp/
+.env.local
