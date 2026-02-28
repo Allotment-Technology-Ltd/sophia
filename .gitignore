@@ -18,3 +18,6 @@ surreal.log
 surreal.db
 temp/
 tmp/
+.env
+.env.local
+.env.example

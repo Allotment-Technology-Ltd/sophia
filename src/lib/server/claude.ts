@@ -1,7 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { ANTHROPIC_API_KEY } from '$env/static/private';
 
 const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY
+  apiKey: ANTHROPIC_API_KEY
 });
 
 export async function* analyzePhilosophical(
@@ -33,29 +34,23 @@ export async function* analyzePhilosophical(
     ]
   });
 
-  let fullText = '';
-
   for await (const chunk of stream) {
     if (
       chunk.type === 'content_block_delta' &&
       chunk.delta.type === 'text_delta'
     ) {
-      fullText += chunk.delta.text;
       yield chunk.delta.text;
     }
   }
-
-  return fullText;
 }
 
 function getAnalysisPrompt(query: string, context: string): string {
-  return \`
-You are conducting the first pass of a rigorous philosophical analysis. Your role is the PROPONENT: construct the strongest possible argument addressing this question.
+  return `You are conducting the first pass of a rigorous philosophical analysis. Your role is the PROPONENT: construct the strongest possible argument addressing this question.
 
-QUERY: \${query}
+QUERY: ${query}
 
 PHILOSOPHICAL CONTEXT:
-\${context}
+${context}
 
 INSTRUCTIONS:
 1. Decompose the question into constituent philosophical sub-domains
@@ -72,18 +67,16 @@ Produce structured analysis in these sections:
 **Traditions Engaged:** [Which philosophical traditions]
 **Confidence Notes:** [Where strongest, where vulnerable]
 
-Be philosophically rigorous. Use precise terminology.
-  \`;
+Be philosophically rigorous. Use precise terminology.`;
 }
 
 function getCritiquePrompt(query: string, context: string): string {
-  return \`
-You are conducting the second pass of a rigorous philosophical analysis. Your role is the ADVERSARY: identify the weakest points and strongest objections.
+  return `You are conducting the second pass of a rigorous philosophical analysis. Your role is the ADVERSARY: identify the weakest points and strongest objections.
 
-QUERY: \${query}
+QUERY: ${query}
 
 PHILOSOPHICAL CONTEXT:
-\${context}
+${context}
 
 INSTRUCTIONS:
 1. Identify the weakest premise in the argument just presented
@@ -100,18 +93,16 @@ Produce structured analysis:
 **Contested Assumptions:** [What does argument assume?]
 **Gap Search Needed:** [Any specific gaps to fill? yes/no]
 
-Be intellectually honest. Challenge the strongest version of the argument.
-  \`;
+Be intellectually honest. Challenge the strongest version of the argument.`;
 }
 
 function getSynthesisPrompt(query: string, context: string): string {
-  return \`
-You are conducting the third pass of a rigorous philosophical analysis. Your role is the INTEGRATOR: synthesize the argument and its strongest objections into a nuanced final analysis.
+  return `You are conducting the third pass of a rigorous philosophical analysis. Your role is the INTEGRATOR: synthesize the argument and its strongest objections into a nuanced final analysis.
 
-QUERY: \${query}
+QUERY: ${query}
 
 PHILOSOPHICAL CONTEXT:
-\${context}
+${context}
 
 INSTRUCTIONS:
 1. Integrate valid objections into a refined argument
@@ -127,18 +118,17 @@ Produce structured synthesis:
 **Epistemic Status:** [How confident? What qualifications?]
 **Further Questions:** [What follow-up questions?]
 
-Be balanced. Acknowledge legitimate disagreement. Avoid false confidence.
-  \`;
+Be balanced. Acknowledge legitimate disagreement. Avoid false confidence.`;
 }
 
-const ANALYSIS_SYSTEM_PROMPT = \`You are a rigorous philosophical analyst specializing in structured argumentation. Your task is to construct the strongest possible argument addressing a given philosophical question, drawing on the context provided. 
+const ANALYSIS_SYSTEM_PROMPT = `You are a rigorous philosophical analyst specializing in structured argumentation. Your task is to construct the strongest possible argument addressing a given philosophical question, drawing on the context provided. 
 
-You reason dialectically, engage seriously with opposing positions, and ground all claims in evidence or philosophical principle. You use precise terminology and acknowledge complexity rather than oversimplifying. You are the PROPONENT: your role is to make the best case, not to be neutral.\`;
+You reason dialectically, engage seriously with opposing positions, and ground all claims in evidence or philosophical principle. You use precise terminology and acknowledge complexity rather than oversimplifying. You are the PROPONENT: your role is to make the best case, not to be neutral.`;
 
-const CRITIQUE_SYSTEM_PROMPT = \`You are a rigorous philosophical critic. Your task is to identify the weakest points and strongest objections to an argument, drawing on the context provided. 
+const CRITIQUE_SYSTEM_PROMPT = `You are a rigorous philosophical critic. Your task is to identify the weakest points and strongest objections to an argument, drawing on the context provided. 
 
-You argue in good faith, attacking the strongest version of the argument rather than strawmanning. You identify real vulnerabilities without being dismissive. You check for overlooked positions and unsupported claims. You are the ADVERSARY: your role is to strengthen the discourse through serious critique.\`;
+You argue in good faith, attacking the strongest version of the argument rather than strawmanning. You identify real vulnerabilities without being dismissive. You check for overlooked positions and unsupported claims. You are the ADVERSARY: your role is to strengthen the discourse through serious critique.`;
 
-const SYNTHESIS_SYSTEM_PROMPT = \`You are a philosophical integrator. Your task is to synthesize an argument and its strongest objections into a nuanced, balanced final analysis. 
+const SYNTHESIS_SYSTEM_PROMPT = `You are a philosophical integrator. Your task is to synthesize an argument and its strongest objections into a nuanced, balanced final analysis. 
 
-You acknowledge legitimate disagreement without collapsing into relativism. You distinguish between tensions that can be resolved and those that reflect genuine philosophical disagreement. You are appropriately humble about what can be concluded. You are the INTEGRATOR: your role is to produce the final, most defensible analysis.\`;
+You acknowledge legitimate disagreement without collapsing into relativism. You distinguish between tensions that can be resolved and those that reflect genuine philosophical disagreement. You are appropriately humble about what can be concluded. You are the INTEGRATOR: your role is to produce the final, most defensible analysis.`;

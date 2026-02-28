@@ -1,204 +1,248 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { conversation } from '$lib/stores/conversation.svelte';
+  import { renderMarkdown } from '$lib/utils/markdown';
 
-  interface StreamMessage {
-    pass?: string;
-    chunk?: string;
-    done?: boolean;
-    error?: string;
-    complete?: boolean;
-  }
+  let queryInput = $state('');
+  let expandedPasses: Record<string, Set<string>> = $state({});
 
-  let query = '';
-  let messages: Array<{role: string; content: string; timestamp: number; passes?: any}> = [];
-  let loading = false;
-  let error = '';
-  let messagesContainer: HTMLDivElement;
-
-  async function submitQuery() {
-    if (!query.trim()) return;
-
-    const userMsg = {
-      role: 'user',
-      content: query,
-      timestamp: Date.now()
-    };
-    messages = [...messages, userMsg];
-    query = '';
-    loading = true;
-    error = '';
-
-    try {
-      const response = await fetch('/api/analyse', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: userMsg.content })
-      });
-
-      if (!response.ok) throw new Error(\`API error: \${response.statusText}\`);
-
-      const assistantMsg = {
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-        passes: { analysis: '', critique: '', synthesis: '' }
-      };
-      messages = [...messages, assistantMsg];
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No response body');
-
-      const decoder = new TextDecoder();
-      let currentPass: 'analysis' | 'critique' | 'synthesis' = 'analysis';
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6)) as StreamMessage;
-              if (data.complete) {
-                loading = false;
-              } else if (data.error) {
-                error = data.error;
-                loading = false;
-              } else if (data.pass && data.chunk) {
-                currentPass = data.pass as any;
-                assistantMsg.passes[currentPass] += data.chunk;
-                assistantMsg.content += data.chunk;
-                messages = messages;
-              }
-            } catch (e) {}
-          }
-        }
-      }
-    } catch (err) {
-      error = String(err);
-      loading = false;
+  function togglePass(messageId: string, pass: string): void {
+    if (!expandedPasses[messageId]) {
+      expandedPasses[messageId] = new Set();
     }
-
-    setTimeout(() => {
-      messagesContainer?.scrollTo({ top: messagesContainer.scrollHeight, behavior: 'smooth' });
-    }, 0);
+    if (expandedPasses[messageId].has(pass)) {
+      expandedPasses[messageId].delete(pass);
+    } else {
+      expandedPasses[messageId].add(pass);
+    }
   }
 
-  onMount(() => {
-    const input = document.querySelector('input') as HTMLInputElement;
-    input?.focus();
-  });
+  function isPassExpanded(messageId: string, pass: string): boolean {
+    return expandedPasses[messageId]?.has(pass) ?? false;
+  }
+
+  async function handleSubmit(): Promise<void> {
+    if (!queryInput.trim()) return;
+    const query = queryInput.trim();
+    queryInput = '';
+    await conversation.submitQuery(query);
+  }
+
+  function handleKeydown(e: KeyboardEvent): void {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  }
+
+  function calculateCost(inputTokens: number, outputTokens: number): number {
+    return (inputTokens * 3 + outputTokens * 15) / 1_000_000;
+  }
+
+  function formatDuration(ms: number): string {
+    if (ms < 1000) return `${ms}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
 </script>
 
-<svelte:head>
-  <title>SOPHIA — Philosophical Reasoning Engine</title>
-</svelte:head>
+<div class="min-h-screen flex flex-col bg-sophia-dark-bg text-sophia-dark-text">
+  <!-- HEADER -->
+  <header class="border-b border-sophia-dark-border">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between gap-4">
+      <h1 class="font-serif text-2xl tracking-wide text-sophia-dark-sage shrink-0">SOPHIA</h1>
+      <p class="font-mono text-xs sm:text-sm text-sophia-dark-dim text-right">philosophical reasoning engine</p>
+    </div>
+  </header>
 
-<div style="display: flex; flex-direction: column; height: 100vh; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5;">
-  <!-- Header -->
-  <div style="background: #2d4320; color: white; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-    <h1 style="margin: 0; font-size: 28px; font-weight: bold;">SOPHIA</h1>
-    <p style="margin: 5px 0 0; font-size: 13px; opacity: 0.9;">Philosophical Reasoning Engine (Phase 1-2 Validation)</p>
-  </div>
-
-  <!-- Messages -->
-  <div bind:this={messagesContainer} style="flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 15px;">
-    {#each messages as msg}
-      {#if msg.role === 'user'}
-        <div style="display: flex; justify-content: flex-end;">
-          <div style="background: #2d4320; color: white; padding: 12px 16px; border-radius: 8px; max-width: 70%; word-wrap: break-word;">
-            <strong>You:</strong>
-            <div style="margin-top: 4px;">{msg.content}</div>
-          </div>
-        </div>
-      {:else}
-        <div style="display: flex; justify-content: flex-start;">
-          <div style="background: white; border: 1px solid #ddd; padding: 16px; border-radius: 8px; max-width: 100%; width: 100%;">
-            {#if msg.passes}
-              {#if msg.passes.analysis}
-                <div style="margin-bottom: 20px; border-left: 4px solid #78af60; padding-left: 12px;">
-                  <strong style="color: #5a8640;">PASS 1: ANALYSIS (Proponent)</strong>
-                  <div style="margin-top: 8px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; color: #333;">
-                    {msg.passes.analysis}
-                  </div>
-                </div>
-              {/if}
-              {#if msg.passes.critique}
-                <div style="margin-bottom: 20px; border-left: 4px solid #ff9800; padding-left: 12px;">
-                  <strong style="color: #e67e22;">PASS 2: CRITIQUE (Adversary)</strong>
-                  <div style="margin-top: 8px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; color: #333;">
-                    {msg.passes.critique}
-                  </div>
-                </div>
-              {/if}
-              {#if msg.passes.synthesis}
-                <div style="border-left: 4px solid #27ae60; padding-left: 12px;">
-                  <strong style="color: #27ae60;">PASS 3: SYNTHESIS (Integrator)</strong>
-                  <div style="margin-top: 8px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; color: #333;">
-                    {msg.passes.synthesis}
-                  </div>
-                </div>
-              {/if}
-            {:else}
-              <p style="margin: 0; color: #999; font-size: 13px; font-style: italic;">Processing...</p>
-            {/if}
-          </div>
+  <!-- MAIN -->
+  <main class="flex-1 overflow-y-auto px-4 sm:px-6 py-8">
+    <div class="max-w-3xl mx-auto">
+      <!-- Empty State -->
+      {#if conversation.messages.length === 0 && !conversation.isLoading}
+        <div class="flex flex-col items-center justify-center min-h-[60vh] text-center">
+          <p class="font-serif italic text-2xl mb-4">What would you like to think about?</p>
+          <p class="text-sophia-dark-muted max-w-md">
+            Ask a question, paste an argument, describe a dilemma.
+          </p>
         </div>
       {/if}
-    {/each}
 
-    {#if loading}
-      <div style="display: flex; justify-content: flex-start;">
-        <div style="background: white; border: 1px solid #ddd; padding: 12px 16px; border-radius: 8px;">
-          <p style="margin: 0; font-size: 13px; color: #999;">Analyzing your question...</p>
-        </div>
+      <!-- Message List -->
+      <div class="space-y-6">
+        {#each conversation.messages as message (message.id)}
+          {#if message.role === 'user'}
+            <!-- User Message -->
+            <div class="flex justify-end">
+              <div class="bg-sophia-dark-surface-raised rounded-lg px-4 py-3 max-w-lg">
+                <p>{message.content}</p>
+              </div>
+            </div>
+          {:else}
+            <!-- Assistant Message -->
+            <div class="flex flex-col space-y-3">
+              <!-- Main Content (Synthesis) -->
+              {#if message.content}
+                <div class="prose prose-invert prose-sm">
+                  {@html renderMarkdown(message.content)}
+                </div>
+              {/if}
+
+              <!-- Pass Toggle Buttons -->
+              {#if message.passes}
+                <div class="flex gap-3 pt-2">
+                  <button
+                    class="font-mono text-xs px-2 py-1 rounded border transition-colors {isPassExpanded(message.id, 'analysis')
+                      ? 'bg-sophia-dark-sage/20 border-sophia-dark-sage/50 text-sophia-dark-sage'
+                      : 'border-sophia-dark-sage/20 text-sophia-dark-sage hover:border-sophia-dark-sage/50'}"
+                    onclick={() => togglePass(message.id, 'analysis')}
+                  >
+                    Analysis
+                  </button>
+                  <button
+                    class="font-mono text-xs px-2 py-1 rounded border transition-colors {isPassExpanded(message.id, 'critique')
+                      ? 'bg-sophia-dark-copper/20 border-sophia-dark-copper/50 text-sophia-dark-copper'
+                      : 'border-sophia-dark-copper/20 text-sophia-dark-copper hover:border-sophia-dark-copper/50'}"
+                    onclick={() => togglePass(message.id, 'critique')}
+                  >
+                    Critique
+                  </button>
+                  <button
+                    class="font-mono text-xs px-2 py-1 rounded border transition-colors {isPassExpanded(message.id, 'synthesis')
+                      ? 'bg-sophia-dark-blue/20 border-sophia-dark-blue/50 text-sophia-dark-blue'
+                      : 'border-sophia-dark-blue/20 text-sophia-dark-blue hover:border-sophia-dark-blue/50'}"
+                    onclick={() => togglePass(message.id, 'synthesis')}
+                  >
+                    Synthesis
+                  </button>
+                </div>
+
+                <!-- Expanded Pass Content -->
+                {#if isPassExpanded(message.id, 'analysis') && message.passes.analysis}
+                  <div class="border-l-2 border-sophia-dark-sage/50 pl-4 py-2 text-sm prose prose-invert prose-sm">
+                    {@html renderMarkdown(message.passes.analysis)}
+                  </div>
+                {/if}
+                {#if isPassExpanded(message.id, 'critique') && message.passes.critique}
+                  <div class="border-l-2 border-sophia-dark-copper/50 pl-4 py-2 text-sm prose prose-invert prose-sm">
+                    {@html renderMarkdown(message.passes.critique)}
+                  </div>
+                {/if}
+                {#if isPassExpanded(message.id, 'synthesis') && message.passes.synthesis}
+                  <div class="border-l-2 border-sophia-dark-blue/50 pl-4 py-2 text-sm prose prose-invert prose-sm">
+                    {@html renderMarkdown(message.passes.synthesis)}
+                  </div>
+                {/if}
+
+                <!-- Metadata -->
+                {#if message.metadata}
+                  <div class="font-mono text-xs text-sophia-dark-muted pt-2 border-t border-sophia-dark-border">
+                    <span>{message.metadata.total_input_tokens} in</span>
+                    <span class="mx-1">•</span>
+                    <span>{message.metadata.total_output_tokens} out</span>
+                    <span class="mx-1">•</span>
+                    <span>{formatDuration(message.metadata.duration_ms)}</span>
+                    <span class="mx-1">•</span>
+                    <span>${calculateCost(message.metadata.total_input_tokens, message.metadata.total_output_tokens).toFixed(6)}</span>
+                  </div>
+                {/if}
+              {/if}
+            </div>
+          {/if}
+        {/each}
+
+        <!-- Streaming State -->
+        {#if conversation.isLoading}
+          <div class="flex flex-col space-y-4">
+            {#if !conversation.currentPasses.analysis && !conversation.currentPasses.critique && !conversation.currentPasses.synthesis}
+              <div class="flex items-center gap-2 text-sophia-dark-muted">
+                <div class="w-2 h-2 bg-sophia-dark-sage rounded-full animate-pulse"></div>
+                <span class="font-mono text-sm">Thinking…</span>
+              </div>
+            {/if}
+
+            {#if conversation.currentPasses.analysis}
+              <div class="border-l-2 border-sophia-dark-sage/50 pl-4 py-2 {conversation.currentPass === 'analysis' ? 'animate-pulse' : ''}">
+                <div class="flex items-center gap-2 mb-1">
+                  <p class="font-mono text-xs text-sophia-dark-sage">Analysis (Proponent)</p>
+                  {#if conversation.currentPass === 'analysis'}
+                    <div class="w-1.5 h-1.5 bg-sophia-dark-sage rounded-full animate-pulse"></div>
+                  {/if}
+                </div>
+                <div class="prose prose-invert prose-sm">
+                  {@html renderMarkdown(conversation.currentPasses.analysis)}
+                </div>
+              </div>
+            {/if}
+
+            {#if conversation.currentPasses.critique}
+              <div class="border-l-2 border-sophia-dark-copper/50 pl-4 py-2 {conversation.currentPass === 'critique' ? 'animate-pulse' : ''}">
+                <div class="flex items-center gap-2 mb-1">
+                  <p class="font-mono text-xs text-sophia-dark-copper">Critique (Adversary)</p>
+                  {#if conversation.currentPass === 'critique'}
+                    <div class="w-1.5 h-1.5 bg-sophia-dark-copper rounded-full animate-pulse"></div>
+                  {/if}
+                </div>
+                <div class="prose prose-invert prose-sm">
+                  {@html renderMarkdown(conversation.currentPasses.critique)}
+                </div>
+              </div>
+            {/if}
+
+            {#if conversation.currentPasses.synthesis}
+              <div class="border-l-2 border-sophia-dark-blue/50 pl-4 py-2 {conversation.currentPass === 'synthesis' ? 'animate-pulse' : ''}">
+                <div class="flex items-center gap-2 mb-1">
+                  <p class="font-mono text-xs text-sophia-dark-blue">Synthesis (Integrator)</p>
+                  {#if conversation.currentPass === 'synthesis'}
+                    <div class="w-1.5 h-1.5 bg-sophia-dark-blue rounded-full animate-pulse"></div>
+                  {/if}
+                </div>
+                <div class="prose prose-invert prose-sm">
+                  {@html renderMarkdown(conversation.currentPasses.synthesis)}
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+        <!-- Error State -->
+        {#if conversation.error}
+          <div class="bg-red-950/30 border border-red-800/50 rounded-lg px-4 py-3">
+            <p class="text-red-200 font-mono text-sm">{conversation.error}</p>
+          </div>
+        {/if}
       </div>
-    {/if}
+    </div>
+  </main>
 
-    {#if error}
-      <div style="display: flex; justify-content: flex-start;">
-        <div style="background: #fee; border: 1px solid #fcc; color: #c00; padding: 12px 16px; border-radius: 8px; font-size: 13px;">
-          <strong>Error:</strong> {error}
-        </div>
-      </div>
-    {/if}
-  </div>
-
-  <!-- Input -->
-  <div style="background: white; border-top: 1px solid #ddd; padding: 16px 20px; box-shadow: 0 -1px 3px rgba(0,0,0,0.05);">
-    <form on:submit|preventDefault={submitQuery}>
-      <div style="display: flex; gap: 8px; margin-bottom: 12px;">
-        <input
-          bind:value={query}
-          type="text"
-          placeholder="Ask a philosophical question..."
-          disabled={loading}
-          style="flex: 1; padding: 10px 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; font-family: inherit;"
-        />
+  <!-- FOOTER -->
+  <footer class="border-t border-sophia-dark-border">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 py-4">
+      <div class="flex gap-2">
+        <textarea
+          bind:value={queryInput}
+          onkeydown={handleKeydown}
+          disabled={conversation.isLoading}
+          rows="2"
+          placeholder="What would you like to think about?"
+          class="flex-1 bg-sophia-dark-surface border border-sophia-dark-border rounded px-3 py-2 font-sans text-sm text-sophia-dark-text placeholder-sophia-dark-muted focus:outline-none focus:border-sophia-dark-sage/50 disabled:opacity-50 resize-none"
+        ></textarea>
         <button
-          type="submit"
-          disabled={loading || !query.trim()}
-          style="padding: 10px 16px; background: #2d4320; color: white; border: none; border-radius: 4px; font-size: 14px; font-weight: 500; cursor: pointer; opacity: {loading || !query.trim() ? 0.6 : 1};"
+          onclick={handleSubmit}
+          disabled={conversation.isLoading || !queryInput.trim()}
+          class="font-mono text-sm px-4 py-2 rounded border border-sophia-dark-sage/30 bg-sophia-dark-sage/10 text-sophia-dark-sage hover:border-sophia-dark-sage/50 hover:bg-sophia-dark-sage/20 disabled:opacity-30 transition-colors whitespace-nowrap h-fit self-end"
         >
-          {loading ? 'Analyzing...' : 'Analyze'}
+          Think
         </button>
       </div>
-      <p style="margin: 0; font-size: 12px; color: #666;">
-        Test cases: Try "Is it ethical to use AI triage in emergency rooms?" or "Compare utilitarianism and deontology on organ transplants"
-      </p>
-    </form>
-  </div>
+    </div>
+  </footer>
 </div>
 
 <style>
-  :global(body) {
-    margin: 0;
-    padding: 0;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  :global(.prose) {
+    --tw-prose-body: #E8E6E1;
+    --tw-prose-headings: #E8E6E1;
+    --tw-prose-links: #6FA3D4;
+    --tw-prose-bold: #E8E6E1;
+    --tw-prose-code: #E8E6E1;
   }
 </style>

@@ -1,0 +1,35 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400;1,600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light mode (default) */
+    --color-bg: #F8F7F4;
+    --color-surface: #EFEEE9;
+    --color-text: #2A2725;
+    --color-muted: #6B6359;
+    --color-sage: #6B8E6F;
+    --color-copper: #C67C4E;
+    --color-blue: #4A7BA7;
+
+    /* Dark mode */
+    --color-dark-bg: #1A1917;
+    --color-dark-surface: #141312;
+    --color-dark-surface-raised: #201F1D;
+    --color-dark-text: #E8E6E1;
+    --color-dark-muted: #9E9A93;
+    --color-dark-dim: #4A4845;
+    --color-dark-border: #2E2C29;
+    --color-dark-sage: #7FA383;
+    --color-dark-copper: #D4936F;
+    --color-dark-blue: #6FA3D4;
+  }
+
+  body {
+    background-color: var(--color-dark-bg);
+    color: var(--color-dark-text);
+  }
+}

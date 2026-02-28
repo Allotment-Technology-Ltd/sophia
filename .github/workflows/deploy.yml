@@ -1,0 +1,53 @@
+# SOPHIA — Google Cloud Run Deployment Pipeline
+#
+# PREREQUISITES:
+# 1. GCP project with Cloud Run API enabled
+# 2. ANTHROPIC_API_KEY stored in Secret Manager:
+#    gcloud secrets create anthropic-api-key --replication-policy="automatic"
+#    gcloud secrets versions add anthropic-api-key --data-file=-
+# 3. Workload Identity Federation configured for GitHub:
+#    https://github.com/google-github-actions/auth#setting-up-workload-identity-federation
+# 4. GitHub secrets configured:
+#    - WIF_PROVIDER: projects/{PROJECT_ID}/locations/global/workloadIdentityPools/{POOL_ID}/providers/{PROVIDER_ID}
+#    - WIF_SERVICE_ACCOUNT: terraform-sa@{PROJECT_ID}.iam.gserviceaccount.com
+
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account_email: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy sophia \
+            --source . \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --region=europe-west2 \
+            --allow-unauthenticated \
+            --set-secrets="ANTHROPIC_API_KEY=anthropic-api-key:latest" \
+            --memory=512Mi \
+            --cpu=1 \
+            --min-instances=0 \
+            --max-instances=3

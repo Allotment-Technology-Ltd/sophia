@@ -1,0 +1,197 @@
+---
+# SOPHIA — AI Coding Assistant Rules
+# Single source of truth for Cursor, GitHub Copilot, and Roo Code
+# Place in project root as .rules.yaml
+
+project:
+  name: SOPHIA
+  description: >
+    Structured Ontological & Philosophical Heuristic Intelligence Agent.
+    A philosophical reasoning engine that stores knowledge as an argument graph
+    and uses a three-pass dialectical pipeline (Analysis → Critique → Synthesis)
+    to produce rigorous philosophical analysis.
+  domain: usesophia.app
+
+stack:
+  frontend: SvelteKit 2 with Svelte 5
+  language: TypeScript (strict mode)
+  styling: Tailwind CSS with custom design tokens
+  database: SurrealDB v2
+  ai: Claude API (Sonnet 4.5) via @anthropic-ai/sdk
+  hosting: Google Cloud Run via adapter-node
+  auth: Auth.js (Phase 5 only)
+  payments: Stripe (Phase 6 only)
+  package_manager: pnpm
+  validation: Zod
+
+never:
+  frameworks:
+    - React
+    - Next.js
+    - Vue
+    - Angular
+    - Nuxt
+  databases:
+    - PostgreSQL
+    - MongoDB
+    - Neo4j
+    - Firebase
+    - Supabase
+  orchestration:
+    - LangChain
+    - LlamaIndex
+    - CrewAI
+    - AutoGen
+    - Semantic Kernel
+  other:
+    - Lean/Isabelle/Coq (formal theorem provers)
+    - npm or yarn (use pnpm only)
+    - Svelte legacy syntax ($: reactive, export let)
+    - Client-side API keys or secrets
+
+sveltekit:
+  file_conventions:
+    pages: src/routes/**/+page.svelte
+    server_load: src/routes/**/+page.server.ts
+    api_endpoints: src/routes/api/**/+server.ts
+    layouts: src/routes/**/+layout.svelte
+    errors: src/routes/**/+error.svelte
+    components: src/lib/components/**/*.svelte
+    server_only: src/lib/server/**/*.ts
+    types: src/lib/types/**/*.ts
+    utilities: src/lib/utils/**/*.ts
+    stores: src/lib/stores/**/*.svelte.ts
+
+  svelte5_runes:
+    state: "$state(initialValue)"
+    derived: "$derived(expression)"
+    props: "let { data } = $props()"
+    effect: "$effect(() => { ... })"
+    banned:
+      - "$: reactive declarations"
+      - "export let (use $props instead)"
+      - "$$props / $$restProps"
+
+  imports:
+    internal: "$lib/"
+    private_env: "$env/static/private"
+    public_env: "$env/static/public (PREFIX with PUBLIC_)"
+
+  rules:
+    - All Claude API calls in server routes only, never client-side
+    - All SurrealDB queries in server routes only
+    - API keys via $env/static/private, never hardcoded
+
+typescript:
+  strict: true
+  prefer_interface_over_type: true
+  no_any: true # mark exceptions with TODO comment
+  zod_validation: Claude API responses, user input, external data
+  export_types_from: src/lib/types/
+
+surrealdb:
+  package: surrealdb (official npm package)
+  query_language: SurrealQL (NOT SQL)
+  patterns:
+    graph_traversal_outgoing: "->relation_type->table"
+    graph_traversal_incoming: "<-relation_type<-table"
+    vector_search: "WHERE embedding <|N|> $query_embedding"
+    create_relation: "RELATE record_a->relation->record_b SET field = value"
+    record_id_format: "table:id"
+  banned_sql_patterns:
+    - JOIN
+    - INSERT INTO relation_table
+    - Foreign key references
+    - Standard SQL aggregate syntax
+
+claude_api:
+  model: claude-sonnet-4-5-20250514
+  always_stream: true
+  always_track_tokens: true
+  streaming_to_client: Server-Sent Events (SSE)
+  max_tokens_per_pass:
+    analysis: 2048
+    critique: 1536
+    synthesis: 2560
+  cost_logging: >
+    Log input_tokens, output_tokens, and estimated cost
+    for every API call: (input × $3 + output × $15) / 1,000,000
+  caching: Implement for identical or near-identical queries
+  calls_per_query: exactly 3 (analysis, critique, synthesis) — no more
+
+design_system:
+  colors:
+    light:
+      background: "#F8F7F4"       # off-white, warm
+      primary_text: "#2A2725"     # charcoal
+      secondary_text: "#6B6359"   # slate gray
+      primary_accent: "#6B8E6F"   # sage green
+      secondary_accent: "#C67C4E" # copper
+      tertiary_accent: "#4A7BA7"  # soft blue (links)
+    dark:
+      background: "#1A1917"       # near-black, warm
+      primary_text: "#E8E6E1"     # off-white
+      secondary_text: "#9E9A93"   # warm gray
+      primary_accent: "#7FA383"   # sage green (lighter)
+      secondary_accent: "#D4936F" # copper (lighter)
+      tertiary_accent: "#6FA3D4"  # soft blue (lighter)
+    rules:
+      - No pure black (#000) or pure white (#FFF) — always warm neutrals
+      - No color-only information — pair with text or icon for accessibility
+      - WCAG AA compliance on all combinations
+
+  typography:
+    primary_font: "Sohne (fallback: Inter, system-ui, sans-serif)"
+    monospace_font: "Rec Mono (fallback: JetBrains Mono, monospace)"
+    body_size: "1.125rem (18px)"
+    body_line_height: 1.7
+    heading_line_height: 1.2
+    heading_letter_spacing: "-0.02em"
+    font_weights:
+      regular: 400 # body text
+      medium: 500  # subheadings, labels
+      bold: 700    # very rare, sparingly
+
+  spacing:
+    base_unit: "8px (0.5rem)"
+    rule: All spacing as multiples of base unit
+    min_touch_target: 44px
+
+  principles:
+    - No gamification (points, streaks, achievements)
+    - No urgency indicators (red alerts, countdowns)
+    - Generous whitespace — contemplative tool
+    - Warm, honest error messages (not "Oops!")
+    - Never lose user input on error
+
+error_handling:
+  claude_api:
+    - Retry with exponential backoff (max 3 retries)
+    - Graceful degradation if SurrealDB down (query Claude without graph context)
+    - Never expose raw error messages to user
+    - Log all errors server-side with context
+  user_facing:
+    - Warm, honest tone
+    - Tell user what happened and what they can do
+    - Never lose user input
+
+phases:
+  current: Check docs/phase-checklist.md
+  rules:
+    - Do not generate code for features belonging to later phases
+    - Phase 2: No database code, context hardcoded or from files
+    - Phase 3a: SurrealDB, ethics domain only, domain filter on all retrieval
+    - Phase 3b+: Expanding domains, cross-domain relation extraction
+    - Phase 4+: Web search, conversation persistence
+    - Phase 5+: Auth.js, rate limiting
+    - Phase 6+: Stripe, API access layer
+
+documentation:
+  location: docs/
+  files:
+    - architecture.md           # System design, tech decisions
+    - brand-design-system.md    # Full visual identity reference
+    - visual-mockups.md         # ASCII wireframes of every screen state
+    - phase-checklist.md        # Current phase tasks and status
+    - roadmap.md                # Phased roadmap (v3.1)
+    - source-lists/3a-ethics.md # Phase 3a curated sources (30 URLs)

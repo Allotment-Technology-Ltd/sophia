@@ -3,25 +3,24 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite dev",
     "build": "vite build",
-    "preview": "vite preview",
-    "type-check": "tsc --noEmit"
-  },
-  "devDependencies": {
-    "@sveltejs/adapter-node": "^5.0.0",
-    "@sveltejs/kit": "^2.0.0",
-    "@tailwindcss/typography": "^0.5.10",
-    "@types/node": "^22.0.0",
-    "autoprefixer": "^10.4.16",
-    "postcss": "^8.4.31",
-    "tailwindcss": "^3.3.5",
-    "typescript": "^5.2.2",
-    "vite": "^5.0.0",
-    "svelte": "^5.0.0"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.26.0",
-    "dotenv": "^16.4.5"
+    "marked": "^17.0.3"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-node": "^5.0.0",
+    "@sveltejs/kit": "^2.53.4",
+    "@sveltejs/vite-plugin-svelte": "^4.0.4",
+    "@tailwindcss/postcss": "^4.2.1",
+    "@tailwindcss/typography": "^0.5.19",
+    "autoprefixer": "^10.4.27",
+    "postcss": "^8.5.6",
+    "svelte": "^5.53.6",
+    "tailwindcss": "^4.2.1",
+    "vite": "^5.0.0"
   }
 }
