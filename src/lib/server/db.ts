@@ -1,11 +1,10 @@
 import { Surreal } from 'surrealdb';
-import {
-	SURREAL_URL,
-	SURREAL_USER,
-	SURREAL_PASS,
-	SURREAL_NAMESPACE,
-	SURREAL_DATABASE
-} from '$env/static/private';
+// Use process.env for SurrealDB config
+const SURREAL_URL = process.env.SURREAL_URL;
+const SURREAL_USER = process.env.SURREAL_USER;
+const SURREAL_PASS = process.env.SURREAL_PASS;
+const SURREAL_NAMESPACE = process.env.SURREAL_NAMESPACE;
+const SURREAL_DATABASE = process.env.SURREAL_DATABASE;
 
 let dbInstance: Surreal | null = null;
 let isConnecting = false;
