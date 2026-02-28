@@ -45,7 +45,7 @@ jobs:
           gcloud run deploy sophia \
             --source . \
             --project=${{ secrets.GCP_PROJECT_ID }} \
-            --region=europe-west2 \
+            --region=europe-west1 \
             --allow-unauthenticated \
             --set-secrets="ANTHROPIC_API_KEY=anthropic-api-key:latest" \
             --memory=512Mi \
