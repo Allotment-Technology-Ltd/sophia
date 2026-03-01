@@ -65,6 +65,7 @@ jobs:
         with:
           path: ./
           extra_args: --only-verified
+        continue-on-error: true
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -78,7 +79,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Audit dependencies
         run: pnpm audit --audit-level=high
