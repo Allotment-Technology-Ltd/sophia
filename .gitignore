@@ -1,11 +1,9 @@
 node_modules/
 yarn.lock
-.env.local
-.env*.local
 build/
 .svelte-kit/
 dist/
-.vscode/
+.vscode/settings.json
 .idea/
 *.swp
 *.swo
@@ -23,6 +21,19 @@ data/reports/*.json
 data/ingested/*-partial.json
 data/ingested/batch-summary-*.json
 memory/
+.cursor/
+
+# Environment & secrets — never commit real keys
 .env
 .env.local
-.env.example
+.env*.local
+
+# .env.example is intentionally tracked (contains placeholder values only)
+
+# Source texts and ingested data (copyrighted material — do not publish)
+data/sources/*.txt
+data/sources/*.meta.json
+data/ingested/*.json
+
+# Database files
+*.db
