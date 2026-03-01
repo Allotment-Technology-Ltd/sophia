@@ -26,18 +26,14 @@
 # Create once — idempotent, safe to re-run:
 #
 #   gcloud compute networks vpc-access connectors create sophia-connector \
-#     --region=europe-west2 \
+#     --region=europe-west1 \
 #     --network=default \
 #     --range=10.8.0.0/28 \
 #     --project=sophia-488807
 #
 # Verify connector is READY before deploying:
 #   gcloud compute networks vpc-access connectors describe sophia-connector \
-#     --region=europe-west2 --project=sophia-488807
-#
-# NOTE: There is a legacy 'sophia' service in europe-west1 from an earlier deploy.
-# It can be deleted once this pipeline has run successfully:
-#   gcloud run services delete sophia --region=europe-west1 --project=sophia-488807
+#     --region=europe-west1 --project=sophia-488807
 
 name: Deploy to Cloud Run
 
@@ -110,13 +106,6 @@ jobs:
 
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker europe-west1-docker.pkg.dev
-
-      - name: Verify source code contains expected changes
-        run: |
-          echo "Checking for is-analysis class in +page.svelte..."
-          grep -c "is-analysis" src/routes/+page.svelte || echo "NOT FOUND"
-          echo "Checking for streamPassWithContinuation in engine.ts..."
-          grep -c "streamPassWithContinuation" src/lib/server/engine.ts || echo "NOT FOUND"
 
       - name: Build Docker image
         run: |

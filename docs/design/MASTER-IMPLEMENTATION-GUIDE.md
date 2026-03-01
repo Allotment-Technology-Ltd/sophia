@@ -407,7 +407,7 @@ Mobile Safari:
 - No rubber-banding on panel scroll (`overscroll-behavior: contain` on `.side-panel`)
 
 Mobile Chrome: same as Safari checks.
-
+npx tsx --env-file=.env [ingest-batch.ts](http://_vscodecontentref_/3) --wave 1 --retry --fail-fast --pre-scan
 ---
 
 ### ─── PHASE F: Production Deploy ───

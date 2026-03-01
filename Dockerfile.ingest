@@ -2,15 +2,20 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Install dependencies with npm install (more flexible than npm ci)
-COPY package.json package-lock.json ./
-RUN npm install --legacy-peer-deps 2>&1 | tail -20 || echo "Install completed"
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# Copy dependency files
+COPY package.json pnpm-lock.yaml ./
+
+# Install all dependencies (includes tsx for runtime)
+RUN pnpm install --frozen-lockfile
 
 # Copy application code
 COPY . .
 
-# Default wave number (override via Cloud Run --set-env-vars WAVE_NUM=N)
+# Default wave number (override via Cloud Run --set-env-vars WAVE_NUM=1)
 ENV WAVE_NUM=1
 
-# Shell form so ${WAVE_NUM} gets expanded at runtime
-CMD npx tsx scripts/ingest-batch.ts --wave ${WAVE_NUM} --fast --retry
+# Shell form so ${WAVE_NUM} gets expanded at runtime  
+CMD pnpm exec tsx scripts/ingest-batch.ts --wave ${WAVE_NUM} --retry --fail-fast --pre-scan

@@ -16,8 +16,10 @@ surreal.db
 temp/
 tmp/
 data/backups/*/
+data/backups/
 data/reports/*.md
 data/reports/*.json
+data/reports/
 data/ingested/*-partial.json
 data/ingested/batch-summary-*.json
 memory/
