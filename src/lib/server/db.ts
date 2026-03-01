@@ -1,4 +1,4 @@
-import { Surreal } from 'surrealdb';
+import { Surreal, StringRecordId } from 'surrealdb';
 // Use process.env for SurrealDB config
 const SURREAL_URL = process.env.SURREAL_URL;
 const SURREAL_USER = process.env.SURREAL_USER;
@@ -147,7 +147,7 @@ export async function create<T>(
 export async function update<T>(id: string, data: Record<string, unknown>): Promise<T> {
 	try {
 		const db = await getDb();
-		const result = await db.update<T>(id, data);
+		const result = await db.update<T>(new StringRecordId(id), data);
 
 		if (Array.isArray(result) && result.length > 0) {
 			return result[0];
@@ -169,7 +169,7 @@ export async function update<T>(id: string, data: Record<string, unknown>): Prom
 export async function remove(id: string): Promise<void> {
 	try {
 		const db = await getDb();
-		await db.delete(id);
+		await db.delete(new StringRecordId(id));
 		console.log(`[DB] Deleted record: ${id}`);
 	} catch (error) {
 		console.error('[DB] Delete failed:', { id, error });

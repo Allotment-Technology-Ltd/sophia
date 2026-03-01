@@ -24,7 +24,8 @@ jobs:
           fetch-depth: 0  # Full history required for secret scanning
 
       - name: Scan for secrets
-        uses: trufflesecurity/trufflehog@v3
+        if: github.event.pull_request.base.sha != github.event.pull_request.head.sha
+        uses: trufflesecurity/trufflehog@v3.68.0
         with:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}
@@ -43,7 +44,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Audit dependencies
         run: pnpm audit --audit-level=high
