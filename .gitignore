@@ -17,6 +17,12 @@ surreal.log
 surreal.db
 temp/
 tmp/
+data/backups/*/
+data/reports/*.md
+data/reports/*.json
+data/ingested/*-partial.json
+data/ingested/batch-summary-*.json
+memory/
 .env
 .env.local
 .env.example

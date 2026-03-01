@@ -26,7 +26,19 @@ async function fetchUrl(url: string): Promise<string> {
 		if (!response.ok) {
 			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 		}
+		const contentType = response.headers.get('content-type') || '';
+		if (contentType.includes('application/pdf') || url.toLowerCase().endsWith('.pdf')) {
+			throw new Error(
+				'PDF files cannot be parsed as HTML. Update the source URL to an HTML version.'
+			);
+		}
 		const html = await response.text();
+		// Guard against accidentally fetching binary PDF data served without correct content-type
+		if (html.startsWith('%PDF')) {
+			throw new Error(
+				'Response is a PDF file (detected by content). Update the source URL to an HTML version.'
+			);
+		}
 		console.log(`[FETCH] Downloaded ${html.length.toLocaleString()} bytes`);
 		return html;
 	} catch (error) {

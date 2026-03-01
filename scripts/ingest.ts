@@ -7,6 +7,10 @@
  * Usage: npx tsx --env-file=.env scripts/ingest.ts <source-file-path> [--validate]
  *
  * The source-file-path should be a .txt file in data/sources/ with a matching .meta.json
+ *
+ * Resume: The pipeline is automatically resumable. If a previous run failed or was
+ * interrupted, re-running with the same source will pick up where it left off.
+ * Progress is tracked in the ingestion_log table in SurrealDB.
  */
 
 import * as fs from 'fs';
@@ -16,6 +20,7 @@ import { Surreal } from 'surrealdb';
 import { VoyageAIClient } from 'voyageai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { z } from 'zod';
+import { startSpinner, startStageTimer, renderProgressBar, IS_TTY } from './progress.js';
 
 // ─── Prompt imports (relative paths for standalone script) ─────────────────
 import {
@@ -85,7 +90,21 @@ const VOYAGE_API_KEY = process.env.VOYAGE_API_KEY || '';
 const GOOGLE_AI_API_KEY = process.env.GOOGLE_AI_API_KEY || '';
 
 const INGESTED_DIR = './data/ingested';
-const MAX_TOKENS_PER_SECTION = 80_000;
+// Keep sections small enough that Claude's extraction output fits within max_tokens (16384).
+// Each claim is ~150 tokens of JSON. At 10 claims/1k input tokens:
+//   10_000 tokens input → ~100 claims → ~15_000 tokens output → fits in 16384 limit.
+const MAX_TOKENS_PER_SECTION = 10_000;
+
+// ─── Stage ordering for resume logic ──────────────────────────────────────
+const STAGES_ORDER = ['extracting', 'relating', 'grouping', 'embedding', 'validating', 'storing'];
+
+function shouldRunStage(stage: string, lastCompleted: string | null | undefined): boolean {
+	if (!lastCompleted) return true;
+	const completedIdx = STAGES_ORDER.indexOf(lastCompleted);
+	const stageIdx = STAGES_ORDER.indexOf(stage);
+	if (completedIdx === -1) return true; // unknown stage = run everything
+	return stageIdx > completedIdx;
+}
 
 // ─── Cost tracking ─────────────────────────────────────────────────────────
 interface CostTracker {
@@ -233,7 +252,23 @@ function splitIntoSections(text: string): string[] {
 		merged.push(buffer.trim());
 	}
 
-	return merged;
+	// Post-process: sub-split any merged chunk that's still larger than the threshold.
+	// This happens when a single heading-based section (e.g., Kant's Section II) exceeds
+	// MAX_TOKENS_PER_SECTION on its own.
+	const final: string[] = [];
+	const charChunkSize = MAX_TOKENS_PER_SECTION * 4; // ~4 chars per token
+	for (const chunk of merged) {
+		if (estimateTokens(chunk) > MAX_TOKENS_PER_SECTION) {
+			for (let i = 0; i < chunk.length; i += charChunkSize) {
+				const sub = chunk.substring(i, i + charChunkSize).trim();
+				if (sub.length > 100) final.push(sub);
+			}
+		} else {
+			final.push(chunk);
+		}
+	}
+
+	return final;
 }
 
 /**
@@ -290,6 +325,13 @@ async function callClaude(
 					costs.claudeOutputTokens += response.usage.output_tokens;
 				}
 
+				// Detect truncated output before it causes a JSON parse failure downstream
+				if (response.stop_reason === 'max_tokens') {
+					throw new Error(
+						'Claude output was truncated (max_tokens reached) — reduce section size or increase max_tokens'
+					);
+				}
+
 				const textBlock = response.content.find((block) => block.type === 'text');
 				if (!textBlock || textBlock.type !== 'text') {
 					throw new Error('No text block in Claude response');
@@ -325,6 +367,26 @@ async function callClaude(
 }
 
 /**
+ * Wrapper around callClaude that shows a spinner while waiting
+ */
+async function callClaudeWithProgress(
+	client: Anthropic,
+	systemPrompt: string,
+	userMessage: string,
+	label: string
+): Promise<string> {
+	const spinner = startSpinner(label);
+	try {
+		const result = await callClaude(client, systemPrompt, userMessage);
+		spinner.stop();
+		return result;
+	} catch (e) {
+		spinner.stop();
+		throw e;
+	}
+}
+
+/**
  * Attempt to fix malformed JSON by asking Claude
  */
 async function fixJsonWithClaude(
@@ -346,10 +408,11 @@ ${originalJson}
 
 Respond ONLY with the corrected JSON array. No explanation, no markdown backticks.`;
 
-	return callClaude(
+	return callClaudeWithProgress(
 		client,
 		'You are a JSON repair assistant. Fix the malformed JSON to be valid. Respond with only the corrected JSON.',
-		fixPrompt
+		fixPrompt,
+		'Fixing malformed JSON via Claude'
 	);
 }
 
@@ -400,19 +463,110 @@ function loadPartialResults(slug: string): PartialResults | null {
 	}
 }
 
+// ─── Ingestion Log (DB-based tracking) ────────────────────────────────────
+interface IngestionLogRecord {
+	id?: string;
+	source_url: string;
+	source_title: string;
+	status: string;
+	stage_completed?: string;
+	claims_extracted?: number;
+	relations_extracted?: number;
+	arguments_grouped?: number;
+	validation_score?: number;
+	error_message?: string;
+	cost_usd?: number;
+	started_at?: string;
+	completed_at?: string;
+}
+
+async function getIngestionLog(db: Surreal, sourceUrl: string): Promise<IngestionLogRecord | null> {
+	const result = await db.query<IngestionLogRecord[][]>(
+		`SELECT * FROM ingestion_log WHERE source_url = $url LIMIT 1`,
+		{ url: sourceUrl }
+	);
+	const rows = Array.isArray(result?.[0]) ? result[0] : [];
+	return rows.length > 0 ? rows[0] : null;
+}
+
+async function createIngestionLog(db: Surreal, sourceUrl: string, sourceTitle: string): Promise<void> {
+	await db.query(
+		`CREATE ingestion_log CONTENT {
+			source_url: $url,
+			source_title: $title,
+			status: 'extracting',
+			started_at: time::now()
+		}`,
+		{ url: sourceUrl, title: sourceTitle }
+	);
+}
+
+async function updateIngestionLog(
+	db: Surreal,
+	sourceUrl: string,
+	updates: Record<string, unknown>
+): Promise<void> {
+	const setClauses = Object.keys(updates)
+		.map((key) => `${key} = $${key}`)
+		.join(', ');
+	const sql = `UPDATE ingestion_log SET ${setClauses} WHERE source_url = $url`;
+	const vars = { ...updates, url: sourceUrl };
+	try {
+		await db.query(sql, vars);
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		// Session may have expired during long-running stages — re-authenticate and retry
+		if (msg.includes('IAM') || msg.includes('permissions') || msg.includes('authentication')) {
+			console.warn('  [WARN] DB session expired — re-authenticating...');
+			await db.signin({ username: SURREAL_USER, password: SURREAL_PASS } as any);
+			await db.use({ namespace: SURREAL_NAMESPACE, database: SURREAL_DATABASE });
+			await db.query(sql, vars);
+		} else {
+			throw error;
+		}
+	}
+}
+
+/**
+ * Verify DB connection is alive; re-authenticate if the session has expired.
+ * Call this before any stage that performs DB writes after a long gap.
+ */
+async function ensureDbConnected(db: Surreal): Promise<void> {
+	try {
+		await db.query('SELECT 1');
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		if (
+			msg.includes('IAM') ||
+			msg.includes('permissions') ||
+			msg.includes('authentication') ||
+			msg.includes('Unauthorized')
+		) {
+			console.warn('  [WARN] DB session check failed — re-authenticating...');
+			await db.signin({ username: SURREAL_USER, password: SURREAL_PASS } as any);
+			await db.use({ namespace: SURREAL_NAMESPACE, database: SURREAL_DATABASE });
+			console.log('  [OK] Re-authenticated to SurrealDB');
+		} else {
+			throw new Error(`DB connection check failed: ${msg}`);
+		}
+	}
+}
+
 // ─── MAIN PIPELINE ─────────────────────────────────────────────────────────
 async function main() {
 	const args = process.argv.slice(2);
 	const filePath = args.find((a) => !a.startsWith('--'));
 	const shouldValidate = args.includes('--validate');
-	const shouldResume = args.includes('--resume');
+	// Pipeline mode: exit after stages 1-4 so the batch can start the next source's
+	// Claude extraction while Gemini validation runs for this source in a separate process.
+	const stopAfterEmbedding = args.includes('--stop-after-embedding');
 
 	if (!filePath) {
-		console.error('Usage: npx tsx --env-file=.env scripts/ingest.ts <source-file-path> [--validate] [--resume]');
+		console.error('Usage: npx tsx --env-file=.env scripts/ingest.ts <source-file-path> [--validate]');
 		console.error('\nThe source-file-path should be a .txt file in data/sources/');
 		console.error('\nFlags:');
 		console.error('  --validate    Run Gemini cross-model validation (requires GOOGLE_AI_API_KEY)');
-		console.error('  --resume      Resume from partial results if available');
+		console.error('\nResume is automatic — re-run the same source to pick up where it left off.');
 		process.exit(1);
 	}
 
@@ -447,33 +601,66 @@ async function main() {
 	const sourceMeta: SourceMeta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
 	const slug = path.basename(txtPath, '.txt');
 
-	// Check for partial results to resume from
-	let partial: PartialResults;
+	// ─── Connect to SurrealDB (used for ingestion log + Stage 6 storage) ───
+	const db = new Surreal();
+	try {
+		await db.connect(SURREAL_URL);
+		await db.signin({ username: SURREAL_USER, password: SURREAL_PASS } as any);
+		await db.use({ namespace: SURREAL_NAMESPACE, database: SURREAL_DATABASE });
+	} catch (error) {
+		console.error(`[ERROR] Failed to connect to SurrealDB: ${error instanceof Error ? error.message : String(error)}`);
+		console.error('The ingestion pipeline requires SurrealDB for progress tracking.');
+		process.exit(1);
+	}
+
+	// ─── Check ingestion log for resume status ─────────────────────────────
 	let resumeFromStage: string | null = null;
-	
-	if (shouldResume) {
+	const existingLog = await getIngestionLog(db, sourceMeta.url);
+
+	if (existingLog) {
+		if (existingLog.status === 'complete') {
+			console.log(`[SKIP] "${sourceMeta.title}" already ingested (status: complete)`);
+			await db.close();
+			process.exit(0);
+		}
+
+		// Failed or partial — attempt resume
+		resumeFromStage = existingLog.stage_completed || null;
+		console.log('╔══════════════════════════════════════════════════════════════╗');
+		console.log('║         SOPHIA — INGESTION PIPELINE (RESUMING)              ║');
+		console.log('╚══════════════════════════════════════════════════════════════╝');
+		console.log('');
+		console.log(`[RESUME] Previous status: ${existingLog.status}`);
+		console.log(`[RESUME] Last completed stage: ${resumeFromStage || 'none'}`);
+		if (existingLog.error_message) {
+			console.log(`[RESUME] Previous error: ${existingLog.error_message}`);
+		}
+		console.log('');
+
+		// Clear error state for retry
+		await updateIngestionLog(db, sourceMeta.url, {
+			status: 'extracting',
+			error_message: undefined
+		});
+	} else {
+		// Fresh start
+		await createIngestionLog(db, sourceMeta.url, sourceMeta.title);
+	}
+
+	// Load partial results from disk if resuming
+	let partial: PartialResults;
+	if (resumeFromStage) {
 		const loaded = loadPartialResults(slug);
 		if (loaded) {
 			partial = loaded;
-			resumeFromStage = loaded.stage_completed;
-			console.log('╔══════════════════════════════════════════════════════════════╗');
-			console.log('║         SOPHIA — INGESTION PIPELINE (RESUMING)              ║');
-			console.log('╚══════════════════════════════════════════════════════════════╝');
-			console.log('');
-			console.log(`[RESUME] Loaded partial results from stage: ${resumeFromStage}`);
-			console.log('');
+			console.log(`[RESUME] Loaded partial results from disk (stage: ${loaded.stage_completed})`);
 		} else {
-			console.log('[RESUME] No partial results found, starting from scratch');
-			partial = {
-				source: sourceMeta,
-				stage_completed: 'none'
-			};
+			console.log('[RESUME] No partial results on disk — restarting from scratch');
+			resumeFromStage = null;
+			partial = { source: sourceMeta, stage_completed: 'none' };
 		}
 	} else {
-		partial = {
-			source: sourceMeta,
-			stage_completed: 'none'
-		};
+		partial = { source: sourceMeta, stage_completed: 'none' };
 	}
 
 	console.log('╔══════════════════════════════════════════════════════════════╗');
@@ -486,8 +673,8 @@ async function main() {
 	console.log(`Words:  ${sourceMeta.word_count.toLocaleString()}`);
 	console.log(`Est. tokens: ~${estimateTokens(sourceText).toLocaleString()}`);
 	console.log(`Validate: ${shouldValidate ? 'YES (Gemini)' : 'No'}`);
-	if (shouldResume && resumeFromStage) {
-		console.log(`Resume: YES (from ${resumeFromStage})`);
+	if (resumeFromStage) {
+		console.log(`Resume from: ${resumeFromStage}`);
 	}
 	console.log('');
 
@@ -501,24 +688,100 @@ async function main() {
 		// ═══════════════════════════════════════════════════════════════
 		let allClaims: ExtractionOutput = [];
 
-		console.log('┌──────────────────────────────────────────────────────────┐');
-		console.log('│ STAGE 1: CLAIM EXTRACTION                               │');
-		console.log('└──────────────────────────────────────────────────────────┘');
-		const estimatedTokenCount = estimateTokens(sourceText);
+		if (shouldRunStage('extracting', resumeFromStage)) {
+			await updateIngestionLog(db, sourceMeta.url, { status: 'extracting' });
 
-		if (estimatedTokenCount > MAX_TOKENS_PER_SECTION) {
-			// Large source — split into sections
-			console.log(`  [INFO] Source exceeds ${MAX_TOKENS_PER_SECTION.toLocaleString()} token estimate. Splitting into sections...`);
-			const sections = splitIntoSections(sourceText);
-			console.log(`  [INFO] Split into ${sections.length} sections`);
+			console.log('┌──────────────────────────────────────────────────────────┐');
+			console.log('│ STAGE 1: CLAIM EXTRACTION                               │');
+			console.log('└──────────────────────────────────────────────────────────┘');
+			const stageTimer1 = startStageTimer();
+			const estimatedTokenCount = estimateTokens(sourceText);
 
-			for (let i = 0; i < sections.length; i++) {
-				console.log(`\n  [SECTION ${i + 1}/${sections.length}] (~${estimateTokens(sections[i]).toLocaleString()} tokens)`);
+			if (estimatedTokenCount > MAX_TOKENS_PER_SECTION) {
+				// Large source — split into sections
+				console.log(`  [INFO] Source exceeds ${MAX_TOKENS_PER_SECTION.toLocaleString()} token estimate. Splitting into sections...`);
+				const sections = splitIntoSections(sourceText);
+				console.log(`  [INFO] Split into ${sections.length} sections`);
 
+				// Build a mutable queue — auto-halve sections that hit the output token limit
+				const sectionQueue: string[] = [...sections];
+				let sectionLabel = 0;
+
+				for (let i = 0; i < sectionQueue.length; i++) {
+					const section = sectionQueue[i];
+					sectionLabel++;
+					console.log(`\n  [SECTION ${sectionLabel}] (~${estimateTokens(section).toLocaleString()} tokens)`);
+
+					const userMsg = EXTRACTION_USER(
+						`${sourceMeta.title} (Section ${sectionLabel})`,
+						sourceMeta.author.join(', ') || 'Unknown',
+						section
+					);
+
+					let rawResponse: string;
+					try {
+						rawResponse = await callClaudeWithProgress(
+							claude,
+							EXTRACTION_SYSTEM,
+							userMsg,
+							`Extracting section ${sectionLabel} via Claude`
+						);
+					} catch (apiError) {
+						const apiMsg = apiError instanceof Error ? apiError.message : String(apiError);
+						if (apiMsg.includes('truncated (max_tokens reached)') && section.length > 500) {
+							// Section too dense — halve it and re-queue both halves
+							const mid = Math.floor(section.length / 2);
+							console.warn(
+								`  [SPLIT] Section ${sectionLabel} truncated — splitting into 2 sub-sections and retrying`
+							);
+							sectionQueue.splice(i + 1, 0, section.substring(0, mid), section.substring(mid));
+							sectionLabel--;
+							continue;
+						}
+						throw apiError;
+					}
+					logClaudeCost('Extraction');
+
+					try {
+						const parsed = parseJsonResponse(rawResponse);
+						const validated = ExtractionOutputSchema.parse(parsed);
+
+						// Offset positions for later sections
+						const offset = allClaims.length;
+						const offsetClaims = validated.map((c) => ({
+							...c,
+							position_in_source: c.position_in_source + offset
+						}));
+
+						allClaims.push(...offsetClaims);
+						console.log(`  [OK] Extracted ${validated.length} claims from section ${sectionLabel}`);
+					} catch (parseError) {
+						console.warn(`  [WARN] JSON parse/validation failed for section ${sectionLabel}. Attempting fix...`);
+
+						const fixedResponse = await fixJsonWithClaude(
+							claude,
+							rawResponse,
+							parseError instanceof Error ? parseError.message : String(parseError),
+							'Array of { text, claim_type, domain, section_context, position_in_source, confidence }'
+						);
+
+						const fixedParsed = parseJsonResponse(fixedResponse);
+						const fixedValidated = ExtractionOutputSchema.parse(fixedParsed);
+						const offset = allClaims.length;
+						const offsetClaims = fixedValidated.map((c) => ({
+							...c,
+							position_in_source: c.position_in_source + offset
+						}));
+						allClaims.push(...offsetClaims);
+						console.log(`  [OK] Fixed and extracted ${fixedValidated.length} claims from section ${sectionLabel}`);
+					}
+				}
+			} else {
+				// Normal-sized source — process in one pass
 				const userMsg = EXTRACTION_USER(
-					`${sourceMeta.title} (Section ${i + 1}/${sections.length})`,
+					sourceMeta.title,
 					sourceMeta.author.join(', ') || 'Unknown',
-					sections[i]
+					sourceText
 				);
 
 				const rawResponse = await callClaude(claude, EXTRACTION_SYSTEM, userMsg);
@@ -526,19 +789,10 @@ async function main() {
 
 				try {
 					const parsed = parseJsonResponse(rawResponse);
-					const validated = ExtractionOutputSchema.parse(parsed);
-
-					// Offset positions for later sections
-					const offset = allClaims.length;
-					const offsetClaims = validated.map((c) => ({
-						...c,
-						position_in_source: c.position_in_source + offset
-					}));
-
-					allClaims.push(...offsetClaims);
-					console.log(`  [OK] Extracted ${validated.length} claims from section ${i + 1}`);
+					allClaims = ExtractionOutputSchema.parse(parsed);
+					console.log(`  [OK] Extracted ${allClaims.length} claims`);
 				} catch (parseError) {
-					console.warn(`  [WARN] JSON parse/validation failed for section ${i + 1}. Attempting fix...`);
+					console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
 
 					const fixedResponse = await fixJsonWithClaude(
 						claude,
@@ -548,342 +802,419 @@ async function main() {
 					);
 
 					const fixedParsed = parseJsonResponse(fixedResponse);
-					const fixedValidated = ExtractionOutputSchema.parse(fixedParsed);
-					const offset = allClaims.length;
-					const offsetClaims = fixedValidated.map((c) => ({
-						...c,
-						position_in_source: c.position_in_source + offset
-					}));
-					allClaims.push(...offsetClaims);
-					console.log(`  [OK] Fixed and extracted ${fixedValidated.length} claims from section ${i + 1}`);
+					allClaims = ExtractionOutputSchema.parse(fixedParsed);
+					console.log(`  [OK] Fixed and extracted ${allClaims.length} claims`);
 				}
 			}
-		} else {
-			// Normal-sized source — process in one pass
-			const userMsg = EXTRACTION_USER(
-				sourceMeta.title,
-				sourceMeta.author.join(', ') || 'Unknown',
-				sourceText
-			);
 
-			const rawResponse = await callClaude(claude, EXTRACTION_SYSTEM, userMsg);
-			logClaudeCost('Extraction');
-
-			try {
-				const parsed = parseJsonResponse(rawResponse);
-				allClaims = ExtractionOutputSchema.parse(parsed);
-				console.log(`  [OK] Extracted ${allClaims.length} claims`);
-			} catch (parseError) {
-				console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
-
-				const fixedResponse = await fixJsonWithClaude(
-					claude,
-					rawResponse,
-					parseError instanceof Error ? parseError.message : String(parseError),
-					'Array of { text, claim_type, domain, section_context, position_in_source, confidence }'
-				);
-
-				const fixedParsed = parseJsonResponse(fixedResponse);
-				allClaims = ExtractionOutputSchema.parse(fixedParsed);
-				console.log(`  [OK] Fixed and extracted ${allClaims.length} claims`);
+			// Print breakdown
+			const claimTypeBreakdown: Record<string, number> = {};
+			for (const claim of allClaims) {
+				claimTypeBreakdown[claim.claim_type] = (claimTypeBreakdown[claim.claim_type] || 0) + 1;
 			}
+			console.log(`\n  Claims by type:`);
+			for (const [type, count] of Object.entries(claimTypeBreakdown).sort((a, b) => b[1] - a[1])) {
+				console.log(`    ${type}: ${count}`);
+			}
+
+			partial.claims = allClaims;
+			partial.stage_completed = 'extracting';
+			savePartialResults(slug, partial);
+			await updateIngestionLog(db, sourceMeta.url, {
+				stage_completed: 'extracting',
+				claims_extracted: allClaims.length,
+				cost_usd: parseFloat(estimateCostUsd())
+			});
+		} else {
+			console.log('  [SKIP] Stage 1: Extraction (already completed)\n');
+			allClaims = partial.claims!;
 		}
 
-		// Print breakdown
-		const claimTypeBreakdown: Record<string, number> = {};
-		for (const claim of allClaims) {
-			claimTypeBreakdown[claim.claim_type] = (claimTypeBreakdown[claim.claim_type] || 0) + 1;
+		// ── Post-stage 1 check: fail fast if nothing was extracted ─────
+		if (allClaims.length === 0) {
+			throw new Error(
+				'Stage 1 produced 0 claims — check extraction prompt or source quality before proceeding'
+			);
 		}
-		console.log(`\n  Claims by type:`);
-		for (const [type, count] of Object.entries(claimTypeBreakdown).sort((a, b) => b[1] - a[1])) {
-			console.log(`    ${type}: ${count}`);
-		}
-
-		partial.claims = allClaims;
-		partial.stage_completed = 'extraction';
-		savePartialResults(slug, partial);
 
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 2: RELATION EXTRACTION
 		// ═══════════════════════════════════════════════════════════════
 		let relations: RelationsOutput = [];
 
-		console.log('\n┌──────────────────────────────────────────────────────────┐');
-		console.log('│ STAGE 2: RELATION EXTRACTION                            │');
-		console.log('└──────────────────────────────────────────────────────────┘');
+		if (shouldRunStage('relating', resumeFromStage)) {
+			await updateIngestionLog(db, sourceMeta.url, { status: 'relating' });
 
-		const claimsJson = JSON.stringify(allClaims, null, 2);
-		const relUserMsg = RELATIONS_USER(claimsJson);
-		const relRawResponse = await callClaude(claude, RELATIONS_SYSTEM, relUserMsg);
-		logClaudeCost('Relations');
+			console.log('\n┌──────────────────────────────────────────────────────────┐');
+			console.log('│ STAGE 2: RELATION EXTRACTION                            │');
+			console.log('└──────────────────────────────────────────────────────────┘');
 
-		try {
-			const parsed = parseJsonResponse(relRawResponse);
-			relations = RelationsOutputSchema.parse(parsed);
-			console.log(`  [OK] Identified ${relations.length} relations`);
-		} catch (parseError) {
-			console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
-			const fixedResponse = await fixJsonWithClaude(
-				claude,
-				relRawResponse,
-				parseError instanceof Error ? parseError.message : String(parseError),
-				'Array of { from_position, to_position, relation_type, strength, note? }'
-			);
-			const fixedParsed = parseJsonResponse(fixedResponse);
-			relations = RelationsOutputSchema.parse(fixedParsed);
-			console.log(`  [OK] Fixed and identified ${relations.length} relations`);
+			const claimsJson = JSON.stringify(allClaims, null, 2);
+			const relUserMsg = RELATIONS_USER(claimsJson);
+			const relRawResponse = await callClaude(claude, RELATIONS_SYSTEM, relUserMsg);
+			logClaudeCost('Relations');
+
+			try {
+				const parsed = parseJsonResponse(relRawResponse);
+				relations = RelationsOutputSchema.parse(parsed);
+				console.log(`  [OK] Identified ${relations.length} relations`);
+			} catch (parseError) {
+				console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
+				const fixedResponse = await fixJsonWithClaude(
+					claude,
+					relRawResponse,
+					parseError instanceof Error ? parseError.message : String(parseError),
+					'Array of { from_position, to_position, relation_type, strength, note? }'
+				);
+				const fixedParsed = parseJsonResponse(fixedResponse);
+				relations = RelationsOutputSchema.parse(fixedParsed);
+				console.log(`  [OK] Fixed and identified ${relations.length} relations`);
+			}
+
+			// Print breakdown
+			const relTypeBreakdown: Record<string, number> = {};
+			for (const rel of relations) {
+				relTypeBreakdown[rel.relation_type] = (relTypeBreakdown[rel.relation_type] || 0) + 1;
+			}
+			console.log(`\n  Relations by type:`);
+			for (const [type, count] of Object.entries(relTypeBreakdown).sort((a, b) => b[1] - a[1])) {
+				console.log(`    ${type}: ${count}`);
+			}
+
+			partial.relations = relations;
+			partial.stage_completed = 'relating';
+			savePartialResults(slug, partial);
+			await updateIngestionLog(db, sourceMeta.url, {
+				stage_completed: 'relating',
+				relations_extracted: relations.length,
+				cost_usd: parseFloat(estimateCostUsd())
+			});
+		} else {
+			console.log('  [SKIP] Stage 2: Relations (already completed)\n');
+			relations = partial.relations!;
 		}
-
-		// Print breakdown
-		const relTypeBreakdown: Record<string, number> = {};
-		for (const rel of relations) {
-			relTypeBreakdown[rel.relation_type] = (relTypeBreakdown[rel.relation_type] || 0) + 1;
-		}
-		console.log(`\n  Relations by type:`);
-		for (const [type, count] of Object.entries(relTypeBreakdown).sort((a, b) => b[1] - a[1])) {
-			console.log(`    ${type}: ${count}`);
-		}
-
-		partial.relations = relations;
-		partial.stage_completed = 'relations';
-		savePartialResults(slug, partial);
 
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 3: ARGUMENT GROUPING
 		// ═══════════════════════════════════════════════════════════════
 		let arguments_: GroupingOutput = [];
 
-		console.log('\n┌──────────────────────────────────────────────────────────┐');
-		console.log('│ STAGE 3: ARGUMENT GROUPING                              │');
-		console.log('└──────────────────────────────────────────────────────────┘');
+		if (shouldRunStage('grouping', resumeFromStage)) {
+			await updateIngestionLog(db, sourceMeta.url, { status: 'grouping' });
 
-		{
-			const claimsJson = JSON.stringify(allClaims, null, 2);
-			const relationsJson = JSON.stringify(relations, null, 2);
-			const grpUserMsg = GROUPING_USER(claimsJson, relationsJson);
-			const grpRawResponse = await callClaude(claude, GROUPING_SYSTEM, grpUserMsg);
-			logClaudeCost('Grouping');
+			console.log('\n┌──────────────────────────────────────────────────────────┐');
+			console.log('│ STAGE 3: ARGUMENT GROUPING                              │');
+			console.log('└──────────────────────────────────────────────────────────┘');
 
-			try {
-				const parsed = parseJsonResponse(grpRawResponse);
-				arguments_ = GroupingOutputSchema.parse(parsed);
-				console.log(`  [OK] Identified ${arguments_.length} arguments`);
-			} catch (parseError) {
-				console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
-				const fixedResponse = await fixJsonWithClaude(
-					claude,
-					grpRawResponse,
-					parseError instanceof Error ? parseError.message : String(parseError),
-					'Array of { name, tradition?, domain, summary, claims: [{ position_in_source, role }] }'
-				);
-				const fixedParsed = parseJsonResponse(fixedResponse);
-				arguments_ = GroupingOutputSchema.parse(fixedParsed);
-				console.log(`  [OK] Fixed and identified ${arguments_.length} arguments`);
+			{
+				const claimsJson = JSON.stringify(allClaims, null, 2);
+				const relationsJson = JSON.stringify(relations, null, 2);
+				const grpUserMsg = GROUPING_USER(claimsJson, relationsJson);
+				const grpRawResponse = await callClaude(claude, GROUPING_SYSTEM, grpUserMsg);
+				logClaudeCost('Grouping');
+
+				try {
+					const parsed = parseJsonResponse(grpRawResponse);
+					arguments_ = GroupingOutputSchema.parse(parsed);
+					console.log(`  [OK] Identified ${arguments_.length} arguments`);
+				} catch (parseError) {
+					console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
+					const fixedResponse = await fixJsonWithClaude(
+						claude,
+						grpRawResponse,
+						parseError instanceof Error ? parseError.message : String(parseError),
+						'Array of { name, tradition?, domain, summary, claims: [{ position_in_source, role }] }'
+					);
+					const fixedParsed = parseJsonResponse(fixedResponse);
+					arguments_ = GroupingOutputSchema.parse(fixedParsed);
+					console.log(`  [OK] Fixed and identified ${arguments_.length} arguments`);
+				}
 			}
-		}
 
-		console.log(`\n  Named arguments:`);
-		for (const arg of arguments_) {
-			console.log(`    • ${arg.name} (${arg.domain}, ${arg.claims.length} claims)`);
-		}
+			console.log(`\n  Named arguments:`);
+			for (const arg of arguments_) {
+				console.log(`    • ${arg.name} (${arg.domain}, ${arg.claims.length} claims)`);
+			}
 
-		partial.arguments = arguments_;
-		partial.stage_completed = 'grouping';
-		savePartialResults(slug, partial);
+			partial.arguments = arguments_;
+			partial.stage_completed = 'grouping';
+			savePartialResults(slug, partial);
+			await updateIngestionLog(db, sourceMeta.url, {
+				stage_completed: 'grouping',
+				arguments_grouped: arguments_.length,
+				cost_usd: parseFloat(estimateCostUsd())
+			});
+		} else {
+			console.log('  [SKIP] Stage 3: Grouping (already completed)\n');
+			arguments_ = partial.arguments!;
+		}
 
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 4: EMBEDDING
 		// ═══════════════════════════════════════════════════════════════
 		let allEmbeddings: number[][] = [];
 
-		console.log('\n┌──────────────────────────────────────────────────────────┐');
-		console.log('│ STAGE 4: EMBEDDING (Voyage AI)                          │');
-		console.log('└──────────────────────────────────────────────────────────┘');
+		if (shouldRunStage('embedding', resumeFromStage)) {
+			await updateIngestionLog(db, sourceMeta.url, { status: 'embedding' });
 
-		const claimTexts = allClaims.map((c) => c.text);
-		const BATCH_SIZE = 128;
+			console.log('\n┌──────────────────────────────────────────────────────────┐');
+			console.log('│ STAGE 4: EMBEDDING (Voyage AI)                          │');
+			console.log('└──────────────────────────────────────────────────────────┘');
 
-		console.log(`  Embedding ${claimTexts.length} claims in batches of ${BATCH_SIZE}...`);
+			const claimTexts = allClaims.map((c) => c.text);
+			const BATCH_SIZE = 128;
 
-		for (let i = 0; i < claimTexts.length; i += BATCH_SIZE) {
-			const batch = claimTexts.slice(i, i + BATCH_SIZE);
-			const batchNum = Math.floor(i / BATCH_SIZE) + 1;
-			const totalBatches = Math.ceil(claimTexts.length / BATCH_SIZE);
-			console.log(`  [BATCH ${batchNum}/${totalBatches}] Embedding ${batch.length} texts...`);
+			console.log(`  Embedding ${claimTexts.length} claims in batches of ${BATCH_SIZE}...`);
 
-			const voyageCandidates = getVoyageModelCandidates(VOYAGE_DIMENSIONS);
-			let response: Awaited<ReturnType<VoyageAIClient['embed']>> | null = null;
-			let voyageLastError: Error | null = null;
+			for (let i = 0; i < claimTexts.length; i += BATCH_SIZE) {
+				const batch = claimTexts.slice(i, i + BATCH_SIZE);
+				const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+				const totalBatches = Math.ceil(claimTexts.length / BATCH_SIZE);
+				console.log(`  [BATCH ${batchNum}/${totalBatches}] Embedding ${batch.length} texts...`);
 
-			for (const model of voyageCandidates) {
-				try {
-					response = await voyage.embed({
-						model,
-						input: batch,
-						inputType: 'document',
-						outputDimension: VOYAGE_DIMENSIONS
-					});
-					if (model !== VOYAGE_MODEL) {
-						console.log(`  [MODEL] Voyage fallback selected: ${model}`);
-					}
-					break;
-				} catch (error) {
-					voyageLastError = error instanceof Error ? error : new Error(String(error));
-					if (!isModelUnavailableError(voyageLastError)) {
+				const voyageCandidates = getVoyageModelCandidates(VOYAGE_DIMENSIONS);
+				let response: Awaited<ReturnType<VoyageAIClient['embed']>> | null = null;
+				let voyageLastError: Error | null = null;
+
+				for (const model of voyageCandidates) {
+					try {
+						response = await voyage.embed({
+							model,
+							input: batch,
+							inputType: 'document',
+							outputDimension: VOYAGE_DIMENSIONS
+						});
+						if (model !== VOYAGE_MODEL) {
+							console.log(`  [MODEL] Voyage fallback selected: ${model}`);
+						}
 						break;
+					} catch (error) {
+						voyageLastError = error instanceof Error ? error : new Error(String(error));
+						if (!isModelUnavailableError(voyageLastError)) {
+							break;
+						}
+					}
+				}
+
+				if (!response) {
+					throw new Error(
+						`Voyage embedding failed: ${voyageLastError?.message || 'No compatible model available'}`
+					);
+				}
+
+				if (response.usage?.totalTokens) {
+					costs.voyageTokens += response.usage.totalTokens;
+				}
+
+				if (response.data) {
+					for (const item of response.data) {
+						if (item.embedding) {
+							allEmbeddings.push(item.embedding);
+						}
 					}
 				}
 			}
 
-			if (!response) {
-				throw new Error(
-					`Voyage embedding failed: ${voyageLastError?.message || 'No compatible model available'}`
-				);
-			}
+			console.log(`  [OK] Generated ${allEmbeddings.length} embeddings (${VOYAGE_DIMENSIONS} dimensions)`);
+			console.log(`  [COST] Voyage tokens: ${costs.voyageTokens.toLocaleString()}`);
 
-			if (response.usage?.totalTokens) {
-				costs.voyageTokens += response.usage.totalTokens;
-			}
-
-			if (response.data) {
-				for (const item of response.data) {
-					if (item.embedding) {
-						allEmbeddings.push(item.embedding);
-					}
-				}
-			}
+			partial.embeddings = allEmbeddings;
+			partial.stage_completed = 'embedding';
+			savePartialResults(slug, partial);
+			await updateIngestionLog(db, sourceMeta.url, {
+				stage_completed: 'embedding',
+				cost_usd: parseFloat(estimateCostUsd())
+			});
+		} else {
+			console.log('  [SKIP] Stage 4: Embedding (already completed)\n');
+			allEmbeddings = partial.embeddings!;
 		}
 
-		console.log(`  [OK] Generated ${allEmbeddings.length} embeddings (${VOYAGE_DIMENSIONS} dimensions)`);
-		console.log(`  [COST] Voyage tokens: ${costs.voyageTokens.toLocaleString()}`);
-
-		partial.embeddings = allEmbeddings;
-		partial.stage_completed = 'embedding';
-		savePartialResults(slug, partial);
+		// ── Pipeline handoff point ─────────────────────────────────────
+		// When running in pipelined mode, stop here so the batch can start
+		// the next source's Claude extraction while Gemini validates this one.
+		if (stopAfterEmbedding) {
+			console.log('\n  [PIPELINE] Stages 1-4 complete. Handing off to Gemini+Store phase.');
+			await updateIngestionLog(db, sourceMeta.url, {
+				status: 'validating',
+				stage_completed: 'embedding',
+				cost_usd: parseFloat(estimateCostUsd())
+			});
+			await db.close();
+			process.exit(0);
+		}
 
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 5: CROSS-MODEL VALIDATION (optional)
 		// ═══════════════════════════════════════════════════════════════
 		let validationResult: ValidationOutput | null = null;
 
-		if (shouldValidate) {
-			console.log('\n┌──────────────────────────────────────────────────────────┐');
-			console.log('│ STAGE 5: CROSS-MODEL VALIDATION (Gemini)                │');
-			console.log('└──────────────────────────────────────────────────────────┘');
+		if (shouldRunStage('validating', resumeFromStage)) {
+			if (shouldValidate) {
+				await updateIngestionLog(db, sourceMeta.url, { status: 'validating' });
 
-			const gemini = new GoogleGenerativeAI(GOOGLE_AI_API_KEY);
+				console.log('\n┌──────────────────────────────────────────────────────────┐');
+				console.log('│ STAGE 5: CROSS-MODEL VALIDATION (Gemini)                │');
+				console.log('└──────────────────────────────────────────────────────────┘');
 
-			const validationPrompt =
-				VALIDATION_SYSTEM +
-				'\n\n' +
-				VALIDATION_USER({
-					sourceTitle: sourceMeta.title,
-					sourceText: sourceText.substring(0, 100_000), // Truncate if massive
-					claimsJson: JSON.stringify(allClaims, null, 2),
-					relationsJson: JSON.stringify(relations, null, 2),
-					argumentsJson: JSON.stringify(arguments_, null, 2)
-				});
+				const gemini = new GoogleGenerativeAI(GOOGLE_AI_API_KEY);
 
-			let validationError: Error | null = null;
+				const validationPrompt =
+					VALIDATION_SYSTEM +
+					'\n\n' +
+					VALIDATION_USER({
+						sourceTitle: sourceMeta.title,
+						sourceText: sourceText.substring(0, 100_000), // Truncate if massive
+						claimsJson: JSON.stringify(allClaims, null, 2),
+						relationsJson: JSON.stringify(relations, null, 2),
+						argumentsJson: JSON.stringify(arguments_, null, 2)
+					});
 
-			for (const modelName of GEMINI_MODELS) {
-				let validationAttempts = 0;
-				const maxValidationRetries = 3;
+				let validationError: Error | null = null;
 
-				while (validationAttempts <= maxValidationRetries) {
-					try {
-						if (validationAttempts > 0) {
-							const delay = 1000 * Math.pow(2, validationAttempts - 1);
-							console.log(`  [RETRY] Attempt ${validationAttempts + 1} (waiting ${delay}ms)...`);
-							await sleep(delay);
+				for (const modelName of GEMINI_MODELS) {
+					let validationAttempts = 0;
+					const maxValidationRetries = 3;
+
+					while (validationAttempts <= maxValidationRetries) {
+						try {
+							if (validationAttempts > 0) {
+								const delay = 1000 * Math.pow(2, validationAttempts - 1);
+								console.log(`  [RETRY] Attempt ${validationAttempts + 1} (waiting ${delay}ms)...`);
+								await sleep(delay);
+							}
+
+							const model = gemini.getGenerativeModel({ model: modelName });
+							const result = await model.generateContent({
+								contents: [{ role: 'user', parts: [{ text: validationPrompt }] }],
+								generationConfig: { temperature: 0.1 }
+							});
+
+							const response = result.response;
+							if (response?.usageMetadata?.totalTokenCount) {
+								costs.geminiTokens += response.usageMetadata.totalTokenCount;
+							}
+
+							const responseText = response?.text() || '';
+							const parsed = parseJsonResponse(responseText);
+							validationResult = ValidationOutputSchema.parse(parsed);
+							if (modelName !== GEMINI_MODEL) {
+								console.log(`  [MODEL] Gemini fallback selected: ${modelName}`);
+							}
+							break;
+						} catch (error) {
+							validationError = error instanceof Error ? error : new Error(String(error));
+							validationAttempts++;
+
+							if (isModelUnavailableError(validationError)) {
+								break;
+							}
+
+							if (validationAttempts > maxValidationRetries) {
+								break;
+							}
 						}
+					}
 
-						const model = gemini.getGenerativeModel({ model: modelName });
-						const result = await model.generateContent({
-							contents: [{ role: 'user', parts: [{ text: validationPrompt }] }],
-							generationConfig: { temperature: 0.1 }
-						});
-
-						const response = result.response;
-						if (response?.usageMetadata?.totalTokenCount) {
-							costs.geminiTokens += response.usageMetadata.totalTokenCount;
-						}
-
-						const responseText = response?.text() || '';
-						const parsed = parseJsonResponse(responseText);
-						validationResult = ValidationOutputSchema.parse(parsed);
-						if (modelName !== GEMINI_MODEL) {
-							console.log(`  [MODEL] Gemini fallback selected: ${modelName}`);
-						}
+					if (validationResult) {
 						break;
-					} catch (error) {
-						validationError = error instanceof Error ? error : new Error(String(error));
-						validationAttempts++;
-
-						if (isModelUnavailableError(validationError)) {
-							break;
-						}
-
-						if (validationAttempts > maxValidationRetries) {
-							break;
-						}
 					}
 				}
 
+				if (!validationResult && validationError) {
+					console.warn('  [WARN] Validation failed after model fallbacks. Continuing without validation.');
+					console.warn(`  Error: ${validationError.message}`);
+				}
+
 				if (validationResult) {
-					break;
+					const claimScores = validationResult.claims?.map((c) => c.faithfulness_score) || [];
+					const avgScore =
+						claimScores.length > 0
+							? Math.round(claimScores.reduce((a, b) => a + b, 0) / claimScores.length)
+							: 0;
+					const quarantined = validationResult.quarantine_items?.length || 0;
+
+					console.log(`  [OK] Validation complete`);
+					console.log(`  Average faithfulness score: ${avgScore}/100`);
+					console.log(`  Quarantined items: ${quarantined}`);
+					console.log(`  Summary: ${validationResult.summary}`);
+
+					if (avgScore < 60) {
+						console.warn('\n  ⚠️  WARNING: Quality score below 60. Manual review recommended.');
+					}
 				}
+			} else {
+				console.log('\n  [SKIP] Stage 5: Validation (use --validate flag to enable)');
 			}
 
-			if (!validationResult && validationError) {
-				console.warn('  [WARN] Validation failed after model fallbacks. Continuing without validation.');
-				console.warn(`  Error: ${validationError.message}`);
-			}
+			partial.validation = validationResult;
+			partial.stage_completed = 'validating';
+			savePartialResults(slug, partial);
 
-			if (validationResult) {
-				const claimScores = validationResult.claims?.map((c) => c.faithfulness_score) || [];
-				const avgScore =
-					claimScores.length > 0
-						? Math.round(claimScores.reduce((a, b) => a + b, 0) / claimScores.length)
-						: 0;
-				const quarantined = validationResult.quarantine_items?.length || 0;
+			const valScore = validationResult?.claims?.length
+				? validationResult.claims.reduce((a, b) => a + b.faithfulness_score, 0) / validationResult.claims.length
+				: undefined;
 
-				console.log(`  [OK] Validation complete`);
-				console.log(`  Average faithfulness score: ${avgScore}/100`);
-				console.log(`  Quarantined items: ${quarantined}`);
-				console.log(`  Summary: ${validationResult.summary}`);
-
-				if (avgScore < 60) {
-					console.warn('\n  ⚠️  WARNING: Quality score below 60. Manual review recommended.');
-				}
-			}
+			await updateIngestionLog(db, sourceMeta.url, {
+				stage_completed: 'validating',
+				validation_score: valScore,
+				cost_usd: parseFloat(estimateCostUsd())
+			});
 		} else {
-			console.log('\n  [SKIP] Stage 5: Validation (use --validate flag to enable)');
+			console.log('  [SKIP] Stage 5: Validation (already completed)\n');
+			validationResult = partial.validation ?? null;
 		}
-
-		partial.validation = validationResult;
-		partial.stage_completed = 'validation';
-		savePartialResults(slug, partial);
 
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 6: STORE IN SURREALDB
 		// ═══════════════════════════════════════════════════════════════
-		console.log('\n┌──────────────────────────────────────────────────────────┐');
-		console.log('│ STAGE 6: STORE IN SURREALDB                             │');
-		console.log('└──────────────────────────────────────────────────────────┘');
+		if (shouldRunStage('storing', resumeFromStage)) {
+			// ── Pre-stage 6 health check ──────────────────────────────
+			// Stages 1–5 can take 20+ minutes; verify the DB session is still
+			// alive before beginning the critical write phase.
+			console.log('\n  [CHECK] Verifying DB connection before store...');
+			await ensureDbConnected(db);
 
-		const db = new Surreal();
+			await updateIngestionLog(db, sourceMeta.url, { status: 'storing' });
 
-		try {
-			await db.connect(SURREAL_URL);
-			await db.signin({
-				username: SURREAL_USER,
-				password: SURREAL_PASS
-			} as any);
-			await db.use({ namespace: SURREAL_NAMESPACE, database: SURREAL_DATABASE });
-			console.log('  [OK] Connected to SurrealDB');
+			console.log('\n┌──────────────────────────────────────────────────────────┐');
+			console.log('│ STAGE 6: STORE IN SURREALDB                             │');
+			console.log('└──────────────────────────────────────────────────────────┘');
 
-			// 6a. Create source record
+			// DB connection already established at startup — reuse it
+			console.log('  [OK] Using existing SurrealDB connection');
+
+			// 6a. Remove any existing source data for this URL (idempotent re-run safety)
+			console.log('  Checking for existing source data...');
+			const RELATION_TABLES_ALL = [
+				'supports', 'contradicts', 'depends_on', 'responds_to', 'refines', 'exemplifies'
+			];
+			const existingSources = await db.query<[{ id: string }[]]>(
+				'SELECT id FROM source WHERE url = $url LIMIT 1',
+				{ url: sourceMeta.url }
+			);
+			const existingSourceId = Array.isArray(existingSources) && existingSources.length > 0
+				? Array.isArray(existingSources[0]) ? existingSources[0][0]?.id : (existingSources[0] as any)?.id
+				: null;
+			if (existingSourceId) {
+				console.log(`  [CLEANUP] Removing existing source (${existingSourceId}) and its claims/arguments...`);
+				// Remove relation edges among claims of this source
+				for (const relTable of RELATION_TABLES_ALL) {
+					await db.query(
+						`DELETE ${relTable} WHERE in IN (SELECT id FROM claim WHERE source = $sid) OR out IN (SELECT id FROM claim WHERE source = $sid)`,
+						{ sid: existingSourceId }
+					);
+				}
+				await db.query('DELETE part_of WHERE in IN (SELECT id FROM claim WHERE source = $sid)', { sid: existingSourceId });
+				await db.query('DELETE claim WHERE source = $sid', { sid: existingSourceId });
+				await db.query('DELETE argument WHERE source = $sid', { sid: existingSourceId });
+				await db.query('DELETE source WHERE id = $sid', { sid: existingSourceId });
+				console.log('  [CLEANUP] Existing data removed — proceeding with fresh store');
+			} else {
+				console.log('  [OK] No existing data found — fresh store');
+			}
+
+			// 6b. Create source record
 			console.log('  Creating source record...');
 			const sourceRecord = await db.query<[{ id: string }[]]>(
 				`CREATE source CONTENT {
@@ -919,11 +1250,16 @@ async function main() {
 			}
 			console.log(`  [OK] Source record: ${sourceId}`);
 
-			// 6b. Create claim records with embeddings
+			// 6c. Create claim records with embeddings
 			console.log(`  Creating ${allClaims.length} claim records...`);
 			const claimIdMap: Map<number, string> = new Map(); // position_in_source → claim ID
 
 			for (let i = 0; i < allClaims.length; i++) {
+				// Re-check DB connection every 25 claims to catch session expiry early
+				if (i > 0 && i % 25 === 0) {
+					await ensureDbConnected(db);
+				}
+
 				const claim = allClaims[i];
 				const embedding = allEmbeddings[i] || null;
 
@@ -974,7 +1310,7 @@ async function main() {
 			console.log('');
 			console.log(`  [OK] Created ${claimIdMap.size} claim records`);
 
-			// 6c. Create relation records
+			// 6d. Create relation records
 			console.log(`  Creating ${relations.length} relation records...`);
 			let relationsCreated = 0;
 
@@ -1051,7 +1387,7 @@ async function main() {
 			}
 			console.log(`  [OK] Created ${relationsCreated} relation records`);
 
-			// 6d. Create argument records and part_of relations
+			// 6e. Create argument records and part_of relations
 			console.log(`  Creating ${arguments_.length} argument records...`);
 			let argumentsCreated = 0;
 			let partOfCreated = 0;
@@ -1118,7 +1454,7 @@ async function main() {
 			console.log(`  [OK] Created ${argumentsCreated} argument records`);
 			console.log(`  [OK] Created ${partOfCreated} part_of relations`);
 
-			// 6e. Update source record
+			// 6f. Update source record
 			await db.query(`UPDATE $source SET claim_count = $count, status = $status`, {
 				source: sourceId,
 				count: allClaims.length,
@@ -1126,28 +1462,45 @@ async function main() {
 			});
 			console.log('  [OK] Source record updated');
 
-			await db.close();
-			console.log('  [OK] Database connection closed');
+			// ── Post-store verification ───────────────────────────────
+			// Query DB to confirm expected counts are actually stored.
+			console.log('  Verifying stored data...');
+			const verifyClaimResult = await db.query<[{ count: number }[]]>(
+				`SELECT count() AS count FROM claim WHERE source = $sid GROUP ALL`,
+				{ sid: sourceId }
+			);
+			const verifyArgResult = await db.query<[{ count: number }[]]>(
+				`SELECT count() AS count FROM argument WHERE source = $sid GROUP ALL`,
+				{ sid: sourceId }
+			);
+			const storedClaims =
+				Array.isArray(verifyClaimResult?.[0]) ? (verifyClaimResult[0][0]?.count ?? 0) : 0;
+			const storedArgs =
+				Array.isArray(verifyArgResult?.[0]) ? (verifyArgResult[0][0]?.count ?? 0) : 0;
+
+			if (storedClaims !== claimIdMap.size) {
+				console.warn(
+					`  [WARN] Claim count mismatch: expected ${claimIdMap.size} in DB, found ${storedClaims}`
+				);
+			} else {
+				console.log(`  [OK] Verified: ${storedClaims} claims in DB`);
+			}
+			if (storedArgs !== argumentsCreated) {
+				console.warn(
+					`  [WARN] Argument count mismatch: expected ${argumentsCreated} in DB, found ${storedArgs}`
+				);
+			} else {
+				console.log(`  [OK] Verified: ${storedArgs} arguments in DB`);
+			}
 
 			partial.stage_completed = 'stored';
 			savePartialResults(slug, partial);
-		} catch (dbError) {
-			console.error(
-				'\n  [ERROR] SurrealDB failure:',
-				dbError instanceof Error ? dbError.message : String(dbError)
-			);
-			try {
-				await db.close();
-			} catch {
-				// ignore
-			}
-			partial.stage_completed = 'store_failed';
-			savePartialResults(slug, partial);
-			process.exit(1);
+		} else {
+			console.log('  [SKIP] Stage 6: Storage (already completed)\n');
 		}
 
 		// ═══════════════════════════════════════════════════════════════
-		// SUMMARY
+		// MARK COMPLETE IN INGESTION LOG
 		// ═══════════════════════════════════════════════════════════════
 		const validationAvg = validationResult?.claims?.length
 			? Math.round(
@@ -1156,6 +1509,23 @@ async function main() {
 				)
 			: null;
 
+		await updateIngestionLog(db, sourceMeta.url, {
+			status: 'complete',
+			stage_completed: 'storing',
+			claims_extracted: allClaims.length,
+			relations_extracted: relations.length,
+			arguments_grouped: arguments_.length,
+			validation_score: validationAvg ?? undefined,
+			cost_usd: parseFloat(estimateCostUsd()),
+			completed_at: new Date()
+		});
+
+		await db.close();
+		console.log('  [OK] Database connection closed');
+
+		// ═══════════════════════════════════════════════════════════════
+		// SUMMARY
+		// ═══════════════════════════════════════════════════════════════
 		console.log('\n╔══════════════════════════════════════════════════════════════╗');
 		console.log('║                   INGESTION COMPLETE                        ║');
 		console.log('╠══════════════════════════════════════════════════════════════╣');
@@ -1189,7 +1559,26 @@ async function main() {
 		if (error instanceof Error && error.stack) {
 			console.error(error.stack);
 		}
+
+		// Update ingestion log with failure
+		try {
+			await updateIngestionLog(db, sourceMeta.url, {
+				status: 'failed',
+				error_message: error instanceof Error ? error.message : String(error),
+				cost_usd: parseFloat(estimateCostUsd())
+			});
+		} catch {
+			// If we can't update the log, we still want to save partial results
+		}
+
 		savePartialResults(slug, partial);
+
+		try {
+			await db.close();
+		} catch {
+			// ignore
+		}
+
 		process.exit(1);
 	}
 }

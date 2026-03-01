@@ -1,62 +1,63 @@
-# SOPHIA Phase 3a: Ethics Knowledge Base Checklist
+# SOPHIA Phase 3b: DB Persistence + Ingestion Checklist
 
 ## Infrastructure
-- [ ] SurrealDB running locally via Docker
-- [ ] Schema created (run setup-schema.ts)
-- [ ] Voyage AI API key obtained and configured
-- [ ] Gemini API key obtained and configured
-
-## Ingestion Pipeline
-- [ ] Source fetcher script working (fetch-source.ts)
-- [ ] Extraction prompt producing valid JSON
-- [ ] Relation extraction prompt producing valid JSON
-- [ ] Argument grouping prompt producing valid JSON
-- [ ] Zod validation passing on all outputs
-- [ ] Embedding generation working (Voyage AI)
-- [ ] Gemini validation producing scored results
-- [ ] Full pipeline (ingest.ts) runs end-to-end on one source
-- [ ] SurrealDB correctly stores claims, relations, arguments with edges
+- [x] GCE VM (sophia-db) running SurrealDB with persistent storage
+- [x] Firewall rules configured (DB port restricted)
+- [x] VPC connector created (Cloud Run → GCE internal networking)
+- [x] Production schema applied
+- [x] DB password in Secret Manager
+- [x] Voyage AI key in Secret Manager
+- [x] Gemini key in Secret Manager
+- [x] deploy.yml updated with all secrets and VPC connector
+- [x] Health check endpoint returning source/claim/argument counts
+- [x] Backup script tested
 
 ## Wave 1 Ingestion (8 foundational sources)
-- [ ] Source 1: SEP Utilitarianism — fetched & ingested
-- [ ] Source 2: Mill Utilitarianism — fetched & ingested
-- [ ] Source 3: Singer Famine/Affluence — fetched & ingested
-- [ ] Source 4: SEP Deontological Ethics — fetched & ingested
-- [ ] Source 5: Kant Groundwork — fetched & ingested
-- [ ] Source 6: Ross Right and Good — fetched & ingested
-- [ ] Source 7: SEP Virtue Ethics — fetched & ingested
-- [ ] Source 8: Aristotle Nicomachean Ethics — fetched & ingested
-- [ ] Manual review: spot-check 30+ claims from Wave 1 for accuracy
-- [ ] Prompt adjustments based on Wave 1 review
+- [x] All 8 sources fetched to data/sources/
+- [x] Batch ingestion run with --validate flag
+- [ ] Ingestion log shows all 8 complete _(ingestion_log table created in Phase 3b; Wave 1 pre-dates it — run `setup-ingestion-log.ts` then verify, or re-ingest with --retry to populate log)_
+- [ ] Quality report generated _(run: `npx tsx --env-file=.env scripts/quality-report.ts --all`)_
+- [x] Spot-check: ≥10 claims per source reviewed manually
+- [x] Accuracy ≥80% on spot-checked claims
+- [x] Prompt adjustments documented in tuning log _(accuracy gate passed; no adjustments required)_
+- [x] Backup taken after Wave 1
+
+## Wave 1 Prompt Tuning (if accuracy < 80%)
+> **N/A** — Phase 3a spot-check confirmed accuracy >80%. Prompt tuning loop was not required.
+
+- [x] Error patterns identified _(none — accuracy gate passed)_
+- [x] Extraction prompt updated _(no changes required)_
+- [x] Re-run failed/low-quality sources _(no failures)_
+- [x] Re-spot-check shows improvement _(not applicable)_
 
 ## Wave 2 Ingestion (10 sources)
-- [ ] Sources 9-18 ingested with updated prompts
+- [ ] All 10 sources fetched
+- [ ] Batch ingestion run (with updated prompts from Wave 1 tuning)
 - [ ] Spot-check 10% of claims
-- [ ] Cross-source relations emerging in graph
+- [ ] Quality report shows no regression
+- [ ] Backup taken after Wave 2
 
 ## Wave 3 Ingestion (11 sources)
-- [ ] Sources 19-29 ingested
-- [ ] Full Gemini validation on all sources
-- [ ] Quarantined items reviewed
+- [ ] All 11 sources fetched
+- [ ] Batch ingestion run
+- [ ] Full Gemini validation on all 29 sources
+- [ ] Quarantined items reviewed manually
+- [ ] Backup taken after Wave 3
 
-## Retrieval Integration
-- [ ] Argument-aware retrieval returning structured context
-- [ ] Context block formatting correct
-- [ ] Engine integration: graph context injected into all three passes
-- [ ] Graceful degradation: engine works without SurrealDB
+## Retrieval Validation
+- [ ] Retrieval test: ≥7/10 ethics queries return GOOD context
+- [ ] Non-ethics queries correctly return EMPTY (expected)
+- [ ] Graph traversal working: trolley problem retrieves Foot + DDE + utilitarian counterargs
 
-## Quality Gates (ALL must pass before Phase 3b)
-- [ ] Extraction accuracy >80% (spot-checked claims are atomic, correctly typed)
-- [ ] Relation accuracy >75% (spot-checked relations are genuine logical connections)
-- [ ] Retrieval quality: 5 ethics queries return relevant graph context
-- [ ] Three-pass improvement: with graph beats without on ≥6/10 test cases
-- [ ] Cross-argument traversal: trolley problem retrieves Foot, DDE, utilitarian counterarguments
+## Quality Gate (ALL must pass)
+- [ ] Three-pass with graph beats without on ≥6/10 test cases
+- [ ] Total claims in graph: >200 (across 29 sources)
+- [ ] Total named arguments: >30
+- [ ] Cross-argument traversal verified
+- [ ] Production deployment updated and health check green
+- [ ] Backup of complete knowledge base stored
 
-## Admin
-- [ ] Admin dashboard showing knowledge base stats
-- [ ] Source list visible with status
-
-## Deployment
-- [ ] SurrealDB accessible in production (Cloud Run or managed)
-- [ ] New secrets in Secret Manager (Voyage, Gemini)
-- [ ] Deploy.yml updated
+## Production Deploy
+- [ ] App redeployed with DB connection
+- [ ] Health check on production returns 'healthy' with correct counts
+- [ ] Live test: submit ethics query on production URL, verify graph context appears in output
