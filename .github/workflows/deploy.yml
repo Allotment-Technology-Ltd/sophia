@@ -111,6 +111,13 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker europe-west2-docker.pkg.dev
 
+      - name: Verify source code contains expected changes
+        run: |
+          echo "Checking for is-analysis class in +page.svelte..."
+          grep -c "is-analysis" src/routes/+page.svelte || echo "NOT FOUND"
+          echo "Checking for streamPassWithContinuation in engine.ts..."
+          grep -c "streamPassWithContinuation" src/lib/server/engine.ts || echo "NOT FOUND"
+
       - name: Build Docker image
         run: |
           docker build --no-cache --pull \
