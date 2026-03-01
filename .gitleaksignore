@@ -1,0 +1,18 @@
+# .gitleaksignore
+#
+# Whitelists known false positives from gitleaks secret scanning.
+# Each entry is a SHA256 hash of the offending line, or a file path pattern.
+#
+# To generate a hash for a false positive:
+#   echo -n "the offending line" | sha256sum
+
+# .env.example contains placeholder values only (sk-ant-your-key-here, AIza-your-key-here, etc.)
+# These are not real secrets.
+.env.example
+
+# Documentation may contain example API key formats for illustration
+docs/**
+
+# Build output is not committed but is listed here defensively
+build/**
+.svelte-kit/**

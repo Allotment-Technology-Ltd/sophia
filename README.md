@@ -1,164 +1,232 @@
-# SOPHIA
+# SOPHIA: Structured Ontological & Philosophical Heuristic Intelligence Agent
 
-**Philosophical reasoning engine with ethics knowledge base, deploying via GitHub Actions to Google Cloud Run.**
+**A structured-reasoning engine for philosophical analysis using a three-pass dialectical approach and argument graph retrieval.**
 
-## Project Status
+[![Deploy to Cloud Run](https://github.com/Allotment-Technology-Ltd/sophia/actions/workflows/deploy.yml/badge.svg)](https://github.com/Allotment-Technology-Ltd/sophia/actions/workflows/deploy.yml)
 
-**Phase 3a ✅ Complete** (Tag: `phase-3a-complete`)
-- Ethics knowledge base ingestion pipeline fully operational
-- 8 foundational philosophical sources ingested with LLM validation
-- SurrealDB persistent storage on GCE VM + Cloud Run test instance
-- Multi-pass reasoning engine integrated with graph context retrieval
-- All API keys (Voyage AI, Gemini) rotated and secured in GCP Secret Manager
+---
 
-**Current Version**: 3a | **Production Ready**: Yes (with monitoring)
+## Research Question
 
-See [CHANGELOG.md](CHANGELOG.md) for Phase 3a deliverables and [docs/phase-3b-roadmap.md](docs/phase-3b-roadmap.md) for upcoming work.
+Can structured argument retrieval combined with dialectical prompting produce measurably more rigorous philosophical analyses than standard single-pass LLM responses?
+
+SOPHIA tests this hypothesis by storing philosophical knowledge as an **argument graph** (claims linked by typed logical relations) and using a **three-pass dialectical engine** (Analysis → Critique → Synthesis) that mirrors genuine philosophical methodology. Phase 1 validation showed the structured approach outperformed single-pass on 8/10 test cases using a blinded rubric assessing argument quality, counterargument acknowledgement, and conclusion justification.
+
+---
+
+## Live Demo
+
+**[usesophia.app](https://sophia-210020077715.europe-west2.run.app)**
+
+Try: *"Is moral relativism defensible?"* or *"Assess the ethical assumptions behind the EU AI Act's risk classification system"*
+
+---
+
+## Architecture
+
+### Three-Pass Dialectical Engine
+
+Rather than a single LLM call, SOPHIA uses three sequential passes that mirror philosophical debate:
+
+| Pass | Role | What it does |
+|------|------|-------------|
+| **Pass 1 — Analysis** | The Proponent | Constructs the strongest case(s) for each position, grounding claims in named traditions |
+| **Pass 2 — Critique** | The Sceptic | Challenges premises, exposes hidden assumptions, raises counterarguments |
+| **Pass 3 — Synthesis** | The Synthesiser | Integrates perspectives, maps genuine disagreements, reaches a justified conclusion |
+
+Each pass receives: (a) the original query, (b) the argument-graph context retrieved for that query, and (c) the output of prior passes. This prevents the Synthesiser from glossing over genuine tensions that the Critic exposed.
+
+See [docs/three-pass-engine.md](docs/three-pass-engine.md) for rationale and example output.
+
+### Argument Graph
+
+Philosophical knowledge is stored not as flat text chunks but as structured **claims** linked by **typed relations** in SurrealDB:
+
+```
+Claim: "Maximising aggregate utility can justify harming individuals"
+  ← contradicts ← Claim: "Each person's interests must be treated as inviolable"
+  ← responds_to ← Claim: "Rule utilitarianism avoids agent-specific violations"
+  ← part_of     ← Argument: "The Rights Objection to Utilitarianism"
+```
+
+Typed relations include: `supports`, `contradicts`, `responds_to`, `depends_on`, `part_of`, `exemplifies`.
+
+This matters because **vector search alone** would retrieve the most semantically similar claims — often the same position restated. Graph traversal assembles the *argumentative structure*: thesis + objection + reply, which is what philosophical reasoning requires.
+
+See [docs/argument-graph.md](docs/argument-graph.md) for the full schema.
+
+### Argument-Aware Retrieval Pipeline
+
+```
+Query
+  │
+  ├─ Embed query (Voyage AI)
+  ├─ Vector search → top-K semantically similar claims
+  ├─ Graph traversal → expand to related claims via typed edges
+  ├─ Deduplicate + resolve inter-claim relations
+  ├─ Fetch enclosing argument structures
+  └─ Return assembled context block (claims + relations + arguments)
+```
+
+The assembled context is injected into all three passes. Each pass has a different prompt — the Proponent uses claims to ground positions, the Sceptic looks for contradictions, the Synthesiser tracks which objections were adequately answered.
+
+See [docs/architecture.md](docs/architecture.md) for the system diagram.
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Why |
+|-------|-----------|-----|
+| Frontend + Backend | SvelteKit 2, Svelte 5, TypeScript | Full-stack with SSE streaming; Svelte 5 runes for reactive state |
+| Database | SurrealDB v2 | Graph + vector + document queries in a single query path |
+| AI Engine | Claude API (claude-sonnet-4-5) | Best reasoning quality for multi-step philosophical argumentation |
+| Validation | Google Gemini 2.5 Flash | Cross-model validation during ingestion pipeline (bias diversification) |
+| Embeddings | Voyage AI | High-quality semantic retrieval tuned for long-form text |
+| Hosting | Google Cloud Run + GCE | Containerised app (Cloud Run) + persistent DB VM (GCE) |
+| CI/CD | GitHub Actions + Workload Identity Federation | Keyless auth to GCP; secret-free pipeline |
+
+---
+
+## Current Status
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 1 | ✅ Complete | Three-pass engine validated: outperforms single-pass on 8/10 test cases |
+| Phase 2 | ✅ Complete | SvelteKit app deployed with streaming three-pass analysis |
+| Phase 3a | ✅ Complete | Ethics knowledge base (Wave 1): ingestion pipeline, argument graph, retrieval |
+| Phase 3b | ✅ Complete | Production SurrealDB on GCE, ingestion quality validation |
+| Phase 3c | 🔄 In progress | UI — references panel, design system |
+| Phase 4 | 📋 Planned | Web search gap-filling (Pass 2 triggers search when it identifies factual gaps) |
+| Phase 5 | 📋 Planned | Authentication, rate limiting, beta launch (50 users) |
+| Phase 6 | 📋 Planned | Commercial features |
+
+---
+
+## Knowledge Base
+
+**Phase 3a (complete):** Ethics corpus, Wave 1
+
+- ~500+ claims extracted and validated
+- ~400+ typed inter-claim relations
+- 8 foundational sources ingested:
+  - Stanford Encyclopedia of Philosophy: Utilitarianism, Deontological Ethics, Virtue Ethics
+  - Mill: *Utilitarianism*; Kant: *Groundwork of the Metaphysics of Morals*
+  - Singer: *Famine, Affluence, and Morality*
+  - Ross: *The Right and the Good*; Aristotle: *Nicomachean Ethics* (excerpts)
+
+**Waves 2–3 (Phase 3b/3c):** 21 additional sources covering consequentialism, rights theory, applied ethics, and meta-ethics. See `data/source-list-3a.json` for the full annotated list.
+
+---
+
+## Project Structure
+
+```
+src/
+├── lib/
+│   ├── server/
+│   │   ├── engine.ts          # Three-pass dialectical engine
+│   │   ├── retrieval.ts       # Argument-aware graph retrieval
+│   │   ├── prompts/           # All AI prompt templates (analysis, critique, synthesis)
+│   │   ├── anthropic.ts       # Claude API client + token tracking
+│   │   ├── gemini.ts          # Gemini validation client
+│   │   ├── embeddings.ts      # Voyage AI embedding client
+│   │   └── db.ts              # SurrealDB client (singleton, lazy-init)
+│   ├── components/            # Svelte 5 UI components
+│   ├── stores/                # Svelte 5 rune stores
+│   └── types/                 # TypeScript interfaces
+├── routes/
+│   ├── api/analyse/           # SSE streaming endpoint (POST)
+│   └── admin/                 # Knowledge base monitoring dashboard
+scripts/
+├── ingest.ts                  # 7-pass source ingestion pipeline
+├── fetch-source.ts            # Source fetcher (SEP, papers, books)
+├── setup-schema.ts            # SurrealDB schema setup
+├── verify-db.ts               # Database integrity checks
+└── quality-report.ts          # Ingestion quality reporting
+data/
+├── source-list-3a.json        # Annotated list of Phase 3a sources
+└── sources/                   # Raw source texts (not committed — see data/sources/README.md)
+```
+
+---
 
 ## Quick Start
 
+### Prerequisites
+
+- Node.js 20+, pnpm 9+
+- SurrealDB v2 running locally (or remote connection)
+- API keys: Anthropic, Google AI, Voyage AI (see `.env.example`)
+
 ### Local Development
+
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
-# Set up environment (see .env.example)
+# Configure environment
 cp .env.example .env
-# Edit .env with your API keys and database connection
+# Edit .env with your API keys
 
-# Run development server
-npm run dev
-
-# Access at http://localhost:5173
-```
-
-### Knowledge Base Management
-```bash
-# Ingest a single source
-npx ts-node scripts/ingest.ts <source-url>
-
-# Batch ingest multiple sources
-npx ts-node scripts/ingest-batch.ts
-
-# Verify database integrity
-npx ts-node scripts/verify-db.ts
+# Run SurrealDB locally (separate terminal)
+surreal start --bind 0.0.0.0:8000 --user root --pass your-pass
 
 # Set up database schema (first time only)
-npx ts-node scripts/setup-schema.ts
+pnpm tsx scripts/setup-schema.ts
+
+# Start development server
+pnpm dev
+# → http://localhost:5173
 ```
 
-### Deployment
+### Ingest a Source
+
 ```bash
-# Deploy to Cloud Run (via GitHub Actions on main push)
-git push origin main
-# View deployment: https://github.com/Allotment-Technology-Ltd/sophia/actions
+# Fetch a source text
+pnpm tsx scripts/fetch-source.ts <url> <source_type>
+
+# Ingest with validation
+pnpm tsx scripts/ingest.ts <source-file> --validate
 ```
 
-## Architecture Overview
+---
 
-### Technology Stack
-- **Frontend**: SvelteKit + Vite + Tailwind CSS
-- **Backend**: Node.js + SvelteKit Server
-- **Database**: SurrealDB (graph-based knowledge storage)
-- **LLM APIs**: Google Gemini (reasoning), Voyage AI (embeddings)
-- **Deployment**: Google Cloud Run (stateless) + GCE VM (SurrealDB)
-- **CI/CD**: GitHub Actions
+## Research Methodology
 
-### Core Components
+Phase 1 evaluation used a blinded rubric assessing:
 
-#### Web Application (`/src`)
-- **Routes**: Main conversation interface (`+page.svelte`), admin dashboard (`/admin`)
-- **API**: `/api/analyse` endpoint for three-pass reasoning
-- **Server**: Database and LLM integration (`/src/lib/server`)
-- **State Management**: Svelte stores for conversation context
+1. **Argument structure** — Are premises made explicit? Is the reasoning valid?
+2. **Counterargument acknowledgement** — Are the strongest objections engaged?
+3. **Conclusion justification** — Is the conclusion proportionate to the evidence?
+4. **Philosophical grounding** — Are claims anchored in named traditions?
 
-#### Knowledge Base
-- **Storage**: SurrealDB graph database with claims, arguments, and relations
-- **Schema**: Ethics domain model with philosophical schools and concepts
-- **Ingestion**: 7-pass pipeline (fetch → extract → validate → embed → score → rank → store)
+The three-pass engine was compared against single-pass Claude Sonnet on identical queries. Results: 8/10 test cases rated higher for argument quality; 10/10 for counterargument coverage.
 
-#### Reasoning Engine
-- **Three-Pass Analysis**:
-  1. **Pass 1 (Analysis)**: Extract core arguments from user query using knowledge graph context
-  2. **Pass 2 (Critique)**: Challenge assumptions and identify counterarguments
-  3. **Pass 3 (Synthesis)**: Integrate multiple perspectives toward balanced conclusion
-- **LLM Integration**: Prompts in `/src/lib/server/prompts`
+See [docs/evaluation-methodology.md](docs/evaluation-methodology.md) for the full rubric and test cases.
 
-#### Retrieval & Context
-- **Graph Traversal**: Multi-hop argument retrieval from knowledge base
-- **Argument-Aware**: Returns structured philosophical arguments with citations
-- **Graceful Degradation**: Works without SurrealDB using fallback prompts
+---
 
-### Data Flow
-```
-User Query
-  ↓
-Retrieve Graph Context (SurrealDB)
-  ↓
-Pass 1: Analysis (Gemini + context)
-  ↓
-Pass 2: Critique (Gemini + context)
-  ↓
-Pass 3: Synthesis (Gemini + context)
-  ↓
-Response to User
-```
+## Documentation
 
-## Knowledge Base Contents
+- [docs/architecture.md](docs/architecture.md) — System architecture and data flow
+- [docs/three-pass-engine.md](docs/three-pass-engine.md) — Dialectical engine design with example output
+- [docs/argument-graph.md](docs/argument-graph.md) — Knowledge graph schema and SurrealQL examples
+- [docs/evaluation-methodology.md](docs/evaluation-methodology.md) — Evaluation rubric and Phase 1 results
 
-### Wave 1 Sources (Complete - Phase 3a)
-1. Stanford Encyclopedia of Philosophy: Utilitarianism
-2. John Stuart Mill: Utilitarianism (excerpts)
-3. Peter Singer: Famine, Affluence, and Morality
-4. Stanford Encyclopedia of Philosophy: Deontological Ethics
-5. Immanuel Kant: Groundwork of the Metaphysics of Morals (excerpts)
-6. W.D. Ross: The Right and the Good (excerpts)
-7. Stanford Encyclopedia of Philosophy: Virtue Ethics
-8. Aristotle: Nicomachean Ethics (excerpts)
+---
 
-**Stats**: ~500+ claims, ~400+ relations extracted and validated
+## License
 
-### Wave 2 & 3 Sources (Phase 3b - In Planning)
-10 additional Wave 2 sources + 11 Wave 3 sources covering consequentialism, Kantian ethics, rights, applied ethics, and bioethics.
+MIT — see [LICENSE](LICENSE).
 
-See [docs/phase-3b-roadmap.md](docs/phase-3b-roadmap.md) for details.
+All research methodology, evaluation results, argument graph schema, and dialectical prompt architecture are published as open source. The curated knowledge base contents (ingested philosophical texts) are derived from copyrighted sources and are not redistributed; only the schema and pipeline for reproducing it are published.
 
-## Recommended IDE Setup
+---
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
+## Author
 
-## Need an official Svelte framework?
+**Adam Hinton** — MA Philosophy (University of Exeter), PG student (The Open University), Senior Product Manager (NHS England, Cybersecurity Division)
 
-Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less, and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
+Research interest: whether structured knowledge representation can improve the epistemological rigour of LLM-generated philosophical reasoning.
 
-## Technical considerations
-
-**Why use this over SvelteKit?**
-
-- It brings its own routing solution which might not be preferable for some users.
-- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
-
-This template contains as little as possible to get started with Vite + Svelte, while taking into account the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte project.
-
-Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been structured similarly to SvelteKit so that it is easy to migrate.
-
-**Why include `.vscode/extensions.json`?**
-
-Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to install the recommended extension upon opening the project.
-
-**Why enable `checkJs` in the JS template?**
-
-It is likely that most cases of changing variable types in runtime are likely to be accidental, rather than deliberate. This provides advanced typechecking out of the box. Should you like to take advantage of the dynamically-typed nature of JavaScript, it is trivial to change the configuration.
-
-**Why is HMR not preserving my local component state?**
-
-HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr` and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the details [here](https://github.com/sveltejs/svelte-hmr/tree/master/packages/svelte-hmr#preservation-of-local-state).
-
-If you have state that's important to retain within a component, consider creating an external store which would not be replaced by HMR.
-
-```js
-// store.js
-// An extremely simple external store
-import { writable } from 'svelte/store'
-export default writable(0)
-```
