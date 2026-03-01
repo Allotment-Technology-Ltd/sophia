@@ -39,6 +39,10 @@ const SURREAL_NAMESPACE = process.env.SURREAL_NAMESPACE || 'sophia';
 const SURREAL_DATABASE = process.env.SURREAL_DATABASE || 'sophia';
 const GEMINI_CONCURRENCY = parseInt(process.env.GEMINI_CONCURRENCY || '2', 10);
 
+// When .env file exists (local dev), pass --env-file=.env to child tsx processes.
+// On Cloud Run, env vars are injected by the platform so no file is needed.
+const TSX_ENV_ARGS: string[] = fs.existsSync('.env') ? ['tsx', '--env-file=.env'] : ['tsx'];
+
 // ─── Types ─────────────────────────────────────────────────────────────────
 interface SourceEntry {
 	id: number;
@@ -181,7 +185,7 @@ function fetchSource(url: string, sourceType: string): boolean {
 	console.log(`  [FETCH] Running fetch-source.ts...`);
 	const result = spawnSync(
 		'npx',
-		['tsx', '--env-file=.env', 'scripts/fetch-source.ts', url, sourceType],
+		[...TSX_ENV_ARGS, 'scripts/fetch-source.ts', url, sourceType],
 		{
 			stdio: 'inherit',
 			cwd: process.cwd()
@@ -233,8 +237,7 @@ function spawnAsync(
 async function runPhaseA(slug: string, validate: boolean, label: string, fastMode = false): Promise<boolean> {
 	const txtPath = path.join(SOURCES_DIR, `${slug}.txt`);
 	const args = [
-		'tsx',
-		'--env-file=.env',
+		...TSX_ENV_ARGS,
 		'scripts/ingest.ts',
 		txtPath,
 		'--stop-after-embedding'
@@ -280,7 +283,7 @@ async function runPhaseB(
 	label: string
 ): Promise<{ success: boolean; claims?: number; relations?: number; arguments?: number; cost_gbp?: number }> {
 	const txtPath = path.join(SOURCES_DIR, `${slug}.txt`);
-	const args = ['tsx', '--env-file=.env', 'scripts/ingest.ts', txtPath];
+	const args = [...TSX_ENV_ARGS, 'scripts/ingest.ts', txtPath];
 	if (validate) args.push('--validate');
 
 	console.log(`  [PHASE B] Running stages 5-6 (Gemini+Store): ${label}`);
@@ -314,7 +317,7 @@ async function ingestSourceFull(
 	validate: boolean
 ): Promise<{ success: boolean; claims?: number; relations?: number; arguments?: number; cost_gbp?: number }> {
 	const txtPath = path.join(SOURCES_DIR, `${slug}.txt`);
-	const args = ['tsx', '--env-file=.env', 'scripts/ingest.ts', txtPath];
+	const args = [...TSX_ENV_ARGS, 'scripts/ingest.ts', txtPath];
 	if (validate) args.push('--validate');
 
 	const result = await spawnAsync(args, slug);

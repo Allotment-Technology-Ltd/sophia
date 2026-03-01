@@ -9,6 +9,8 @@ RUN npm install --legacy-peer-deps 2>&1 | tail -20 || echo "Install completed"
 # Copy application code
 COPY . .
 
-# Default command: extract with --fast flag (no validation)
-# Override WAVE_NUM env var to run a different wave
-CMD ["npx", "tsx", "scripts/ingest-batch.ts", "--wave", "2", "--fast", "--retry"]
+# Default wave number (override via Cloud Run --set-env-vars WAVE_NUM=N)
+ENV WAVE_NUM=1
+
+# Shell form so ${WAVE_NUM} gets expanded at runtime
+CMD npx tsx scripts/ingest-batch.ts --wave ${WAVE_NUM} --fast --retry

@@ -508,4 +508,7 @@ async function main() {
 	process.exit(hasBlockers ? 1 : 0);
 }
 
-main();
+// Only run main() when executed directly, not when imported by ingest-batch.ts
+import { fileURLToPath } from 'url';
+const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isDirectRun) main();
