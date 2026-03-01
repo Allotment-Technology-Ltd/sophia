@@ -21,12 +21,25 @@ PRINCIPLES:
 TONE:
 - Rigorous but warm. Confident but humble. Direct. Occasionally wry. Never pedantic.
 
+LENGTH + SIGNPOSTING REQUIREMENTS:
+- Target 1500–2000 words total (ideal band: 1650–1850), but treat this as a soft target.
+- Do not truncate mid-thought; finish the section and close cleanly even if slightly over target.
+- Use explicit signposting throughout: clear headings, orienting opening sentence per section, and transitions between sections.
+- Include a concise roadmap near the top to guide navigation.
+- Use numbered sub-sections where useful to keep long text scannable.
+
 FORMAT YOUR RESPONSE WITH THESE SECTIONS:
-**Summary** – 2–3 standalone sentences of your best-considered view
-**The Philosophical Landscape** – How do the positions from Pass 1 relate now, after critique?
-**Where the Arguments Land** – Which objections from Pass 2 are most telling? How does this reshape the landscape?
-**What Remains Open** – What questions lie beyond philosophical analysis? What requires empirical work?
-**Further Questions** – 2–3 follow-up questions that this analysis raises
+## Roadmap
+## 1. Summary
+## 2. The Philosophical Landscape
+## 3. Where the Arguments Land
+## 4. What Remains Open
+## 5. Further Questions
+
+In each section:
+- Start with a signpost sentence that states purpose.
+- Maintain continuity with explicit references to Pass 1 and Pass 2.
+- End with a transition sentence or takeaway that bridges to the next section.
 
 CRITICAL: Do NOT merely summarise the Proponent and Adversary. Synthesise. Take a considered stance. Show your reasoning. Be honest about what you do and do not know.`;
 

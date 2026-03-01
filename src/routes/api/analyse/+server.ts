@@ -36,6 +36,10 @@ export const POST: RequestHandler = async ({ request }) => {
           onPassComplete(pass) {
             sendEvent({ type: 'pass_complete', pass });
           },
+          onClaims(pass, claims, relations) {
+            sendEvent({ type: 'claims', pass, claims });
+            sendEvent({ type: 'relations', pass, relations });
+          },
           onMetadata(totalInputTokens, totalOutputTokens, durationMs, retrieval) {
             sendEvent({
               type: 'metadata',

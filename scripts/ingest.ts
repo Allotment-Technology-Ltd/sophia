@@ -53,6 +53,7 @@ import {
 	ValidationOutputSchema,
 	type ValidationOutput
 } from '../src/lib/server/prompts/validation.js';
+import { BatchInserter } from '../src/lib/server/batch-inserter.js';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929';
@@ -88,6 +89,8 @@ const SURREAL_DATABASE = process.env.SURREAL_DATABASE || 'sophia';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const VOYAGE_API_KEY = process.env.VOYAGE_API_KEY || '';
 const GOOGLE_AI_API_KEY = process.env.GOOGLE_AI_API_KEY || '';
+const DB_CONNECT_MAX_RETRIES = Number(process.env.DB_CONNECT_MAX_RETRIES || '4');
+const DB_CONNECT_RETRY_BASE_MS = Number(process.env.DB_CONNECT_RETRY_BASE_MS || '750');
 
 const INGESTED_DIR = './data/ingested';
 // Keep sections small enough that Claude's extraction output fits within max_tokens (16384).
@@ -146,11 +149,10 @@ function estimateCostUsd(): string {
 
 function logClaudeCost(label: string) {
 	console.log(
-		`  [COST] Claude tokens — input: ${costs.claudeInputTokens.toLocaleString()}, output: ${costs.claudeOutputTokens.toLocaleString()} (running total: $${estimateCostUsd()})`
+		`  [COST] ${label}: Claude tokens — input: ${costs.claudeInputTokens.toLocaleString()}, output: ${costs.claudeOutputTokens.toLocaleString()} (running total: $${estimateCostUsd()})`
 	);
 }
 
-// ─── Utilities ─────────────────────────────────────────────────────────────
 function estimateTokens(text: string): number {
 	return Math.ceil(text.split(/\s+/).length * 1.3);
 }
@@ -173,6 +175,97 @@ function parseModelList(envValue: string | undefined, defaults: string[]): strin
 	return unique;
 }
 
+function isRetryableDbError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+	return (
+		message.includes('econnrefused') ||
+		message.includes('econnreset') ||
+		message.includes('etimedout') ||
+		message.includes('ehostunreach') ||
+		message.includes('socket hang up') ||
+		message.includes('timeout') ||
+		message.includes('temporarily unavailable') ||
+		message.includes('service unavailable') ||
+		message.includes('503') ||
+		message.includes('502') ||
+		message.includes('429') ||
+		message.includes('iam') ||
+		message.includes('permissions') ||
+		message.includes('authentication') ||
+		message.includes('unauthorized')
+	);
+}
+
+async function reconnectDbWithRetry(db: Surreal, reason: string): Promise<void> {
+	let lastError: unknown;
+
+	for (let attempt = 1; attempt <= DB_CONNECT_MAX_RETRIES; attempt++) {
+		try {
+			try {
+				await db.close();
+			} catch {
+				// ignore stale socket close errors
+			}
+
+			await db.connect(SURREAL_URL);
+			await db.signin({ username: SURREAL_USER, password: SURREAL_PASS } as any);
+			await db.use({ namespace: SURREAL_NAMESPACE, database: SURREAL_DATABASE });
+
+			if (attempt > 1) {
+				console.log(`  [OK] SurrealDB reconnected after retry ${attempt}/${DB_CONNECT_MAX_RETRIES}`);
+			}
+			return;
+		} catch (error) {
+			lastError = error;
+			const msg = error instanceof Error ? error.message : String(error);
+			if (attempt >= DB_CONNECT_MAX_RETRIES || !isRetryableDbError(error)) {
+				throw new Error(`SurrealDB reconnect failed (${reason}): ${msg}`);
+			}
+
+			const waitMs = DB_CONNECT_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+			console.warn(
+				`  [WARN] SurrealDB reconnect attempt ${attempt}/${DB_CONNECT_MAX_RETRIES} failed (${msg}). Retrying in ${waitMs}ms...`
+			);
+			await sleep(waitMs);
+		}
+	}
+
+	throw new Error(
+		`SurrealDB reconnect failed (${reason}): ${lastError instanceof Error ? lastError.message : String(lastError)}`
+	);
+}
+
+async function dbQueryWithRetry<T>(
+	db: Surreal,
+	query: string,
+	vars?: Record<string, unknown>,
+	maxAttempts = 3
+): Promise<T> {
+	let lastError: unknown;
+
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		try {
+			return await db.query<T>(query, vars);
+		} catch (error) {
+			lastError = error;
+			if (attempt >= maxAttempts || !isRetryableDbError(error)) {
+				throw error;
+			}
+
+			const msg = error instanceof Error ? error.message : String(error);
+			const waitMs = DB_CONNECT_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+			console.warn(
+				`  [WARN] DB query failed (attempt ${attempt}/${maxAttempts}): ${msg}. Reconnecting...`
+			);
+			await reconnectDbWithRetry(db, `query retry attempt ${attempt}`);
+			await sleep(waitMs);
+		}
+	}
+
+	throw new Error(
+		`DB query failed after ${maxAttempts} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+	);
+}
 function isModelUnavailableError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
 	return (
@@ -506,25 +599,14 @@ async function updateIngestionLog(
 	sourceUrl: string,
 	updates: Record<string, unknown>
 ): Promise<void> {
+	if (Object.keys(updates).length === 0) return;
+
 	const setClauses = Object.keys(updates)
 		.map((key) => `${key} = $${key}`)
 		.join(', ');
 	const sql = `UPDATE ingestion_log SET ${setClauses} WHERE source_url = $url`;
 	const vars = { ...updates, url: sourceUrl };
-	try {
-		await db.query(sql, vars);
-	} catch (error) {
-		const msg = error instanceof Error ? error.message : String(error);
-		// Session may have expired during long-running stages — re-authenticate and retry
-		if (msg.includes('IAM') || msg.includes('permissions') || msg.includes('authentication')) {
-			console.warn('  [WARN] DB session expired — re-authenticating...');
-			await db.signin({ username: SURREAL_USER, password: SURREAL_PASS } as any);
-			await db.use({ namespace: SURREAL_NAMESPACE, database: SURREAL_DATABASE });
-			await db.query(sql, vars);
-		} else {
-			throw error;
-		}
-	}
+	await dbQueryWithRetry(db, sql, vars, 3);
 }
 
 /**
@@ -533,23 +615,43 @@ async function updateIngestionLog(
  */
 async function ensureDbConnected(db: Surreal): Promise<void> {
 	try {
-		await db.query('SELECT 1');
+		await db.query('INFO FOR DB;');
 	} catch (error) {
 		const msg = error instanceof Error ? error.message : String(error);
-		if (
-			msg.includes('IAM') ||
-			msg.includes('permissions') ||
-			msg.includes('authentication') ||
-			msg.includes('Unauthorized')
-		) {
-			console.warn('  [WARN] DB session check failed — re-authenticating...');
-			await db.signin({ username: SURREAL_USER, password: SURREAL_PASS } as any);
-			await db.use({ namespace: SURREAL_NAMESPACE, database: SURREAL_DATABASE });
-			console.log('  [OK] Re-authenticated to SurrealDB');
+		if (isRetryableDbError(error)) {
+			console.warn(`  [WARN] DB health check failed (${msg}) — reconnecting...`);
+			await reconnectDbWithRetry(db, 'health check');
+			await dbQueryWithRetry(db, 'INFO FOR DB;', undefined, 2);
+			console.log('  [OK] SurrealDB connection restored');
 		} else {
 			throw new Error(`DB connection check failed: ${msg}`);
 		}
 	}
+}
+
+function normalizeResumeStage(
+	lastCompleted: string | null,
+	partial: PartialResults
+): string | null {
+	if (!lastCompleted) return null;
+
+	const hasClaims = Array.isArray(partial.claims) && partial.claims.length > 0;
+	const hasRelations = Array.isArray(partial.relations);
+	const hasArguments = Array.isArray(partial.arguments);
+	const hasEmbeddings = Array.isArray(partial.embeddings);
+
+	if (!hasClaims) return null;
+	if (!hasRelations && ['relating', 'grouping', 'embedding', 'validating', 'storing'].includes(lastCompleted)) {
+		return 'extracting';
+	}
+	if (!hasArguments && ['grouping', 'embedding', 'validating', 'storing'].includes(lastCompleted)) {
+		return 'relating';
+	}
+	if (!hasEmbeddings && ['embedding', 'validating', 'storing'].includes(lastCompleted)) {
+		return 'grouping';
+	}
+
+	return lastCompleted;
 }
 
 // ─── MAIN PIPELINE ─────────────────────────────────────────────────────────
@@ -604,9 +706,7 @@ async function main() {
 	// ─── Connect to SurrealDB (used for ingestion log + Stage 6 storage) ───
 	const db = new Surreal();
 	try {
-		await db.connect(SURREAL_URL);
-		await db.signin({ username: SURREAL_USER, password: SURREAL_PASS } as any);
-		await db.use({ namespace: SURREAL_NAMESPACE, database: SURREAL_DATABASE });
+		await reconnectDbWithRetry(db, 'initial startup');
 	} catch (error) {
 		console.error(`[ERROR] Failed to connect to SurrealDB: ${error instanceof Error ? error.message : String(error)}`);
 		console.error('The ingestion pipeline requires SurrealDB for progress tracking.');
@@ -653,6 +753,13 @@ async function main() {
 		const loaded = loadPartialResults(slug);
 		if (loaded) {
 			partial = loaded;
+			const normalized = normalizeResumeStage(resumeFromStage, partial);
+			if (normalized !== resumeFromStage) {
+				console.log(
+					`[RESUME] Partial data incomplete for stage "${resumeFromStage}" — rolling back resume point to "${normalized ?? 'none'}"`
+				);
+				resumeFromStage = normalized;
+			}
 			console.log(`[RESUME] Loaded partial results from disk (stage: ${loaded.stage_completed})`);
 		} else {
 			console.log('[RESUME] No partial results on disk — restarting from scratch');
@@ -827,7 +934,10 @@ async function main() {
 			});
 		} else {
 			console.log('  [SKIP] Stage 1: Extraction (already completed)\n');
-			allClaims = partial.claims!;
+			if (!Array.isArray(partial.claims) || partial.claims.length === 0) {
+				throw new Error('Resume data missing claims for skipped Stage 1; rerun without resume or regenerate partial results');
+			}
+			allClaims = partial.claims;
 		}
 
 		// ── Post-stage 1 check: fail fast if nothing was extracted ─────
@@ -891,7 +1001,10 @@ async function main() {
 			});
 		} else {
 			console.log('  [SKIP] Stage 2: Relations (already completed)\n');
-			relations = partial.relations!;
+			if (!Array.isArray(partial.relations)) {
+				throw new Error('Resume data missing relations for skipped Stage 2; rerun from Stage 2');
+			}
+			relations = partial.relations;
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -946,7 +1059,10 @@ async function main() {
 			});
 		} else {
 			console.log('  [SKIP] Stage 3: Grouping (already completed)\n');
-			arguments_ = partial.arguments!;
+			if (!Array.isArray(partial.arguments)) {
+				throw new Error('Resume data missing arguments for skipped Stage 3; rerun from Stage 3');
+			}
+			arguments_ = partial.arguments;
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -1027,7 +1143,10 @@ async function main() {
 			});
 		} else {
 			console.log('  [SKIP] Stage 4: Embedding (already completed)\n');
-			allEmbeddings = partial.embeddings!;
+			if (!Array.isArray(partial.embeddings)) {
+				throw new Error('Resume data missing embeddings for skipped Stage 4; rerun from Stage 4');
+			}
+			allEmbeddings = partial.embeddings;
 		}
 
 		// ── Pipeline handoff point ─────────────────────────────────────

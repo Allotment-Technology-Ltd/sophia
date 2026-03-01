@@ -3,7 +3,7 @@
  *
  * Ingest multiple sources from the curated source list.
  *
- * Usage: npx tsx --env-file=.env scripts/ingest-batch.ts [--wave 1|2|3] [--validate] [--dry-run] [--status] [--retry] [--pre-scan] [--fast]
+ * Usage: npx tsx --env-file=.env scripts/ingest-batch.ts [--wave 1|2|3] [--validate] [--dry-run] [--status] [--retry] [--pre-scan] [--fast] [--fail-fast]
  *
  * Flags:
  *   --wave N            Only ingest sources from wave N (1, 2, or 3)
@@ -13,11 +13,13 @@
  *   --retry             Retry sources that previously failed
  *   --pre-scan          Scan all targets for token/URL issues before ingesting; abort on blockers
  *   --fast              Fast extraction mode (no validation, detailed error logging)
+ *   --fail-fast         Stop launching new sources after first failure
  *
  * Pipeline mode (default):
- *   Phase A (stages 1-4, Claude + Voyage) runs sequentially — one source at a time.
+ *   Phase A (stages 1-4, Claude + Voyage) runs in parallel — up to PHASE_A_CONCURRENCY.
  *   Phase B (stage 5 Gemini + stage 6 Store) runs async — up to GEMINI_CONCURRENCY in parallel.
- *   When Phase A finishes, Phase B starts in the background AND the next source's Phase A starts.
+ *   When each Phase A finishes, Phase B starts in the background.
+ *   Set PHASE_A_CONCURRENCY env var to control parallel extraction workers (default: 4).
  *   Set GEMINI_CONCURRENCY env var to control parallel Gemini processes (default: 2).
  */
 
@@ -38,6 +40,7 @@ const SURREAL_PASS = process.env.SURREAL_PASS || 'root';
 const SURREAL_NAMESPACE = process.env.SURREAL_NAMESPACE || 'sophia';
 const SURREAL_DATABASE = process.env.SURREAL_DATABASE || 'sophia';
 const GEMINI_CONCURRENCY = parseInt(process.env.GEMINI_CONCURRENCY || '2', 10);
+const PHASE_A_CONCURRENCY = parseInt(process.env.PHASE_A_CONCURRENCY || '4', 10);
 
 // When .env file exists (local dev), pass --env-file=.env to child tsx processes.
 // On Cloud Run, env vars are injected by the platform so no file is needed.
@@ -453,6 +456,24 @@ function sleep(seconds: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, seconds * 1000));
 }
 
+function logBatchFailure(
+	source: SourceEntry,
+	phase: string,
+	reason: string,
+	extra?: Record<string, unknown>
+): void {
+	console.error(
+		`[BATCH_ERROR] ${JSON.stringify({
+			timestamp: new Date().toISOString(),
+			source_id: source.id,
+			source_title: source.title,
+			phase,
+			reason,
+			...extra
+		})}`
+	);
+}
+
 // ─── Main Function ─────────────────────────────────────────────────────────
 
 async function main() {
@@ -465,6 +486,7 @@ async function main() {
 	let retryFailed = false;
 	let preScan = false;
 	let fastMode = false;
+	let failFast = false;
 
 	for (let i = 0; i < args.length; i++) {
 		if (args[i] === '--wave' && i + 1 < args.length) {
@@ -483,6 +505,8 @@ async function main() {
 		} else if (args[i] === '--fast') {
 			fastMode = true;
 			validate = false; // Fast mode disables validation
+		} else if (args[i] === '--fail-fast') {
+			failFast = true;
 		}
 	}
 
@@ -552,8 +576,10 @@ async function main() {
 	console.log(`Validation: ${validate ? 'ENABLED' : 'Disabled'}`);
 	console.log(`Pre-scan: ${preScan ? 'ENABLED (already ran above)' : 'Disabled (use --pre-scan to enable)'}`);
 	console.log(`Retry failed: ${retryFailed ? 'YES' : 'No'}`);
+	console.log(`Fail fast: ${failFast ? 'ENABLED' : 'Disabled'}`);
 	if (validate) {
 		console.log(`Gemini concurrency: ${GEMINI_CONCURRENCY} (set GEMINI_CONCURRENCY to change)`);
+		console.log(`Phase A concurrency: ${PHASE_A_CONCURRENCY} (set PHASE_A_CONCURRENCY to change)`);
 	}
 	if (fastMode) {
 		console.log(`⚡ Fast mode: extraction + embedding only (no Gemini validation). Est. time: 5-10 min.`);
@@ -582,12 +608,13 @@ async function main() {
 	}
 
 	// ─── Pipelined ingestion ────────────────────────────────────────────────
-	// Phase A (Claude+Voyage, stages 1-4) runs sequentially.
-	// Phase B (Gemini+Store, stages 5-6) runs async, up to GEMINI_CONCURRENCY at once.
-	// Semaphore ensures Phase A doesn't start if all Gemini slots are busy.
+	// Phase A (Claude+Voyage, stages 1-4) runs in parallel via phaseASem.
+	// Phase B (Gemini+Store, stages 5-6) runs async, up to GEMINI_CONCURRENCY via sem.
 	const sem = new Semaphore(GEMINI_CONCURRENCY);
+	const phaseASem = new Semaphore(PHASE_A_CONCURRENCY);
 	const results: IngestionResult[] = [];
 	const phaseBTasks: Array<Promise<void>> = [];
+	const phaseATasks: Array<Promise<void>> = [];
 
 	let successCount = 0;
 	let skippedCount = 0;
@@ -597,10 +624,16 @@ async function main() {
 	let totalArguments = 0;
 	let totalCost = 0;
 	const batchStartTime = Date.now();
+	let stopLaunchingNewSources = false;
 
 	console.log('[BATCH] Starting ingestion loop...\n');
 
 	for (let i = 0; i < sources.length; i++) {
+		if (stopLaunchingNewSources) {
+			console.warn('[BATCH] Fail-fast is enabled — skipping remaining sources after first failure.');
+			break;
+		}
+
 		const source = sources[i];
 		const slug = createSlug(source.title);
 		const label = `[${i + 1}/${sources.length}] ${source.title}`;
@@ -678,8 +711,12 @@ async function main() {
 					const fetchSuccess = fetchSource(source.url, source.source_type);
 					if (!fetchSuccess) {
 						console.error('  [FAILED] Fetch failed');
+						logBatchFailure(source, 'fetch', 'Fetch failed');
 						results.push({ id: source.id, title: source.title, status: 'failed', reason: 'Fetch failed' });
 						failedCount++;
+						if (failFast) {
+							stopLaunchingNewSources = true;
+						}
 						console.log('');
 						continue;
 					}
@@ -693,68 +730,78 @@ async function main() {
 			}
 
 			if (validate) {
-				// ── Pipelined mode ──────────────────────────────────────────
-				// Wait for a Gemini slot before starting Phase A.
-				// This prevents Claude extraction from racing too far ahead.
-				await sem.acquire();
-
-				// Phase A: Claude extraction + Voyage embedding (synchronous — one at a time)
-				const phaseAOk = await runPhaseA(ingestSlug, validate, label, fastMode);
-
-				if (!phaseAOk) {
-					sem.release();
-					console.error(`  [FAILED] Phase A failed for: ${source.title}`);
-					results.push({
-						id: source.id,
-						title: source.title,
-						status: 'failed',
-						reason: 'Phase A (extract/embed) failed'
-					});
-					failedCount++;
-					console.log('');
-					continue;
-				}
-
-				console.log(`  [PIPELINE] Phase A complete — handing off to Phase B (background)`);
 				const capturedSource = source;
 				const capturedSlug = ingestSlug;
 				const capturedLabel = label;
 
-				// Phase B: Gemini validation + Store (async — runs in background)
-				const phaseBTask = runPhaseB(capturedSlug, validate, capturedLabel)
-					.then((result) => {
-						if (result.success) {
-							successCount++;
-							results.push({
-								id: capturedSource.id,
-								title: capturedSource.title,
-								status: 'success',
-								claims: result.claims,
-								relations: result.relations,
-								arguments: result.arguments,
-								cost_gbp: result.cost_gbp
-							});
-							if (result.claims) totalClaims += result.claims;
-							if (result.relations) totalRelations += result.relations;
-							if (result.arguments) totalArguments += result.arguments;
-							if (result.cost_gbp) totalCost += result.cost_gbp;
-							console.log(
-								`\n  ✓ DONE: ${capturedSource.title} — ${result.claims ?? '?'} claims, £${result.cost_gbp?.toFixed(4) ?? '?'}`
-							);
-						} else {
-							failedCount++;
+				const phaseATask = (async () => {
+					await phaseASem.acquire();
+					try {
+						const phaseAOk = await runPhaseA(capturedSlug, validate, capturedLabel, fastMode);
+
+						if (!phaseAOk) {
+							console.error(`  [FAILED] Phase A failed for: ${capturedSource.title}`);
+							logBatchFailure(capturedSource, 'phase-a', 'Phase A (extract/embed) failed');
 							results.push({
 								id: capturedSource.id,
 								title: capturedSource.title,
 								status: 'failed',
-								reason: 'Phase B (validate/store) failed'
+								reason: 'Phase A (extract/embed) failed'
 							});
-							console.error(`\n  ✗ FAILED (Phase B): ${capturedSource.title}`);
+							failedCount++;
+							if (failFast) {
+								stopLaunchingNewSources = true;
+							}
+							return;
 						}
-					})
-					.finally(() => sem.release());
 
-				phaseBTasks.push(phaseBTask);
+						console.log(`  [PIPELINE] Phase A complete — handing off to Phase B (background)`);
+
+						await sem.acquire();
+						const phaseBTask = runPhaseB(capturedSlug, validate, capturedLabel)
+							.then((result) => {
+								if (result.success) {
+									successCount++;
+									results.push({
+										id: capturedSource.id,
+										title: capturedSource.title,
+										status: 'success',
+										claims: result.claims,
+										relations: result.relations,
+										arguments: result.arguments,
+										cost_gbp: result.cost_gbp
+									});
+									if (result.claims) totalClaims += result.claims;
+									if (result.relations) totalRelations += result.relations;
+									if (result.arguments) totalArguments += result.arguments;
+									if (result.cost_gbp) totalCost += result.cost_gbp;
+									console.log(
+										`\n  ✓ DONE: ${capturedSource.title} — ${result.claims ?? '?'} claims, £${result.cost_gbp?.toFixed(4) ?? '?'}`
+									);
+								} else {
+									failedCount++;
+									logBatchFailure(capturedSource, 'phase-b', 'Phase B (validate/store) failed');
+									if (failFast) {
+										stopLaunchingNewSources = true;
+									}
+									results.push({
+										id: capturedSource.id,
+										title: capturedSource.title,
+										status: 'failed',
+										reason: 'Phase B (validate/store) failed'
+									});
+									console.error(`\n  ✗ FAILED (Phase B): ${capturedSource.title}`);
+								}
+							})
+							.finally(() => sem.release());
+
+						phaseBTasks.push(phaseBTask);
+					} finally {
+						phaseASem.release();
+					}
+				})();
+
+				phaseATasks.push(phaseATask);
 			} else {
 				// ── Non-pipelined mode (no Gemini) ──────────────────────────
 				// No Gemini validation, so no benefit to pipelining — run sequentially.
@@ -762,8 +809,12 @@ async function main() {
 
 				if (!ingestResult.success) {
 					console.error('  [FAILED] Ingestion failed');
+					logBatchFailure(source, 'full-ingest', 'Ingestion pipeline error');
 					results.push({ id: source.id, title: source.title, status: 'failed', reason: 'Ingestion pipeline error' });
 					failedCount++;
+					if (failFast) {
+						stopLaunchingNewSources = true;
+					}
 				} else {
 					console.log('  [SUCCESS] Ingestion complete');
 					results.push({
@@ -793,6 +844,7 @@ async function main() {
 			console.error(
 				`  [ERROR] Unexpected error: ${error instanceof Error ? error.message : error}`
 			);
+			logBatchFailure(source, 'batch-loop', error instanceof Error ? error.message : String(error));
 			results.push({
 				id: source.id,
 				title: source.title,
@@ -800,8 +852,16 @@ async function main() {
 				reason: error instanceof Error ? error.message : String(error)
 			});
 			failedCount++;
+			if (failFast) {
+				stopLaunchingNewSources = true;
+			}
 			console.log('');
 		}
+	}
+
+	if (phaseATasks.length > 0) {
+		console.log(`\n[PIPELINE] Waiting for ${phaseATasks.length} Phase A task(s) to complete...`);
+		await Promise.all(phaseATasks);
 	}
 
 	// Wait for all Phase B (Gemini+Store) tasks to complete

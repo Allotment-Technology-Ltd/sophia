@@ -185,6 +185,63 @@ Wave 3 (11s) | 2 Gi   | 2   | 2-5 min
 
 ---
 
+## Phase 3 Monitoring (Wave Health + Alerts)
+
+Use the new monitor utility to detect failures and stalled runs within minutes.
+
+### Local / One-shot checks
+
+```bash
+# One-shot summary for all waves
+pnpm monitor:wave
+
+# One-shot summary for wave 2
+npx tsx --env-file=.env scripts/monitor-wave.ts --wave 2 --once
+```
+
+### Continuous monitoring
+
+```bash
+# Poll every 2 minutes
+pnpm monitor:wave:watch
+
+# Wave-scoped watch with strict failure exit code
+npx tsx --env-file=.env scripts/monitor-wave.ts \
+   --wave 2 \
+   --interval-sec 120 \
+   --stuck-minutes 20 \
+   --fail-on-alert
+```
+
+### Slack alerting
+
+Set `MONITOR_SLACK_WEBHOOK_URL` to enable alert pushes:
+
+```bash
+export MONITOR_SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."
+pnpm monitor:wave
+```
+
+### Cloud Scheduler example
+
+Run monitor checks every 2 minutes via Cloud Scheduler → Cloud Run job/service.
+
+```bash
+gcloud scheduler jobs create http sophia-wave-monitor \
+   --location us-central1 \
+   --schedule "*/2 * * * *" \
+   --uri "https://YOUR-MONITOR-SERVICE-URL" \
+   --http-method POST
+```
+
+Monitor alert conditions currently include:
+- `failed` ingestion records
+- long-running non-terminal records (`stuck` candidates)
+- completed sources with `claims_extracted > 0` but `relations_extracted = 0`
+- completed sources with `claims_extracted > 0` but `arguments_grouped = 0`
+
+---
+
 ## Troubleshooting
 
 ### Cloud Run timeout (3600s = 1 hour limit)

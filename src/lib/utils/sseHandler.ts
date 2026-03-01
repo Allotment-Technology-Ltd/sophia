@@ -1,0 +1,45 @@
+import type { SSEEvent } from '$lib/types/api';
+import { referencesStore } from '$lib/stores/references.svelte';
+import { resolveBackRefs } from './backRef';
+
+/**
+ * Routes an SSE event to the appropriate store.
+ * Phase 2 events (pass_start, pass_chunk, pass_complete, metadata, error)
+ * are returned for the conversation store to handle.
+ * Phase 3c events (claims, relations) are routed directly to referencesStore.
+ *
+ * Returns true if the event was handled here (Phase 3c), false if the caller
+ * should handle it (Phase 2).
+ */
+export function handleSSEEvent(event: SSEEvent): boolean {
+  switch (event.type) {
+    case 'claims': {
+      const resolved = resolveBackRefs(event.claims, referencesStore.activeClaims);
+      referencesStore.addClaims(event.pass, resolved, []);
+      referencesStore.setPhase(event.pass);
+      referencesStore.setLive(true);
+      return true;
+    }
+
+    case 'relations': {
+      // Relations are bundled — add them to existing claims
+      for (const bundle of event.relations) {
+        referencesStore.addClaims(event.pass, [], [bundle]);
+      }
+      return true;
+    }
+
+    case 'pass_start':
+      referencesStore.setPhase(event.pass as 'analysis' | 'critique' | 'synthesis');
+      referencesStore.setLive(true);
+      return false;
+
+    case 'metadata':
+      referencesStore.setLive(false);
+      referencesStore.setPhase(null);
+      return false;
+
+    default:
+      return false;
+  }
+}

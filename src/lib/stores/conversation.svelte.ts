@@ -1,5 +1,8 @@
 import type { PassType } from '$lib/types/passes';
 import type { SSEEvent } from '$lib/types/api';
+import { handleSSEEvent } from '$lib/utils/sseHandler';
+import { referencesStore } from '$lib/stores/references.svelte';
+import { historyStore } from '$lib/stores/history.svelte';
 
 export interface Message {
   id: string;
@@ -29,6 +32,7 @@ function createConversationStore() {
       isLoading = true;
       currentPass = null;
       currentPasses = { analysis: '', critique: '', synthesis: '' };
+      referencesStore.reset();
 
       // Add user message
       messages = [...messages, {
@@ -79,6 +83,10 @@ function createConversationStore() {
               continue;
             }
 
+            // Route Phase 3c events to references store
+            if (handleSSEEvent(event)) continue;
+
+            // Phase 2 events handled here
             switch (event.type) {
               case 'pass_start':
                 currentPass = event.pass;
@@ -107,6 +115,7 @@ function createConversationStore() {
                   },
                   timestamp: new Date()
                 }];
+                historyStore.addEntry(query);
                 break;
 
               case 'error':

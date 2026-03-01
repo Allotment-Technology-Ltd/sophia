@@ -6,10 +6,13 @@
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json"
+    "check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",
+    "monitor:wave": "tsx --env-file=.env scripts/monitor-wave.ts --once",
+    "monitor:wave:watch": "tsx --env-file=.env scripts/monitor-wave.ts --interval-sec 120"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.26.0",
+    "@google-cloud/logging": "^11.1.0",
     "@google/generative-ai": "^0.24.1",
     "marked": "^17.0.3",
     "node-html-parser": "^7.0.2",

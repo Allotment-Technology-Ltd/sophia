@@ -1,4 +1,5 @@
 import type { PassType } from './passes';
+import type { AnalysisPhase, Claim, RelationBundle } from './references';
 
 export interface AnalyseRequest {
   query: string;
@@ -34,9 +35,23 @@ export interface ErrorEvent {
   message: string;
 }
 
+export interface ClaimsEvent {
+  type: 'claims';
+  pass: AnalysisPhase;
+  claims: Claim[];
+}
+
+export interface RelationsEvent {
+  type: 'relations';
+  pass: AnalysisPhase;
+  relations: RelationBundle[];
+}
+
 export type SSEEvent =
   | PassStartEvent
   | PassChunkEvent
   | PassCompleteEvent
   | MetadataEvent
-  | ErrorEvent;
+  | ErrorEvent
+  | ClaimsEvent
+  | RelationsEvent;
