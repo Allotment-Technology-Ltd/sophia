@@ -95,6 +95,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          clean: true
 
       - id: auth
         name: Authenticate to Google Cloud
@@ -111,7 +113,7 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build --no-cache \
+          docker build --no-cache --pull \
             -t europe-west2-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:${{ github.sha }} \
             -t europe-west2-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:latest .
 
