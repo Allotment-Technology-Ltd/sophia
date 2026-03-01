@@ -109,7 +109,7 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker europe-west2-docker.pkg.dev
+        run: gcloud auth configure-docker europe-west1-docker.pkg.dev
 
       - name: Verify source code contains expected changes
         run: |
@@ -121,20 +121,20 @@ jobs:
       - name: Build Docker image
         run: |
           docker build --no-cache --pull \
-            -t europe-west2-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:${{ github.sha }} \
-            -t europe-west2-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:latest .
+            -t europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:${{ github.sha }} \
+            -t europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:latest .
 
       - name: Push Docker image
         run: |
-          docker push europe-west2-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:${{ github.sha }}
-          docker push europe-west2-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:latest
+          docker push europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:${{ github.sha }}
+          docker push europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:latest
 
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy sophia \
-            --image=europe-west2-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:${{ github.sha }} \
+            --image=europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:${{ github.sha }} \
             --project=${{ secrets.GCP_PROJECT_ID }} \
-            --region=europe-west2 \
+            --region=europe-west1 \
             --allow-unauthenticated \
             --memory=512Mi \
             --cpu=1 \
