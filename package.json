@@ -9,7 +9,7 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.26.0",
+    "@anthropic-ai/sdk": "^0.78.0",
     "@google/generative-ai": "^0.24.1",
     "marked": "^17.0.3",
     "node-html-parser": "^7.0.2",
