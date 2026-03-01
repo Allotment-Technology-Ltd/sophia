@@ -6,8 +6,8 @@
 #   - Required pull request review (at least 0 approving reviews — enforces PR workflow)
 #   - No push restrictions (any collaborator may push via PR)
 #
-# Trigger manually once after making the repo public, or re-run whenever
-# the protection rules need to be updated.
+# Triggers automatically on every push to main so protection rules are always
+# in force. Can also be run manually via workflow_dispatch.
 #
 # Requires the GITHUB_TOKEN to have administration:write permission, which
 # is granted below. This works for repositories owned by organisations that
@@ -17,6 +17,9 @@ name: Set Up Branch Protection
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
