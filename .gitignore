@@ -3,7 +3,7 @@ yarn.lock
 build/
 .svelte-kit/
 dist/
-.vscode/settings.json
+.vscode/
 .idea/
 *.swp
 *.swo
@@ -22,6 +22,9 @@ data/ingested/*-partial.json
 data/ingested/batch-summary-*.json
 memory/
 .cursor/
+
+# Local design documents — do not commit work-in-progress design files
+docs/design/MASTER-IMPLEMENTATION-GUIDE.md
 
 # Environment & secrets — never commit real keys
 .env

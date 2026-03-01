@@ -3,28 +3,34 @@ FROM node:20 AS builder
 
 WORKDIR /app
 
-# Copy dependency and config files
-COPY package.json package-lock.json .npmrc ./
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
 
-# Install dependencies with increased timeout
-RUN npm install --prefer-offline --no-audit --legacy-peer-deps
+# Copy dependency files
+COPY package.json pnpm-lock.yaml ./
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
 
 # Copy source code
 COPY . .
 
 # Build the app
-RUN npm run build
+RUN pnpm build
 
 # Stage 2: Runtime
 FROM node:20
 
 WORKDIR /app
 
-# Copy package files and config
-COPY package.json package-lock.json .npmrc ./
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# Copy package files
+COPY package.json pnpm-lock.yaml ./
 
 # Install production dependencies only
-RUN npm install --omit=dev --prefer-offline --no-audit --legacy-peer-deps
+RUN pnpm install --prod --frozen-lockfile
 
 # Copy built app from builder
 COPY --from=builder /app/build ./build
