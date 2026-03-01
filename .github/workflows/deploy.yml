@@ -109,17 +109,6 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker europe-west2-docker.pkg.dev
 
-      - name: Ensure Artifact Registry repository exists
-        run: |
-          gcloud artifacts repositories describe sophia \
-            --location=europe-west2 \
-            --project=${{ secrets.GCP_PROJECT_ID }} || \
-          gcloud artifacts repositories create sophia \
-            --repository-format=docker \
-            --location=europe-west2 \
-            --description="SOPHIA Docker images" \
-            --project=${{ secrets.GCP_PROJECT_ID }}
-
       - name: Build Docker image
         run: |
           docker build -t europe-west2-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:${{ github.sha }} \
