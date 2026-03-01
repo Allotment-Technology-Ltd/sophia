@@ -61,9 +61,10 @@ jobs:
           fetch-depth: 0  # Full history required for secret scanning
 
       - name: Scan for secrets
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: trufflesecurity/trufflehog@v3
+        with:
+          path: ./
+          extra_args: --only-verified
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
