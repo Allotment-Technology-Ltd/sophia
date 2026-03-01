@@ -103,7 +103,6 @@
               placeholder="Ask a philosophical question, explore an argument, or describe a dilemma you're thinking through..."
               class="centered-input-field"
               rows="4"
-              autofocus
             ></textarea>
             <button
               type="submit"
@@ -289,6 +288,8 @@
         </div>
       </footer>
     {/if}
+
+  </main>
 
   <SidePanel open={panelStore.open} onClose={() => panelStore.close()}>
     <TabStrip {tabs} {activeTab} onTabChange={(tab) => activeTab = tab} />

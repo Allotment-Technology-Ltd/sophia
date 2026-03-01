@@ -58,7 +58,7 @@
 
   let isDesktop = $derived(viewportWidth >= 768);
   let panelRole = $derived(isDesktop ? 'complementary' : 'dialog');
-  let ariaModal = $derived(isDesktop ? undefined : 'true');
+  let ariaModal = $derived(isDesktop ? undefined : true);
   let ariaLabel = $derived(
     isDesktop ? 'References and navigation' : 'Navigation'
   );

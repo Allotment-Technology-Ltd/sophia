@@ -1,10 +1,10 @@
 import { Surreal, StringRecordId } from 'surrealdb';
 // Use process.env for SurrealDB config
-const SURREAL_URL = process.env.SURREAL_URL;
-const SURREAL_USER = process.env.SURREAL_USER;
-const SURREAL_PASS = process.env.SURREAL_PASS;
-const SURREAL_NAMESPACE = process.env.SURREAL_NAMESPACE;
-const SURREAL_DATABASE = process.env.SURREAL_DATABASE;
+const SURREAL_URL = process.env.SURREAL_URL || 'ws://127.0.0.1:8000/rpc';
+const SURREAL_USER = process.env.SURREAL_USER || 'root';
+const SURREAL_PASS = process.env.SURREAL_PASS || 'root';
+const SURREAL_NAMESPACE = process.env.SURREAL_NAMESPACE || 'sophia';
+const SURREAL_DATABASE = process.env.SURREAL_DATABASE || 'sophia';
 
 let dbInstance: Surreal | null = null;
 let isConnecting = false;
@@ -123,10 +123,13 @@ export async function create<T>(
 ): Promise<T> {
 	try {
 		const db = await getDb();
-		const result = await db.create<T>(table, data);
+		const result = await db.query<[T[]]>(
+			'CREATE type::table($table) CONTENT $data',
+			{ table, data }
+		);
 
 		if (Array.isArray(result) && result.length > 0) {
-			return result[0];
+			return Array.isArray(result[0]) ? result[0][0] : (result[0] as T);
 		}
 
 		return result as T;
@@ -147,10 +150,13 @@ export async function create<T>(
 export async function update<T>(id: string, data: Record<string, unknown>): Promise<T> {
 	try {
 		const db = await getDb();
-		const result = await db.update<T>(new StringRecordId(id), data);
+		const result = await db.query<[T[]]>(
+			'UPDATE type::thing($id) MERGE $data RETURN AFTER',
+			{ id, data }
+		);
 
 		if (Array.isArray(result) && result.length > 0) {
-			return result[0];
+			return Array.isArray(result[0]) ? result[0][0] : (result[0] as T);
 		}
 
 		return result as T;

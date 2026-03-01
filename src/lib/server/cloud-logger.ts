@@ -11,7 +11,7 @@
  *   await logger.error('Something failed', { source: 'wave1', stage: 'extraction' });
  */
 
-import { LoggingClient } from '@google-cloud/logging';
+import { Logging } from '@google-cloud/logging';
 
 type Severity = 'DEBUG' | 'INFO' | 'NOTICE' | 'WARNING' | 'ERROR' | 'CRITICAL';
 
@@ -24,7 +24,7 @@ export interface LogEntry {
 
 export class CloudLogger {
 	private isCloudRun: boolean;
-	private client: LoggingClient | null = null;
+	private client: Logging | null = null;
 	private logName: string;
 
 	constructor() {
@@ -34,7 +34,7 @@ export class CloudLogger {
 
 		if (this.isCloudRun) {
 			try {
-				this.client = new LoggingClient();
+				this.client = new Logging();
 			} catch (error) {
 				console.warn('[LOGGER] Failed to initialize Cloud Logging client:', error);
 				this.isCloudRun = false;
@@ -82,22 +82,22 @@ export class CloudLogger {
 		if (!this.client) return;
 
 		try {
+			const payload: Record<string, unknown> = {
+				message,
+				...metadata,
+				timestamp: new Date().toISOString(),
+				service: this.logName
+			};
+
 			const entry = this.client.entry(
 				{
 					severity,
-					jsonPayload: {
-						message,
-						...metadata,
-						timestamp: new Date().toISOString(),
-						service: this.logName
-					}
-				},
-				{
 					labels: {
 						service: this.logName,
 						job: process.env.CLOUD_RUN_TASK_NAME || 'unknown'
 					}
-				}
+				},
+				payload
 			);
 
 			await this.client.log(this.logName).write(entry);

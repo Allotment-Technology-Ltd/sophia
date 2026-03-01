@@ -1,5 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { GOOGLE_AI_API_KEY } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 
 export const VALIDATION_MODEL = 'gemini-2.0-flash';
 const VALIDATION_MODELS = parseModelList(process.env.GEMINI_MODELS, [
@@ -9,7 +9,8 @@ const VALIDATION_MODELS = parseModelList(process.env.GEMINI_MODELS, [
 	'gemini-1.5-flash'
 ]);
 
-const client = new GoogleGenerativeAI(GOOGLE_AI_API_KEY);
+const geminiApiKey = env.GOOGLE_AI_API_KEY;
+const client = geminiApiKey ? new GoogleGenerativeAI(geminiApiKey) : null;
 
 let totalTokensUsed = 0;
 
@@ -61,6 +62,10 @@ async function callWithRetry(
 	prompt: string,
 	options: RetryOptions = DEFAULT_RETRY_OPTIONS
 ): Promise<string> {
+	if (!client) {
+		throw new Error('GOOGLE_AI_API_KEY is not configured');
+	}
+
 	let lastError: Error | null = null;
 
 	for (const modelName of VALIDATION_MODELS) {

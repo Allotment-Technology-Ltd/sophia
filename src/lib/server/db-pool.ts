@@ -31,7 +31,7 @@ interface PooledConnection {
 export class SurrealDBPool {
 	private connections: Map<string, PooledConnection[]> = new Map();
 	private config: ConnectionConfig;
-	private healthCheckInterval: NodeJS.Timer | null = null;
+	private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
 	private readonly poolSize: number;
 	private readonly maxIdleTime: number;
 

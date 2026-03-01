@@ -16,7 +16,6 @@
     font-family: var(--font-ui);
     font-weight: 400;
     font-size: var(--text-label);
-    min-font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.10em;
     padding: 4px 10px;

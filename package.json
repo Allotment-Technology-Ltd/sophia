@@ -8,7 +8,9 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",
     "monitor:wave": "tsx --env-file=.env scripts/monitor-wave.ts --once",
-    "monitor:wave:watch": "tsx --env-file=.env scripts/monitor-wave.ts --interval-sec 120"
+    "monitor:wave:watch": "tsx --env-file=.env scripts/monitor-wave.ts --interval-sec 120",
+    "ingest:wave1:retry": "tsx --env-file=.env scripts/ingest-batch.ts --wave 1 --retry --fail-fast --pre-scan",
+    "ingest:unknown:resume": "tsx --env-file=.env scripts/ingest.ts data/sources/unknown-title.txt --stop-after-embedding"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.26.0",
