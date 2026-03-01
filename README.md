@@ -16,7 +16,7 @@ SOPHIA tests this hypothesis by storing philosophical knowledge as an **argument
 
 ## Live Demo
 
-**[usesophia.app](https://sophia-210020077715.europe-west2.run.app)**
+**[https://sophia-210020077715.europe-west2.run.app](https://sophia-210020077715.europe-west2.run.app)**
 
 Try: *"Is moral relativism defensible?"* or *"Assess the ethical assumptions behind the EU AI Act's risk classification system"*
 
