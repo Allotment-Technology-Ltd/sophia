@@ -98,7 +98,9 @@ export async function retrieveContext(
 		// ── Step 1: Embed the query ──────────────────────────────────
 		let queryEmbedding: number[];
 		try {
+			console.log('[RETRIEVAL] Embedding query:', userQuery.substring(0, 50) + '...');
 			queryEmbedding = await embedQuery(userQuery);
+			console.log('[RETRIEVAL] ✓ Query embedding received:', queryEmbedding.length, 'dimensions');
 		} catch (err) {
 			console.error('[RETRIEVAL] Embedding API failed:', err instanceof Error ? err.message : err);
 			return {
@@ -126,6 +128,7 @@ export async function retrieveContext(
 
 		let seedClaims: SeedRow[];
 		try {
+			console.log('[RETRIEVAL] Starting vector search for topK=', topK);
 			seedClaims = await query<SeedRow[]>(
 				`SELECT
 					id,
@@ -147,6 +150,7 @@ export async function retrieveContext(
 					...(minConfidence > 0 ? { minConfidence } : {})
 				}
 			);
+			console.log('[RETRIEVAL] ✓ Vector search returned:', seedClaims?.length || 0, 'claims');
 		} catch (dbErr) {
 			if (isDatabaseUnavailable(dbErr)) {
 				console.warn('[RETRIEVAL] Database unavailable during seed retrieval');

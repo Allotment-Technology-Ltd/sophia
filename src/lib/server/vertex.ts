@@ -1,5 +1,4 @@
 import { createVertex } from '@ai-sdk/google-vertex';
-import { env } from '$env/dynamic/private';
 
 // Lazy initialization - create vertex client only when first called
 let vertexInstance: ReturnType<typeof createVertex> | null = null;
@@ -7,9 +6,9 @@ let vertexInstance: ReturnType<typeof createVertex> | null = null;
 function initializeVertex() {
   if (vertexInstance) return vertexInstance;
 
-  // Prioritize process.env for reliability in Cloud Run
-  const project = process.env.GOOGLE_VERTEX_PROJECT || process.env.GCP_PROJECT_ID || env.GOOGLE_VERTEX_PROJECT || env.GCP_PROJECT_ID;
-  const location = process.env.GOOGLE_VERTEX_LOCATION || process.env.GCP_LOCATION || env.GOOGLE_VERTEX_LOCATION || env.GCP_LOCATION || 'us-central1';
+  // Use process.env directly for compatibility with both SvelteKit and standalone scripts
+  const project = process.env.GOOGLE_VERTEX_PROJECT || process.env.GCP_PROJECT_ID;
+  const location = process.env.GOOGLE_VERTEX_LOCATION || process.env.GCP_LOCATION || 'us-central1';
 
   console.log(`[Vertex] Initializing — project=${project ?? '(missing)'} location=${location}`);
 
@@ -33,8 +32,8 @@ function getVertex() {
   return initializeVertex();
 }
 
-const reasoningModelId = process.env.GEMINI_REASONING_MODEL || env.GEMINI_REASONING_MODEL || 'gemini-2.5-pro';
-const extractionModelId = process.env.GEMINI_EXTRACTION_MODEL || env.GEMINI_EXTRACTION_MODEL || 'gemini-2.5-flash';
+const reasoningModelId = process.env.GEMINI_REASONING_MODEL || 'gemini-2.5-pro';
+const extractionModelId = process.env.GEMINI_EXTRACTION_MODEL || 'gemini-2.5-flash';
 
 export function getReasoningModel() {
   return getVertex()(reasoningModelId);

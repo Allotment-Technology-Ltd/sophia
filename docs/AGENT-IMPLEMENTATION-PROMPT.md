@@ -327,16 +327,20 @@ Work through these tasks in order. Each task is atomic — verify before moving 
 
 **Verify:** Run `scripts/test-retrieval.ts` with 5 known queries. Compare results to pre-migration quality.
 
-### Task 5: Hybrid Parallel Engine (Phase C1-C3)
+### Task 5: Hybrid Parallel Engine (Phase C1-C4)
 
-**Files to modify:** `src/lib/server/engine.ts`, `src/lib/server/prompts/critique.ts`, `src/lib/stores/conversation.svelte.ts`, `src/routes/+page.svelte`
+**Files to modify:** `src/lib/server/engine.ts`, `src/lib/server/prompts/analysis.ts`, `critique.ts`, `synthesis.ts`, `src/lib/stores/conversation.svelte.ts`, `src/routes/+page.svelte`
 
 1. Restructure `runDialecticalEngine()` to start Critique after ~2000 chars of Analysis
 2. Update Critique system prompt for partial input
-3. Ensure client handles interleaved `pass_start`/`pass_chunk` events for concurrent passes
-4. Update UI to show both tabs as active during concurrent streaming
+3. Add word limits to all pass prompts:
+   - Pass 1 (Analysis): 500–750 words
+   - Pass 2 (Critique): 500–750 words
+   - Pass 3 (Synthesis): 750–1000 words
+4. Ensure client handles interleaved `pass_start`/`pass_chunk` events for concurrent passes
+5. Update UI to show both tabs as active during concurrent streaming
 
-**Verify:** Submit a query. Both Analysis and Critique tabs show streaming indicators simultaneously. Total time < 2m30s (measured from SSE metadata event).
+**Verify:** Submit a query. Both Analysis and Critique tabs show streaming indicators simultaneously. Total time < 2m30s (measured from SSE metadata event). Verify word counts are within limits in Cloud Logging or Stream output.
 
 ### Task 6: Inline Structured Output (Phase D1-D3)
 

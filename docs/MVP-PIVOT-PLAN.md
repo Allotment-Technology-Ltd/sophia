@@ -274,6 +274,17 @@ const critiqueResult = await critiquePromise;
 
 > The Analysis output you receive may be partial (in progress) or complete. Apply your critical reasoning to whatever content is available. Focus on the arguments, premises, and positions presented so far. If the Analysis appears incomplete, note this but proceed with your critique of the available material.
 
+#### C4. Add word limits to all pass prompts
+
+**Files:** `src/lib/server/prompts/analysis.ts`, `critique.ts`, `synthesis.ts`
+**Change:** Add word limits to each system prompt:
+
+- **Analysis** (Pass 1): "Your response should be 500–750 words."
+- **Critique** (Pass 2): "Your response should be 500–750 words."
+- **Synthesis** (Pass 3): "Your response should be 750–1000 words."
+
+Include these limits as explicit constraints in the system prompt so the model complies during streaming.
+
 #### C3. Update client for concurrent pass streaming
 
 **File:** `src/lib/stores/conversation.svelte.ts`

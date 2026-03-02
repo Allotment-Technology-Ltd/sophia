@@ -1,100 +1,142 @@
-// ...existing code...
-import { VoyageAIClient } from 'voyageai';
-import { env } from '$env/dynamic/private';
+/**
+ * SOPHIA — Embeddings (Vertex AI)
+ * 
+ * Uses Google Vertex AI text-embedding-005 (768 dimensions)
+ * Replaces Voyage AI for zero external vendor dependencies.
+ * 
+ * Authentication: Application Default Credentials (works automatically on Cloud Run)
+ */
 
-export const EMBEDDING_MODEL = env.VOYAGE_MODEL || 'voyage-3-lite';
-export const EMBEDDING_DIMENSIONS = Number(env.VOYAGE_DIMENSIONS || '1024');
-const EMBEDDING_MODELS = parseModelList(env.VOYAGE_MODELS, [
-	EMBEDDING_MODEL,
-	'voyage-4',
-	'voyage-3',
-	'voyage-3-lite'
-]);
+import { GoogleAuth } from 'google-auth-library';
 
-const client = new VoyageAIClient({
-	apiKey: env.VOYAGE_API_KEY
-});
+export const EMBEDDING_MODEL = 'text-embedding-005';
+export const EMBEDDING_DIMENSIONS = 768; // text-embedding-005 native dimension
+
+const PROJECT_ID = process.env.GOOGLE_VERTEX_PROJECT || 
+	process.env.GCP_PROJECT_ID;
+
+const LOCATION = process.env.GOOGLE_VERTEX_LOCATION || 
+	process.env.GCP_LOCATION || 
+	'us-central1';
+
+// Lazy auth client initialization
+let authClient: GoogleAuth | null = null;
+
+function getAuthClient(): GoogleAuth {
+	if (!authClient) {
+		authClient = new GoogleAuth({
+			scopes: ['https://www.googleapis.com/auth/cloud-platform']
+		});
+	}
+	return authClient;
+}
 
 let totalTokensUsed = 0;
 
-function parseModelList(envValue: string | undefined, defaults: string[]): string[] {
-	const fromEnv = (envValue || '')
-		.split(',')
-		.map((value) => value.trim())
-		.filter(Boolean);
+interface VertexEmbeddingRequest {
+	instances: Array<{
+		content: string;
+		taskType?: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY';
+	}>;
+}
 
-	const unique: string[] = [];
-	for (const model of [...fromEnv, ...defaults]) {
-		if (!unique.includes(model)) unique.push(model);
+interface VertexEmbeddingResponse {
+	predictions: Array<{
+		embeddings: {
+			values: number[];
+		};
+		statistics?: {
+			token_count?: number;
+		};
+	}>;
+}
+
+/**
+ * Call Vertex AI text-embedding-005 via REST API
+ * Uses Application Default Credentials (automatic on Cloud Run)
+ */
+async function callVertexEmbedding(
+	texts: string[],
+	taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' = 'RETRIEVAL_DOCUMENT'
+): Promise<number[][]> {
+	if (!PROJECT_ID) {
+		throw new Error('Vertex AI project ID is required. Set GOOGLE_VERTEX_PROJECT or GCP_PROJECT_ID environment variable.');
 	}
-	return unique;
-}
 
-function isModelUnavailableError(error: unknown): boolean {
-	const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-	return (
-		message.includes('not_found') ||
-		message.includes('model:') ||
-		message.includes('not available') ||
-		message.includes('unsupported model') ||
-		message.includes('invalid model')
-	);
-}
+	const url = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${EMBEDDING_MODEL}:predict`;
 
-function getVoyageModelCandidates(requiredDimension: number): string[] {
-	return EMBEDDING_MODELS.filter((model) => {
-		if (requiredDimension >= 1024 && model === 'voyage-3-lite') return false;
-		return true;
+	const auth = getAuthClient();
+	const client = await auth.getClient();
+	const accessToken = await client.getAccessToken();
+
+	if (!accessToken.token) {
+		throw new Error('Failed to obtain access token for Vertex AI');
+	}
+
+	const requestBody: VertexEmbeddingRequest = {
+		instances: texts.map(text => ({
+			content: text,
+			taskType
+		}))
+	};
+
+	const response = await fetch(url, {
+		method: 'POST',
+		headers: {
+			'Authorization': `Bearer ${accessToken.token}`,
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify(requestBody)
 	});
-}
 
-async function embedWithFallback(input: string | string[], inputType: 'document' | 'query') {
-	const candidates = getVoyageModelCandidates(EMBEDDING_DIMENSIONS);
-	let lastError: Error | null = null;
+	if (!response.ok) {
+		const errorText = await response.text();
+		throw new Error(`Vertex AI embedding failed: ${response.status} ${response.statusText} - ${errorText}`);
+	}
 
-	for (const model of candidates) {
-		try {
-			return await client.embed({
-				model,
-				input,
-				inputType,
-				outputDimension: EMBEDDING_DIMENSIONS
-			});
-		} catch (error) {
-			lastError = error instanceof Error ? error : new Error(String(error));
-			if (!isModelUnavailableError(lastError)) {
-				throw lastError;
-			}
+	const data = await response.json() as VertexEmbeddingResponse;
+
+	if (!data.predictions || data.predictions.length === 0) {
+		throw new Error('No embeddings returned from Vertex AI');
+	}
+
+	// Extract embeddings and track tokens
+	const embeddings: number[][] = [];
+	let batchTokens = 0;
+
+	for (const prediction of data.predictions) {
+		if (!prediction.embeddings?.values) {
+			throw new Error('Invalid embedding format from Vertex AI');
+		}
+		embeddings.push(prediction.embeddings.values);
+		
+		if (prediction.statistics?.token_count) {
+			batchTokens += prediction.statistics.token_count;
 		}
 	}
 
-	throw new Error(`No available Voyage model could embed with ${EMBEDDING_DIMENSIONS} dimensions: ${lastError?.message || 'unknown error'}`);
+	if (batchTokens > 0) {
+		totalTokensUsed += batchTokens;
+	}
+
+	return embeddings;
 }
 
 /**
  * Embed a single text for document storage/indexing
- * Uses document input_type for better representation of semantic content
+ * Uses RETRIEVAL_DOCUMENT task type for better representation of semantic content
  */
 export async function embedText(text: string): Promise<number[]> {
 	try {
 		console.log('[EMBED] Embedding document text...');
 
-		const response = await embedWithFallback(text, 'document');
+		const embeddings = await callVertexEmbedding([text], 'RETRIEVAL_DOCUMENT');
 
-		// Track tokens for cost awareness
-		if (response.usage?.totalTokens) {
-			totalTokensUsed += response.usage.totalTokens;
-			console.log(
-				`[EMBED] Used ${response.usage.totalTokens} tokens (session total: ${totalTokensUsed})`
-			);
-		}
+		console.log(
+			`[EMBED] Embedded 1 text (session total: ${totalTokensUsed} tokens)`
+		);
 
-		// Voyage AI returns embeddings in data array
-		if (response.data && response.data.length > 0 && response.data[0].embedding) {
-			return response.data[0].embedding;
-		}
-
-		throw new Error('No embedding returned from Voyage AI');
+		return embeddings[0];
 	} catch (error) {
 		console.error('[EMBED] Error embedding text:', error);
 		throw new Error(
@@ -105,38 +147,28 @@ export async function embedText(text: string): Promise<number[]> {
 
 /**
  * Embed multiple texts in batches
- * Voyage API supports up to 128 documents per request
+ * Vertex AI supports up to 250 instances per request
  * Automatically chunks larger arrays
  */
 export async function embedTexts(texts: string[]): Promise<number[][]> {
-	const BATCH_SIZE = 128;
+	const BATCH_SIZE = 250;
 	const embeddings: number[][] = [];
 
 	try {
 		console.log(`[EMBED] Embedding ${texts.length} texts in batches of ${BATCH_SIZE}...`);
 
-		// Process in batches of up to 128
+		// Process in batches of up to 250
 		for (let i = 0; i < texts.length; i += BATCH_SIZE) {
 			const batch = texts.slice(i, i + BATCH_SIZE);
 			const batchNum = Math.floor(i / BATCH_SIZE) + 1;
 			console.log(`[EMBED] Batch ${batchNum}: embedding ${batch.length} texts`);
 
-			const response = await embedWithFallback(batch, 'document');
+			const batchEmbeddings = await callVertexEmbedding(batch, 'RETRIEVAL_DOCUMENT');
+			embeddings.push(...batchEmbeddings);
 
-			// Track tokens
-			if (response.usage?.totalTokens) {
-				totalTokensUsed += response.usage.totalTokens;
-				console.log(
-					`[EMBED] Batch ${batchNum} used ${response.usage.totalTokens} tokens (session total: ${totalTokensUsed})`
-				);
-			}
-
-			// Extract embeddings in order
-			if (response.data) {
-				for (const item of response.data) {
-					if (item.embedding) embeddings.push(item.embedding);
-				}
-			}
+			console.log(
+				`[EMBED] Batch ${batchNum} complete (session total: ${totalTokensUsed} tokens)`
+			);
 		}
 
 		if (embeddings.length !== texts.length) {
@@ -156,27 +188,19 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
 
 /**
  * Embed a query for semantic search/retrieval
- * Uses query input_type, optimised for finding relevant documents
+ * Uses RETRIEVAL_QUERY task type, optimised for finding relevant documents
  */
 export async function embedQuery(text: string): Promise<number[]> {
 	try {
 		console.log('[EMBED] Embedding query...');
 
-		const response = await embedWithFallback(text, 'query');
+		const embeddings = await callVertexEmbedding([text], 'RETRIEVAL_QUERY');
 
-		// Track tokens for cost awareness
-		if (response.usage?.totalTokens) {
-			totalTokensUsed += response.usage.totalTokens;
-			console.log(
-				`[EMBED] Query used ${response.usage.totalTokens} tokens (session total: ${totalTokensUsed})`
-			);
-		}
+		console.log(
+			`[EMBED] Query embedded (session total: ${totalTokensUsed} tokens)`
+		);
 
-		if (response.data && response.data.length > 0 && response.data[0].embedding) {
-			return response.data[0].embedding;
-		}
-
-		throw new Error('No embedding returned from Voyage AI');
+		return embeddings[0];
 	} catch (error) {
 		console.error('[EMBED] Error embedding query:', error);
 		throw new Error(
@@ -187,7 +211,7 @@ export async function embedQuery(text: string): Promise<number[]> {
 
 /**
  * Get total tokens used in this session
- * Useful for tracking costs: Voyage 3 Lite = $0.02 per 1M tokens
+ * Useful for tracking costs
  */
 export function getTotalTokensUsed(): number {
 	return totalTokensUsed;
@@ -195,11 +219,14 @@ export function getTotalTokensUsed(): number {
 
 /**
  * Get estimated cost of embeddings used so far
- * Based on Voyage 3 Lite pricing: $0.02 per 1M tokens
+ * Based on Vertex AI text-embedding-005 pricing: ~$0.025 per 1M characters
+ * (Vertex pricing is character-based, not token-based, but we track tokens for compatibility)
  */
 export function getEstimatedCost(): string {
-	const costPer1M = 0.02;
-	const cost = (totalTokensUsed / 1_000_000) * costPer1M;
+	// Rough approximation: 1 token ≈ 4 characters
+	const estimatedChars = totalTokensUsed * 4;
+	const costPer1MChars = 0.025;
+	const cost = (estimatedChars / 1_000_000) * costPer1MChars;
 	return cost.toFixed(6);
 }
 
@@ -220,7 +247,7 @@ export function resetTokenCounter(): void {
 export function logStats(): void {
 	console.log('\n[EMBED] === SESSION STATISTICS ===');
 	console.log(`Total tokens embedded: ${totalTokensUsed.toLocaleString()}`);
-	console.log(`Estimated cost (Voyage 3 Lite): $${getEstimatedCost()}`);
+	console.log(`Estimated cost (Vertex AI): $${getEstimatedCost()}`);
 	console.log(`Model: ${EMBEDDING_MODEL}`);
 	console.log(`Dimensions: ${EMBEDDING_DIMENSIONS}`);
 	console.log('');
