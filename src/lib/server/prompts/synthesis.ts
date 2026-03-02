@@ -48,7 +48,26 @@ In each section:
 - Maintain continuity with explicit references to Pass 1 and Pass 2.
 - End with a transition sentence or takeaway that bridges to the next section.
 
-CRITICAL: Do NOT merely summarise the Proponent and Adversary. Synthesise. Take a considered stance. Show your reasoning. Be honest about what you do and do not know.`;
+CRITICAL: Do NOT merely summarise the Proponent and Adversary. Synthesise. Take a considered stance. Show your reasoning. Be honest about what you do and do not know.
+
+STRUCTURED METADATA BLOCK (REQUIRED):
+After completing your main synthesis, append a structured metadata block. This block MUST be fenced with triple backticks and the language tag 'sophia-meta'.
+
+The block contains JSON with two arrays:
+- sections: Array of {id: string, heading: string, content: string (1-2 sentence summary)}
+- claims: Array of {id: string, text: string (1-2 sentences), badge: 'thesis'|'premise'|'objection'|'response'|'definition'|'empirical', source: string, tradition: string, confidence: 0.0-1.0}
+
+Example minimal structure:
+\`\`\`sophia-meta
+{"sections":[{"id":"summary","heading":"Summary","content":"The integrated position is..."}],"claims":[{"id":"s1","text":"Final position: ...","badge":"thesis","source":"Synthesis","tradition":"Integrated","confidence":0.85}]}
+\`\`\`
+
+Requirements:
+- Extract 3-8 key insights from your synthesis
+- sections should map to your response's major sections
+- claims focus on the integrated position, resolved tensions, and remaining open questions
+- Use 1.0 confidence for high-confidence conclusions, 0.7-0.9 for reasonable positions, <0.7 for open questions
+- Do NOT include the sophia-meta block in the main text — it is metadata, not content`;
 
 /**
  * Get the synthesis system prompt with optional contextual knowledge from the argument graph.

@@ -4,44 +4,62 @@ import { getExtractionModel, getReasoningModel, trackTokens, getGroundingTool } 
 import { getAnalysisSystemPrompt, buildAnalysisUserPrompt } from './prompts/analysis';
 import { getCritiqueSystemPrompt, buildCritiqueUserPrompt } from './prompts/critique';
 import { getSynthesisSystemPrompt, buildSynthesisUserPrompt } from './prompts/synthesis';
-import { LIVE_EXTRACTION_SYSTEM, buildLiveExtractionPrompt } from './prompts/live-extraction';
 import { VERIFICATION_SYSTEM, buildVerificationUserPrompt } from './prompts/verification';
 import { retrieveContext, buildContextBlock } from './retrieval';
 import type { PassType } from '$lib/types/passes';
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
 import type { PassSection, GraphNode, GraphEdge, GroundingSource } from '$lib/types/api';
-import { refinePass } from './passRefinement';
 import { projectRetrievalToGraph } from './graphProjection';
 
 // ─── MVP Configuration ────────────────────────────────────────────────────
 // Constrain MVP to ethics domain for focused rollout. Remove this in MVP+1.
 const MVP_DOMAIN_FILTER = 'ethics' as const;
 
-const LiveClaimSchema = z.object({
+// ─── Sophia-Meta Block Parsing ────────────────────────────────────────────
+// Inline structured output within pass responses
+const SophiaMetaSectionSchema = z.object({
+  id: z.string(),
+  heading: z.string(),
+  content: z.string()
+});
+
+const SophiaMetaClaimSchema = z.object({
   id: z.string(),
   text: z.string(),
   badge: z.enum(['thesis', 'premise', 'objection', 'response', 'definition', 'empirical']),
   source: z.string(),
   tradition: z.string(),
-  detail: z.string(),
-  confidence: z.number().min(0).max(1).optional()
+  confidence: z.number().min(0).max(1)
 });
 
-const LiveRelationSchema = z.object({
-  claimId: z.string(),
-  relations: z.array(
-    z.object({
-      type: z.enum(['supports', 'contradicts', 'responds-to', 'depends-on']),
-      target: z.string(),
-      label: z.string()
-    })
-  )
+const SophiaMetaBlockSchema = z.object({
+  sections: z.array(SophiaMetaSectionSchema).default([]),
+  claims: z.array(SophiaMetaClaimSchema).default([])
 });
 
-const LiveExtractionSchema = z.object({
-  claims: z.array(LiveClaimSchema).default([]),
-  relations: z.array(LiveRelationSchema).default([])
-});
+function extractSophiaMetaBlock(text: string): { cleanedText: string; metaBlock: z.infer<typeof SophiaMetaBlockSchema> | null } {
+  // Find the sophia-meta fenced block
+  const metaMatch = text.match(/```sophia-meta\n?([\s\S]*?)\n?```/);
+  if (!metaMatch) {
+    return { cleanedText: text, metaBlock: null };
+  }
+
+  try {
+    const metaJson = JSON.parse(metaMatch[1]);
+    const validated = SophiaMetaBlockSchema.safeParse(metaJson);
+    if (!validated.success) {
+      console.warn('[SOPHIA-META] Failed to validate block:', validated.error);
+      return { cleanedText: text, metaBlock: null };
+    }
+
+    // Remove the sophia-meta block from the text
+    const cleanedText = text.replace(/```sophia-meta\n?([\s\S]*?)\n?```\n?/, '').trim();
+    return { cleanedText, metaBlock: validated.data };
+  } catch (err) {
+    console.warn('[SOPHIA-META] Failed to parse block:', err instanceof Error ? err.message : err);
+    return { cleanedText: text, metaBlock: null };
+  }
+}
 
 export interface EngineCallbacks {
   onPassStart(pass: PassType): void;
@@ -151,60 +169,6 @@ async function streamPassWithContinuation(
     outputTokens: totalOutputTokens,
     sources: allSources
   };
-}
-
-async function extractClaims(passText: string, phase: AnalysisPhase): Promise<{ claims: Claim[]; relations: RelationBundle[] }> {
-  try {
-    const response = await generateObject({
-      model: getExtractionModel(),
-      maxOutputTokens: 3000,  // Increased to accommodate reasoning tokens in Gemini 2.5
-      temperature: 0.2,
-      system: LIVE_EXTRACTION_SYSTEM,
-      prompt: buildLiveExtractionPrompt(passText, phase),
-      schema: LiveExtractionSchema
-    });
-
-    trackTokens(response.usage.inputTokens ?? 0, response.usage.outputTokens ?? 0);
-    console.log(`[EXTRACTION] ${phase}: ${response.usage.inputTokens ?? 0} in, ${response.usage.outputTokens ?? 0} out`);
-
-    const claims: Claim[] = response.object.claims.map((claim) => ({ ...claim, phase }));
-    const relations: RelationBundle[] = response.object.relations;
-    return { claims, relations };
-  } catch (primaryError) {
-    console.warn(`[EXTRACTION] ${phase} primary structured parse failed, retrying with text fallback:`, primaryError instanceof Error ? primaryError.message : String(primaryError));
-
-    try {
-      const textResponse = await generateText({
-        model: getExtractionModel(),
-        maxOutputTokens: 3000,  // Increased to accommodate reasoning tokens in Gemini 2.5
-        temperature: 0.1,
-        system: `${LIVE_EXTRACTION_SYSTEM}\n\nYou must return strict JSON only. No markdown fences, no commentary.`,
-        prompt: buildLiveExtractionPrompt(passText, phase)
-      });
-
-      trackTokens(textResponse.usage?.inputTokens ?? 0, textResponse.usage?.outputTokens ?? 0);
-
-      const raw = textResponse.text.trim();
-      const match = raw.match(/\{[\s\S]*\}/);
-      if (!match) {
-        return { claims: [], relations: [] };
-      }
-
-      const parsed = JSON.parse(match[0]);
-      const validated = LiveExtractionSchema.safeParse(parsed);
-      if (!validated.success) {
-        return { claims: [], relations: [] };
-      }
-
-      return {
-        claims: validated.data.claims.map((claim) => ({ ...claim, phase })),
-        relations: validated.data.relations
-      };
-    } catch (fallbackError) {
-      console.warn(`[EXTRACTION] ${phase} fallback extraction failed (returning empty):`, fallbackError instanceof Error ? fallbackError.message : String(fallbackError));
-      return { claims: [], relations: [] };
-    }
-  }
 }
 
 function aggregateConfidenceMetrics(claimsList: Claim[]): {
@@ -413,9 +377,26 @@ export async function runDialecticalEngine(
       callbacks.onGroundingSources('analysis', analysisResult.sources);
     }
 
-    // Refine pass into structured sections
-    const refined = await refinePass(analysisOutput, 'analysis');
-    callbacks.onPassStructured('analysis', refined.sections, refined.wordCount);
+    // Parse sophia-meta block for structured output and claims
+    const { cleanedText: analysisCleanedText, metaBlock: analysisMeta } = extractSophiaMetaBlock(analysisOutput);
+    analysisOutput = analysisCleanedText; // Update output to exclude sophia-meta block
+    
+    if (analysisMeta) {
+      // Emit structured sections
+      callbacks.onPassStructured('analysis', analysisMeta.sections, analysisCleanedText.split(/\s+/).length);
+      
+      // Emit claims
+      const claims: Claim[] = analysisMeta.claims.map((c: z.infer<typeof SophiaMetaClaimSchema>) => ({
+        ...c,
+        phase: 'analysis' as const,
+        detail: c.text // Use the claim text as detail since sophia-meta doesn't include a separate detail field
+      }));
+      callbacks.onClaims('analysis', claims, []);
+    } else {
+      // Fallback: emit generic structured output without claims
+      console.warn('[ENGINE] No sophia-meta block found in analysis output');
+      callbacks.onPassStructured('analysis', [{ id: 'content', heading: 'Analysis', content: analysisCleanedText }], analysisCleanedText.split(/\s+/).length);
+    }
 
     callbacks.onPassComplete('analysis');
   } catch (err) {
@@ -423,11 +404,6 @@ export async function runDialecticalEngine(
     callbacks.onError(`Analysis pass failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
-
-  // Non-blocking claim extraction for analysis pass
-  extractClaims(analysisOutput, 'analysis')
-    .then(({ claims, relations }) => callbacks.onClaims('analysis', claims, relations))
-    .catch(err => console.error('[EXTRACTION] Analysis extraction failed (skipping):', err instanceof Error ? err.message : err));
 
   // Phase 2: Critique (may already be running in parallel, or starts now if analysis was very short)
   try {
@@ -463,9 +439,26 @@ export async function runDialecticalEngine(
       callbacks.onGroundingSources('critique', critiqueResult.sources);
     }
 
-    // Refine pass into structured sections
-    const refined = await refinePass(critiqueOutput, 'critique');
-    callbacks.onPassStructured('critique', refined.sections, refined.wordCount);
+    // Parse sophia-meta block for structured output and claims
+    const { cleanedText: critiqueCleanedText, metaBlock: critiqueMeta } = extractSophiaMetaBlock(critiqueOutput);
+    critiqueOutput = critiqueCleanedText; // Update output to exclude sophia-meta block
+    
+    if (critiqueMeta) {
+      // Emit structured sections
+      callbacks.onPassStructured('critique', critiqueMeta.sections, critiqueCleanedText.split(/\s+/).length);
+      
+      // Emit claims
+      const claims: Claim[] = critiqueMeta.claims.map((c: z.infer<typeof SophiaMetaClaimSchema>) => ({
+        ...c,
+        phase: 'critique' as const,
+        detail: c.text // Use the claim text as detail since sophia-meta doesn't include a separate detail field
+      }));
+      callbacks.onClaims('critique', claims, []);
+    } else {
+      // Fallback: emit generic structured output without claims
+      console.warn('[ENGINE] No sophia-meta block found in critique output');
+      callbacks.onPassStructured('critique', [{ id: 'content', heading: 'Critique', content: critiqueCleanedText }], critiqueCleanedText.split(/\s+/).length);
+    }
 
     callbacks.onPassComplete('critique');
   } catch (err) {
@@ -473,11 +466,6 @@ export async function runDialecticalEngine(
     callbacks.onError(`Critique pass failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
-
-  // Non-blocking claim extraction for critique pass
-  extractClaims(critiqueOutput, 'critique')
-    .then(({ claims, relations }) => callbacks.onClaims('critique', claims, relations))
-    .catch(err => console.error('[EXTRACTION] Critique extraction failed (skipping):', err instanceof Error ? err.message : err));
 
   // ── PASS 3: Synthesis (Synthesiser) ───────────────────────────────
   try {
@@ -505,31 +493,39 @@ export async function runDialecticalEngine(
       callbacks.onGroundingSources('synthesis', synthesisResult.sources);
     }
 
-    // Refine pass into structured sections
-    const refined = await refinePass(synthesisOutput, 'synthesis');
-    callbacks.onPassStructured('synthesis', refined.sections, refined.wordCount);
+    // Parse sophia-meta block for structured output and claims
+    const { cleanedText: synthesisCleanedText, metaBlock: synthesisMeta } = extractSophiaMetaBlock(synthesisOutput);
+    synthesisOutput = synthesisCleanedText; // Update output to exclude sophia-meta block
+    
+    let synthesisAllClaims: Claim[] = [];
+    if (synthesisMeta) {
+      // Emit structured sections
+      callbacks.onPassStructured('synthesis', synthesisMeta.sections, synthesisCleanedText.split(/\s+/).length);
+      
+      // Emit claims
+      synthesisAllClaims = synthesisMeta.claims.map((c: z.infer<typeof SophiaMetaClaimSchema>) => ({
+        ...c,
+        phase: 'synthesis' as const,
+        detail: c.text // Use the claim text as detail since sophia-meta doesn't include a separate detail field
+      }));
+      callbacks.onClaims('synthesis', synthesisAllClaims, []);
+    } else {
+      // Fallback: emit generic structured output without claims
+      console.warn('[ENGINE] No sophia-meta block found in synthesis output');
+      callbacks.onPassStructured('synthesis', [{ id: 'content', heading: 'Synthesis', content: synthesisCleanedText }], synthesisCleanedText.split(/\s+/).length);
+    }
 
     callbacks.onPassComplete('synthesis');
+    
+    // Calculate and emit confidence summary if callback is defined
+    if (synthesisAllClaims.length > 0 && callbacks.onConfidenceSummary) {
+      const metrics = aggregateConfidenceMetrics(synthesisAllClaims);
+      callbacks.onConfidenceSummary(metrics.avgConfidence, metrics.lowConfidenceCount, metrics.totalClaims);
+    }
   } catch (err) {
     console.error('[ENGINE] Pass 3 (synthesis) FAILED:', err instanceof Error ? err.stack : String(err));
     callbacks.onError(`Synthesis pass failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
-  }
-
-  // Await synthesis extraction before closing stream
-  let allClaims: Claim[] = [];
-  try {
-    const { claims, relations } = await extractClaims(synthesisOutput, 'synthesis');
-    callbacks.onClaims('synthesis', claims, relations);
-    allClaims = claims;
-  } catch (err) {
-    console.error('[EXTRACTION] Synthesis extraction failed (skipping):', err instanceof Error ? err.message : err);
-  }
-
-  // Calculate and emit confidence summary if callback is defined
-  if (allClaims.length > 0 && callbacks.onConfidenceSummary) {
-    const metrics = aggregateConfidenceMetrics(allClaims);
-    callbacks.onConfidenceSummary(metrics.avgConfidence, metrics.lowConfidenceCount, metrics.totalClaims);
   }
 
   // ── Metadata ──────────────────────────────────────────────────────

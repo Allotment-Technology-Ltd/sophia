@@ -46,7 +46,26 @@ Within each Position section, include:
 - 3-5 clearly enumerated premises
 - A brief transition to the next section
 
-CRITICAL: Do NOT resolve the tensions or reach a verdict. That is the Synthesiser's job in Pass 3. Your role is to lay out the landscape of serious argument.`;
+CRITICAL: Do NOT resolve the tensions or reach a verdict. That is the Synthesiser's job in Pass 3. Your role is to lay out the landscape of serious argument.
+
+STRUCTURED METADATA BLOCK (REQUIRED):
+After completing your main analysis, append a structured metadata block. This block MUST be fenced with triple backticks and the language tag 'sophia-meta'.
+
+The block contains JSON with two arrays:
+- sections: Array of {id: string, heading: string, content: string (1-2 sentence summary)}
+- claims: Array of {id: string, text: string (1-2 sentences), badge: 'thesis'|'premise'|'objection'|'response'|'definition'|'empirical', source: string, tradition: string, confidence: 0.0-1.0}
+
+Example minimal structure:
+\`\`\`sophia-meta
+{"sections":[{"id":"the-question","heading":"The Question(s)","content":"Summary of the question..."}],"claims":[{"id":"c1","text":"First premise...","badge":"premise","source":"Author","tradition":"School","confidence":0.85}]}
+\`\`\`
+
+Requirements:
+- Extract 3-8 substantive philosophical claims from your response
+- sections should map to your response's main sections
+- claims focus on premises, positions, and conclusions
+- Use 1.0 confidence for well-established positions, 0.7-0.9 for reasonable interpretations, <0.7 for novel claims
+- Do NOT include the sophia-meta block in the main text — it is metadata, not content`;
 
 /**
  * Get the analysis system prompt with optional contextual knowledge from the argument graph.

@@ -51,7 +51,26 @@ For each major section:
 - Use specific, traceable references to Pass 1 claims.
 - End with a short transition sentence to the next section.
 
-CRITICAL: Your role is to strengthen the discourse by honest critique, not to reach a final verdict. That happens in Pass 3.`;
+CRITICAL: Your role is to strengthen the discourse by honest critique, not to reach a final verdict. That happens in Pass 3.
+
+STRUCTURED METADATA BLOCK (REQUIRED):
+After completing your main critique, append a structured metadata block. This block MUST be fenced with triple backticks and the language tag 'sophia-meta'.
+
+The block contains JSON with two arrays:
+- sections: Array of {id: string, heading: string, content: string (1-2 sentence summary)}
+- claims: Array of {id: string, text: string (1-2 sentences), badge: 'thesis'|'premise'|'objection'|'response'|'definition'|'empirical', source: string, tradition: string, confidence: 0.0-1.0}
+
+Example minimal structure:
+\`\`\`sophia-meta
+{"sections":[{"id":"weakest-premise","heading":"Weakest Premise","content":"Summary of the vulnerable premise..."}],"claims":[{"id":"o1","text":"Objection: ...","badge":"objection","source":"Author","tradition":"School","confidence":0.8}]}
+\`\`\`
+
+Requirements:
+- Extract 3-8 substantive criticisms and objections from your response
+- sections should map to your response's major sections
+- claims focus on objections, blind spots, and identified weaknesses
+- Use 1.0 confidence for strong objections, 0.7-0.9 for reasonable challenges, <0.7 for speculative critiques
+- Do NOT include the sophia-meta block in the main text — it is metadata, not content`;
 
 /**
  * Get the critique system prompt with optional contextual knowledge from the argument graph.
