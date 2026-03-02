@@ -523,6 +523,31 @@ async function main() {
 		console.log(`[FILTER] Selected wave ${waveFilter}: ${sources.length} sources`);
 	}
 
+	// ─── PDF guard ──────────────────────────────────────────────────────────
+	// Skip any source whose URL is a raw PDF — we can't extract text from them.
+	const pdfSources = sources.filter((s) => s.url.toLowerCase().endsWith('.pdf'));
+	if (pdfSources.length > 0) {
+		for (const s of pdfSources) {
+			console.warn(`[SKIP] Source #${s.id} "${s.title}" has a PDF URL — skipping (replace with an HTML URL to ingest): ${s.url}`);
+		}
+		sources = sources.filter((s) => !s.url.toLowerCase().endsWith('.pdf'));
+	}
+
+	// ─── Custom skip list ────────────────────────────────────────────────────
+	// Environment variable to skip specific sources: SKIP_SOURCE_IDS=5,6,9
+	const skipListStr = process.env.SKIP_SOURCE_IDS || '';
+	const skipList = skipListStr
+		.split(',')
+		.map((id) => parseInt(id.trim(), 10))
+		.filter((id) => !isNaN(id));
+	
+	if (skipList.length > 0) {
+		const skippedBefore = sources.length;
+		sources = sources.filter((s) => !skipList.includes(s.id));
+		const skippedCount = skippedBefore - sources.length;
+		console.warn(`[SKIP] Skipping ${skippedCount} source(s) from SKIP_SOURCE_IDS: ${skipList.join(', ')}`);
+	}
+
 	if (sources.length === 0) {
 		console.log('[INFO] No sources to ingest');
 		process.exit(0);

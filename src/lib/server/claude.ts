@@ -58,7 +58,7 @@ export async function* analyzePhilosophical(
     try {
       const stream = await client.messages.stream({
         model,
-        max_tokens: 2000,
+        max_tokens: 1000,
         system: systemPrompts[passNumber],
         messages: [
           {
@@ -90,80 +90,59 @@ export async function* analyzePhilosophical(
 }
 
 function getAnalysisPrompt(query: string, context: string): string {
-  return `You are conducting the first pass of a rigorous philosophical analysis. Your role is the PROPONENT: construct the strongest possible argument addressing this question.
+  return `PASS 1: PROPONENT — Construct the strongest argument addressing this question.
 
 QUERY: ${query}
 
-PHILOSOPHICAL CONTEXT:
+CONTEXT:
 ${context}
 
-INSTRUCTIONS:
-1. Decompose the question into constituent philosophical sub-domains
-2. Identify the key philosophical positions relevant to answering this question
-3. Construct the strongest available argument from the context provided
-4. Identify key premises and their evidential support
-5. Note which philosophical traditions are engaged
+Respond concisely (≤1000 words). Structure as:
 
-Produce structured analysis in these sections:
-**Domains Identified:** [List philosophical domains]
-**Positions Engaged:** [Name main positions]
-**Core Argument:** [2-3 sentences]
-**Key Premises:** [List 3-5 key premises]
-**Traditions Engaged:** [Which philosophical traditions]
-**Confidence Notes:** [Where strongest, where vulnerable]
+**Argument:** State the clearest case. (2-3 sentences)
+**Key Premises:** 3-4 supporting premises with their basis.
+**Philosophical Grounding:** Which tradition(s) support this?
+**Strongest Version:** How would this argument's best defender present it?
 
-Be philosophically rigorous. Use precise terminology.`;
+Be rigorous. Use precise terminology. Acknowledge complexity.`;
 }
 
 function getCritiquePrompt(query: string, context: string): string {
-  return `You are conducting the second pass of a rigorous philosophical analysis. Your role is the ADVERSARY: identify the weakest points and strongest objections.
+  return `PASS 2: ADVERSARY — Identify the strongest objections and weakest points.
 
 QUERY: ${query}
 
-PHILOSOPHICAL CONTEXT:
+CONTEXT:
 ${context}
 
-INSTRUCTIONS:
-1. Identify the weakest premise in the argument just presented
-2. Construct the strongest available objection from the context
-3. Check for overlooked philosophical positions that would challenge the argument
-4. Flag any empirical claims that lack support
-5. Identify contested assumptions the argument depends on
+Respond concisely (≤1000 words). Structure as:
 
-Produce structured analysis:
-**Weakest Premise:** [Which premise is vulnerable?]
-**Strongest Objection:** [Most formidable counterargument]
-**Overlooked Positions:** [What positions weren't engaged]
-**Unsupported Claims:** [Which claims lack grounding]
-**Contested Assumptions:** [What does argument assume?]
-**Gap Search Needed:** [Any specific gaps to fill? yes/no]
+**Central Vulnerability:** What is the argument's weakest premise?
+**Main Objection:** What is the strongest counterargument from the context?
+**Overlooked Positions:** Which relevant positions were not engaged?
+**Contested Assumptions:** What does the argument take for granted?
+**Unresolved Tension:** What cannot be easily answered?
 
-Be intellectually honest. Challenge the strongest version of the argument.`;
+Attack the strongest version of the argument, not a strawman. Be intellectually honest.`;
 }
 
 function getSynthesisPrompt(query: string, context: string): string {
-  return `You are conducting the third pass of a rigorous philosophical analysis. Your role is the INTEGRATOR: synthesize the argument and its strongest objections into a nuanced final analysis.
+  return `PASS 3: INTEGRATOR — Synthesize the argument and objections into a final analysis.
 
 QUERY: ${query}
 
-PHILOSOPHICAL CONTEXT:
+CONTEXT:
 ${context}
 
-INSTRUCTIONS:
-1. Integrate valid objections into a refined argument
-2. Distinguish between tensions that can be resolved and those that cannot
-3. Identify genuine philosophical disagreement that survives analysis
-4. Assess the overall epistemic status of the argument
-5. Suggest further questions the analysis raises
+Respond concisely (≤1000 words). Structure as:
 
-Produce structured synthesis:
-**Integrated Analysis:** [Restate argument incorporating objections. 2-3 paragraphs]
-**Resolved Tensions:** [Which objections refine rather than refute?]
-**Unresolved Tensions:** [What genuine disagreement remains?]
-**Epistemic Status:** [How confident? What qualifications?]
-**Further Questions:** [What follow-up questions?]
+**Refined Argument:** Restate the case, incorporating valid criticisms. (1-2 paragraphs)
+**What This Shows:** What survivable disagreement remains? Where is consensus possible?
+**Genuine Tensions:** What tensions cannot be resolved? Why is this a disputed question?
+**Epistemic Take:** How confident can we be? What would change our minds?
+**Open Questions:** What further inquiry is needed?
 
-Be balanced. Acknowledge legitimate disagreement. Avoid false confidence.`;
+Be balanced. Avoid false confidence. Acknowledge legitimate disagreement.`;
 }
 
 const ANALYSIS_SYSTEM_PROMPT = `You are a rigorous philosophical analyst specializing in structured argumentation. Your task is to construct the strongest possible argument addressing a given philosophical question, drawing on the context provided. 

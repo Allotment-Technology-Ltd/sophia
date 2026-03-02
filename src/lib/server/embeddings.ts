@@ -1,9 +1,10 @@
 // ...existing code...
 import { VoyageAIClient } from 'voyageai';
+import { env } from '$env/dynamic/private';
 
-export const EMBEDDING_MODEL = process.env.VOYAGE_MODEL || 'voyage-3-lite';
-export const EMBEDDING_DIMENSIONS = Number(process.env.VOYAGE_DIMENSIONS || '1024');
-const EMBEDDING_MODELS = parseModelList(process.env.VOYAGE_MODELS, [
+export const EMBEDDING_MODEL = env.VOYAGE_MODEL || 'voyage-3-lite';
+export const EMBEDDING_DIMENSIONS = Number(env.VOYAGE_DIMENSIONS || '1024');
+const EMBEDDING_MODELS = parseModelList(env.VOYAGE_MODELS, [
 	EMBEDDING_MODEL,
 	'voyage-4',
 	'voyage-3',
@@ -11,7 +12,7 @@ const EMBEDDING_MODELS = parseModelList(process.env.VOYAGE_MODELS, [
 ]);
 
 const client = new VoyageAIClient({
-	apiKey: process.env.VOYAGE_API_KEY
+	apiKey: env.VOYAGE_API_KEY
 });
 
 let totalTokensUsed = 0;

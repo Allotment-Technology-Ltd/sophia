@@ -17,5 +17,5 @@ COPY . .
 # Default wave number (override via Cloud Run --set-env-vars WAVE_NUM=1)
 ENV WAVE_NUM=1
 
-# Shell form so ${WAVE_NUM} gets expanded at runtime  
-CMD pnpm exec tsx scripts/ingest-batch.ts --wave ${WAVE_NUM} --retry --fail-fast --pre-scan
+# Shell form so ${WAVE_NUM} gets expanded at runtime
+CMD pnpm exec tsx scripts/ingest-batch.ts --wave ${WAVE_NUM} --retry

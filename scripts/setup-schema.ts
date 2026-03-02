@@ -143,6 +143,25 @@ async function setupSchema() {
 		`);
 		console.log('[SETUP] ✓ Relation: part_of');
 
+		// 11. QUERY_CACHE TABLE (with 7-day TTL for automatic expiration)
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS query_cache SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS query_hash ON query_cache TYPE string;
+			DEFINE FIELD IF NOT EXISTS query_text ON query_cache TYPE string;
+			DEFINE FIELD IF NOT EXISTS lens ON query_cache TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS events ON query_cache TYPE array<object>;
+			DEFINE FIELD IF NOT EXISTS hit_count ON query_cache TYPE int DEFAULT 0;
+			DEFINE FIELD IF NOT EXISTS created_at ON query_cache TYPE datetime VALUE time::now();
+			DEFINE FIELD IF NOT EXISTS expires_at ON query_cache TYPE datetime VALUE (time::now() + 7d);
+		`);
+		console.log('[SETUP] ✓ Table: query_cache');
+
+		// Create index for query_cache table
+		await db.query(`
+			DEFINE INDEX IF NOT EXISTS query_cache_hash ON query_cache FIELDS query_hash UNIQUE;
+		`);
+		console.log('[SETUP] ✓ Index: query_cache_hash');
+
 		// Verify schema by querying table counts
 		console.log('\n[SETUP] Verifying schema...');
 
@@ -156,7 +175,8 @@ async function setupSchema() {
 			'responds_to',
 			'refines',
 			'exemplifies',
-			'part_of'
+			'part_of',
+			'query_cache'
 		];
 
 		for (const table of tables) {

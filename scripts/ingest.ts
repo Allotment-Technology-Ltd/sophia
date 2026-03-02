@@ -93,10 +93,11 @@ const DB_CONNECT_MAX_RETRIES = Number(process.env.DB_CONNECT_MAX_RETRIES || '4')
 const DB_CONNECT_RETRY_BASE_MS = Number(process.env.DB_CONNECT_RETRY_BASE_MS || '750');
 
 const INGESTED_DIR = './data/ingested';
-// Keep sections small enough that Claude's extraction output fits within max_tokens (16384).
+// Keep sections small enough that Claude's extraction output fits within max_tokens (32768).
 // Each claim is ~150 tokens of JSON. At 10 claims/1k input tokens:
-//   10_000 tokens input → ~100 claims → ~15_000 tokens output → fits in 16384 limit.
-const MAX_TOKENS_PER_SECTION = 10_000;
+//   5_000 tokens input → ~50 claims → ~7_500 tokens output → fits in 32768 limit with safety margin.
+const MAX_TOKENS_PER_SECTION = 5_000;
+const BOOK_MAX_TOKENS_PER_SECTION = Number(process.env.BOOK_MAX_TOKENS_PER_SECTION || '3_000');
 
 // ─── Stage ordering for resume logic ──────────────────────────────────────
 const STAGES_ORDER = ['extracting', 'relating', 'grouping', 'embedding', 'validating', 'storing'];
@@ -284,10 +285,55 @@ function getVoyageModelCandidates(requiredDimension: number): string[] {
 	});
 }
 
+function getSectionTokenLimit(sourceType: string): number {
+	if (sourceType === 'book') {
+		return BOOK_MAX_TOKENS_PER_SECTION;
+	}
+	return MAX_TOKENS_PER_SECTION;
+}
+
+function splitChunkByParagraphs(chunk: string, maxTokensPerSection: number): string[] {
+	if (estimateTokens(chunk) <= maxTokensPerSection) return [chunk];
+
+	const paragraphs = chunk
+		.split(/\n\s*\n/g)
+		.map((p) => p.trim())
+		.filter((p) => p.length > 0);
+
+	if (paragraphs.length <= 1) {
+		const charChunkSize = maxTokensPerSection * 4;
+		const direct: string[] = [];
+		for (let i = 0; i < chunk.length; i += charChunkSize) {
+			const sub = chunk.substring(i, i + charChunkSize).trim();
+			if (sub.length > 100) direct.push(sub);
+		}
+		return direct;
+	}
+
+	const grouped: string[] = [];
+	let buffer = '';
+
+	for (const paragraph of paragraphs) {
+		const candidate = buffer ? `${buffer}\n\n${paragraph}` : paragraph;
+		if (estimateTokens(candidate) > maxTokensPerSection && buffer.length > 0) {
+			grouped.push(buffer.trim());
+			buffer = paragraph;
+		} else {
+			buffer = candidate;
+		}
+	}
+
+	if (buffer.length > 0) {
+		grouped.push(buffer.trim());
+	}
+
+	return grouped;
+}
+
 /**
  * Split large source text into sections based on headings
  */
-function splitIntoSections(text: string): string[] {
+function splitIntoSections(text: string, maxTokensPerSection = MAX_TOKENS_PER_SECTION): string[] {
 	// Split on common heading patterns
 	const sections: string[] = [];
 	const lines = text.split('\n');
@@ -322,7 +368,7 @@ function splitIntoSections(text: string): string[] {
 
 	// If we couldn't split meaningfully, return chunks by character count
 	if (sections.length <= 1) {
-		const chunkSize = 40_000; // ~30k words, ~40k tokens
+		const chunkSize = maxTokensPerSection * 4; // ~4 chars/token
 		const chunks: string[] = [];
 		for (let i = 0; i < text.length; i += chunkSize) {
 			chunks.push(text.substring(i, i + chunkSize));
@@ -334,7 +380,7 @@ function splitIntoSections(text: string): string[] {
 	const merged: string[] = [];
 	let buffer = '';
 	for (const section of sections) {
-		if (estimateTokens(buffer + '\n\n' + section) > MAX_TOKENS_PER_SECTION && buffer.length > 0) {
+		if (estimateTokens(buffer + '\n\n' + section) > maxTokensPerSection && buffer.length > 0) {
 			merged.push(buffer.trim());
 			buffer = section;
 		} else {
@@ -347,15 +393,11 @@ function splitIntoSections(text: string): string[] {
 
 	// Post-process: sub-split any merged chunk that's still larger than the threshold.
 	// This happens when a single heading-based section (e.g., Kant's Section II) exceeds
-	// MAX_TOKENS_PER_SECTION on its own.
+	// maxTokensPerSection on its own.
 	const final: string[] = [];
-	const charChunkSize = MAX_TOKENS_PER_SECTION * 4; // ~4 chars per token
 	for (const chunk of merged) {
-		if (estimateTokens(chunk) > MAX_TOKENS_PER_SECTION) {
-			for (let i = 0; i < chunk.length; i += charChunkSize) {
-				const sub = chunk.substring(i, i + charChunkSize).trim();
-				if (sub.length > 100) final.push(sub);
-			}
+		if (estimateTokens(chunk) > maxTokensPerSection) {
+			final.push(...splitChunkByParagraphs(chunk, maxTokensPerSection));
 		} else {
 			final.push(chunk);
 		}
@@ -408,7 +450,7 @@ async function callClaude(
 
 				const response = await client.messages.create({
 					model,
-					max_tokens: 16384,
+					max_tokens: 32768,
 					system: systemPrompt,
 					messages: [{ role: 'user', content: userMessage }]
 				});
@@ -443,12 +485,9 @@ async function callClaude(
 					lastError.message.includes('529') ||
 					lastError.message.includes('500') ||
 					lastError.message.includes('overloaded') ||
-					lastError.message.includes('timeout');
-
-				if (attempt >= maxRetries || !isRetryable) {
-					break;
-				}
-
+				lastError.message.includes('timeout') ||
+				lastError.message.includes('prompt_too_long') ||
+				lastError.message.includes('context_length');
 				console.warn(`  [WARN] Claude API error: ${lastError.message}`);
 			}
 		}
@@ -531,6 +570,11 @@ interface PartialResults {
 	embeddings?: number[][];
 	validation?: ValidationOutput | null;
 	stage_completed: string;
+	// Mid-extraction checkpoint: if extraction crashes mid-section, resume from here
+	extraction_progress?: {
+		claims_so_far: ExtractionOutput;
+		remaining_sections: string[];
+	};
 }
 
 function savePartialResults(slug: string, results: PartialResults) {
@@ -538,7 +582,10 @@ function savePartialResults(slug: string, results: PartialResults) {
 		fs.mkdirSync(INGESTED_DIR, { recursive: true });
 	}
 	const partialPath = path.join(INGESTED_DIR, `${slug}-partial.json`);
-	fs.writeFileSync(partialPath, JSON.stringify(results, null, 2), 'utf-8');
+	const tmpPath = `${partialPath}.tmp`;
+	// Write to temp file first, then atomic rename — prevents corruption on crash mid-write
+	fs.writeFileSync(tmpPath, JSON.stringify(results, null, 2), 'utf-8');
+	fs.renameSync(tmpPath, partialPath);
 	console.log(`  [SAVE] Partial results saved to: ${partialPath}`);
 }
 
@@ -803,16 +850,32 @@ async function main() {
 			console.log('└──────────────────────────────────────────────────────────┘');
 			const stageTimer1 = startStageTimer();
 			const estimatedTokenCount = estimateTokens(sourceText);
+			const sectionTokenLimit = getSectionTokenLimit(sourceMeta.source_type);
 
-			if (estimatedTokenCount > MAX_TOKENS_PER_SECTION) {
+			if (estimatedTokenCount > sectionTokenLimit) {
 				// Large source — split into sections
-				console.log(`  [INFO] Source exceeds ${MAX_TOKENS_PER_SECTION.toLocaleString()} token estimate. Splitting into sections...`);
-				const sections = splitIntoSections(sourceText);
+				console.log(
+					`  [INFO] Source exceeds ${sectionTokenLimit.toLocaleString()} token estimate. Splitting into sections...`
+				);
+				const sections = splitIntoSections(sourceText, sectionTokenLimit);
 				console.log(`  [INFO] Split into ${sections.length} sections`);
 
-				// Build a mutable queue — auto-halve sections that hit the output token limit
-				const sectionQueue: string[] = [...sections];
+				// Check for mid-extraction resume — never re-send already-processed sections
+				let sectionQueue: string[] = [...sections];
 				let sectionLabel = 0;
+
+				if (partial.extraction_progress?.claims_so_far.length > 0) {
+					console.log(
+						`  [RESUME] Mid-extraction checkpoint — ${partial.extraction_progress.claims_so_far.length} claims already extracted`
+					);
+					console.log(`  [RESUME] Skipping ${sections.length - partial.extraction_progress.remaining_sections.length} completed sections`);
+					allClaims = partial.extraction_progress.claims_so_far;
+					sectionQueue = partial.extraction_progress.remaining_sections;
+					sectionLabel = sections.length - sectionQueue.length;
+					if (sectionQueue.length === 0) {
+						console.log(`  [RESUME] All ${sections.length} sections already extracted; skipping to stage completion`);
+					}
+				}
 
 				for (let i = 0; i < sectionQueue.length; i++) {
 					const section = sectionQueue[i];
@@ -862,25 +925,54 @@ async function main() {
 
 						allClaims.push(...offsetClaims);
 						console.log(`  [OK] Extracted ${validated.length} claims from section ${sectionLabel}`);
+
+						// Checkpoint after each successful section
+						partial.extraction_progress = {
+							claims_so_far: [...allClaims],
+							remaining_sections: sectionQueue.slice(i + 1)
+						};
+						savePartialResults(slug, partial);
 					} catch (parseError) {
 						console.warn(`  [WARN] JSON parse/validation failed for section ${sectionLabel}. Attempting fix...`);
 
-						const fixedResponse = await fixJsonWithClaude(
-							claude,
-							rawResponse,
-							parseError instanceof Error ? parseError.message : String(parseError),
-							'Array of { text, claim_type, domain, section_context, position_in_source, confidence }'
-						);
+						let fixedResponse: string;
+						try {
+							fixedResponse = await fixJsonWithClaude(
+								claude,
+								rawResponse,
+								parseError instanceof Error ? parseError.message : String(parseError),
+								'Array of { text, claim_type, domain, section_context, position_in_source, confidence }'
+							);
+						} catch (fixError) {
+							const fixMsg = fixError instanceof Error ? fixError.message : String(fixError);
+							if (fixMsg.includes('truncated (max_tokens reached)') && section.length > 500) {
+								const mid = Math.floor(section.length / 2);
+								console.warn(
+									`  [SPLIT] Section ${sectionLabel} fix response truncated—splitting into 2 sub-sections and retrying`
+								);
+								sectionQueue.splice(i + 1, 0, section.substring(0, mid), section.substring(mid));
+								sectionLabel--;
+								continue;
+							}
+							throw fixError;
+						}
 
 						const fixedParsed = parseJsonResponse(fixedResponse);
 						const fixedValidated = ExtractionOutputSchema.parse(fixedParsed);
-						const offset = allClaims.length;
-						const offsetClaims = fixedValidated.map((c) => ({
+						const fixOffset = allClaims.length;
+						const fixOffsetClaims = fixedValidated.map((c) => ({
 							...c,
-							position_in_source: c.position_in_source + offset
+							position_in_source: c.position_in_source + fixOffset
 						}));
-						allClaims.push(...offsetClaims);
+						allClaims.push(...fixOffsetClaims);
 						console.log(`  [OK] Fixed and extracted ${fixedValidated.length} claims from section ${sectionLabel}`);
+
+						// Checkpoint after fix path
+						partial.extraction_progress = {
+							claims_so_far: [...allClaims],
+							remaining_sections: sectionQueue.slice(i + 1)
+						};
+						savePartialResults(slug, partial);
 					}
 				}
 			} else {
@@ -926,6 +1018,7 @@ async function main() {
 
 			partial.claims = allClaims;
 			partial.stage_completed = 'extracting';
+			partial.extraction_progress = undefined; // Clear mid-stage progress — extraction is now complete
 			savePartialResults(slug, partial);
 			await updateIngestionLog(db, sourceMeta.url, {
 				stage_completed: 'extracting',

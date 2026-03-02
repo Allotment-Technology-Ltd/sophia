@@ -5,6 +5,9 @@
 # Examples:
 #   ./scripts/run-wave-gcp.sh 1           # Run Wave 1 (uses existing image)
 #   ./scripts/run-wave-gcp.sh 1 --build   # Rebuild image and run Wave 1
+#
+# Environment variables (optional):
+#   SKIP_SOURCE_IDS   Comma-separated source IDs to skip (e.g. SKIP_SOURCE_IDS=5,6 ./scripts/run-wave-gcp.sh 1)
 
 set -e
 
@@ -15,7 +18,7 @@ JOB_NAME="sophia-ingest"
 IMAGE_NAME="sophia-ingest"
 REGISTRY="europe-west2-docker.pkg.dev"
 REPOSITORY="sophia"
-FULL_IMAGE="${REGISTRY}/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}:latest"
+FULL_IMAGE="${REGISTRY}/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}:v2-live"
 
 # Colors
 GREEN='\033[0;32m'
@@ -133,7 +136,7 @@ gcloud run jobs "$ACTION" "$JOB_NAME" \
     --region "$REGION" \
     --project "$PROJECT_ID" \
     --max-retries 0 \
-    --task-timeout 3600 \
+    --task-timeout 10800 \
     --memory 4Gi \
     --cpu 2 \
     --set-env-vars WAVE_NUM="$WAVE_NUM" \
@@ -145,8 +148,9 @@ gcloud run jobs "$ACTION" "$JOB_NAME" \
     --set-env-vars SURREAL_PASS="$SURREAL_PASS" \
     --set-env-vars DB_CONNECT_MAX_RETRIES=4 \
     --set-env-vars DB_CONNECT_RETRY_BASE_MS=750 \
-    --set-env-vars PHASE_A_CONCURRENCY=4 \
-    --set-env-vars GEMINI_CONCURRENCY=2
+    --set-env-vars PHASE_A_CONCURRENCY=2 \
+    --set-env-vars GEMINI_CONCURRENCY=1 \
+    --set-env-vars SKIP_SOURCE_IDS="${SKIP_SOURCE_IDS:-}"
 
 echo -e "${GREEN}✓ Job deployed${NC}"
 echo ""

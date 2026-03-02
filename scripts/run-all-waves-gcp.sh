@@ -42,11 +42,10 @@ if [ "$BUILD_IMAGE" = true ]; then
     echo ""
 fi
 
-# Check for existing job
+# Ensure job exists and includes full environment
 if ! gcloud run jobs describe "$JOB_NAME" \
     --region="$REGION" \
     --project="$PROJECT_ID" &>/dev/null; then
-    
     echo -e "${YELLOW}⚠️  Job doesn't exist yet. Creating with Wave 1...${NC}"
     ./scripts/run-wave-gcp.sh 1
     echo ""
@@ -56,11 +55,11 @@ echo -e "${BLUE}🚀 Launching all waves in parallel...${NC}"
 echo ""
 
 # Launch Wave 1
-echo -e "${YELLOW}[Wave 1] Updating and executing...${NC}"
+echo -e "${YELLOW}[Wave 1] Deploying and executing...${NC}"
 gcloud run jobs update "$JOB_NAME" \
     --region="$REGION" \
     --project="$PROJECT_ID" \
-    --set-env-vars WAVE_NUM=1 \
+    --update-env-vars WAVE_NUM=1 \
     --quiet
 
 EXEC_1=$(gcloud run jobs execute "$JOB_NAME" \
@@ -72,11 +71,11 @@ echo -e "${GREEN}✓ Wave 1 started: $EXEC_1${NC}"
 sleep 2
 
 # Launch Wave 2
-echo -e "${YELLOW}[Wave 2] Updating and executing...${NC}"
+echo -e "${YELLOW}[Wave 2] Deploying and executing...${NC}"
 gcloud run jobs update "$JOB_NAME" \
     --region="$REGION" \
     --project="$PROJECT_ID" \
-    --set-env-vars WAVE_NUM=2 \
+    --update-env-vars WAVE_NUM=2 \
     --quiet
 
 EXEC_2=$(gcloud run jobs execute "$JOB_NAME" \
@@ -88,11 +87,11 @@ echo -e "${GREEN}✓ Wave 2 started: $EXEC_2${NC}"
 sleep 2
 
 # Launch Wave 3
-echo -e "${YELLOW}[Wave 3] Updating and executing...${NC}"
+echo -e "${YELLOW}[Wave 3] Deploying and executing...${NC}"
 gcloud run jobs update "$JOB_NAME" \
     --region="$REGION" \
     --project="$PROJECT_ID" \
-    --set-env-vars WAVE_NUM=3 \
+    --update-env-vars WAVE_NUM=3 \
     --quiet
 
 EXEC_3=$(gcloud run jobs execute "$JOB_NAME" \

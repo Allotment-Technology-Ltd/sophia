@@ -143,7 +143,7 @@ async function main() {
 		console.warn = () => {};
 
 		const t0 = Date.now();
-		const result = await retrieveContext(queryText, { topK: 5 });
+		const result = await retrieveContext(queryText, { topK: 5, domain: 'ethics' });
 		const duration = Date.now() - t0;
 
 		console.log = origLog;

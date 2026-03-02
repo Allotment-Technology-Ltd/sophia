@@ -5,6 +5,7 @@ export const LIVE_EXTRACTION_SYSTEM = `You are extracting the key philosophical 
 - source: 'Author, Work · Year' if referenced, or 'Analysis' if original to this pass
 - tradition: the philosophical tradition (e.g., 'Virtue Ethics', 'Kantian Deontology')
 - detail: 2-3 sentence contextual note explaining the claim's role in the argument
+- confidence: 0.0-1.0 score. Use 1.0 for well-established positions. Use 0.7-0.9 for reasonable interpretations. Use below 0.7 for novel or speculative claims.
 
 Also identify relations between claims:
 - claimId: the 'from' claim id
