@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { auth, signOutUser } from '$lib/firebase';
+  import { goto } from '$app/navigation';
+
   interface Props {
     contextQuery?: string;      // Current question shown centred on results/loading screens
     streamingPass?: string;     // e.g. 'Pass 1 of 3' — shown right of contextQuery when loading
@@ -9,6 +12,19 @@
   }
 
   let { contextQuery, streamingPass, menuDotVisible, panelOpen = false, onMenuToggle, onNew }: Props = $props();
+
+  let currentUser = $derived.by(() => auth.currentUser);
+  let userMenuOpen = $state(false);
+
+  async function handleSignOut() {
+    try {
+      await signOutUser();
+      userMenuOpen = false;
+      await goto('/auth');
+    } catch (error) {
+      console.error('Sign out error:', error);
+    }
+  }
 </script>
 
 <a href="#main" class="skip-link">Skip to content</a>
@@ -56,6 +72,40 @@
     <button class="nav-btn desktop-only" onclick={onNew} aria-label="New conversation">
       + New
     </button>
+
+    <!-- User profile dropdown -->
+    {#if currentUser}
+      <div class="user-profile">
+        <button
+          class="user-button"
+          onclick={() => userMenuOpen = !userMenuOpen}
+          aria-label="User menu"
+          aria-expanded={userMenuOpen}
+        >
+          {#if currentUser.photoURL}
+            <img src={currentUser.photoURL} alt="" class="user-avatar" />
+          {:else}
+            <div class="user-avatar-fallback">{currentUser.displayName?.[0] ?? '?'}</div>
+          {/if}
+        </button>
+        
+        {#if userMenuOpen}
+          <div class="user-dropdown" role="menu">
+            <div class="user-info">
+              <div class="user-name">{currentUser.displayName}</div>
+              <div class="user-email">{currentUser.email}</div>
+            </div>
+            <button
+              class="dropdown-item"
+              onclick={handleSignOut}
+              role="menuitem"
+            >
+              Sign out
+            </button>
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     <!-- Desktop: panel toggle -->
     <button
@@ -255,6 +305,88 @@
     border-radius: 50%;
     background: var(--color-sage);
     animation: symbol-breathe 2s ease-in-out infinite;
+  }
+
+  /* User profile */
+  .user-profile {
+    position: relative;
+  }
+
+  .user-button {
+    display: flex;
+    align-items: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: none;
+    cursor: pointer;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .user-avatar,
+  .user-avatar-fallback {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1px solid var(--color-border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 500;
+    font-size: 0.875rem;
+    background: var(--color-sage);
+    color: white;
+  }
+
+  .user-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: var(--space-2);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    min-width: 220px;
+    z-index: 1000;
+  }
+
+  .user-info {
+    padding: var(--space-3);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .user-name {
+    font-weight: 500;
+    font-size: var(--text-label);
+    color: var(--color-text);
+  }
+
+  .user-email {
+    font-size: var(--text-meta);
+    color: var(--color-muted);
+    margin-top: 2px;
+  }
+
+  .dropdown-item {
+    display: block;
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    text-align: left;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: var(--text-label);
+    color: var(--color-text);
+    transition: background-color var(--transition-fast);
+  }
+
+  .dropdown-item:hover {
+    background-color: var(--color-hover);
   }
 
   /* Responsive visibility */

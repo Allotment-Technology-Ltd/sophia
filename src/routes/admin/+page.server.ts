@@ -1,4 +1,5 @@
 import type { PageServerLoad } from './$types';
+import { redirect, error } from '@sveltejs/kit';
 import { query } from '$lib/server/db';
 
 interface Source {
@@ -20,7 +21,18 @@ interface RelationCount {
 	count: number;
 }
 
-export const load: PageServerLoad = async () => {
+export const load: PageServerLoad = async ({ locals }) => {
+	// Require authentication
+	if (!locals.user) {
+		throw redirect(302, '/auth');
+	}
+
+	// Check admin whitelist
+	const adminUids = process.env.ADMIN_UIDS?.split(',').map(uid => uid.trim()) ?? [];
+	if (!adminUids.includes(locals.user.uid)) {
+		throw error(403, 'Forbidden: Admin access required');
+	}
+
 	try {
 		// Get total counts
 		const [sourceCount] = await query<{ count: number }[]>(

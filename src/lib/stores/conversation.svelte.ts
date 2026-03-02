@@ -5,6 +5,7 @@ import { handleSSEEvent } from '$lib/utils/sseHandler';
 import { referencesStore } from '$lib/stores/references.svelte';
 import { historyStore } from '$lib/stores/history.svelte';
 import { graphStore } from '$lib/stores/graph.svelte';
+import { getIdToken } from '$lib/firebase';
 
 export interface Message {
   id: string;
@@ -102,9 +103,17 @@ function createConversationStore() {
       }
 
       try {
+        const idToken = await getIdToken();
+        if (!idToken) {
+          throw new Error('Not authenticated');
+        }
+
         const response = await fetch('/api/analyse', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${idToken}`
+          },
           body: JSON.stringify({ query, lens })
         });
 

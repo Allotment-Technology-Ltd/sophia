@@ -47,6 +47,18 @@ new gcp.projects.IAMMember("app-sa-log-writer", {
   member: pulumi.interpolate`serviceAccount:${appSa.email}`,
 });
 
+new gcp.projects.IAMMember("app-sa-firebase-auth", {
+  project: projectId,
+  role: "roles/firebase.admin",
+  member: pulumi.interpolate`serviceAccount:${appSa.email}`,
+});
+
+new gcp.projects.IAMMember("app-sa-datastore-user", {
+  project: projectId,
+  role: "roles/datastore.user",
+  member: pulumi.interpolate`serviceAccount:${appSa.email}`,
+});
+
 // Service account for ingestion jobs
 const ingestSa = new gcp.serviceaccount.Account("ingest-sa", {
   accountId: "sophia-ingest",
@@ -166,6 +178,7 @@ const appService = new gcp.cloudrunv2.Service("sophia-app", {
         { name: "GOOGLE_VERTEX_PROJECT",  value: projectId },
         { name: "GCP_LOCATION",           value: region },
         { name: "GOOGLE_VERTEX_LOCATION", value: "us-central1" },
+        { name: "VITE_FIREBASE_PROJECT_ID", value: projectId },
         {
           name: "ANTHROPIC_API_KEY",
           valueSource: { secretKeyRef: { secret: "anthropic-api-key", version: "latest" } },
@@ -181,6 +194,18 @@ const appService = new gcp.cloudrunv2.Service("sophia-app", {
         {
           name: "GOOGLE_AI_API_KEY",
           valueSource: { secretKeyRef: { secret: "google-ai-api-key", version: "latest" } },
+        },
+        {
+          name: "VITE_FIREBASE_API_KEY",
+          valueSource: { secretKeyRef: { secret: "firebase-api-key", version: "latest" } },
+        },
+        {
+          name: "VITE_FIREBASE_AUTH_DOMAIN",
+          valueSource: { secretKeyRef: { secret: "firebase-auth-domain", version: "latest" } },
+        },
+        {
+          name: "ADMIN_UIDS",
+          valueSource: { secretKeyRef: { secret: "admin-uids", version: "latest" } },
         },
       ],
     }],
