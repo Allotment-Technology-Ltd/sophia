@@ -350,11 +350,7 @@ export async function runVerificationPass(
     model: getReasoningModel(),
     maxOutputTokens: 4096,
     system: VERIFICATION_SYSTEM,
-    prompt: buildVerificationUserPrompt(claims, synthesisText),
-    tools: {
-      googleSearch: buildGroundingTool().googleSearch
-    },
-    toolChoice: 'auto'
+    prompt: buildVerificationUserPrompt(claims, synthesisText)
   });
 
   for await (const delta of stream.textStream) {

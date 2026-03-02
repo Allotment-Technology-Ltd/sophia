@@ -17,7 +17,7 @@ interface CachedPassRelations {
 
 export interface CachedQueryResult {
   query: string;
-  passes: { analysis: string; critique: string; synthesis: string };
+  passes: { analysis: string; critique: string; synthesis: string; verification?: string };
   metadata: { total_input_tokens: number; total_output_tokens: number; duration_ms: number };
   sources: SourceReference[];
   claimsByPass: CachedPassClaims[];
