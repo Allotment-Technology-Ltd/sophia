@@ -13,9 +13,11 @@
     "ingest:unknown:resume": "tsx --env-file=.env scripts/ingest.ts data/sources/unknown-title.txt --stop-after-embedding"
   },
   "dependencies": {
+    "@ai-sdk/google-vertex": "^4.0.68",
     "@anthropic-ai/sdk": "^0.26.0",
     "@google-cloud/logging": "^11.1.0",
     "@google/generative-ai": "^0.24.1",
+    "ai": "6.0.105",
     "marked": "^17.0.3",
     "node-html-parser": "^7.0.2",
     "surrealdb": "^2.0.0",

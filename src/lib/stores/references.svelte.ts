@@ -1,12 +1,14 @@
-import type { AnalysisPhase, Claim, RelationBundle } from '$lib/types/references';
+import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
 
 const PHASE_ORDER: AnalysisPhase[] = ['analysis', 'critique', 'synthesis'];
 
 function createReferencesStore() {
   let claims = $state<Claim[]>([]);
   let relations = $state<RelationBundle[]>([]);
+  let sources = $state<SourceReference[]>([]);
   let isLive = $state(false);
   let currentPhase = $state<AnalysisPhase | null>(null);
+  let groundingStatus = $state<Map<string, { grounded: boolean; supportingUris: string[] }>>(new Map());
 
   const activeClaims = $derived(
     [...claims].sort(
@@ -31,8 +33,14 @@ function createReferencesStore() {
   function reset() {
     claims = [];
     relations = [];
+    sources = [];
     isLive = false;
     currentPhase = null;
+    groundingStatus = new Map();
+  }
+
+  function setSources(nextSources: SourceReference[]) {
+    sources = nextSources;
   }
 
   function setLive(live: boolean) {
@@ -43,17 +51,35 @@ function createReferencesStore() {
     currentPhase = phase;
   }
 
+  function setGroundingStatus(claimId: string, status: { grounded: boolean; supportingUris: string[] }) {
+    groundingStatus.set(claimId, status);
+    groundingStatus = new Map(groundingStatus); // Trigger reactivity
+  }
+
+  function getGroundingStatus(claimId: string) {
+    return groundingStatus.get(claimId);
+  }
+
+  function getAllClaims(): Claim[] {
+    return claims;
+  }
+
   return {
     get activeClaims() { return activeClaims; },
     get relations() { return relations; },
+    get sources() { return sources; },
     get isLive() { return isLive; },
     get currentPhase() { return currentPhase; },
     get claimCount() { return claimCount; },
     get claimsPerPhase() { return claimsPerPhase; },
     addClaims,
+    setSources,
     reset,
     setLive,
     setPhase,
+    setGroundingStatus,
+    getGroundingStatus,
+    getAllClaims,
   };
 }
 

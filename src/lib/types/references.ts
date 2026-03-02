@@ -14,6 +14,7 @@ export interface Claim {
   detail: string;           // 2-3 sentence contextual note
   phase: AnalysisPhase;
   backRefIds?: string[];    // IDs of claims this references back to
+  confidence?: number;      // 0.0-1.0 confidence score
 }
 
 export interface RelationBundle {
@@ -23,4 +24,15 @@ export interface RelationBundle {
     target: string;         // target claim id
     label: string;
   }>;
+}
+
+export interface SourceReference {
+  id: string;
+  title: string;
+  author: string[];
+  claimCount: number;
+  groundingConfidence?: {
+    score: number;
+    supportingUris: string[];
+  };
 }

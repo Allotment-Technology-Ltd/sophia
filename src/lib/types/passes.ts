@@ -32,4 +32,16 @@ export interface SynthesisPass {
   practical_implications: string[];
 }
 
-export type PassType = 'analysis' | 'critique' | 'synthesis';
+export interface VerificationClaim {
+	claimId: string;
+	grounded: boolean;
+	supportingUris: string[];
+	confidenceSignal: 'high' | 'medium' | 'low';
+}
+
+export interface VerificationPass {
+	claims: VerificationClaim[];
+	summary: string;
+}
+
+export type PassType = 'analysis' | 'critique' | 'synthesis' | 'verification';
