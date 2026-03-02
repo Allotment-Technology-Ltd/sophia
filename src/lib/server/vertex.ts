@@ -61,5 +61,5 @@ export function trackTokens(inputTokens: number, outputTokens: number): void {
  * Get Google Search grounding tool from the Vertex AI provider
  */
 export function getGroundingTool() {
-  return getVertex().tools.googleSearch();
+  return getVertex().tools.googleSearch({});
 }
