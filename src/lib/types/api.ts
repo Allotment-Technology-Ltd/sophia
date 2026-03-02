@@ -69,6 +69,18 @@ export interface SourcesEvent {
   sources: SourceReference[];
 }
 
+export interface GroundingSource {
+  url: string;
+  title?: string;
+  pass: PassType;
+}
+
+export interface GroundingSourcesEvent {
+  type: 'grounding_sources';
+  pass: PassType;
+  sources: GroundingSource[];
+}
+
 export interface ConfidenceSummaryEvent {
   type: 'confidence_summary';
   avgConfidence: number;
@@ -105,5 +117,6 @@ export type SSEEvent =
   | ClaimsEvent
   | RelationsEvent
   | SourcesEvent
+  | GroundingSourcesEvent
   | ConfidenceSummaryEvent
   | GraphSnapshotEvent;

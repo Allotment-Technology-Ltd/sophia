@@ -7,8 +7,9 @@ let vertexInstance: ReturnType<typeof createVertex> | null = null;
 function initializeVertex() {
   if (vertexInstance) return vertexInstance;
 
-  const project = env.GOOGLE_VERTEX_PROJECT || env.GCP_PROJECT_ID || process.env.GOOGLE_VERTEX_PROJECT || process.env.GCP_PROJECT_ID;
-  const location = env.GOOGLE_VERTEX_LOCATION || env.GCP_LOCATION || process.env.GCP_LOCATION || 'us-central1';
+  // Prioritize process.env for reliability in Cloud Run
+  const project = process.env.GOOGLE_VERTEX_PROJECT || process.env.GCP_PROJECT_ID || env.GOOGLE_VERTEX_PROJECT || env.GCP_PROJECT_ID;
+  const location = process.env.GOOGLE_VERTEX_LOCATION || process.env.GCP_LOCATION || env.GOOGLE_VERTEX_LOCATION || env.GCP_LOCATION || 'us-central1';
 
   console.log(`[Vertex] Initializing — project=${project ?? '(missing)'} location=${location}`);
 
@@ -32,8 +33,8 @@ function getVertex() {
   return initializeVertex();
 }
 
-const reasoningModelId = env.GEMINI_REASONING_MODEL || process.env.GEMINI_REASONING_MODEL || 'gemini-2.5-pro';
-const extractionModelId = env.GEMINI_EXTRACTION_MODEL || process.env.GEMINI_EXTRACTION_MODEL || 'gemini-2.5-flash';
+const reasoningModelId = process.env.GEMINI_REASONING_MODEL || env.GEMINI_REASONING_MODEL || 'gemini-2.5-pro';
+const extractionModelId = process.env.GEMINI_EXTRACTION_MODEL || env.GEMINI_EXTRACTION_MODEL || 'gemini-2.5-flash';
 
 export function getReasoningModel() {
   return getVertex()(reasoningModelId);
@@ -57,16 +58,8 @@ export function trackTokens(inputTokens: number, outputTokens: number): void {
 }
 
 /**
- * Build Vertex AI grounding tool configuration for web search
- * Scopes searches to ethics/philosophy academic sources
+ * Get Google Search grounding tool from the Vertex AI provider
  */
-export function buildGroundingTool() {
-  return {
-    googleSearch: {
-      dynamicRetrievalConfig: {
-        mode: 'MODE_DYNAMIC' as const,
-        dynamicThreshold: 0.3
-      }
-    }
-  };
+export function getGroundingTool() {
+  return getVertex().tools.googleSearch();
 }

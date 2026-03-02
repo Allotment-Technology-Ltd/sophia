@@ -47,12 +47,20 @@ export const POST: RequestHandler = async ({ request }) => {
     );
     if (Array.isArray(cached) && cached.length > 0) {
       const row = cached[0];
+      const hasErrorEvent = Array.isArray(row.events) && row.events.some((event) => event?.type === 'error');
+      const hasMetadataEvent = Array.isArray(row.events) && row.events.some((event) => event?.type === 'metadata');
+
+      if (hasErrorEvent || !hasMetadataEvent) {
+        console.log('[CACHE] Ignoring stale failed/incomplete cached events');
+        await dbQuery(`DELETE query_cache WHERE query_hash = $query_hash`, { query_hash: queryHash });
+      }
+
       if (row.expires_at) {
         const expiresAt = new Date(row.expires_at);
         if (expiresAt < new Date()) {
           console.log('[CACHE] Expired entry, cache miss forced');
           cachedEvents = null;
-        } else if (Array.isArray(row.events)) {
+        } else if (Array.isArray(row.events) && !hasErrorEvent && hasMetadataEvent) {
           cachedEvents = row.events;
           cacheHit = true;
           await dbQuery(
@@ -60,7 +68,7 @@ export const POST: RequestHandler = async ({ request }) => {
             { query_hash: queryHash }
           );
         }
-      } else if (Array.isArray(row.events)) {
+      } else if (Array.isArray(row.events) && !hasErrorEvent && hasMetadataEvent) {
         // fallback for entries without expires_at
         cachedEvents = row.events;
         cacheHit = true;
@@ -78,8 +86,26 @@ export const POST: RequestHandler = async ({ request }) => {
 
   const stream = new ReadableStream({
     async start(controller) {
+      let controllerClosed = false;
+
       function sendEvent(event: SSEEvent): void {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        if (controllerClosed) return;
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        } catch (err) {
+          controllerClosed = true;
+          console.warn('[SSE] enqueue failed (client disconnected):', err instanceof Error ? err.message : String(err));
+        }
+      }
+
+      function closeController(): void {
+        if (controllerClosed) return;
+        controllerClosed = true;
+        try {
+          controller.close();
+        } catch {
+          // no-op
+        }
       }
 
       // Replay cached events if available
@@ -87,7 +113,7 @@ export const POST: RequestHandler = async ({ request }) => {
         for (const event of cachedEvents) {
           sendEvent(event);
         }
-        controller.close();
+        closeController();
         return;
       }
 
@@ -115,6 +141,9 @@ export const POST: RequestHandler = async ({ request }) => {
           },
           onSources(sources) {
             sendEventWithCapture({ type: 'sources', sources });
+          },
+          onGroundingSources(pass, sources) {
+            sendEventWithCapture({ type: 'grounding_sources', pass, sources });
           },
           onGraphSnapshot(nodes, edges) {
             sendEventWithCapture({ type: 'graph_snapshot', nodes, edges });
@@ -152,22 +181,29 @@ export const POST: RequestHandler = async ({ request }) => {
           }
         }, { lens });
 
-        // Persist cache after successful run
-        try {
-          await dbQuery(`DELETE query_cache WHERE query_hash = $query_hash`, { query_hash: queryHash });
-          await dbQuery(
-            `CREATE query_cache CONTENT {
-              query_hash: $query_hash,
-              query_text: $query_text,
-              lens: $lens,
-              events: $events,
-              hit_count: 0,
-              created_at: time::now()
-            }`,
-            { query_hash: queryHash, query_text: queryText, lens: lens ?? null, events: replayEvents }
-          );
-        } catch (err) {
-          console.warn('[CACHE] Write failed:', err instanceof Error ? err.message : String(err));
+        // Persist cache only for successful runs (metadata present, no error event)
+        const hasErrorEvent = replayEvents.some((event) => event.type === 'error');
+        const hasMetadataEvent = replayEvents.some((event) => event.type === 'metadata');
+
+        if (!hasErrorEvent && hasMetadataEvent) {
+          try {
+            await dbQuery(`DELETE query_cache WHERE query_hash = $query_hash`, { query_hash: queryHash });
+            await dbQuery(
+              `CREATE query_cache CONTENT {
+                query_hash: $query_hash,
+                query_text: $query_text,
+                lens: $lens,
+                events: $events,
+                hit_count: 0,
+                created_at: time::now()
+              }`,
+              { query_hash: queryHash, query_text: queryText, lens: lens ?? null, events: replayEvents }
+            );
+          } catch (err) {
+            console.warn('[CACHE] Write failed:', err instanceof Error ? err.message : String(err));
+          }
+        } else {
+          console.log('[CACHE] Skipping cache write for failed or incomplete run', { hasErrorEvent, hasMetadataEvent });
         }
       } catch (err) {
         sendEvent({
@@ -175,7 +211,7 @@ export const POST: RequestHandler = async ({ request }) => {
           message: err instanceof Error ? err.message : String(err)
         });
       } finally {
-        controller.close();
+        closeController();
       }
     }
   });

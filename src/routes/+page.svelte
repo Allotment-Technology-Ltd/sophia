@@ -96,6 +96,10 @@
     return `${(ms / 1000).toFixed(1)}s`;
   }
 
+  function sectionAnchorId(messageId: string, pass: PassKey, sectionId: string): string {
+    return `${messageId}-${pass}-${sectionId}`;
+  }
+
   $effect(() => {
     if (conversation.currentPass) {
       activeStreamingPass = conversation.currentPass;
@@ -163,13 +167,6 @@
           {:else}
             <!-- Assistant Message -->
             <div class="flex flex-col space-y-3">
-              <!-- Main Content (Synthesis) -->
-              {#if message.content}
-                <div class="prose prose-invert prose-sm">
-                  {@html renderMarkdown(message.content)}
-                </div>
-              {/if}
-
               <!-- Pass Toggle Buttons -->
               {#if message.passes}
                 {@const messageTabs = availablePasses(message.passes)}
@@ -200,9 +197,30 @@
                       class:is-critique={selectedPass === 'critique'}
                       class:is-synthesis={selectedPass === 'synthesis'}
                     >
-                      <div class="prose prose-invert prose-sm">
-                        {@html renderMarkdown(message.passes[selectedPass] ?? '')}
-                      </div>
+                      {#if message.structuredPasses?.[selectedPass]?.sections?.length}
+                        <nav class="section-nav" aria-label="Section links">
+                          {#each message.structuredPasses[selectedPass]?.sections ?? [] as section}
+                            <a class="section-nav-link" href={`#${sectionAnchorId(message.id, selectedPass, section.id)}`}>
+                              {section.heading}
+                            </a>
+                          {/each}
+                        </nav>
+
+                        <div class="structured-pass">
+                          {#each message.structuredPasses[selectedPass]?.sections ?? [] as section}
+                            <section id={sectionAnchorId(message.id, selectedPass, section.id)} class="structured-section">
+                              <h3>{section.heading}</h3>
+                              <div class="prose prose-invert prose-sm">
+                                {@html renderMarkdown(section.content)}
+                              </div>
+                            </section>
+                          {/each}
+                        </div>
+                      {:else}
+                        <div class="prose prose-invert prose-sm">
+                          {@html renderMarkdown(message.passes[selectedPass] ?? '')}
+                        </div>
+                      {/if}
                     </div>
                   {/if}
                 {/if}
@@ -617,6 +635,43 @@
     background: var(--color-surface-sunken);
     border-radius: var(--radius-md);
     padding: var(--space-3) var(--space-4);
+  }
+
+  .section-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    margin-bottom: var(--space-3);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .section-nav-link {
+    font-family: var(--font-ui);
+    font-size: var(--text-meta);
+    color: var(--color-muted);
+    text-decoration: none;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+  }
+
+  .section-nav-link:hover {
+    color: var(--color-text);
+    border-color: var(--color-sage-border);
+  }
+
+  .structured-pass {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .structured-section h3 {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    margin: 0 0 var(--space-2);
+    color: var(--color-text);
   }
 
   .pass-content-panel.is-live {

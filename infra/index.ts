@@ -143,7 +143,7 @@ const appService = new gcp.cloudrunv2.Service("sophia-app", {
     serviceAccount: appSa.email,
     vpcAccess: {
       connector: vpcConnector.id,
-      egress: "PRIVATE_RANGES_ONLY",
+      egress: "ALL_TRAFFIC",
     },
     scaling: {
       minInstanceCount: appMinInstances,
@@ -158,12 +158,14 @@ const appService = new gcp.cloudrunv2.Service("sophia-app", {
         },
       },
       envs: [
-        { name: "SURREAL_URL",            value: `ws://${dbInternalIp}:8000/rpc` },
+        { name: "SURREAL_URL",            value: `http://${dbInternalIp}:8000/rpc` },
         { name: "SURREAL_USER",           value: "root" },
         { name: "SURREAL_NAMESPACE",      value: "sophia" },
         { name: "SURREAL_DATABASE",       value: "sophia" },
+        { name: "GCP_PROJECT_ID",         value: projectId },
+        { name: "GOOGLE_VERTEX_PROJECT",  value: projectId },
         { name: "GCP_LOCATION",           value: region },
-        { name: "GOOGLE_VERTEX_LOCATION", value: region },
+        { name: "GOOGLE_VERTEX_LOCATION", value: "us-central1" },
         {
           name: "ANTHROPIC_API_KEY",
           valueSource: { secretKeyRef: { secret: "anthropic-api-key", version: "latest" } },
@@ -225,7 +227,10 @@ const ingestJob = new gcp.cloudrunv2.Job("sophia-ingest", {
           { name: "SURREAL_USER",      value: "root" },
           { name: "SURREAL_NAMESPACE", value: "sophia" },
           { name: "SURREAL_DATABASE",  value: "sophia" },
+          { name: "GCP_PROJECT_ID",    value: projectId },
+          { name: "GOOGLE_VERTEX_PROJECT", value: projectId },
           { name: "GCP_LOCATION",      value: region },
+          { name: "GOOGLE_VERTEX_LOCATION", value: "us-central1" },
           {
             name: "ANTHROPIC_API_KEY",
             valueSource: { secretKeyRef: { secret: "anthropic-api-key", version: "latest" } },
@@ -250,6 +255,94 @@ const ingestJob = new gcp.cloudrunv2.Job("sophia-ingest", {
   dependsOn: [vpcConnector, registry],
 });
 
+// ─── Load Balancer & Domain Mapping ──────────────────────────────────────────────────────────────────
+
+// 1. Reserve Static IP
+const lbIp = new gcp.compute.GlobalAddress("sophia-lb-ip", {
+    project: projectId,
+    addressType: "EXTERNAL",
+    ipVersion: "IPV4",
+});
+
+// 2. Create Serverless NEG (Connects to the Cloud Run service above)
+const serverlessNeg = new gcp.compute.RegionNetworkEndpointGroup("sophia-neg", {
+    project: projectId,
+    region: region,
+    networkEndpointType: "SERVERLESS",
+    cloudRun: {
+        service: appService.name, // Explicitly links to your appService resource
+    },
+});
+
+// 3. Create the Backend Service
+// Using 'EXTERNAL_MANAGED' is the modern, production-grade approach.
+const backendService = new gcp.compute.BackendService("sophia-backend", {
+  project: projectId,
+  loadBalancingScheme: "EXTERNAL_MANAGED",
+  protocol: "HTTPS",
+  timeoutSec: 30,
+  backends: [{
+    group: serverlessNeg.id,
+  }],
+  // Best-in-class tip: Enabling connection draining prevents 
+  // users from being dropped during deployments.
+  connectionDrainingTimeoutSec: 300,
+});
+
+// 4. Create the Google-managed SSL Certificate
+const sslCert = new gcp.compute.ManagedSslCertificate("sophia-ssl", {
+  project: projectId,
+  managed: {
+    domains: ["usesophia.app", "www.usesophia.app"],
+  },
+});
+
+// 5. Create the URL Map (The Router)
+const urlMap = new gcp.compute.URLMap("sophia-url-map", {
+  project: projectId,
+  defaultService: backendService.id,
+});
+
+// 6. Create the Target HTTPS Proxy (SSL Terminator)
+const httpsProxy = new gcp.compute.TargetHttpsProxy("sophia-https-proxy", {
+  project: projectId,
+  urlMap: urlMap.id,
+  sslCertificates: [sslCert.id],
+});
+
+// 7. Global Forwarding Rule for Port 443
+const httpsForwardingRule = new gcp.compute.GlobalForwardingRule("sophia-https-rule", {
+  project: projectId,
+  target: httpsProxy.id,
+  portRange: "443",
+  ipAddress: lbIp.address,
+  loadBalancingScheme: "EXTERNAL_MANAGED",
+});
+
+// 8. Create a URL Map for Redirection
+const redirectUrlMap = new gcp.compute.URLMap("sophia-redirect-map", {
+  project: projectId,
+  defaultUrlRedirect: {
+    httpsRedirect: true,
+    stripQuery: false,
+  },
+});
+
+// 9. Target HTTP Proxy
+const httpProxy = new gcp.compute.TargetHttpProxy("sophia-http-proxy", {
+  project: projectId,
+  urlMap: redirectUrlMap.id,
+});
+
+// 10. Forwarding Rule for Port 80
+const httpForwardingRule = new gcp.compute.GlobalForwardingRule("sophia-http-rule", {
+  project: projectId,
+  target: httpProxy.id,
+  portRange: "80",
+  ipAddress: lbIp.address, // Shares the same static IP!
+  loadBalancingScheme: "EXTERNAL_MANAGED",
+});
+
 // ─── Outputs ──────────────────────────────────────────────────────────────────
 
 export const appServiceUrl = appService.uri;
@@ -261,3 +354,4 @@ export const vpcConnectorId = vpcConnector.id;
 export const registryLocation = registry.location;
 export const appServiceAccountEmail = appSa.email;
 export const ingestServiceAccountEmail = ingestSa.email;
+export const staticIpAddress = lbIp.address;

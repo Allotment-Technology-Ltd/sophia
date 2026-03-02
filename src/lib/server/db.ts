@@ -264,7 +264,7 @@ export function getDatabaseRuntimeConfig(): {
 export async function checkDatabaseHealth(): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
 	const startedAt = Date.now();
 	try {
-		await sqlFetch('SELECT 1 AS ok');
+		await sqlFetch('RETURN 1;');
 		return { ok: true, latencyMs: Date.now() - startedAt };
 	} catch (error) {
 		return {

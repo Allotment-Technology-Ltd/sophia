@@ -20,6 +20,7 @@ export interface Message {
     retrieval_degraded?: boolean;
     retrieval_degraded_reason?: string;
   };
+  structuredPasses?: Partial<Record<PassType, { sections: Array<{ id: string; heading: string; content: string }>; wordCount: number }>>;
   timestamp: Date;
 }
 
@@ -38,6 +39,7 @@ function createConversationStore() {
   let isLoading = $state(false);
   let currentPass = $state<PassType | null>(null);
   let currentPasses = $state({ analysis: '', critique: '', synthesis: '', verification: '' });
+  let currentStructuredPasses = $state<Partial<Record<PassType, { sections: Array<{ id: string; heading: string; content: string }>; wordCount: number }>>>({});
   let error = $state<string | null>(null);
   let confidenceSummary = $state<{ avgConfidence: number; lowConfidenceCount: number; totalClaims: number } | null>(null);
 
@@ -46,6 +48,7 @@ function createConversationStore() {
     get isLoading() { return isLoading; },
     get currentPass() { return currentPass; },
     get currentPasses() { return currentPasses; },
+    get currentStructuredPasses() { return currentStructuredPasses; },
     get error() { return error; },
     get confidenceSummary() { return confidenceSummary; },
 
@@ -54,6 +57,7 @@ function createConversationStore() {
       isLoading = true;
       currentPass = null;
       currentPasses = { analysis: '', critique: '', synthesis: '', verification: '' };
+      currentStructuredPasses = {};
       confidenceSummary = null;
       referencesStore.reset();
       graphStore.reset();
@@ -69,6 +73,7 @@ function createConversationStore() {
       if (cached) {
         currentPass = null;
         currentPasses = { ...cached.passes, verification: cached.passes.verification ?? '' };
+        currentStructuredPasses = {};
         referencesStore.setSources(cached.sources);
 
         for (const { pass, claims } of cached.claimsByPass as CachedPassClaims[]) {
@@ -118,6 +123,7 @@ function createConversationStore() {
         let streamedSources: SourceReference[] = [];
         let streamedClaimsByPass: CachedPassClaims[] = [];
         let streamedRelationsByPass: CachedPassRelations[] = [];
+        let gotMetadata = false;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -169,6 +175,19 @@ function createConversationStore() {
               case 'pass_complete':
                 break;
 
+              case 'pass_structured':
+                currentStructuredPasses = {
+                  ...currentStructuredPasses,
+                  [event.pass]: { sections: event.sections, wordCount: event.wordCount }
+                };
+                currentPasses = {
+                  ...currentPasses,
+                  [event.pass]: event.sections
+                    .map((section) => `## ${section.heading}\n\n${section.content}`)
+                    .join('\n\n')
+                };
+                break;
+
               case 'confidence_summary':
                 confidenceSummary = {
                   avgConfidence: event.avgConfidence,
@@ -178,11 +197,13 @@ function createConversationStore() {
                 break;
 
               case 'metadata':
+                gotMetadata = true;
                 messages = [...messages, {
                   id: crypto.randomUUID(),
                   role: 'assistant',
-                  content: currentPasses.synthesis,
+                  content: currentPasses.synthesis || currentPasses.critique || currentPasses.analysis,
                   passes: { ...currentPasses },
+                  structuredPasses: { ...currentStructuredPasses },
                   metadata: {
                     total_input_tokens: event.total_input_tokens,
                     total_output_tokens: event.total_output_tokens,
@@ -219,6 +240,38 @@ function createConversationStore() {
                 break;
             }
           }
+        }
+
+        if (!gotMetadata && (currentPasses.analysis || currentPasses.critique || currentPasses.synthesis)) {
+          const fallbackMetadata = {
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            duration_ms: 0,
+            claims_retrieved: 0,
+            arguments_retrieved: 0,
+            retrieval_degraded: true,
+            retrieval_degraded_reason: 'stream_disconnected_before_metadata'
+          };
+
+          messages = [...messages, {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: currentPasses.synthesis || currentPasses.critique || currentPasses.analysis,
+            passes: { ...currentPasses },
+            structuredPasses: { ...currentStructuredPasses },
+            metadata: fallbackMetadata,
+            timestamp: new Date()
+          }];
+
+          historyStore.saveCachedResult(query, {
+            passes: { ...currentPasses },
+            metadata: fallbackMetadata,
+            sources: streamedSources,
+            claimsByPass: streamedClaimsByPass,
+            relationsByPass: streamedRelationsByPass
+          });
+
+          historyStore.addEntry(query);
         }
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
@@ -316,6 +369,7 @@ function createConversationStore() {
       error = null;
       currentPass = null;
       currentPasses = { analysis: '', critique: '', synthesis: '', verification: '' };
+      currentStructuredPasses = {};
       confidenceSummary = null;
       isLoading = false;
     }

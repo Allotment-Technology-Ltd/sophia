@@ -1,4 +1,6 @@
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
+import type { PassType } from '$lib/types/passes';
+import type { GroundingSource } from '$lib/types/api';
 
 const PHASE_ORDER: AnalysisPhase[] = ['analysis', 'critique', 'synthesis'];
 
@@ -6,6 +8,7 @@ function createReferencesStore() {
   let claims = $state<Claim[]>([]);
   let relations = $state<RelationBundle[]>([]);
   let sources = $state<SourceReference[]>([]);
+  let groundingSources = $state<GroundingSource[]>([]);
   let isLive = $state(false);
   let currentPhase = $state<AnalysisPhase | null>(null);
   let groundingStatus = $state<Map<string, { grounded: boolean; supportingUris: string[] }>>(new Map());
@@ -34,6 +37,7 @@ function createReferencesStore() {
     claims = [];
     relations = [];
     sources = [];
+    groundingSources = [];
     isLive = false;
     currentPhase = null;
     groundingStatus = new Map();
@@ -41,6 +45,14 @@ function createReferencesStore() {
 
   function setSources(nextSources: SourceReference[]) {
     sources = nextSources;
+  }
+
+  function setGroundingSources(pass: PassType, newSources: GroundingSource[]) {
+    groundingSources = [...groundingSources, ...newSources];
+  }
+
+  function getGroundingSourcesByPass(pass: PassType): GroundingSource[] {
+    return groundingSources.filter(s => s.pass === pass);
   }
 
   function setLive(live: boolean) {
@@ -68,12 +80,15 @@ function createReferencesStore() {
     get activeClaims() { return activeClaims; },
     get relations() { return relations; },
     get sources() { return sources; },
+    get groundingSources() { return groundingSources; },
     get isLive() { return isLive; },
     get currentPhase() { return currentPhase; },
     get claimCount() { return claimCount; },
     get claimsPerPhase() { return claimsPerPhase; },
     addClaims,
     setSources,
+    setGroundingSources,
+    getGroundingSourcesByPass,
     reset,
     setLive,
     setPhase,

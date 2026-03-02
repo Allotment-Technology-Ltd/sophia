@@ -17,6 +17,7 @@ export function handleSSEEvent(event: SSEEvent): boolean {
     case 'claims': {
       const resolved = resolveBackRefs(event.claims, referencesStore.activeClaims);
       referencesStore.addClaims(event.pass, resolved, []);
+      graphStore.addFromClaims(event.pass, resolved, []);
       referencesStore.setPhase(event.pass);
       referencesStore.setLive(true);
       return true;
@@ -27,11 +28,17 @@ export function handleSSEEvent(event: SSEEvent): boolean {
       for (const bundle of event.relations) {
         referencesStore.addClaims(event.pass, [], [bundle]);
       }
+      graphStore.addFromClaims(event.pass, [], event.relations);
       return true;
     }
 
     case 'sources': {
       referencesStore.setSources(event.sources);
+      return true;
+    }
+
+    case 'grounding_sources': {
+      referencesStore.setGroundingSources(event.pass, event.sources);
       return true;
     }
 

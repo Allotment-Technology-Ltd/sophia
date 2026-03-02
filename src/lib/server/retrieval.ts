@@ -442,7 +442,7 @@ export async function retrieveContext(
  * Format a RetrievalResult into a structured text block for the LLM prompt.
  *
  * Returns a human-readable representation of the retrieved argument graph
- * that Claude can use as grounding context for its three-pass analysis.
+ * that the model can use as grounding context for its three-pass analysis.
  */
 export function buildContextBlock(result: RetrievalResult): string {
 	if (!result.claims || result.claims.length === 0) {
@@ -451,42 +451,40 @@ export function buildContextBlock(result: RetrievalResult): string {
 
 	const lines: string[] = [];
 
+	lines.push('=== PHILOSOPHICAL KNOWLEDGE GRAPH CONTEXT ===');
+	lines.push('');
 	lines.push(
-		'The following is structured philosophical context retrieved from SOPHIA\'s argument graph. ' +
-		'Use this to ground your analysis in established positions, identify relevant traditions, ' +
-		'and ensure engagement with existing arguments.'
+		'The following are structured claims from SOPHIA\'s curated philosophical knowledge graph. ' +
+		'Use these as your philosophical foundation, noting their typed logical relations and source attributions.'
 	);
 	lines.push('');
 
-	// ── Claims ──
-	lines.push('RETRIEVED CLAIMS (ordered by relevance):');
+	// ── Claims with IDs and Relations ──
 	for (let i = 0; i < result.claims.length; i++) {
 		const c = result.claims[i];
+		const claimId = `c:${String(i + 1).padStart(3, '0')}`;
 		const authorStr = c.source_author?.length
 			? c.source_author.join(', ')
 			: 'Unknown';
-		lines.push(`[${i + 1}] (${c.claim_type}, ${c.domain}) "${c.text}"`);
-		lines.push(`    Source: ${c.source_title} (${authorStr})`);
-	}
-	lines.push('');
-
-	// ── Relations ──
-	if (result.relations.length > 0) {
-		lines.push('LOGICAL RELATIONS AMONG RETRIEVED CLAIMS:');
-		for (const r of result.relations) {
-			const label = r.relation_type.toUpperCase().replace(/_/g, ' ');
-			const strengthStr = r.strength ? ` (${r.strength})` : '';
-			const noteStr = r.note ? ` — ${r.note}` : '';
-			lines.push(
-				`• Claim [${r.from_index + 1}] ${label} Claim [${r.to_index + 1}]${strengthStr}${noteStr}`
-			);
+		lines.push(`CLAIM [${claimId}] (${c.claim_type}, source: "${c.source_title}")`);
+		lines.push(`"${c.text}"`);
+		
+		// Show relations from this claim
+		const outgoingRelations = result.relations.filter(r => r.from_index === i);
+		if (outgoingRelations.length > 0) {
+			for (const r of outgoingRelations) {
+				const targetId = `c:${String(r.to_index + 1).padStart(3, '0')}`;
+				const relType = r.relation_type.toUpperCase().replace(/_/g, ' ');
+				const strengthStr = r.strength ? ` (${r.strength})` : '';
+				lines.push(`  ├─ ${relType} [${targetId}]${strengthStr}`);
+			}
 		}
 		lines.push('');
 	}
 
 	// ── Arguments ──
 	if (result.arguments.length > 0) {
-		lines.push('NAMED ARGUMENTS CONTAINING THESE CLAIMS:');
+		lines.push('NAMED ARGUMENTS:');
 		for (const arg of result.arguments) {
 			const traditionStr = arg.tradition ? ` (${arg.tradition})` : '';
 			lines.push(`▸ ${arg.name}${traditionStr}`);
@@ -500,6 +498,10 @@ export function buildContextBlock(result: RetrievalResult): string {
 			lines.push('');
 		}
 	}
+
+	lines.push('=== END KNOWLEDGE GRAPH CONTEXT ===');
+	lines.push('');
+	lines.push('Use Google Search to verify, challenge, or extend these claims with current sources.');
 
 	return lines.join('\n');
 }

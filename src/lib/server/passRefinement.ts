@@ -44,6 +44,12 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+function truncateToWords(text: string, maxWords: number): string {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) return text.trim();
+  return `${words.slice(0, maxWords).join(' ')}…`;
+}
+
 export async function refinePass(
   rawText: string,
   passType: 'analysis' | 'critique' | 'synthesis'
@@ -84,7 +90,7 @@ export async function refinePass(
   try {
     const response = await generateObject({
       model: getExtractionModel(),
-      maxOutputTokens: 2000,
+      maxOutputTokens: 3000,  // Increased to accommodate reasoning tokens in Gemini 2.5
       temperature: 0.2,
       system: REFINEMENT_SYSTEM,
       prompt: buildRefinementPrompt(rawText, passType),
@@ -110,10 +116,11 @@ export async function refinePass(
     return result;
   } catch (err) {
     console.error(`[REFINEMENT] Failed for ${passType}:`, err);
-    // Fallback: return raw text as single section
+    // Fallback: return a capped single section to respect the 1000-word constraint
+    const capped = truncateToWords(rawText, 950);
     return {
-      sections: [{ id: passType, heading: passType.charAt(0).toUpperCase() + passType.slice(1), content: rawText }],
-      wordCount: currentWordCount
+      sections: [{ id: passType, heading: passType.charAt(0).toUpperCase() + passType.slice(1), content: capped }],
+      wordCount: countWords(capped)
     };
   }
 }

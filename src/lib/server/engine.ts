@@ -1,6 +1,6 @@
-import { generateObject, streamText } from 'ai';
+import { generateObject, generateText, streamText } from 'ai';
 import { z } from 'zod';
-import { getExtractionModel, getReasoningModel, trackTokens, buildGroundingTool } from './vertex';
+import { getExtractionModel, getReasoningModel, trackTokens, getGroundingTool } from './vertex';
 import { getAnalysisSystemPrompt, buildAnalysisUserPrompt } from './prompts/analysis';
 import { getCritiqueSystemPrompt, buildCritiqueUserPrompt } from './prompts/critique';
 import { getSynthesisSystemPrompt, buildSynthesisUserPrompt } from './prompts/synthesis';
@@ -9,7 +9,7 @@ import { VERIFICATION_SYSTEM, buildVerificationUserPrompt } from './prompts/veri
 import { retrieveContext, buildContextBlock } from './retrieval';
 import type { PassType } from '$lib/types/passes';
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
-import type { PassSection, GraphNode, GraphEdge } from '$lib/types/api';
+import type { PassSection, GraphNode, GraphEdge, GroundingSource } from '$lib/types/api';
 import { refinePass } from './passRefinement';
 import { projectRetrievalToGraph } from './graphProjection';
 
@@ -49,6 +49,7 @@ export interface EngineCallbacks {
   onPassComplete(pass: PassType): void;
   onPassStructured(pass: PassType, sections: PassSection[], wordCount: number): void;
   onSources(sources: SourceReference[]): void;
+  onGroundingSources(pass: PassType, sources: GroundingSource[]): void;
   onGraphSnapshot(nodes: GraphNode[], edges: GraphEdge[]): void;
   onClaims(pass: AnalysisPhase, claims: Claim[], relations: RelationBundle[]): void;
   onConfidenceSummary?(avgConfidence: number, lowConfidenceCount: number, totalClaims: number): void;
@@ -77,11 +78,12 @@ async function streamPassWithContinuation(
   callbacks: EngineCallbacks,
   maxTokens = 4096,
   maxContinuationRounds = 6
-): Promise<{ output: string; inputTokens: number; outputTokens: number }> {
+): Promise<{ output: string; inputTokens: number; outputTokens: number; sources: GroundingSource[] }> {
   let output = '';
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
   let continuationRound = 0;
+  let allSources: GroundingSource[] = [];
 
   const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
     { role: 'user', content: initialUserPrompt }
@@ -94,7 +96,10 @@ async function streamPassWithContinuation(
       model: getReasoningModel(),
       maxOutputTokens: maxTokens,
       system: systemPrompt,
-      messages
+      messages,
+      tools: {
+        googleSearch: getGroundingTool()
+      }
     });
 
     for await (const delta of stream.textStream) {
@@ -110,6 +115,21 @@ async function streamPassWithContinuation(
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
     trackTokens(inputTokens, outputTokens);
+
+    // Extract grounding sources from stream
+    const sources = await stream.sources;
+    if (sources && sources.length > 0) {
+      const groundingSources = sources
+        .filter((s): s is Extract<typeof s, { sourceType: 'url' }> => 
+          s.type === 'source' && s.sourceType === 'url'
+        )
+        .map(s => ({
+          url: s.url,
+          title: s.title,
+          pass
+        }));
+      allSources.push(...groundingSources);
+    }
 
     messages.push({ role: 'assistant', content: segmentOutput });
 
@@ -128,26 +148,63 @@ async function streamPassWithContinuation(
   return {
     output,
     inputTokens: totalInputTokens,
-    outputTokens: totalOutputTokens
+    outputTokens: totalOutputTokens,
+    sources: allSources
   };
 }
 
 async function extractClaims(passText: string, phase: AnalysisPhase): Promise<{ claims: Claim[]; relations: RelationBundle[] }> {
-  const response = await generateObject({
-    model: getExtractionModel(),
-    maxOutputTokens: 1500,
-    temperature: 0.2,
-    system: LIVE_EXTRACTION_SYSTEM,
-    prompt: buildLiveExtractionPrompt(passText, phase),
-    schema: LiveExtractionSchema
-  });
+  try {
+    const response = await generateObject({
+      model: getExtractionModel(),
+      maxOutputTokens: 3000,  // Increased to accommodate reasoning tokens in Gemini 2.5
+      temperature: 0.2,
+      system: LIVE_EXTRACTION_SYSTEM,
+      prompt: buildLiveExtractionPrompt(passText, phase),
+      schema: LiveExtractionSchema
+    });
 
-  trackTokens(response.usage.inputTokens ?? 0, response.usage.outputTokens ?? 0);
-  console.log(`[EXTRACTION] ${phase}: ${response.usage.inputTokens ?? 0} in, ${response.usage.outputTokens ?? 0} out`);
+    trackTokens(response.usage.inputTokens ?? 0, response.usage.outputTokens ?? 0);
+    console.log(`[EXTRACTION] ${phase}: ${response.usage.inputTokens ?? 0} in, ${response.usage.outputTokens ?? 0} out`);
 
-  const claims: Claim[] = response.object.claims.map((claim) => ({ ...claim, phase }));
-  const relations: RelationBundle[] = response.object.relations;
-  return { claims, relations };
+    const claims: Claim[] = response.object.claims.map((claim) => ({ ...claim, phase }));
+    const relations: RelationBundle[] = response.object.relations;
+    return { claims, relations };
+  } catch (primaryError) {
+    console.warn(`[EXTRACTION] ${phase} primary structured parse failed, retrying with text fallback:`, primaryError instanceof Error ? primaryError.message : String(primaryError));
+
+    try {
+      const textResponse = await generateText({
+        model: getExtractionModel(),
+        maxOutputTokens: 3000,  // Increased to accommodate reasoning tokens in Gemini 2.5
+        temperature: 0.1,
+        system: `${LIVE_EXTRACTION_SYSTEM}\n\nYou must return strict JSON only. No markdown fences, no commentary.`,
+        prompt: buildLiveExtractionPrompt(passText, phase)
+      });
+
+      trackTokens(textResponse.usage?.inputTokens ?? 0, textResponse.usage?.outputTokens ?? 0);
+
+      const raw = textResponse.text.trim();
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (!match) {
+        return { claims: [], relations: [] };
+      }
+
+      const parsed = JSON.parse(match[0]);
+      const validated = LiveExtractionSchema.safeParse(parsed);
+      if (!validated.success) {
+        return { claims: [], relations: [] };
+      }
+
+      return {
+        claims: validated.data.claims.map((claim) => ({ ...claim, phase })),
+        relations: validated.data.relations
+      };
+    } catch (fallbackError) {
+      console.warn(`[EXTRACTION] ${phase} fallback extraction failed (returning empty):`, fallbackError instanceof Error ? fallbackError.message : String(fallbackError));
+      return { claims: [], relations: [] };
+    }
+  }
 }
 
 function aggregateConfidenceMetrics(claimsList: Claim[]): {
@@ -257,6 +314,12 @@ export async function runDialecticalEngine(
     totalOutputTokens += outputTokens;
     console.log(`[ENGINE] Pass 1 (analysis) done in ${Date.now() - t1}ms — in=${inputTokens} out=${outputTokens} chars=${analysisOutput.length}`);
 
+    // Emit grounding sources
+    if (analysisResult.sources.length > 0) {
+      console.log(`[ENGINE] Analysis grounding: ${analysisResult.sources.length} sources`);
+      callbacks.onGroundingSources('analysis', analysisResult.sources);
+    }
+
     // Refine pass into structured sections
     const refined = await refinePass(analysisOutput, 'analysis');
     callbacks.onPassStructured('analysis', refined.sections, refined.wordCount);
@@ -294,6 +357,12 @@ export async function runDialecticalEngine(
     totalOutputTokens += outputTokens;
     console.log(`[ENGINE] Pass 2 (critique) done in ${Date.now() - t2}ms — in=${inputTokens} out=${outputTokens} chars=${critiqueOutput.length}`);
 
+    // Emit grounding sources
+    if (critiqueResult.sources.length > 0) {
+      console.log(`[ENGINE] Critique grounding: ${critiqueResult.sources.length} sources`);
+      callbacks.onGroundingSources('critique', critiqueResult.sources);
+    }
+
     // Refine pass into structured sections
     const refined = await refinePass(critiqueOutput, 'critique');
     callbacks.onPassStructured('critique', refined.sections, refined.wordCount);
@@ -330,6 +399,12 @@ export async function runDialecticalEngine(
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
     console.log(`[ENGINE] Pass 3 (synthesis) done in ${Date.now() - t3}ms — in=${inputTokens} out=${outputTokens} chars=${synthesisOutput.length}`);
+
+    // Emit grounding sources
+    if (synthesisResult.sources.length > 0) {
+      console.log(`[ENGINE] Synthesis grounding: ${synthesisResult.sources.length} sources`);
+      callbacks.onGroundingSources('synthesis', synthesisResult.sources);
+    }
 
     // Refine pass into structured sections
     const refined = await refinePass(synthesisOutput, 'synthesis');
