@@ -27,7 +27,7 @@ TONE:
 - Rigorous but accessible. Direct and confident. Mark uncertainty clearly.
 
 LENGTH + SIGNPOSTING REQUIREMENTS:
-- Target 1500–2000 words total (ideal band: 1650–1850), but treat this as a soft target.
+- Target 500–750 words for this pass. This constraint enables parallelisation with subsequent passes.
 - Do not truncate mid-thought; finish the section and close cleanly even if slightly over target.
 - Use explicit signposting throughout: clear section headings, short orienting opening sentence per section, and transition sentences between major sections.
 - Include a concise roadmap near the top that previews the flow of the argument.

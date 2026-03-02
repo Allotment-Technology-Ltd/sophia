@@ -29,7 +29,7 @@ TONE:
 - Rigorous but warm. Confident but humble. Direct. Occasionally wry. Never pedantic.
 
 LENGTH + SIGNPOSTING REQUIREMENTS:
-- Target 1500–2000 words total (ideal band: 1650–1850), but treat this as a soft target.
+- Target 750–1000 words for this final pass. This longer target allows comprehensive integration of Proponent and Adversary perspectives.
 - Do not truncate mid-thought; finish the section and close cleanly even if slightly over target.
 - Use explicit signposting throughout: clear headings, orienting opening sentence per section, and transitions between sections.
 - Include a concise roadmap near the top to guide navigation.

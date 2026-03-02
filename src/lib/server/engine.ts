@@ -293,28 +293,121 @@ export async function runDialecticalEngine(
   const critiqueSystem = getCritiqueSystemPrompt(contextBlock);
   const synthesisSystem = getSynthesisSystemPrompt(contextBlock);
 
-  // ── PASS 1: Analysis (Proponent) ──────────────────────────────────
+  // ── HYBRID PARALLELISM: Analysis → Critique (when Analysis ~30% done) → Synthesis ──
   let analysisOutput = '';
+  let critiqueOutput = '';
+  let synthesisOutput = '';
+
+  // Phase 1: Start Analysis
+  let analysisStarted = false;
+  let critiqueStarted = false;
+  let critiquePromise: Promise<{ output: string; inputTokens: number; outputTokens: number; sources: GroundingSource[] }> | null = null;
+  let analysisPromise: Promise<{ output: string; inputTokens: number; outputTokens: number; sources: GroundingSource[] }> | null = null;
+
+  const analysisStartTime = Date.now();
+
   try {
-    const t1 = Date.now();
     callbacks.onPassStart('analysis');
     console.log('[ENGINE] Pass 1 (analysis) starting');
 
-    const analysisResult = await streamPassWithContinuation(
-      'analysis',
-      analysisSystem,
-      buildAnalysisUserPrompt(query, options?.lens),
-      callbacks
-    );
+    // Create a custom promise for analysis that monitors output length to trigger critique
+    analysisPromise = (async () => {
+      let output = '';
+      let totalInputTokens = 0;
+      let totalOutputTokens = 0;
+      let continuationRound = 0;
+      let allSources: GroundingSource[] = [];
 
+      const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
+        { role: 'user', content: buildAnalysisUserPrompt(query, options?.lens) }
+      ];
+
+      while (continuationRound <= 6) {
+        let segmentOutput = '';
+
+        const stream = streamText({
+          model: getReasoningModel(),
+          maxOutputTokens: 4096,
+          system: analysisSystem,
+          messages,
+          tools: {
+            googleSearch: getGroundingTool()
+          }
+        });
+
+        for await (const delta of stream.textStream) {
+          segmentOutput += delta;
+          output += delta;
+          callbacks.onPassChunk('analysis', delta);
+
+          // Trigger critique when analysis reaches ~2000 characters (if not already started)
+          if (!critiqueStarted && output.length >= 2000) {
+            critiqueStarted = true;
+            console.log(`[ENGINE] Analysis reached 2000 chars, starting Critique in parallel (round=${continuationRound})`);
+            callbacks.onPassStart('critique');
+            
+            critiquePromise = streamPassWithContinuation(
+              'critique',
+              critiqueSystem,
+              buildCritiqueUserPrompt(query, output + '\n[Analysis in progress...]'),
+              callbacks
+            );
+          }
+        }
+
+        const usage = await stream.totalUsage;
+        const finishReason = await stream.finishReason;
+        const inputTokens = usage.inputTokens ?? 0;
+        const outputTokens = usage.outputTokens ?? 0;
+        totalInputTokens += inputTokens;
+        totalOutputTokens += outputTokens;
+        trackTokens(inputTokens, outputTokens);
+
+        // Extract grounding sources from stream
+        const sources = await stream.sources;
+        if (sources && sources.length > 0) {
+          const groundingSources = sources
+            .filter((s): s is Extract<typeof s, { sourceType: 'url' }> => 
+              s.type === 'source' && s.sourceType === 'url'
+            )
+            .map(s => ({
+              url: s.url,
+              title: s.title,
+              pass: 'analysis' as PassType
+            }));
+          allSources.push(...groundingSources);
+        }
+
+        messages.push({ role: 'assistant', content: segmentOutput });
+
+        if (finishReason !== 'length') {
+          break;
+        }
+
+        continuationRound += 1;
+        messages.push({
+          role: 'user',
+          content:
+            'Continue exactly where you left off. Do not restart or repeat. First finish any incomplete sentence, then complete any remaining required sections and end with a clean closing paragraph.'
+        });
+      }
+
+      analysisStarted = true;
+      return { output, inputTokens: totalInputTokens, outputTokens: totalOutputTokens, sources: allSources };
+    })();
+
+    // Wait for analysis to complete
+    const analysisResult = await analysisPromise;
     analysisOutput = analysisResult.output;
-    const inputTokens = analysisResult.inputTokens;
-    const outputTokens = analysisResult.outputTokens;
-    totalInputTokens += inputTokens;
-    totalOutputTokens += outputTokens;
-    console.log(`[ENGINE] Pass 1 (analysis) done in ${Date.now() - t1}ms — in=${inputTokens} out=${outputTokens} chars=${analysisOutput.length}`);
+    const analysisInputTokens = analysisResult.inputTokens;
+    const analysisOutputTokens = analysisResult.outputTokens;
+    totalInputTokens += analysisInputTokens;
+    totalOutputTokens += analysisOutputTokens;
+    
+    const analysisElapsed = Date.now() - analysisStartTime;
+    console.log(`[ENGINE] Pass 1 (analysis) done in ${analysisElapsed}ms — in=${analysisInputTokens} out=${analysisOutputTokens} chars=${analysisOutput.length}`);
 
-    // Emit grounding sources
+    // Emit grounding sources for analysis
     if (analysisResult.sources.length > 0) {
       console.log(`[ENGINE] Analysis grounding: ${analysisResult.sources.length} sources`);
       callbacks.onGroundingSources('analysis', analysisResult.sources);
@@ -336,28 +429,35 @@ export async function runDialecticalEngine(
     .then(({ claims, relations }) => callbacks.onClaims('analysis', claims, relations))
     .catch(err => console.error('[EXTRACTION] Analysis extraction failed (skipping):', err instanceof Error ? err.message : err));
 
-  // ── PASS 2: Critique (Adversary) ──────────────────────────────────
-  let critiqueOutput = '';
+  // Phase 2: Critique (may already be running in parallel, or starts now if analysis was very short)
   try {
     const t2 = Date.now();
-    callbacks.onPassStart('critique');
-    console.log('[ENGINE] Pass 2 (critique) starting');
+    
+    // If critique hasn't started yet (very short analysis), start it now
+    if (!critiqueStarted) {
+      console.log('[ENGINE] Pass 2 (critique) starting (analysis completed before reaching 2000 chars)');
+      callbacks.onPassStart('critique');
+      
+      critiquePromise = streamPassWithContinuation(
+        'critique',
+        critiqueSystem,
+        buildCritiqueUserPrompt(query, analysisOutput),
+        callbacks
+      );
+    } else {
+      console.log('[ENGINE] Pass 2 (critique) already streaming in parallel, waiting for completion');
+    }
 
-    const critiqueResult = await streamPassWithContinuation(
-      'critique',
-      critiqueSystem,
-      buildCritiqueUserPrompt(query, analysisOutput),
-      callbacks
-    );
-
+    // Wait for critique to complete (may have been running in parallel)
+    const critiqueResult = await critiquePromise!;
     critiqueOutput = critiqueResult.output;
-    const inputTokens = critiqueResult.inputTokens;
-    const outputTokens = critiqueResult.outputTokens;
-    totalInputTokens += inputTokens;
-    totalOutputTokens += outputTokens;
-    console.log(`[ENGINE] Pass 2 (critique) done in ${Date.now() - t2}ms — in=${inputTokens} out=${outputTokens} chars=${critiqueOutput.length}`);
+    const critiqueInputTokens = critiqueResult.inputTokens;
+    const critiqueOutputTokens = critiqueResult.outputTokens;
+    totalInputTokens += critiqueInputTokens;
+    totalOutputTokens += critiqueOutputTokens;
+    console.log(`[ENGINE] Pass 2 (critique) done in ${Date.now() - t2}ms — in=${critiqueInputTokens} out=${critiqueOutputTokens} chars=${critiqueOutput.length}`);
 
-    // Emit grounding sources
+    // Emit grounding sources for critique
     if (critiqueResult.sources.length > 0) {
       console.log(`[ENGINE] Critique grounding: ${critiqueResult.sources.length} sources`);
       callbacks.onGroundingSources('critique', critiqueResult.sources);
@@ -380,7 +480,6 @@ export async function runDialecticalEngine(
     .catch(err => console.error('[EXTRACTION] Critique extraction failed (skipping):', err instanceof Error ? err.message : err));
 
   // ── PASS 3: Synthesis (Synthesiser) ───────────────────────────────
-  let synthesisOutput = '';
   try {
     const t3 = Date.now();
     callbacks.onPassStart('synthesis');
@@ -400,7 +499,7 @@ export async function runDialecticalEngine(
     totalOutputTokens += outputTokens;
     console.log(`[ENGINE] Pass 3 (synthesis) done in ${Date.now() - t3}ms — in=${inputTokens} out=${outputTokens} chars=${synthesisOutput.length}`);
 
-    // Emit grounding sources
+    // Emit grounding sources for synthesis
     if (synthesisResult.sources.length > 0) {
       console.log(`[ENGINE] Synthesis grounding: ${synthesisResult.sources.length} sources`);
       callbacks.onGroundingSources('synthesis', synthesisResult.sources);
