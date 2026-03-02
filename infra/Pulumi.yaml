@@ -1,0 +1,6 @@
+name: sophia
+runtime:
+  name: nodejs
+  options:
+    typescript: true
+description: Sophia GCP infrastructure — Cloud Run, GCE DB, VPC, Artifact Registry

@@ -6,7 +6,7 @@
 set -e
 
 # Configuration
-PROJECT_ID="${GCP_PROJECT_ID:-sophia-production}"
+PROJECT_ID="${GCP_PROJECT_ID:-sophia-488807}"
 INSTANCE_NAME="sophia-db"
 ZONE="europe-west2-b"  # London
 MACHINE_TYPE="e2-micro"  # 2 vCPU, 1GB RAM - Free tier eligible

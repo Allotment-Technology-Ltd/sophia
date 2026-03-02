@@ -1,60 +1,100 @@
-# SOPHIA — Google Cloud Run Deployment Pipeline
+# SOPHIA — Unified CI/CD Pipeline
+#
+# Handles both application deployments and infrastructure changes in a single
+# workflow. Path-based filters route to the correct job(s) automatically:
+#
+#   src/**, Dockerfile, package.json, etc.  →  build + Cloud Run deploy
+#   infra/**                                 →  pulumi preview (PR) / up (main)
+#   both changed                             →  infra first, then app
+#
+# TARGET REGION: europe-west2 (London) — all resources are in this region.
+# Region drift was resolved in March 2026: the live us-central1 service was
+# migrated to europe-west2 where the database VM already lives.
 #
 # PREREQUISITES:
-# 1. GCP project with Cloud Run API enabled
-# 2. Secrets stored in Secret Manager (all must exist before first deploy):
-#    - anthropic-api-key   Claude API key
-#    - voyage-api-key      Voyage AI embeddings key
-#    - google-ai-api-key   Gemini validation key
-#    - surreal-db-pass     SurrealDB root password
-# 3. Workload Identity Federation configured for GitHub:
-#    https://github.com/google-github-actions/auth#setting-up-workload-identity-federation
-# 4. GitHub secrets configured:
-#    - WIF_PROVIDER: projects/{PROJECT_ID}/locations/global/workloadIdentityPools/{POOL_ID}/providers/{PROVIDER_ID}
-#    - WIF_SERVICE_ACCOUNT: terraform-sa@{PROJECT_ID}.iam.gserviceaccount.com
-#    - GCP_PROJECT_ID: sophia-488807
+# ─ GCP secrets in Secret Manager: anthropic-api-key, voyage-api-key,
+#   google-ai-api-key, surreal-db-pass
+# ─ Workload Identity Federation configured for this GitHub repo
+# ─ GitHub repository secrets:
+#     WIF_PROVIDER        projects/{N}/locations/global/workloadIdentityPools/{P}/providers/{ID}
+#     WIF_SERVICE_ACCOUNT terraform-sa@sophia-488807.iam.gserviceaccount.com
+#     GCP_PROJECT_ID      sophia-488807
+#     PULUMI_ACCESS_TOKEN Pulumi Cloud access token (https://app.pulumi.com/account/tokens)
 #
-# SURREALDB SETUP:
-# - SurrealDB runs on GCE VM 'sophia-db' in europe-west2-b (zone: europe-west2-b)
-# - Internal IP: 10.154.0.2  (stable — assigned at VM creation, does not change)
-# - External IP: 35.246.25.125 (for local admin access only)
-# - Cloud Run connects to SurrealDB via the internal IP over the shared VPC
-# - If DB is unreachable, the app degrades gracefully: no graph context injected
-#   into the three-pass engine, but all philosophical reasoning still works
+# FIRST-TIME INFRA SETUP (run once from your local machine before CI manages it):
+#   cd infra && npm install
+#   pulumi stack init production
+#   pulumi stack select production
+#   pulumi up   # provisions VPC connector, Cloud Run service, etc. in europe-west2
 #
-# VPC CONNECTOR (required for Cloud Run → GCE internal IP access):
-# Create once — idempotent, safe to re-run:
+# VPC CONNECTOR STATUS:
+#   The sophia-connector is now in europe-west2 (was europe-west1).
+#   Cloud Run uses private egress to reach SurrealDB at 10.154.0.2:8000.
 #
-#   gcloud compute networks vpc-access connectors create sophia-connector \
-#     --region=europe-west1 \
-#     --network=default \
-#     --range=10.8.0.0/28 \
-#     --project=sophia-488807
-#
-# Verify connector is READY before deploying:
-#   gcloud compute networks vpc-access connectors describe sophia-connector \
-#     --region=europe-west1 --project=sophia-488807
+# ROLLBACK:
+#   Trigger the "Rollback App" workflow_dispatch with a Cloud Run revision name.
+#   Infrastructure rollback: revert the infra/ commit and re-run the pipeline.
 
-name: Deploy to Cloud Run
+name: CI/CD
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      rollback_revision:
+        description: "Cloud Run revision to roll back to (e.g. sophia-00042-abc)"
+        required: false
+        type: string
 
 permissions:
   contents: read
   id-token: write
+  pull-requests: write   # needed to post Pulumi preview comments on PRs
+
+env:
+  REGION: europe-west2
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGISTRY: europe-west2-docker.pkg.dev
+  IMAGE_BASE: europe-west2-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app
 
 jobs:
+  # ── 1. Detect which paths changed ──────────────────────────────────────────
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      app: ${{ steps.filter.outputs.app }}
+      infra: ${{ steps.filter.outputs.infra }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            app:
+              - 'src/**'
+              - 'static/**'
+              - 'Dockerfile'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'svelte.config.js'
+              - 'vite.config.js'
+              - 'postcss.config.js'
+              - 'tailwind.config.js'
+            infra:
+              - 'infra/**'
+              - 'scripts/deploy-db-gce.sh'
+
+  # ── 2. Security & quality gate (always runs) ───────────────────────────────
   security:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history required for secret scanning
+          fetch-depth: 0
 
       - name: Scan for secrets
         uses: trufflesecurity/trufflehog@v3.68.0
@@ -63,13 +103,11 @@ jobs:
           extra_args: --only-verified
         continue-on-error: true
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
         with:
           version: 9
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
@@ -79,51 +117,129 @@ jobs:
 
       - name: Audit dependencies
         run: pnpm audit --audit-level=high
-        continue-on-error: true  # Surface high/critical vulns without blocking deploy
+        continue-on-error: true
 
       - name: Type check
         run: pnpm check
 
-  deploy:
-    needs: security
-    runs-on: ubuntu-latest
+      - name: Build (verify)
+        if: github.event_name == 'pull_request'
+        run: pnpm build
 
+  # ── 3. Pulumi preview (PRs) ────────────────────────────────────────────────
+  infra-preview:
+    if: github.event_name == 'pull_request' && needs.changes.outputs.infra == 'true'
+    needs: [changes, security]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          clean: true
+          node-version: 20
+
+      - name: Install Pulumi deps
+        run: npm install
 
       - id: auth
-        name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
-      - name: Set up gcloud CLI
-        uses: google-github-actions/setup-gcloud@v2
+      - uses: pulumi/actions@v5
+        id: preview
+        with:
+          command: preview
+          stack-name: production
+          work-dir: infra
+          comment-on-pr: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.auth.outputs.credentials_file_path }}
+
+  # ── 4. Pulumi up (push to main) ────────────────────────────────────────────
+  infra-apply:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.infra == 'true'
+    needs: [changes, security]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Pulumi deps
+        run: npm install
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: pulumi/actions@v5
+        with:
+          command: up
+          stack-name: production
+          work-dir: infra
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.auth.outputs.credentials_file_path }}
+
+  # ── 5. Build & deploy app ──────────────────────────────────────────────────
+  app-deploy:
+    if: >
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.changes.outputs.app == 'true'
+    needs: [changes, security, infra-apply]
+    # infra-apply is skipped when infra didn't change — `needs` on a skipped job
+    # is treated as success, so this job still runs when only app changed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker europe-west1-docker.pkg.dev
+        run: gcloud auth configure-docker ${{ env.REGISTRY }}
 
       - name: Build Docker image
         run: |
           docker build --no-cache --pull \
-            -t europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:${{ github.sha }} \
-            -t europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:latest .
+            -t ${{ env.IMAGE_BASE }}:${{ github.sha }} \
+            -t ${{ env.IMAGE_BASE }}:latest .
 
       - name: Push Docker image
         run: |
-          docker push europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:${{ github.sha }}
-          docker push europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:latest
+          docker push ${{ env.IMAGE_BASE }}:${{ github.sha }}
+          docker push ${{ env.IMAGE_BASE }}:latest
 
-      - name: Deploy to Cloud Run
+      - name: Deploy to Cloud Run (europe-west2)
         run: |
           gcloud run deploy sophia \
-            --image=europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app:${{ github.sha }} \
-            --project=${{ secrets.GCP_PROJECT_ID }} \
-            --region=europe-west1 \
+            --image=${{ env.IMAGE_BASE }}:${{ github.sha }} \
+            --project=${{ env.PROJECT_ID }} \
+            --region=${{ env.REGION }} \
             --allow-unauthenticated \
             --memory=512Mi \
             --cpu=1 \
@@ -131,5 +247,60 @@ jobs:
             --max-instances=3 \
             --vpc-connector=sophia-connector \
             --vpc-egress=private-ranges-only \
-            --set-env-vars="SURREAL_URL=ws://10.154.0.2:8000/rpc,SURREAL_USER=root,SURREAL_NAMESPACE=sophia,SURREAL_DATABASE=sophia" \
+            --set-env-vars="SURREAL_URL=ws://10.154.0.2:8000/rpc,SURREAL_USER=root,SURREAL_NAMESPACE=sophia,SURREAL_DATABASE=sophia,GCP_LOCATION=${{ env.REGION }},GOOGLE_VERTEX_LOCATION=${{ env.REGION }}" \
             --set-secrets="ANTHROPIC_API_KEY=anthropic-api-key:latest,SURREAL_PASS=surreal-db-pass:latest,VOYAGE_API_KEY=voyage-api-key:latest,GOOGLE_AI_API_KEY=google-ai-api-key:latest"
+
+      - name: Health check
+        run: |
+          URL=$(gcloud run services describe sophia \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format='value(status.url)')
+          echo "Service URL: $URL"
+          # Wait up to 60s for the new revision to become healthy
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL/api/health" || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "✓ Health check passed"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "✗ Health check failed after 60s — rolling back"
+          PREV=$(gcloud run revisions list \
+            --service=sophia \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format='value(metadata.name)' \
+            --sort-by=~metadata.creationTimestamp \
+            --limit=2 | tail -1)
+          gcloud run services update-traffic sophia \
+            --to-revisions="$PREV=100" \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }}
+          echo "Rolled back to $PREV"
+          exit 1
+
+  # ── 6. Manual rollback ─────────────────────────────────────────────────────
+  rollback:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.rollback_revision != ''
+    runs-on: ubuntu-latest
+    steps:
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Roll back to specified revision
+        run: |
+          REVISION="${{ github.event.inputs.rollback_revision }}"
+          echo "Rolling back to: $REVISION"
+          gcloud run services update-traffic sophia \
+            --to-revisions="$REVISION=100" \
+            --region=europe-west2 \
+            --project=${{ secrets.GCP_PROJECT_ID }}
+          echo "✓ Traffic shifted to $REVISION"

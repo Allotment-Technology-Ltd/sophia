@@ -1,0 +1,21 @@
+{
+  "name": "sophia-infra",
+  "version": "1.0.0",
+  "description": "Sophia GCP infrastructure as code",
+  "main": "index.ts",
+  "scripts": {
+    "build": "tsc",
+    "preview": "pulumi preview --stack production",
+    "up": "pulumi up --stack production",
+    "refresh": "pulumi refresh --stack production",
+    "destroy": "pulumi destroy --stack production"
+  },
+  "dependencies": {
+    "@pulumi/gcp": "^8.0.0",
+    "@pulumi/pulumi": "^3.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  }
+}

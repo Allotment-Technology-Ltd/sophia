@@ -10,7 +10,13 @@
     "monitor:wave": "tsx --env-file=.env scripts/monitor-wave.ts --once",
     "monitor:wave:watch": "tsx --env-file=.env scripts/monitor-wave.ts --interval-sec 120",
     "ingest:wave1:retry": "tsx --env-file=.env scripts/ingest-batch.ts --wave 1 --retry --fail-fast --pre-scan",
-    "ingest:unknown:resume": "tsx --env-file=.env scripts/ingest.ts data/sources/unknown-title.txt --stop-after-embedding"
+    "ingest:unknown:resume": "tsx --env-file=.env scripts/ingest.ts data/sources/unknown-title.txt --stop-after-embedding",
+    "health": "curl -s --max-time 30 https://usesophia.app/api/health | jq .",
+    "infra:preview": "cd infra && pulumi preview --stack production",
+    "infra:up": "cd infra && pulumi up --stack production",
+    "infra:refresh": "cd infra && pulumi refresh --stack production",
+    "infra:install": "cd infra && npm install",
+    "migrate": "bash scripts/migrate-to-europe-west2.sh"
   },
   "dependencies": {
     "@ai-sdk/google-vertex": "^4.0.68",

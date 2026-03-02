@@ -1,7 +1,9 @@
 # SOPHIA — Pull Request Checks
 #
-# Runs on every PR to main. Performs security scanning, dependency auditing,
-# type checking, and build verification. Does NOT deploy.
+# Lightweight gate that runs on every PR. The full security scan, type check,
+# and infra preview are handled by the unified CI/CD workflow (deploy.yml).
+# This workflow ensures the build succeeds and dependencies are audited before
+# merge, acting as a fast required status check for branch protection.
 
 name: PR Check
 
@@ -14,14 +16,14 @@ permissions:
   contents: read
 
 jobs:
-  security:
+  quality:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history required for secret scanning
+          fetch-depth: 0
 
       - name: Scan for secrets
         if: github.event.pull_request.base.sha != github.event.pull_request.head.sha
@@ -48,7 +50,7 @@ jobs:
 
       - name: Audit dependencies
         run: pnpm audit --audit-level=high
-        continue-on-error: true  # Surface high/critical vulns without blocking the PR
+        continue-on-error: true
 
       - name: Type check
         run: pnpm check

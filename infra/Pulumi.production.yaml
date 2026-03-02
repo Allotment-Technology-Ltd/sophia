@@ -1,0 +1,14 @@
+config:
+  gcp:project: sophia-488807
+  sophia:region: europe-west2
+  sophia:zone: europe-west2-b
+  sophia:dbInternalIp: 10.154.0.2
+  sophia:dbExternalIp: 35.246.25.125
+  sophia:vpcConnectorRange: 10.8.0.0/28
+  sophia:appMinInstances: "0"
+  sophia:appMaxInstances: "3"
+  sophia:appMemory: 512Mi
+  sophia:appCpu: "1"
+  sophia:ingestMemory: 4Gi
+  sophia:ingestCpu: "2"
+  sophia:ingestTimeoutSeconds: "10800"
