@@ -56,6 +56,9 @@ export const POST: RequestHandler = async ({ request }) => {
           onSources() {
             // Not used in verification context
           },
+          onGroundingSources() {
+            // Not used in verification context
+          },
           onClaims() {
             // Not used in verification context
           },
