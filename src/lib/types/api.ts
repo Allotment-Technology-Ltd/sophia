@@ -41,6 +41,10 @@ export interface MetadataEvent {
   total_input_tokens: number;
   total_output_tokens: number;
   duration_ms: number;
+  claims_retrieved?: number;
+  arguments_retrieved?: number;
+  retrieval_degraded?: boolean;
+  retrieval_degraded_reason?: string;
 }
 
 export interface ErrorEvent {

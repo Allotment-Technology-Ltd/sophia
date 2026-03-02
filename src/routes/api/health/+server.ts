@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { query } from '$lib/server/db';
+import { checkDatabaseHealth, getDatabaseRuntimeConfig, query } from '$lib/server/db';
 
 const RELATION_TABLES = [
 	'supports',
@@ -20,9 +20,19 @@ async function countTable(table: string): Promise<number> {
 }
 
 export const GET: RequestHandler = async () => {
+	const runtime = getDatabaseRuntimeConfig();
 	let dbStatus: {
 		status: 'connected' | 'disconnected';
+		latency_ms?: number;
 		error?: string;
+		runtime: {
+			mode: 'http-sql';
+			url: string;
+			namespace: string;
+			database: string;
+			timeoutMs: number;
+			maxRetries: number;
+		};
 		counts?: {
 			sources: number;
 			claims: number;
@@ -32,6 +42,11 @@ export const GET: RequestHandler = async () => {
 	};
 
 	try {
+		const heartbeat = await checkDatabaseHealth();
+		if (!heartbeat.ok) {
+			throw new Error(heartbeat.error || 'Database health probe failed');
+		}
+
 		const [sources, claims, args, ...relationCounts] = await Promise.all([
 			countTable('source'),
 			countTable('claim'),
@@ -43,11 +58,14 @@ export const GET: RequestHandler = async () => {
 
 		dbStatus = {
 			status: 'connected',
+			latency_ms: heartbeat.latencyMs,
+			runtime,
 			counts: { sources, claims, arguments: args, relations }
 		};
 	} catch (err) {
 		dbStatus = {
 			status: 'disconnected',
+			runtime,
 			error: err instanceof Error ? err.message : String(err)
 		};
 	}
@@ -57,6 +75,7 @@ export const GET: RequestHandler = async () => {
 	return json(
 		{
 			status: healthy ? 'healthy' : 'degraded',
+			readiness: healthy ? 'ready' : 'degraded',
 			app: { status: 'up' },
 			database: dbStatus,
 			timestamp: new Date().toISOString()

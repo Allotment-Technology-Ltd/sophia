@@ -17,7 +17,7 @@
  * so the three-pass engine can still work without the graph.
  */
 
-import { query } from './db';
+import { isDatabaseUnavailable, query } from './db';
 import { embedQuery } from './embeddings';
 import type { PhilosophicalDomain } from './types';
 
@@ -56,6 +56,8 @@ export interface RetrievalResult {
 	claims: RetrievedClaim[];
 	relations: RetrievedRelation[];
 	arguments: RetrievedArgument[];
+	degraded: boolean;
+	degraded_reason?: string;
 }
 
 export interface RetrievalOptions {
@@ -70,7 +72,8 @@ export interface RetrievalOptions {
 const EMPTY_RESULT: RetrievalResult = {
 	claims: [],
 	relations: [],
-	arguments: []
+	arguments: [],
+	degraded: false
 };
 
 // ─── Main retrieval function ───────────────────────────────────────────────
@@ -98,7 +101,11 @@ export async function retrieveContext(
 			queryEmbedding = await embedQuery(userQuery);
 		} catch (err) {
 			console.error('[RETRIEVAL] Embedding API failed:', err instanceof Error ? err.message : err);
-			return EMPTY_RESULT;
+			return {
+				...EMPTY_RESULT,
+				degraded: true,
+				degraded_reason: 'embedding_unavailable'
+			};
 		}
 
 		// ── Step 2: Vector search for seed claims ────────────────────
@@ -117,27 +124,40 @@ export async function retrieveContext(
 			source_author: string[];
 		};
 
-		const seedClaims = await query<SeedRow[]>(
-			`SELECT
-				id,
-				text,
-				claim_type,
-				domain,
-				confidence,
-				position_in_source,
-				section_context,
-				source.title AS source_title,
-				source.author AS source_author
-			FROM claim
-			WHERE embedding <|${topK}|> $query_embedding
-				${domainFilter}
-				${confidenceFilter}`,
-			{
-				query_embedding: queryEmbedding,
-				...(domain ? { domain } : {}),
-				...(minConfidence > 0 ? { minConfidence } : {})
+		let seedClaims: SeedRow[];
+		try {
+			seedClaims = await query<SeedRow[]>(
+				`SELECT
+					id,
+					text,
+					claim_type,
+					domain,
+					confidence,
+					position_in_source,
+					section_context,
+					source.title AS source_title,
+					source.author AS source_author
+				FROM claim
+				WHERE embedding <|${topK}|> $query_embedding
+					${domainFilter}
+					${confidenceFilter}`,
+				{
+					query_embedding: queryEmbedding,
+					...(domain ? { domain } : {}),
+					...(minConfidence > 0 ? { minConfidence } : {})
+				}
+			);
+		} catch (dbErr) {
+			if (isDatabaseUnavailable(dbErr)) {
+				console.warn('[RETRIEVAL] Database unavailable during seed retrieval');
+				return {
+					...EMPTY_RESULT,
+					degraded: true,
+					degraded_reason: 'database_unavailable'
+				};
 			}
-		);
+			throw dbErr;
+		}
 
 		if (!seedClaims || seedClaims.length === 0) {
 			console.log('[RETRIEVAL] No seed claims found via vector search');
@@ -401,14 +421,18 @@ export async function retrieveContext(
 
 		console.log(`[RETRIEVAL] ${arguments_.length} arguments assembled`);
 
-		return { claims, relations, arguments: arguments_ };
+		return { claims, relations, arguments: arguments_, degraded: false };
 	} catch (err) {
 		// Top-level catch: SurrealDB unreachable, unexpected errors, etc.
 		console.error(
 			'[RETRIEVAL] Fatal retrieval error (returning empty result):',
 			err instanceof Error ? err.message : err
 		);
-		return EMPTY_RESULT;
+		return {
+			...EMPTY_RESULT,
+			degraded: true,
+			degraded_reason: isDatabaseUnavailable(err) ? 'database_unavailable' : 'retrieval_error'
+		};
 	}
 }
 

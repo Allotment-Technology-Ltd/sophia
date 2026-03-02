@@ -68,13 +68,24 @@ SOPHIA is a SvelteKit application backed by a SurrealDB argument graph, using th
 - Entry point: `retrieveContext(query)` → `RetrievalResult`
 - Pipeline: embed → vector search → graph traversal → dedup → relation resolve → format
 - Returns `claims[]`, `relations[]`, `arguments[]`
-- Gracefully degrades to empty result if SurrealDB is unavailable
+- Explicitly marks degraded retrieval mode when embedding or DB dependencies are unavailable
+- Preserves engine execution in degraded mode while surfacing reliability metadata
 
 ### Database (`src/lib/server/db.ts`)
 
-- Singleton SurrealDB client, lazy-initialised on first query
-- Connection pooling via the singleton pattern
-- All queries use the `query()` wrapper which handles reconnection
+- Stateless HTTP SQL client (`/sql`) for Cloud Run-safe request isolation
+- Canonical URL normalization (`ws/wss` and `/rpc` inputs normalized to HTTP SQL root)
+- Bounded retries with exponential backoff for transient failures
+- Per-request timeout with typed `DatabaseError` classification
+- Health probe + runtime config helpers used by `/api/health`
+
+### Production Reliability Contract (Phase 1)
+
+- **DB transport**: HTTP SQL only for app runtime (no persistent SDK sessions in request handlers)
+- **Failure semantics**: Retrieval can degrade without failing the full three-pass analysis
+- **Visibility**: SSE `metadata` includes retrieval reliability fields (`retrieval_degraded`, `retrieval_degraded_reason`)
+- **Health diagnostics**: `GET /api/health` reports readiness, DB latency, and DB runtime configuration
+- **Retry policy**: controlled by `DB_MAX_RETRIES`, `DB_RETRY_BASE_MS`, `DB_REQUEST_TIMEOUT_MS`
 
 ### Prompts (`src/lib/server/prompts/`)
 

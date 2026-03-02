@@ -137,7 +137,14 @@ export const POST: RequestHandler = async ({ request }) => {
               total_input_tokens: totalInputTokens,
               total_output_tokens: totalOutputTokens,
               duration_ms: durationMs,
-              ...(retrieval ? { claims_retrieved: retrieval.claims_retrieved, arguments_retrieved: retrieval.arguments_retrieved } : {})
+              ...(retrieval
+                ? {
+                    claims_retrieved: retrieval.claims_retrieved,
+                    arguments_retrieved: retrieval.arguments_retrieved,
+                    retrieval_degraded: retrieval.retrieval_degraded,
+                    retrieval_degraded_reason: retrieval.retrieval_degraded_reason
+                  }
+                : {})
             });
           },
           onError(error) {

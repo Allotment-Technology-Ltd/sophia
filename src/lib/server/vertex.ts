@@ -1,25 +1,46 @@
 import { createVertex } from '@ai-sdk/google-vertex';
 import { env } from '$env/dynamic/private';
 
-const project = env.GOOGLE_VERTEX_PROJECT || env.GCP_PROJECT_ID;
-const location = env.GOOGLE_VERTEX_LOCATION || env.GCP_LOCATION || 'europe-west2';
+// Lazy initialization - create vertex client only when first called
+let vertexInstance: ReturnType<typeof createVertex> | null = null;
 
-const vertex = createVertex({
-  ...(project ? { project } : {}),
-  ...(location ? { location } : {})
-});
+function initializeVertex() {
+  if (vertexInstance) return vertexInstance;
 
-const reasoningModelId =
-  (env.GEMINI_REASONING_MODEL || 'gemini-2.5-pro') as Parameters<typeof vertex>[0];
-const extractionModelId =
-  (env.GEMINI_EXTRACTION_MODEL || 'gemini-2.5-flash') as Parameters<typeof vertex>[0];
+  const project = env.GOOGLE_VERTEX_PROJECT || env.GCP_PROJECT_ID || process.env.GOOGLE_VERTEX_PROJECT || process.env.GCP_PROJECT_ID;
+  const location = env.GOOGLE_VERTEX_LOCATION || env.GCP_LOCATION || process.env.GCP_LOCATION || 'us-central1';
+
+  console.log(`[Vertex] Initializing — project=${project ?? '(missing)'} location=${location}`);
+
+  if (!project) {
+    console.error('[Vertex] FATAL: No project ID found. Checked: GOOGLE_VERTEX_PROJECT, GCP_PROJECT_ID (env + process.env)');
+    throw new Error('Vertex AI project ID is required. Set GOOGLE_VERTEX_PROJECT or GCP_PROJECT_ID environment variable.');
+  }
+
+  try {
+    vertexInstance = createVertex({ project, location });
+    console.log(`[Vertex] Client created successfully — project=${project} location=${location}`);
+  } catch (err) {
+    console.error('[Vertex] createVertex() threw:', err instanceof Error ? err.stack : String(err));
+    throw err;
+  }
+
+  return vertexInstance;
+}
+
+function getVertex() {
+  return initializeVertex();
+}
+
+const reasoningModelId = env.GEMINI_REASONING_MODEL || process.env.GEMINI_REASONING_MODEL || 'gemini-2.5-pro';
+const extractionModelId = env.GEMINI_EXTRACTION_MODEL || process.env.GEMINI_EXTRACTION_MODEL || 'gemini-2.5-flash';
 
 export function getReasoningModel() {
-  return vertex(reasoningModelId);
+  return getVertex()(reasoningModelId);
 }
 
 export function getExtractionModel() {
-  return vertex(extractionModelId);
+  return getVertex()(extractionModelId);
 }
 
 let sessionTokens = {

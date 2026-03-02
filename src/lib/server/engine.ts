@@ -52,7 +52,17 @@ export interface EngineCallbacks {
   onGraphSnapshot(nodes: GraphNode[], edges: GraphEdge[]): void;
   onClaims(pass: AnalysisPhase, claims: Claim[], relations: RelationBundle[]): void;
   onConfidenceSummary?(avgConfidence: number, lowConfidenceCount: number, totalClaims: number): void;
-  onMetadata(inputTokens: number, outputTokens: number, durationMs: number, retrieval?: { claims_retrieved: number; arguments_retrieved: number }): void;
+  onMetadata(
+    inputTokens: number,
+    outputTokens: number,
+    durationMs: number,
+    retrieval?: {
+      claims_retrieved: number;
+      arguments_retrieved: number;
+      retrieval_degraded?: boolean;
+      retrieval_degraded_reason?: string;
+    }
+  ): void;
   onError(error: string): void;
 }
 
@@ -165,6 +175,8 @@ export async function runDialecticalEngine(
   options?: EngineOptions
 ): Promise<void> {
   const startTime = Date.now();
+  const queryPreview = query.slice(0, 60).replace(/\n/g, ' ');
+  console.log(`[ENGINE] Starting — query="${queryPreview}" lens=${options?.lens ?? 'none'}`);
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
@@ -172,12 +184,21 @@ export async function runDialecticalEngine(
   let contextBlock = '';
   let claimsRetrieved = 0;
   let argumentsRetrieved = 0;
+  let retrievalDegraded = false;
+  let retrievalDegradedReason: string | undefined;
 
   try {
+    const t0 = Date.now();
     const retrievalResult = await retrieveContext(query, { domain: MVP_DOMAIN_FILTER });
     contextBlock = buildContextBlock(retrievalResult);
     claimsRetrieved = retrievalResult.claims.length;
     argumentsRetrieved = retrievalResult.arguments.length;
+    retrievalDegraded = retrievalResult.degraded;
+    retrievalDegradedReason = retrievalResult.degraded_reason;
+    console.log(`[ENGINE] Retrieval done in ${Date.now() - t0}ms — claims=${claimsRetrieved} arguments=${argumentsRetrieved}`);
+    if (retrievalDegraded) {
+      console.warn('[ENGINE] Retrieval degraded mode active', { reason: retrievalDegradedReason });
+    }
 
     const sourceMap = new Map<string, SourceReference>();
     for (const claim of retrievalResult.claims) {
@@ -218,7 +239,9 @@ export async function runDialecticalEngine(
   // ── PASS 1: Analysis (Proponent) ──────────────────────────────────
   let analysisOutput = '';
   try {
+    const t1 = Date.now();
     callbacks.onPassStart('analysis');
+    console.log('[ENGINE] Pass 1 (analysis) starting');
 
     const analysisResult = await streamPassWithContinuation(
       'analysis',
@@ -232,6 +255,7 @@ export async function runDialecticalEngine(
     const outputTokens = analysisResult.outputTokens;
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
+    console.log(`[ENGINE] Pass 1 (analysis) done in ${Date.now() - t1}ms — in=${inputTokens} out=${outputTokens} chars=${analysisOutput.length}`);
 
     // Refine pass into structured sections
     const refined = await refinePass(analysisOutput, 'analysis');
@@ -239,6 +263,7 @@ export async function runDialecticalEngine(
 
     callbacks.onPassComplete('analysis');
   } catch (err) {
+    console.error('[ENGINE] Pass 1 (analysis) FAILED:', err instanceof Error ? err.stack : String(err));
     callbacks.onError(`Analysis pass failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
@@ -251,7 +276,9 @@ export async function runDialecticalEngine(
   // ── PASS 2: Critique (Adversary) ──────────────────────────────────
   let critiqueOutput = '';
   try {
+    const t2 = Date.now();
     callbacks.onPassStart('critique');
+    console.log('[ENGINE] Pass 2 (critique) starting');
 
     const critiqueResult = await streamPassWithContinuation(
       'critique',
@@ -265,6 +292,7 @@ export async function runDialecticalEngine(
     const outputTokens = critiqueResult.outputTokens;
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
+    console.log(`[ENGINE] Pass 2 (critique) done in ${Date.now() - t2}ms — in=${inputTokens} out=${outputTokens} chars=${critiqueOutput.length}`);
 
     // Refine pass into structured sections
     const refined = await refinePass(critiqueOutput, 'critique');
@@ -272,6 +300,7 @@ export async function runDialecticalEngine(
 
     callbacks.onPassComplete('critique');
   } catch (err) {
+    console.error('[ENGINE] Pass 2 (critique) FAILED:', err instanceof Error ? err.stack : String(err));
     callbacks.onError(`Critique pass failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
@@ -284,7 +313,9 @@ export async function runDialecticalEngine(
   // ── PASS 3: Synthesis (Synthesiser) ───────────────────────────────
   let synthesisOutput = '';
   try {
+    const t3 = Date.now();
     callbacks.onPassStart('synthesis');
+    console.log('[ENGINE] Pass 3 (synthesis) starting');
 
     const synthesisResult = await streamPassWithContinuation(
       'synthesis',
@@ -298,6 +329,7 @@ export async function runDialecticalEngine(
     const outputTokens = synthesisResult.outputTokens;
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
+    console.log(`[ENGINE] Pass 3 (synthesis) done in ${Date.now() - t3}ms — in=${inputTokens} out=${outputTokens} chars=${synthesisOutput.length}`);
 
     // Refine pass into structured sections
     const refined = await refinePass(synthesisOutput, 'synthesis');
@@ -305,6 +337,7 @@ export async function runDialecticalEngine(
 
     callbacks.onPassComplete('synthesis');
   } catch (err) {
+    console.error('[ENGINE] Pass 3 (synthesis) FAILED:', err instanceof Error ? err.stack : String(err));
     callbacks.onError(`Synthesis pass failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
@@ -327,9 +360,12 @@ export async function runDialecticalEngine(
 
   // ── Metadata ──────────────────────────────────────────────────────
   const durationMs = Date.now() - startTime;
+  console.log(`[ENGINE] Complete in ${durationMs}ms — totalIn=${totalInputTokens} totalOut=${totalOutputTokens}`);
   callbacks.onMetadata(totalInputTokens, totalOutputTokens, durationMs, {
     claims_retrieved: claimsRetrieved,
-    arguments_retrieved: argumentsRetrieved
+    arguments_retrieved: argumentsRetrieved,
+    retrieval_degraded: retrievalDegraded,
+    retrieval_degraded_reason: retrievalDegradedReason
   });
 }
 

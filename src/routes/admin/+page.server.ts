@@ -1,5 +1,5 @@
 import type { PageServerLoad } from './$types';
-import { getDb, query } from '$lib/server/db';
+import { query } from '$lib/server/db';
 
 interface Source {
 	id: string;
@@ -22,9 +22,6 @@ interface RelationCount {
 
 export const load: PageServerLoad = async () => {
 	try {
-		// Connect to database
-		await getDb();
-
 		// Get total counts
 		const [sourceCount] = await query<{ count: number }[]>(
 			'SELECT count() AS count FROM source GROUP ALL'

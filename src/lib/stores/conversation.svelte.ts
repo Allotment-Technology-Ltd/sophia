@@ -11,7 +11,15 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   passes?: { analysis: string; critique: string; synthesis: string; verification?: string };
-  metadata?: { total_input_tokens: number; total_output_tokens: number; duration_ms: number };
+  metadata?: {
+    total_input_tokens: number;
+    total_output_tokens: number;
+    duration_ms: number;
+    claims_retrieved?: number;
+    arguments_retrieved?: number;
+    retrieval_degraded?: boolean;
+    retrieval_degraded_reason?: string;
+  };
   timestamp: Date;
 }
 
@@ -178,7 +186,11 @@ function createConversationStore() {
                   metadata: {
                     total_input_tokens: event.total_input_tokens,
                     total_output_tokens: event.total_output_tokens,
-                    duration_ms: event.duration_ms
+                    duration_ms: event.duration_ms,
+                    claims_retrieved: event.claims_retrieved,
+                    arguments_retrieved: event.arguments_retrieved,
+                    retrieval_degraded: event.retrieval_degraded,
+                    retrieval_degraded_reason: event.retrieval_degraded_reason
                   },
                   timestamp: new Date()
                 }];
@@ -188,7 +200,11 @@ function createConversationStore() {
                   metadata: {
                     total_input_tokens: event.total_input_tokens,
                     total_output_tokens: event.total_output_tokens,
-                    duration_ms: event.duration_ms
+                    duration_ms: event.duration_ms,
+                    claims_retrieved: event.claims_retrieved,
+                    arguments_retrieved: event.arguments_retrieved,
+                    retrieval_degraded: event.retrieval_degraded,
+                    retrieval_degraded_reason: event.retrieval_degraded_reason
                   },
                   sources: streamedSources,
                   claimsByPass: streamedClaimsByPass,
