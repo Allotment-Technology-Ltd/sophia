@@ -103,7 +103,7 @@ const vpcConnector = new gcp.vpcaccess.Connector("sophia-connector", {
   ipCidrRange: vpcConnectorRange,  // 10.8.0.0/28
   project: projectId,
   minInstances: 2,
-  maxInstances: 3,
+  maxInstances: 10,
 });
 
 // ─── Firewall ─────────────────────────────────────────────────────────────────
@@ -119,12 +119,12 @@ new gcp.compute.Firewall("allow-surrealdb", {
   name: "allow-surrealdb",
   network: "default",
   direction: "INGRESS",
-  targetTags: ["surrealdb"],
+  targetTags: ["sophia-db"],  // matches VM tag on sophia-db instance
   allows: [{ protocol: "tcp", ports: ["8000"] }],
   sourceRanges: [vpcConnectorRange],  // VPC connector CIDR only, not 0.0.0.0/0
   description: "Allow SurrealDB access from Cloud Run VPC connector only",
   project: projectId,
-}, { deleteBeforeReplace: true });
+});
 
 // ─── Cloud Run — App ─────────────────────────────────────────────────────────
 //
