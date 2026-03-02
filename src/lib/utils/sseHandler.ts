@@ -1,5 +1,6 @@
 import type { SSEEvent } from '$lib/types/api';
 import { referencesStore } from '$lib/stores/references.svelte';
+import { graphStore } from '$lib/stores/graph.svelte';
 import { resolveBackRefs } from './backRef';
 
 /**
@@ -26,6 +27,17 @@ export function handleSSEEvent(event: SSEEvent): boolean {
       for (const bundle of event.relations) {
         referencesStore.addClaims(event.pass, [], [bundle]);
       }
+      return true;
+    }
+
+    case 'sources': {
+      referencesStore.setSources(event.sources);
+      return true;
+    }
+
+    case 'graph_snapshot': {
+      console.log('[SSE] Received graph_snapshot:', { nodeCount: event.nodes.length, edgeCount: event.edges.length });
+      graphStore.setGraph(event.nodes, event.edges);
       return true;
     }
 

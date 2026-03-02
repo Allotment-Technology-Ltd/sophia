@@ -5,6 +5,7 @@ function createPanelStore() {
     get open() { return open; },
     toggle() { open = !open; },
     close() { open = false; },
+    openPanel() { open = true; },
   };
 }
 

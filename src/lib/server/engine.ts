@@ -1,17 +1,57 @@
-import { anthropic, MODEL, trackTokens } from './anthropic';
+import { generateObject, streamText } from 'ai';
+import { z } from 'zod';
+import { getExtractionModel, getReasoningModel, trackTokens, buildGroundingTool } from './vertex';
 import { getAnalysisSystemPrompt, buildAnalysisUserPrompt } from './prompts/analysis';
 import { getCritiqueSystemPrompt, buildCritiqueUserPrompt } from './prompts/critique';
 import { getSynthesisSystemPrompt, buildSynthesisUserPrompt } from './prompts/synthesis';
 import { LIVE_EXTRACTION_SYSTEM, buildLiveExtractionPrompt } from './prompts/live-extraction';
+import { VERIFICATION_SYSTEM, buildVerificationUserPrompt } from './prompts/verification';
 import { retrieveContext, buildContextBlock } from './retrieval';
 import type { PassType } from '$lib/types/passes';
-import type { AnalysisPhase, Claim, RelationBundle } from '$lib/types/references';
+import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
+import type { PassSection, GraphNode, GraphEdge } from '$lib/types/api';
+import { refinePass } from './passRefinement';
+import { projectRetrievalToGraph } from './graphProjection';
+
+// ─── MVP Configuration ────────────────────────────────────────────────────
+// Constrain MVP to ethics domain for focused rollout. Remove this in MVP+1.
+const MVP_DOMAIN_FILTER = 'ethics' as const;
+
+const LiveClaimSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  badge: z.enum(['thesis', 'premise', 'objection', 'response', 'definition', 'empirical']),
+  source: z.string(),
+  tradition: z.string(),
+  detail: z.string(),
+  confidence: z.number().min(0).max(1).optional()
+});
+
+const LiveRelationSchema = z.object({
+  claimId: z.string(),
+  relations: z.array(
+    z.object({
+      type: z.enum(['supports', 'contradicts', 'responds-to', 'depends-on']),
+      target: z.string(),
+      label: z.string()
+    })
+  )
+});
+
+const LiveExtractionSchema = z.object({
+  claims: z.array(LiveClaimSchema).default([]),
+  relations: z.array(LiveRelationSchema).default([])
+});
 
 export interface EngineCallbacks {
   onPassStart(pass: PassType): void;
   onPassChunk(pass: PassType, content: string): void;
   onPassComplete(pass: PassType): void;
+  onPassStructured(pass: PassType, sections: PassSection[], wordCount: number): void;
+  onSources(sources: SourceReference[]): void;
+  onGraphSnapshot(nodes: GraphNode[], edges: GraphEdge[]): void;
   onClaims(pass: AnalysisPhase, claims: Claim[], relations: RelationBundle[]): void;
+  onConfidenceSummary?(avgConfidence: number, lowConfidenceCount: number, totalClaims: number): void;
   onMetadata(inputTokens: number, outputTokens: number, durationMs: number, retrieval?: { claims_retrieved: number; arguments_retrieved: number }): void;
   onError(error: string): void;
 }
@@ -40,34 +80,30 @@ async function streamPassWithContinuation(
   while (continuationRound <= maxContinuationRounds) {
     let segmentOutput = '';
 
-    const stream = anthropic.messages.stream({
-      model: MODEL,
-      max_tokens: maxTokens,
+    const stream = streamText({
+      model: getReasoningModel(),
+      maxOutputTokens: maxTokens,
       system: systemPrompt,
       messages
     });
 
-    for await (const event of stream) {
-      if (
-        event.type === 'content_block_delta' &&
-        event.delta.type === 'text_delta'
-      ) {
-        segmentOutput += event.delta.text;
-        output += event.delta.text;
-        callbacks.onPassChunk(pass, event.delta.text);
-      }
+    for await (const delta of stream.textStream) {
+      segmentOutput += delta;
+      output += delta;
+      callbacks.onPassChunk(pass, delta);
     }
 
-    const message = await stream.finalMessage();
-    const inputTokens = message.usage.input_tokens;
-    const outputTokens = message.usage.output_tokens;
+    const usage = await stream.totalUsage;
+    const finishReason = await stream.finishReason;
+    const inputTokens = usage.inputTokens ?? 0;
+    const outputTokens = usage.outputTokens ?? 0;
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
     trackTokens(inputTokens, outputTokens);
 
     messages.push({ role: 'assistant', content: segmentOutput });
 
-    if (message.stop_reason !== 'max_tokens') {
+    if (finishReason !== 'length') {
       break;
     }
 
@@ -87,41 +123,40 @@ async function streamPassWithContinuation(
 }
 
 async function extractClaims(passText: string, phase: AnalysisPhase): Promise<{ claims: Claim[]; relations: RelationBundle[] }> {
-  const response = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 1500,
+  const response = await generateObject({
+    model: getExtractionModel(),
+    maxOutputTokens: 1500,
     temperature: 0.2,
     system: LIVE_EXTRACTION_SYSTEM,
-    messages: [
-      { role: 'user', content: buildLiveExtractionPrompt(passText, phase) }
-    ]
+    prompt: buildLiveExtractionPrompt(passText, phase),
+    schema: LiveExtractionSchema
   });
 
-  const text = response.content
-    .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
-    .map(b => b.text)
-    .join('');
+  trackTokens(response.usage.inputTokens ?? 0, response.usage.outputTokens ?? 0);
+  console.log(`[EXTRACTION] ${phase}: ${response.usage.inputTokens ?? 0} in, ${response.usage.outputTokens ?? 0} out`);
 
-  trackTokens(response.usage.input_tokens, response.usage.output_tokens);
-  console.log(`[EXTRACTION] ${phase}: ${response.usage.input_tokens} in, ${response.usage.output_tokens} out`);
-
-  // Strip markdown code blocks if present
-  const cleanText = text
-    .replace(/^```(?:json)?\n?/, '')
-    .replace(/\n?```$/, '')
-    .trim();
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(cleanText);
-  } catch (err) {
-    console.error(`[EXTRACTION] ${phase} JSON parse failed. Raw text:`, text);
-    throw new Error(`Failed to parse extraction JSON for ${phase}: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  const claims: Claim[] = (parsed.claims ?? []).map((c: Omit<Claim, 'phase'>) => ({ ...c, phase }));
-  const relations: RelationBundle[] = parsed.relations ?? [];
+  const claims: Claim[] = response.object.claims.map((claim) => ({ ...claim, phase }));
+  const relations: RelationBundle[] = response.object.relations;
   return { claims, relations };
+}
+
+function aggregateConfidenceMetrics(claimsList: Claim[]): {
+  avgConfidence: number;
+  lowConfidenceCount: number;
+  totalClaims: number;
+} {
+  const claimsWithConfidence = claimsList.filter((c) => c.confidence !== undefined && c.confidence !== null);
+  const totalClaims = claimsWithConfidence.length;
+  
+  if (totalClaims === 0) {
+    return { avgConfidence: 0, lowConfidenceCount: 0, totalClaims: 0 };
+  }
+  
+  const sumConfidence = claimsWithConfidence.reduce((sum, c) => sum + (c.confidence ?? 0), 0);
+  const avgConfidence = sumConfidence / totalClaims;
+  const lowConfidenceCount = claimsWithConfidence.filter((c) => (c.confidence ?? 0) < 0.7).length;
+  
+  return { avgConfidence, lowConfidenceCount, totalClaims };
 }
 
 export async function runDialecticalEngine(
@@ -133,19 +168,42 @@ export async function runDialecticalEngine(
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
-  // ── Retrieve argument-graph context ────────────────────────────────
+  // ── Retrieve argument-graph context (ethics domain only for MVP) ────────
   let contextBlock = '';
   let claimsRetrieved = 0;
   let argumentsRetrieved = 0;
 
   try {
-    const retrievalResult = await retrieveContext(query);
+    const retrievalResult = await retrieveContext(query, { domain: MVP_DOMAIN_FILTER });
     contextBlock = buildContextBlock(retrievalResult);
     claimsRetrieved = retrievalResult.claims.length;
     argumentsRetrieved = retrievalResult.arguments.length;
 
+    const sourceMap = new Map<string, SourceReference>();
+    for (const claim of retrievalResult.claims) {
+      const sourceId = `${claim.source_title}::${claim.source_author.join('|')}`;
+      const existing = sourceMap.get(sourceId);
+      if (existing) {
+        existing.claimCount += 1;
+        continue;
+      }
+      sourceMap.set(sourceId, {
+        id: sourceId,
+        title: claim.source_title,
+        author: claim.source_author,
+        claimCount: 1
+      });
+    }
+
+    callbacks.onSources(Array.from(sourceMap.values()));
+
+    // Emit graph snapshot for visualization (only when retrieval succeeds)
     if (claimsRetrieved > 0) {
-      console.log(`[ENGINE] Retrieved ${claimsRetrieved} claims, ${argumentsRetrieved} arguments from graph`);
+      const graphData = projectRetrievalToGraph(retrievalResult);
+      console.log('[ENGINE] Emitting graph snapshot:', { nodeCount: graphData.nodes.length, edgeCount: graphData.edges.length, claimsRetrieved, argumentsRetrieved });
+      callbacks.onGraphSnapshot(graphData.nodes, graphData.edges);
+    } else {
+      console.log('[ENGINE] No claims retrieved (claimsRetrieved=0), skipping graph snapshot');
     }
   } catch (err) {
     console.error('[ENGINE] Retrieval failed (continuing without graph context):', err instanceof Error ? err.message : err);
@@ -174,6 +232,10 @@ export async function runDialecticalEngine(
     const outputTokens = analysisResult.outputTokens;
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
+
+    // Refine pass into structured sections
+    const refined = await refinePass(analysisOutput, 'analysis');
+    callbacks.onPassStructured('analysis', refined.sections, refined.wordCount);
 
     callbacks.onPassComplete('analysis');
   } catch (err) {
@@ -204,6 +266,10 @@ export async function runDialecticalEngine(
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
 
+    // Refine pass into structured sections
+    const refined = await refinePass(critiqueOutput, 'critique');
+    callbacks.onPassStructured('critique', refined.sections, refined.wordCount);
+
     callbacks.onPassComplete('critique');
   } catch (err) {
     callbacks.onError(`Critique pass failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -233,6 +299,10 @@ export async function runDialecticalEngine(
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
 
+    // Refine pass into structured sections
+    const refined = await refinePass(synthesisOutput, 'synthesis');
+    callbacks.onPassStructured('synthesis', refined.sections, refined.wordCount);
+
     callbacks.onPassComplete('synthesis');
   } catch (err) {
     callbacks.onError(`Synthesis pass failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -240,11 +310,19 @@ export async function runDialecticalEngine(
   }
 
   // Await synthesis extraction before closing stream
+  let allClaims: Claim[] = [];
   try {
     const { claims, relations } = await extractClaims(synthesisOutput, 'synthesis');
     callbacks.onClaims('synthesis', claims, relations);
+    allClaims = claims;
   } catch (err) {
     console.error('[EXTRACTION] Synthesis extraction failed (skipping):', err instanceof Error ? err.message : err);
+  }
+
+  // Calculate and emit confidence summary if callback is defined
+  if (allClaims.length > 0 && callbacks.onConfidenceSummary) {
+    const metrics = aggregateConfidenceMetrics(allClaims);
+    callbacks.onConfidenceSummary(metrics.avgConfidence, metrics.lowConfidenceCount, metrics.totalClaims);
   }
 
   // ── Metadata ──────────────────────────────────────────────────────
@@ -253,4 +331,43 @@ export async function runDialecticalEngine(
     claims_retrieved: claimsRetrieved,
     arguments_retrieved: argumentsRetrieved
   });
+}
+
+/**
+ * Run Pass 4: Web Verification
+ * Verifies claims against academic sources using Google Search grounding
+ */
+export async function runVerificationPass(
+  claims: Claim[],
+  synthesisText: string,
+  callbacks: EngineCallbacks
+): Promise<{ output: string; inputTokens: number; outputTokens: number }> {
+  let output = '';
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+
+  const stream = streamText({
+    model: getReasoningModel(),
+    maxOutputTokens: 4096,
+    system: VERIFICATION_SYSTEM,
+    prompt: buildVerificationUserPrompt(claims, synthesisText),
+    tools: {
+      googleSearch: buildGroundingTool().googleSearch
+    },
+    toolChoice: 'auto'
+  });
+
+  for await (const delta of stream.textStream) {
+    output += delta;
+    callbacks.onPassChunk('verification', delta);
+  }
+
+  const usage = await stream.totalUsage;
+  const inputTokens = usage.inputTokens ?? 0;
+  const outputTokens = usage.outputTokens ?? 0;
+  totalInputTokens += inputTokens;
+  totalOutputTokens += outputTokens;
+  trackTokens(inputTokens, outputTokens);
+
+  return { output, inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
 }

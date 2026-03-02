@@ -14,7 +14,7 @@
   /* ── Text ── */
   --color-text:           #E8E6E1;   /* Primary — headings, pass content */
   --color-muted:          #9E9A93;   /* Secondary — body copy, descriptions */
-  --color-dim:            #4A4845;   /* Tertiary — labels, timestamps, inactive */
+  --color-dim:            #6B6763;   /* Tertiary — labels, timestamps, inactive */
 
   /* ── Borders ── */
   --color-border:         #2E2C29;   /* All borders and dividers, 1px */
@@ -88,4 +88,30 @@
   --content-max:      680px;   /* Pass content */
   --input-max:        700px;   /* Query input */
   --pass-nav-width:   200px;   /* Results left nav */
+
+  /* ── Focus indicators (WCAG 2.2 AA) ── */
+  --focus-ring-width: 2px;
+  --focus-ring-color: var(--color-sage);
+  --focus-ring-offset: 2px;
 }
+
+/* ============================================================
+   WCAG 2.2 AA Contrast Ratios (Audited 2026-03-02)
+   ============================================================
+   
+   Normal text requires 4.5:1, Large text/UI requires 3:1
+   
+   --color-text on --color-bg:             14.09:1  ✓✓
+   --color-text on --color-surface-raised: 13.20:1  ✓✓
+   --color-muted on --color-surface:        6.63:1  ✓✓
+   --color-muted on --color-bg:             6.27:1  ✓✓
+   --color-dim on --color-bg:               3.13:1  ✓ (Large/UI only)
+   --color-dim on --color-surface:          3.31:1  ✓ (Large/UI only)
+   --color-sage on --color-bg:              6.25:1  ✓✓
+   --color-copper on --color-bg:            6.86:1  ✓✓
+   --color-blue on --color-bg:              6.58:1  ✓✓
+   --color-amber on --color-bg:             5.82:1  ✓✓
+   
+   Note: --color-dim is intentionally below 4.5:1 for visual hierarchy.
+   Use only for large text (14pt+ bold, 18pt+ regular) or UI components.
+   ============================================================ */

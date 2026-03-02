@@ -3,21 +3,27 @@
   import { referencesStore } from '$lib/stores/references.svelte';
   import { historyStore } from '$lib/stores/history.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
+  import { graphStore } from '$lib/stores/graph.svelte';
   import { renderMarkdown } from '$lib/utils/markdown';
+  import { getRandomExamples } from '$lib/constants/examples';
   import SidePanel from '$lib/components/panel/SidePanel.svelte';
   import TabStrip, { type TabId, type Tab } from '$lib/components/panel/TabStrip.svelte';
   import ReferencesTab from '$lib/components/references/ReferencesTab.svelte';
   import HistoryTab from '$lib/components/panel/HistoryTab.svelte';
   import SettingsTab from '$lib/components/panel/SettingsTab.svelte';
+  import GraphCanvas from '$lib/components/visualization/GraphCanvas.svelte';
 
   let queryInput = $state('');
+  let examplePrompts = $state(getRandomExamples(4, 'ethics'));
+  console.log('[Page] Random examples loaded:', examplePrompts.map(e => e.text));
   let activeTab = $state<TabId>('references');
-  type PassKey = 'analysis' | 'critique' | 'synthesis';
-  const PASS_ORDER: PassKey[] = ['analysis', 'critique', 'synthesis'];
+  type PassKey = 'analysis' | 'critique' | 'synthesis' | 'verification';
+  const PASS_ORDER: PassKey[] = ['analysis', 'critique', 'synthesis', 'verification'];
   const PASS_LABELS: Record<PassKey, string> = {
     analysis: 'Analysis',
     critique: 'Critique',
     synthesis: 'Synthesis',
+    verification: 'Web Verification',
   };
 
   let activePassByMessage: Record<string, PassKey> = $state({});
@@ -74,6 +80,17 @@
     return (inputTokens * 3 + outputTokens * 15) / 1_000_000;
   }
 
+  function handleNodeSelect(nodeId: string): void {
+    console.log('[GraphViz] Node selected:', nodeId);
+    // Store selection state - detail panel is handled by GraphCanvas itself
+  }
+
+  function handleJumpToReferences(nodeId: string): void {
+    console.log('[GraphViz] Jumping to references for:', nodeId);
+    panelStore.openPanel();
+    // TODO: scroll to specific claim/source in references panel
+  }
+
   function formatDuration(ms: number): string {
     if (ms < 1000) return `${ms}ms`;
     return `${(ms / 1000).toFixed(1)}s`;
@@ -83,6 +100,10 @@
     if (conversation.currentPass) {
       activeStreamingPass = conversation.currentPass;
     }
+  });
+
+  $effect(() => {
+    console.log('[Page] Graph store updated:', { nodeCount: graphStore.nodes.length, edgeCount: graphStore.edges.length, nodes: graphStore.nodes.map(n => ({ id: n.id, type: n.type })) });
   });
 </script>
 
@@ -116,18 +137,11 @@
           <div class="example-prompts">
             <p class="example-label">Try asking about:</p>
             <div class="example-grid">
-              <button class="example-btn" onclick={() => { queryInput = 'Is morality relative?'; handleSubmit(); }}>
-                Is morality relative?
-              </button>
-              <button class="example-btn" onclick={() => { queryInput = 'Can AI have consciousness?'; handleSubmit(); }}>
-                Can AI have consciousness?
-              </button>
-              <button class="example-btn" onclick={() => { queryInput = 'What makes a life meaningful?'; handleSubmit(); }}>
-                What makes life meaningful?
-              </button>
-              <button class="example-btn" onclick={() => { queryInput = 'Is free will compatible with determinism?'; handleSubmit(); }}>
-                Is free will compatible with determinism?
-              </button>
+              {#each examplePrompts as example (example.text)}
+                <button class="example-btn" onclick={() => { queryInput = example.text; handleSubmit(); }}>
+                  {example.text}
+                </button>
+              {/each}
             </div>
           </div>
         </div>
@@ -193,6 +207,33 @@
                   {/if}
                 {/if}
 
+                <!-- Confidence Assessment -->
+                {#if conversation.confidenceSummary && !conversation.isLoading}
+                  <div class="bg-sophia-dark-surface-raised border border-sophia-dark-border rounded-lg p-4 mt-4">
+                    <h3 class="text-sm font-semibold mb-3 text-sophia-dark-text">Confidence Assessment</h3>
+                    <div class="grid grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <span class="text-sophia-dark-muted text-xs block mb-1">Average Confidence</span>
+                        <div class="text-2xl font-bold text-sophia-dark-sage">
+                          {(conversation.confidenceSummary.avgConfidence * 100).toFixed(0)}%
+                        </div>
+                      </div>
+                      <div>
+                        <span class="text-sophia-dark-muted text-xs block mb-1">Needs Review</span>
+                        <div class="text-2xl font-bold text-sophia-dark-coral">
+                          {conversation.confidenceSummary.lowConfidenceCount}/{conversation.confidenceSummary.totalClaims}
+                        </div>
+                      </div>
+                    </div>
+                    <button 
+                      onclick={() => conversation.runVerification()}
+                      class="w-full bg-sophia-dark-sage text-sophia-dark-surface px-4 py-2 rounded font-semibold hover:opacity-90 transition-opacity"
+                    >
+                      Run Web Verification
+                    </button>
+                  </div>
+                {/if}
+
                 <!-- Metadata -->
                 {#if message.metadata}
                   <div class="font-mono text-xs text-sophia-dark-muted pt-2 border-t border-sophia-dark-border">
@@ -217,6 +258,20 @@
               <div class="flex items-center gap-2 text-sophia-dark-muted">
                 <div class="w-2 h-2 bg-sophia-dark-sage rounded-full animate-pulse"></div>
                 <span class="font-mono text-sm">Thinking…</span>
+              </div>
+            {/if}
+
+            <!-- Graph Visualization (during streaming with data) -->
+            {#if graphStore.nodes.length > 0}
+              <div class="graph-container">
+                <GraphCanvas
+                  nodes={graphStore.nodes}
+                  edges={graphStore.edges}
+                  width={Math.min(800, typeof window !== 'undefined' ? window.innerWidth - 64 : 800)}
+                  height={400}
+                  onNodeSelect={handleNodeSelect}
+                  onJumpToReferences={handleJumpToReferences}
+                />
               </div>
             {/if}
 
@@ -255,6 +310,30 @@
                 </div>
               {/if}
             {/if}
+          </div>
+        {/if}
+
+        <!-- Confidence Summary Card (after synthesis completes) -->
+        {#if !conversation.isLoading && conversation.confidenceSummary}
+          <div class="confidence-summary-card">
+            <h3 class="confidence-summary-title">Confidence Summary</h3>
+            <div class="confidence-metrics">
+              <div class="confidence-metric">
+                <span class="confidence-label">Average Confidence:</span>
+                <span class="confidence-value">{(conversation.confidenceSummary.avgConfidence * 100).toFixed(1)}%</span>
+              </div>
+              <div class="confidence-metric">
+                <span class="confidence-label">Low Confidence Claims:</span>
+                <span class="confidence-value">{conversation.confidenceSummary.lowConfidenceCount} / {conversation.confidenceSummary.totalClaims}</span>
+              </div>
+            </div>
+            <button
+              class="run-verification-btn"
+              onclick={() => conversation.runVerification()}
+              disabled={conversation.isLoading || !!conversation.currentPasses.verification}
+            >
+              {conversation.currentPasses.verification ? 'Verification Complete' : 'Run Web Verification'}
+            </button>
           </div>
         {/if}
 
@@ -777,6 +856,15 @@
 
   :global(html.reduce-motion) .tab-live-dot {
     animation: none !important;
+  }
+
+  .graph-container {
+    margin: var(--space-4) 0;
+    padding: var(--space-3);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
   }
 
   @media (max-width: 600px) {
