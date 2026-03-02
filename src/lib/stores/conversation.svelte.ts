@@ -60,7 +60,7 @@ function createConversationStore() {
       const cached = historyStore.getCachedResult(query);
       if (cached) {
         currentPass = null;
-        currentPasses = { analysis: '', critique: '', synthesis: '', verification: '', ...cached.passes };
+        currentPasses = { ...cached.passes, verification: cached.passes.verification ?? '' };
         referencesStore.setSources(cached.sources);
 
         for (const { pass, claims } of cached.claimsByPass as CachedPassClaims[]) {
