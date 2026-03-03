@@ -133,8 +133,4 @@
     opacity: 0.6;
     cursor: not-allowed;
   }
-
-  .footer-text a:hover {
-    color: var(--color-blue) !important;
-  }
 </style>
