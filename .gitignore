@@ -42,3 +42,6 @@ data/ingested/*.json
 
 # Database files
 *.db
+
+# Local migration artifacts
+data/migration/
