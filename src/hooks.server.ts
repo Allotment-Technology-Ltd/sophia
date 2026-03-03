@@ -9,32 +9,30 @@ export const handle: Handle = async ({ event, resolve }) => {
     event.url.pathname.startsWith('/api/') &&
     !event.url.pathname.startsWith('/api/health');
 
-  if (!isProtectedApi) {
-    return resolve(event);
-  }
+  if (isProtectedApi) {
+    const authHeader = event.request.headers.get('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return new Response(JSON.stringify({ error: 'Authentication required' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
 
-  const authHeader = event.request.headers.get('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return new Response(JSON.stringify({ error: 'Authentication required' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-
-  try {
-    const token = authHeader.slice(7);
-    const decoded = await adminAuth.verifyIdToken(token);
-    event.locals.user = {
-      uid: decoded.uid,
-      email: decoded.email ?? null,
-      displayName: decoded.name ?? null,
-      photoURL: decoded.picture ?? null
-    };
-  } catch (error) {
-    return new Response(JSON.stringify({ error: 'Invalid token' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' }
-    });
+    try {
+      const token = authHeader.slice(7);
+      const decoded = await adminAuth.verifyIdToken(token);
+      event.locals.user = {
+        uid: decoded.uid,
+        email: decoded.email ?? null,
+        displayName: decoded.name ?? null,
+        photoURL: decoded.picture ?? null
+      };
+    } catch (error) {
+      return new Response(JSON.stringify({ error: 'Invalid token' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
   }
 
   return resolve(event);

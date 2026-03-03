@@ -17,7 +17,9 @@
   if (browser) {
     onAuthChange((user) => {
       const isAuthPage = $page.url.pathname.startsWith('/auth');
-      if (!user && !isAuthPage) {
+      if (user && isAuthPage) {
+        goto('/');
+      } else if (!user && !isAuthPage) {
         goto('/auth');
       }
     });

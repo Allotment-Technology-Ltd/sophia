@@ -8,11 +8,6 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
     return {};
   }
 
-  // User must be authenticated
-  if (!locals.user) {
-    throw redirect(302, '/auth');
-  }
-
   // Check email allowlist for development gating
   const allowedEmailsEnv = process.env.ALLOWED_EMAILS || '';
   const allowedEmails = allowedEmailsEnv
@@ -21,7 +16,7 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
     .filter(e => e.length > 0);
 
   // If allowlist is configured and user email is not in it, deny access
-  if (allowedEmails.length > 0 && locals.user.email) {
+  if (locals.user && allowedEmails.length > 0 && locals.user.email) {
     const userEmail = locals.user.email.toLowerCase();
     if (!allowedEmails.includes(userEmail)) {
       throw redirect(302, '/access-denied');
@@ -29,6 +24,6 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
   }
 
   return {
-    user: locals.user
+    user: locals.user ?? null
   };
 };
