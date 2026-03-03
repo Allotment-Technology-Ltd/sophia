@@ -19,8 +19,11 @@ async function countTable(table: string): Promise<number> {
 	return Array.isArray(result) ? (result[0]?.count ?? 0) : 0;
 }
 
-export const GET: RequestHandler = async () => {
+export const GET: RequestHandler = async (event) => {
 	const runtime = getDatabaseRuntimeConfig();
+	
+	// Fast health check: just a quick heartbeat to the database
+	// Used by Cloud Run startup probe (must respond quickly, < 10s)
 	let dbStatus: {
 		status: 'connected' | 'disconnected';
 		latency_ms?: number;
@@ -47,21 +50,32 @@ export const GET: RequestHandler = async () => {
 			throw new Error(heartbeat.error || 'Database health probe failed');
 		}
 
-		const [sources, claims, args, ...relationCounts] = await Promise.all([
-			countTable('source'),
-			countTable('claim'),
-			countTable('argument'),
-			...RELATION_TABLES.map((t) => countTable(t))
-		]);
+		// If ?details=true, include expensive table counts
+		// Otherwise return fast heartbeat only
+		if (event.url.searchParams.get('details') === 'true') {
+			const [sources, claims, args, ...relationCounts] = await Promise.all([
+				countTable('source'),
+				countTable('claim'),
+				countTable('argument'),
+				...RELATION_TABLES.map((t) => countTable(t))
+			]);
 
-		const relations = relationCounts.reduce((sum, n) => sum + n, 0);
+			const relations = relationCounts.reduce((sum, n) => sum + n, 0);
 
-		dbStatus = {
-			status: 'connected',
-			latency_ms: heartbeat.latencyMs,
-			runtime,
-			counts: { sources, claims, arguments: args, relations }
-		};
+			dbStatus = {
+				status: 'connected',
+				latency_ms: heartbeat.latencyMs,
+				runtime,
+				counts: { sources, claims, arguments: args, relations }
+			};
+		} else {
+			// Fast response: just latency from heartbeat
+			dbStatus = {
+				status: 'connected',
+				latency_ms: heartbeat.latencyMs,
+				runtime
+			};
+		}
 	} catch (err) {
 		dbStatus = {
 			status: 'disconnected',
