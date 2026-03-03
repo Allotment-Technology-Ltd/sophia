@@ -204,12 +204,13 @@ jobs:
   # ── 5. Build & deploy app ──────────────────────────────────────────────────
   app-deploy:
     if: >
+      always() &&
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
-      needs.changes.outputs.app == 'true'
+      needs.changes.outputs.app == 'true' &&
+      (needs.infra-apply.result == 'success' || needs.infra-apply.result == 'skipped')
     needs: [changes, security, infra-apply]
-    # infra-apply is skipped when infra didn't change — `needs` on a skipped job
-    # is treated as success, so this job still runs when only app changed.
+    # Run after infra when present; still run for app-only changes where infra is skipped.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
