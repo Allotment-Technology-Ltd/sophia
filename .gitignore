@@ -45,3 +45,16 @@ data/ingested/*.json
 
 # Local migration artifacts
 data/migration/
+
+# Private migration docs/scripts (not for public repo)
+docs/GCP-ORG-MIGRATION.md
+docs/MIGRATION-IMPLEMENTATION-SUMMARY.md
+docs/MIGRATION-QUICKSTART.md
+docs/ORG-POLICY-TROUBLESHOOTING.md
+scripts/check-org-policies.sh
+scripts/migration-db-backup.sh
+scripts/modify-org-policies.sh
+scripts/revert-org-policies.sh
+scripts/setup-wif.sh
+scripts/transfer-project.sh
+scripts/verify-migration.sh
