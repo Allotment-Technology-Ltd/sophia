@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { auth, signOutUser } from '$lib/firebase';
+  import { auth, signOutUser, onAuthChange } from '$lib/firebase';
   import { goto } from '$app/navigation';
+  import { browser } from '$app/environment';
 
   interface Props {
     contextQuery?: string;      // Current question shown centred on results/loading screens
@@ -13,8 +14,12 @@
 
   let { contextQuery, streamingPass, menuDotVisible, panelOpen = false, onMenuToggle, onNew }: Props = $props();
 
-  let currentUser = $derived.by(() => auth?.currentUser ?? null);
+  let currentUser = $state(browser ? auth?.currentUser ?? null : null);
   let userMenuOpen = $state(false);
+
+  if (browser) {
+    onAuthChange((user) => { currentUser = user; });
+  }
 
   async function handleSignOut() {
     try {
@@ -83,7 +88,7 @@
           aria-expanded={userMenuOpen}
         >
           {#if currentUser.photoURL}
-            <img src={currentUser.photoURL} alt="" class="user-avatar" />
+            <img src={currentUser.photoURL} alt="" class="user-avatar" referrerpolicy="no-referrer" />
           {:else}
             <div class="user-avatar-fallback">{currentUser.displayName?.[0] ?? '?'}</div>
           {/if}

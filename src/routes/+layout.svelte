@@ -4,9 +4,26 @@
   import { conversation } from '$lib/stores/conversation.svelte';
   import { referencesStore } from '$lib/stores/references.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
+  import { onAuthChange } from '$lib/firebase';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
+  import { browser } from '$app/environment';
   import { type Snippet } from 'svelte';
 
   let { children }: { children: Snippet } = $props();
+
+  // Client-side auth guard for page navigation.
+  // API routes are protected server-side in hooks.server.ts.
+  if (browser) {
+    onAuthChange((user) => {
+      const isAuthPage = $page.url.pathname.startsWith('/auth');
+      if (!user && !isAuthPage) {
+        goto('/auth');
+      }
+    });
+  }
+
+  let isAuthPage = $derived($page.url.pathname.startsWith('/auth'));
 
   // Context query: the most recent user message (shown centred in TopBar on results/loading screens)
   let contextQuery = $derived(
@@ -30,15 +47,17 @@
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 </svelte:head>
 
-<TopBar
-  {contextQuery}
-  {streamingPass}
-  {menuDotVisible}
-  panelOpen={panelStore.open}
-  onMenuToggle={() => panelStore.toggle()}
-  onNew={() => conversation.clear()}
-/>
+{#if !isAuthPage}
+  <TopBar
+    {contextQuery}
+    {streamingPass}
+    {menuDotVisible}
+    panelOpen={panelStore.open}
+    onMenuToggle={() => panelStore.toggle()}
+    onNew={() => conversation.clear()}
+  />
+{/if}
 
-<div id="main" style="padding-top: var(--nav-height);">
+<div id="main" style={isAuthPage ? '' : 'padding-top: var(--nav-height);'}>
   {@render children()}
 </div>

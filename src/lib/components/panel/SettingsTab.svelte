@@ -1,4 +1,19 @@
 <script lang="ts">
+  import { auth, signOutUser, onAuthChange } from '$lib/firebase';
+  import { goto } from '$app/navigation';
+  import { browser } from '$app/environment';
+
+  let currentUser = $state(browser ? auth?.currentUser : null);
+
+  if (browser) {
+    onAuthChange((user) => { currentUser = user; });
+  }
+
+  async function handleSignOut() {
+    await signOutUser();
+    goto('/auth');
+  }
+
   // Reduce Motion reads system preference and adds a CSS class to <html>
   let prefersReducedMotion = $state(
     typeof window !== 'undefined'
@@ -64,6 +79,21 @@
       onclick={() => presenceMode = !presenceMode}
     >
       <span class="toggle-knob" aria-hidden="true"></span>
+    </button>
+  </div>
+
+  <p class="settings-section-label">Account</p>
+
+  <div class="setting-row">
+    <div class="setting-info">
+      <span class="setting-name">{currentUser?.displayName ?? currentUser?.email ?? 'Signed in'}</span>
+      <span class="setting-desc">{currentUser?.email ?? ''}</span>
+    </div>
+  </div>
+
+  <div class="setting-row">
+    <button class="sign-out-btn" onclick={handleSignOut}>
+      Sign out
     </button>
   </div>
 </div>
@@ -155,6 +185,21 @@
   .toggle.is-on .toggle-knob {
     transform: translateX(16px);
     background: var(--color-sage);
+  }
+
+  .sign-out-btn {
+    font-family: var(--font-ui);
+    font-size: var(--text-body);
+    color: var(--color-warning, #e07070);
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .sign-out-btn:hover {
+    text-decoration: underline;
   }
 
   /* ── Reduced Motion: suppress toggle transitions ── */

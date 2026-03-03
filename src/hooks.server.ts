@@ -2,19 +2,19 @@ import { adminAuth } from '$lib/server/firebase-admin';
 import type { Handle } from '@sveltejs/kit';
 
 export const handle: Handle = async ({ event, resolve }) => {
-  // Public routes that don't require auth
-  const publicPaths = ['/api/health', '/auth'];
+  // Only enforce Bearer token auth on protected API routes.
+  // Page navigation doesn't send Bearer tokens — auth for pages is handled
+  // client-side via onAuthStateChanged in the layout.
+  const isProtectedApi =
+    event.url.pathname.startsWith('/api/') &&
+    !event.url.pathname.startsWith('/api/health');
 
-  if (publicPaths.some(p => event.url.pathname.startsWith(p))) {
+  if (!isProtectedApi) {
     return resolve(event);
   }
 
   const authHeader = event.request.headers.get('Authorization');
   if (!authHeader?.startsWith('Bearer ')) {
-    // For page requests, redirect to auth page
-    if (event.request.headers.get('Accept')?.includes('text/html')) {
-      return new Response(null, { status: 302, headers: { Location: '/auth' } });
-    }
     return new Response(JSON.stringify({ error: 'Authentication required' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' }
