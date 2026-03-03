@@ -13,11 +13,12 @@
 #
 # PREREQUISITES:
 # ─ GCP secrets in Secret Manager: anthropic-api-key, voyage-api-key,
-#   google-ai-api-key, surreal-db-pass
+#   google-ai-api-key, surreal-db-pass, firebase-api-key,
+#   firebase-auth-domain, admin-uids
 # ─ Workload Identity Federation configured for this GitHub repo
 # ─ GitHub repository secrets:
 #     WIF_PROVIDER        projects/{N}/locations/global/workloadIdentityPools/{P}/providers/{ID}
-#     WIF_SERVICE_ACCOUNT terraform-sa@sophia-488807.iam.gserviceaccount.com
+#     WIF_SERVICE_ACCOUNT github-deploy@sophia-488807.iam.gserviceaccount.com
 #     GCP_PROJECT_ID      sophia-488807
 #     PULUMI_ACCESS_TOKEN Pulumi Cloud access token (https://app.pulumi.com/account/tokens)
 #
