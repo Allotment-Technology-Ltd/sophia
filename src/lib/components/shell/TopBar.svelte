@@ -13,7 +13,7 @@
 
   let { contextQuery, streamingPass, menuDotVisible, panelOpen = false, onMenuToggle, onNew }: Props = $props();
 
-  let currentUser = $derived.by(() => auth.currentUser);
+  let currentUser = $derived.by(() => auth?.currentUser ?? null);
   let userMenuOpen = $state(false);
 
   async function handleSignOut() {
