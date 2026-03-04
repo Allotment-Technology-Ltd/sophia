@@ -53,6 +53,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  security-events: write
   pull-requests: write   # needed to post Pulumi preview comments on PRs
 
 env:
@@ -130,10 +131,24 @@ jobs:
         if: github.event_name == 'pull_request'
         run: pnpm build
 
+  # ── 2b. CodeQL scan (in unified pipeline) ──────────────────────────────────
+  codeql:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+
   # ── 3. Pulumi preview (PRs) ────────────────────────────────────────────────
   infra-preview:
     if: github.event_name == 'pull_request' && needs.changes.outputs.infra == 'true'
-    needs: [changes, security]
+    needs: [changes, security, codeql]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -169,7 +184,7 @@ jobs:
   # ── 4. Pulumi up (push to main) ────────────────────────────────────────────
   infra-apply:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.infra == 'true'
-    needs: [changes, security]
+    needs: [changes, security, codeql]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -209,7 +224,7 @@ jobs:
       github.ref == 'refs/heads/main' &&
       needs.changes.outputs.app == 'true' &&
       (needs.infra-apply.result == 'success' || needs.infra-apply.result == 'skipped')
-    needs: [changes, security, infra-apply]
+    needs: [changes, security, codeql, infra-apply]
     # Run after infra when present; still run for app-only changes where infra is skipped.
     runs-on: ubuntu-latest
     steps:
