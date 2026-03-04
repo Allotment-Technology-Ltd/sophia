@@ -32,8 +32,8 @@ function getVertex() {
   return initializeVertex();
 }
 
-const reasoningModelId = process.env.GEMINI_REASONING_MODEL || 'gemini-1.5-pro-002';
-const extractionModelId = process.env.GEMINI_EXTRACTION_MODEL || 'gemini-2.0-flash-exp';
+const reasoningModelId = process.env.GEMINI_REASONING_MODEL || 'gemini-1.5-pro';
+const extractionModelId = process.env.GEMINI_EXTRACTION_MODEL || 'gemini-1.5-flash';
 
 export function getReasoningModel() {
   return getVertex()(reasoningModelId);
