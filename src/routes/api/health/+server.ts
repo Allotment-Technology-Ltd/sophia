@@ -21,9 +21,10 @@ async function countTable(table: string): Promise<number> {
 
 export const GET: RequestHandler = async (event) => {
 	const runtime = getDatabaseRuntimeConfig();
-	
-	// Fast health check: just a quick heartbeat to the database
-	// Used by Cloud Run startup probe (must respond quickly, < 10s)
+	const includeDb = event.url.searchParams.get('details') === 'true';
+
+	// Fast health check for Cloud Run startup probes.
+	// Keep this route independent of database availability by default.
 	let dbStatus: {
 		status: 'connected' | 'disconnected';
 		latency_ms?: number;
@@ -44,15 +45,19 @@ export const GET: RequestHandler = async (event) => {
 		};
 	};
 
-	try {
-		const heartbeat = await checkDatabaseHealth();
-		if (!heartbeat.ok) {
-			throw new Error(heartbeat.error || 'Database health probe failed');
-		}
+	if (!includeDb) {
+		dbStatus = {
+			status: 'connected',
+			runtime
+		};
+	} else {
+		try {
+			const heartbeat = await checkDatabaseHealth();
+			if (!heartbeat.ok) {
+				throw new Error(heartbeat.error || 'Database health probe failed');
+			}
 
-		// If ?details=true, include expensive table counts
-		// Otherwise return fast heartbeat only
-		if (event.url.searchParams.get('details') === 'true') {
+			// If ?details=true, include expensive table counts
 			const [sources, claims, args, ...relationCounts] = await Promise.all([
 				countTable('source'),
 				countTable('claim'),
@@ -68,23 +73,16 @@ export const GET: RequestHandler = async (event) => {
 				runtime,
 				counts: { sources, claims, arguments: args, relations }
 			};
-		} else {
-			// Fast response: just latency from heartbeat
+		} catch (err) {
 			dbStatus = {
-				status: 'connected',
-				latency_ms: heartbeat.latencyMs,
-				runtime
+				status: 'disconnected',
+				runtime,
+				error: err instanceof Error ? err.message : String(err)
 			};
 		}
-	} catch (err) {
-		dbStatus = {
-			status: 'disconnected',
-			runtime,
-			error: err instanceof Error ? err.message : String(err)
-		};
 	}
 
-	const healthy = dbStatus.status === 'connected';
+	const healthy = !includeDb || dbStatus.status === 'connected';
 
 	return json(
 		{
