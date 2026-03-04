@@ -4,26 +4,37 @@
   import { conversation } from '$lib/stores/conversation.svelte';
   import { referencesStore } from '$lib/stores/references.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
-  import { onAuthChange } from '$lib/firebase';
+  import { auth, onAuthChange } from '$lib/firebase';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { browser } from '$app/environment';
+  import { onMount } from 'svelte';
   import { type Snippet } from 'svelte';
 
   let { children }: { children: Snippet } = $props();
+  let authResolved = $state(false);
+  let isAuthenticated = $state(false);
 
   // Client-side auth guard for page navigation.
   // API routes are protected server-side in hooks.server.ts.
-  if (browser) {
-    onAuthChange((user) => {
-      const isAuthPage = $page.url.pathname.startsWith('/auth');
-      if (user && isAuthPage) {
+  onMount(() => {
+    if (!browser) return;
+
+    const applyAuthGuard = (user: unknown) => {
+      const onAuthRoute = $page.url.pathname.startsWith('/auth');
+      isAuthenticated = !!user;
+      authResolved = true;
+
+      if (isAuthenticated && onAuthRoute) {
         goto('/');
-      } else if (!user && !isAuthPage) {
+      } else if (!isAuthenticated && !onAuthRoute) {
         goto('/auth');
       }
-    });
-  }
+    };
+
+    applyAuthGuard(auth?.currentUser ?? null);
+    return onAuthChange((user) => applyAuthGuard(user));
+  });
 
   let isAuthPage = $derived($page.url.pathname.startsWith('/auth'));
 
@@ -60,6 +71,10 @@
   />
 {/if}
 
-<div id="main" style={isAuthPage ? '' : 'padding-top: var(--nav-height);'}>
-  {@render children()}
-</div>
+{#if isAuthPage || authResolved}
+  <div id="main" style={isAuthPage ? '' : 'padding-top: var(--nav-height);'}>
+    {#if isAuthPage || isAuthenticated}
+      {@render children()}
+    {/if}
+  </div>
+{/if}
