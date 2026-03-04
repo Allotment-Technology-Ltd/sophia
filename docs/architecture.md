@@ -1,3 +1,32 @@
+# Architecture — sophia
+
+Sophia is a SvelteKit application with infrastructure defined in Pulumi and several scheduled/operational scripts for ingestion and monitoring.
+
+- Application:
+  - Frontend: SvelteKit (Vite) — main website and app UI
+  - Scripts: tsx-based workers for ingestion, monitoring, and batch processing
+
+- Infrastructure:
+  - infra/ contains Pulumi code that provisions cloud resources (GCP or chosen provider)
+  - Pulumi stacks are used to manage environments (production, staging)
+
+- Tooling & workflows:
+  - pnpm for package management
+  - svelte-check and TypeScript for static checks
+  - tsx for running TypeScript scripts without a build step
+  - Pulumi for IaC lifecycle (preview → up → refresh/destroy)
+
+- Deployments & monitoring:
+  - App deployed to chosen hosting (Vercel / custom host)
+  - Logs and metrics routed to cloud provider logging (Cloud Logging / Stackdriver)
+  - Health endpoint present for readiness/liveness checks
+
+Notes:
+- Ensure Pulumi credentials and stack configuration are documented in repo secrets and onboarding docs.
+- Keep ingestion jobs idempotent and document retry semantics in runbooks.
+
+---
+
 # SOPHIA — System Architecture
 
 ## Overview
