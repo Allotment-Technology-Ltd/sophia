@@ -276,7 +276,7 @@ jobs:
             --max-instances=3 \
             --vpc-connector=sophia-connector \
             --vpc-egress=private-ranges-only \
-            --set-env-vars="^|^SURREAL_URL=http://10.154.0.2:8000|SURREAL_USER=root|SURREAL_NAMESPACE=sophia|SURREAL_DATABASE=sophia|GCP_LOCATION=${{ env.REGION }}|GOOGLE_VERTEX_LOCATION=${{ env.REGION }}|VITE_FIREBASE_PROJECT_ID=${{ env.PROJECT_ID }}|ALLOWED_EMAILS=adam.boon1984@gmail.com,adam.boon1984@googlemail.com,admin@usesophia.app" \
+            --set-env-vars="^|^SURREAL_URL=http://10.154.0.2:8000|SURREAL_USER=root|SURREAL_NAMESPACE=sophia|SURREAL_DATABASE=sophia|GCP_PROJECT_ID=${{ env.PROJECT_ID }}|GCP_LOCATION=${{ env.REGION }}|GOOGLE_VERTEX_LOCATION=${{ env.REGION }}|VITE_FIREBASE_PROJECT_ID=${{ env.PROJECT_ID }}|ALLOWED_EMAILS=adam.boon1984@gmail.com,adam.boon1984@googlemail.com,admin@usesophia.app" \
             --set-secrets="ANTHROPIC_API_KEY=anthropic-api-key:latest,SURREAL_PASS=surreal-db-pass:latest,VOYAGE_API_KEY=voyage-api-key:latest,GOOGLE_AI_API_KEY=google-ai-api-key:latest,VITE_FIREBASE_API_KEY=firebase-api-key:latest,VITE_FIREBASE_AUTH_DOMAIN=firebase-auth-domain:latest,ADMIN_UIDS=admin-uids:latest"
 
       - name: Route 100% traffic to latest revision
