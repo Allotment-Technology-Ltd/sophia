@@ -32,7 +32,7 @@ TONE:
 - Incisive but fair peer reviewer. Rigorous and direct. Never dismissive.
 
 LENGTH + SIGNPOSTING REQUIREMENTS:
-- Target 500–750 words for this pass. This constraint enables parallelisation with the synthesis pass.
+- Target 750–1000 words for this pass.
 - Do not truncate mid-thought; finish the section and close cleanly even if slightly over target.
 - Use explicit signposting throughout: clear section headings, orienting opening sentence per section, and explicit transitions between major sections.
 - Include a concise roadmap near the top so readers can navigate the critique.

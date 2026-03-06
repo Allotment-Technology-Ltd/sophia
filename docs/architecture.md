@@ -1,167 +1,159 @@
-# Architecture — sophia
+# SOPHIA — System Architecture
 
-Sophia is a SvelteKit application with infrastructure defined in Pulumi and several scheduled/operational scripts for ingestion and monitoring.
-
-- Application:
-  - Frontend: SvelteKit (Vite) — main website and app UI
-  - Scripts: tsx-based workers for ingestion, monitoring, and batch processing
-
-- Infrastructure:
-  - infra/ contains Pulumi code that provisions cloud resources (GCP or chosen provider)
-  - Pulumi stacks are used to manage environments (production, staging)
-
-- Tooling & workflows:
-  - pnpm for package management
-  - svelte-check and TypeScript for static checks
-  - tsx for running TypeScript scripts without a build step
-  - Pulumi for IaC lifecycle (preview → up → refresh/destroy)
-
-- Deployments & monitoring:
-  - App deployed to chosen hosting (Vercel / custom host)
-  - Logs and metrics routed to cloud provider logging (Cloud Logging / Stackdriver)
-  - Health endpoint present for readiness/liveness checks
-
-Notes:
-- Ensure Pulumi credentials and stack configuration are documented in repo secrets and onboarding docs.
-- Keep ingestion jobs idempotent and document retry semantics in runbooks.
+_Last updated: 2026-03-06. Reflects post-Phase-3c target architecture (MVP Pivot). See [ROADMAP.md](../ROADMAP.md) for current build status._
 
 ---
 
-# SOPHIA — System Architecture
-
 ## Overview
 
-SOPHIA is a SvelteKit application backed by a SurrealDB argument graph, using the Anthropic Claude API for philosophical reasoning. The core differentiator is the three-pass dialectical engine combined with argument-aware retrieval from a typed knowledge graph.
+SOPHIA is a SvelteKit application backed by a SurrealDB argument graph. The core differentiator is the **three-pass dialectical engine** (Analysis → Critique → Synthesis) combined with argument-aware retrieval from a typed philosophical knowledge graph (~7,500 claims, 27 sources). The engine runs on Vertex AI (Gemini 2.5 Pro) with Google Search grounding, output streams via SSE, and all users are authenticated via Firebase Auth.
 
-## System Diagram
+---
+
+## System Diagram (Target — Phase 3c)
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                          User (Browser)                             │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │  HTTPS
-                               ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│              SvelteKit App (Google Cloud Run)                       │
-│                                                                     │
-│  ┌─────────────────┐    ┌──────────────────────────────────────┐   │
-│  │  +page.svelte   │    │   POST /api/analyse (SSE stream)     │   │
-│  │  (UI, Svelte 5) │◄───┤                                      │   │
-│  └─────────────────┘    │   1. Parse query                     │   │
-│                         │   2. Retrieve graph context          │   │
-│                         │   3. Run 3-pass engine               │   │
-│                         │   4. Stream chunks to client         │   │
-│                         └──────────────┬─────────────────────-┘   │
-└──────────────────────────────────────── │ ──────────────────────────┘
-                                          │
-                    ┌─────────────────────┼────────────────────┐
-                    │                     │                    │
-                    ▼                     ▼                    ▼
-          ┌─────────────────┐  ┌──────────────────┐  ┌───────────────┐
-          │   SurrealDB     │  │  Claude API       │  │  Voyage AI    │
-          │   (GCE VM)      │  │  (Anthropic)      │  │  (Embeddings) │
-          │                 │  │                   │  │               │
-          │  Argument graph │  │  3 API calls per  │  │  Query embed  │
-          │  Vector index   │  │  query (Analysis, │  │  for vector   │
-          │  Graph traversal│  │  Critique,        │  │  search       │
-          │                 │  │  Synthesis)       │  │               │
-          └─────────────────┘  └──────────────────┘  └───────────────┘
+User (browser, Firebase Auth mandatory)
+    │  Google ID token in Authorization header
+    ▼
+SvelteKit App (Cloud Run, europe-west2)
+    │
+    ├─► Firebase Auth          — user identity, session management, admin gating
+    │
+    ├─► SurrealDB (GCE VM, VPC) — philosophical knowledge graph
+    │       Vertex AI text-embedding-005 for query embedding
+    │       → vector search + multi-hop graph traversal
+    │       → structured context block injected into prompts
+    │
+    ├─► Gemini 2.5 Pro + Google Search Grounding (Vertex AI)
+    │       Hybrid-parallel 3 passes: Analysis → [Critique after ~30%] → Synthesis
+    │       Streaming text via SSE (pass_start / pass_chunk / pass_complete)
+    │       Grounding sources emitted as SSE events (real URLs per pass)
+    │       Inline sophia-meta block: structured claims (no separate LLM call)
+    │
+    ├─► Firestore
+    │       users/{uid}/queries/{queryId}   — persistent cross-device history
+    │       query_cache/{hash}              — server-side memoisation
+    │       grounding_discoveries/{hash}    — auto-captured sources for corpus growth
+    │       veracity_signals/{claimId}      — grounding vs graph confidence delta
+    │
+    └─► Admin Dashboard (/admin, Firebase Auth gated)
+            SurrealDB stats (sources, claims, arguments)
+            Firestore stats (queries, cache hit rate)
+            Full operational visibility
 ```
 
-## Components
+---
 
-### Frontend (`src/routes/+page.svelte`)
+## Key Components
 
-- Svelte 5 with runes (`$state`, `$derived`, `$effect`)
-- Reads SSE stream from `/api/analyse`
-- Displays three passes progressively as chunks arrive
-- Shows pass labels (Analysis / Critique / Synthesis) with streaming text
+### Frontend
 
-### API Endpoint (`src/routes/api/analyse/+server.ts`)
+| File | Description |
+|------|-------------|
+| `src/routes/+page.svelte` | Main query interface. Svelte 5 runes. Streams three-pass output. |
+| `src/routes/+layout.svelte` | App shell. TopBar + panel wiring. |
+| `src/routes/admin/` | Admin dashboard. Firebase Auth protected. |
+| `src/lib/components/shell/TopBar.svelte` | Navigation bar (44px, Design B). |
+| `src/lib/components/panel/SidePanel.svelte` | Right-side slide-in panel (380px desktop, full overlay mobile). |
+| `src/lib/components/panel/TabStrip.svelte` | Panel tab navigation (Claims / Sources / History / Settings). |
+| `src/lib/components/visualization/GraphCanvas.svelte` | Argument graph circle visualization. |
+| `src/styles/design-tokens.css` | All CSS custom properties (Design B dark theme). |
 
-- Accepts `POST { query: string, lens?: string }`
-- Opens a `ReadableStream` for SSE
-- Calls `runDialecticalEngine()` with SSE callbacks
-- Sends `pass_start`, `pass_chunk`, `pass_complete`, `metadata`, `error` events
+### Backend — Server-Side
 
-### Dialectical Engine (`src/lib/server/engine.ts`)
+| File | Description |
+|------|-------------|
+| `src/lib/server/engine.ts` | Three-pass dialectical engine. Entry: `runDialecticalEngine()`. |
+| `src/lib/server/vertex.ts` | Vertex AI client. `getReasoningModel()` → Gemini 2.5 Pro. |
+| `src/lib/server/retrieval.ts` | Knowledge graph retrieval. `retrieveContext()` → embed → vector search → graph traversal. |
+| `src/lib/server/embeddings.ts` | Vertex AI `text-embedding-005` (replaces Voyage AI). |
+| `src/lib/server/db.ts` | SurrealDB HTTP SQL client. Stateless, retries, typed errors. |
+| `src/lib/server/graphProjection.ts` | Converts `RetrievalResult` to graph nodes/edges for `graph_snapshot` SSE event. |
+| `src/routes/api/analyse/+server.ts` | SSE endpoint. `POST { query }` → streams `pass_start / pass_chunk / pass_complete / graph_snapshot / sources / metadata / error`. |
 
-- Entry point: `runDialecticalEngine(query, callbacks, options)`
-- Retrieves argument-graph context from SurrealDB
-- Calls Claude API three times sequentially, accumulating pass outputs
-- Each pass receives the context block + prior pass outputs
-- Callbacks stream chunks back to the SSE endpoint in real time
+### SSE Event Contract
 
-### Retrieval (`src/lib/server/retrieval.ts`)
+```
+{ type: 'pass_start',    pass: PassType }
+{ type: 'pass_chunk',    pass: PassType, content: string }
+{ type: 'pass_complete', pass: PassType }
+{ type: 'graph_snapshot', nodes: GraphNode[], edges: GraphEdge[] }
+{ type: 'sources',       pass: PassType, sources: SourceRecord[] }
+{ type: 'claims',        pass: PassType, claims: Claim[] }
+{ type: 'relations',     pass: PassType, relations: Relation[] }
+{ type: 'metadata',      total_input_tokens, total_output_tokens, duration_ms }
+{ type: 'error',         message: string }
+```
 
-- Entry point: `retrieveContext(query)` → `RetrievalResult`
-- Pipeline: embed → vector search → graph traversal → dedup → relation resolve → format
-- Returns `claims[]`, `relations[]`, `arguments[]`
-- Explicitly marks degraded retrieval mode when embedding or DB dependencies are unavailable
-- Preserves engine execution in degraded mode while surfacing reliability metadata
+where `PassType = 'analysis' | 'critique' | 'synthesis'`
 
-### Database (`src/lib/server/db.ts`)
-
-- Stateless HTTP SQL client (`/sql`) for Cloud Run-safe request isolation
-- Canonical URL normalization (`ws/wss` and `/rpc` inputs normalized to HTTP SQL root)
-- Bounded retries with exponential backoff for transient failures
-- Per-request timeout with typed `DatabaseError` classification
-- Health probe + runtime config helpers used by `/api/health`
-
-### Production Reliability Contract (Phase 1)
-
-- **DB transport**: HTTP SQL only for app runtime (no persistent SDK sessions in request handlers)
-- **Failure semantics**: Retrieval can degrade without failing the full three-pass analysis
-- **Visibility**: SSE `metadata` includes retrieval reliability fields (`retrieval_degraded`, `retrieval_degraded_reason`)
-- **Health diagnostics**: `GET /api/health` reports readiness, DB latency, and DB runtime configuration
-- **Retry policy**: controlled by `DB_MAX_RETRIES`, `DB_RETRY_BASE_MS`, `DB_REQUEST_TIMEOUT_MS`
-
-### Prompts (`src/lib/server/prompts/`)
-
-- `analysis.ts` — Proponent prompt: strongest case(s) for each position
-- `critique.ts` — Sceptic prompt: objections, hidden assumptions, counterarguments
-- `synthesis.ts` — Synthesiser prompt: integrate perspectives, map disagreements
-- `extraction.ts` — Ingestion: extract claims from source text
-- `relations.ts` — Ingestion: identify typed inter-claim relations
-- `grouping.ts` — Ingestion: cluster claims into arguments
-- `validation.ts` — Ingestion: Gemini cross-validation of extracted claims
-
-### Admin Dashboard (`src/routes/admin/`)
-
-- Knowledge base monitoring: claim counts, source coverage, ingestion status
-- Not authenticated in development; protected in production
+---
 
 ## Ingestion Pipeline
+
+The ingestion pipeline runs offline (scripts/), not at query time.
 
 ```
 Source URL
   │
-  ├─ fetch-source.ts    → fetch HTML/PDF, strip boilerplate, save .txt + .meta.json
-  ├─ ingest.ts          → 7-pass pipeline:
-  │     1. Load source text
-  │     2. Extract claims (Claude)
-  │     3. Extract inter-claim relations (Claude)
-  │     4. Group claims into arguments (Claude)
-  │     5. Validate with Gemini (cross-model QA)
-  │     6. Score and filter low-confidence claims
-  │     7. Embed claims (Voyage AI) and store in SurrealDB
-  └─ verify-db.ts       → integrity checks
+  ├─ fetch-source.ts      → fetch HTML, strip boilerplate → data/sources/{slug}.txt
+  ├─ pre-scan.ts          → URL reachability + token estimate (blocks on failures)
+  ├─ ingest.ts            → 7-stage pipeline per source:
+  │     Stage 1: Claim extraction (Claude Sonnet via Anthropic SDK)
+  │     Stage 2: Relation extraction (Claude)
+  │     Stage 3: Argument grouping (Claude)
+  │     Stage 4: Embedding (Voyage AI — kept for ingestion consistency)
+  │     Stage 5: Gemini validation (cross-model QA, --validate flag)
+  │     Stage 6: Score & filter low-confidence claims
+  │     Stage 7: Store in SurrealDB (graph with typed edges)
+  ├─ ingest-batch.ts      → batch runner with pipelined Phase A/B concurrency
+  └─ check-status.ts      → query ingestion_log for live status
 ```
+
+> **Note:** Runtime query embedding uses Vertex AI `text-embedding-005`. Ingestion embeddings use Voyage AI for corpus consistency. A one-time re-embedding migration is planned (see ROADMAP).
+
+---
 
 ## Deployment
 
-- **App**: Cloud Run (europe-west2), auto-scales 0–3 instances, 512Mi
-- **Database**: GCE VM `sophia-db` (europe-west2-b), SurrealDB on persistent disk
-- **Connectivity**: VPC connector `sophia-connector` for Cloud Run → GCE internal IP
-- **Secrets**: GCP Secret Manager (API keys injected at container start)
-- **Auth**: GitHub Actions → GCP via Workload Identity Federation (no long-lived keys)
+| Component | Detail |
+|-----------|--------|
+| **App** | Cloud Run (europe-west2), auto-scales 0–3 instances, 512Mi |
+| **Database** | GCE VM `sophia-db` (europe-west2-b), SurrealDB on persistent disk |
+| **Connectivity** | VPC connector `sophia-connector` — Cloud Run ↔ GCE internal IP |
+| **Auth** | Firebase Auth (Google Sign-In). ID tokens verified server-side. |
+| **History / Cache** | Firestore (europe-west2) — serverless, paired with Firebase Auth UIDs |
+| **Secrets** | GCP Secret Manager — injected at container start |
+| **CI/CD** | GitHub Actions → Cloud Run via Workload Identity Federation |
+| **IaC** | Pulumi (`infra/`) — `pulumi up --stack production` |
+
+---
 
 ## Key Design Decisions
 
-**Why SurrealDB?** Graph + vector + document queries in a single query path, without needing separate vector and graph databases. The argument graph schema requires multi-hop graph traversal and vector similarity in the same query — SurrealDB handles both natively.
+**Why SurrealDB?** Graph + vector + document queries in a single query path. The argument graph requires multi-hop traversal and vector similarity in the same query — SurrealDB handles both natively without a separate vector database.
 
-**Why three passes instead of one?** A single LLM call tends to hedge towards consensus. Explicit role separation (Proponent / Sceptic / Synthesiser) forces each pass to do its job without softening for politeness. The Critic cannot synthesise; the Synthesiser must account for what the Critic said.
+**Why three passes?** A single LLM call hedges towards consensus. Explicit role separation (Proponent / Sceptic / Synthesiser) forces genuine dialectical engagement. The Sceptic cannot synthesise; the Synthesiser must account for what the Sceptic said.
 
-**Why Voyage AI for embeddings?** Higher recall on long philosophical texts compared to OpenAI Ada in Phase 1 testing. The philosophy corpus uses technical vocabulary that benefits from domain-tuned embeddings.
+**Why Vertex AI + Google Search grounding?** Eliminates external vendor dependencies in the live query path. Grounding provides live, verified web sources per pass — output is no longer indistinguishable from a single raw LLM call.
 
-**Why Gemini for ingestion validation?** Cross-model validation reduces model-specific bias in claim extraction. If Claude extracts a claim that Gemini rates as unsupported, that claim is flagged for review rather than automatically ingested.
+**Why Firebase Auth?** Zero infrastructure overhead. Pairs naturally with Firestore for per-user history using UIDs. All users authenticated — no anonymous API access.
+
+**Why Firestore for history?** Serverless, free tier sufficient for MVP, pairs with Firebase Auth UIDs for cross-device persistence. Replaces `localStorage`-only history.
+
+---
+
+## Reference Documents
+
+| Document | Purpose |
+|----------|---------|
+| [ROADMAP.md](../ROADMAP.md) | **Single source of truth** — what is built, what is left |
+| [docs/MVP-PIVOT-PLAN.md](MVP-PIVOT-PLAN.md) | Full pivot plan with Phase A–J implementation detail |
+| [docs/AGENT-IMPLEMENTATION-PROMPT.md](AGENT-IMPLEMENTATION-PROMPT.md) | Agent onboarding guide for implementing the pivot |
+| [docs/design/MASTER-IMPLEMENTATION-GUIDE.md](design/MASTER-IMPLEMENTATION-GUIDE.md) | Phase 3c UI implementation guide (canonical) |
+| [docs/argument-graph.md](argument-graph.md) | SurrealDB schema reference |
+| [docs/three-pass-engine.md](three-pass-engine.md) | Engine design and pass architecture |
+| [docs/prompts-reference.md](prompts-reference.md) | All LLM prompt templates |
+| [docs/evaluation-methodology.md](evaluation-methodology.md) | Evaluation rubric and test cases |
+| [docs/runbooks.md](runbooks.md) | Operational commands and shortcuts |

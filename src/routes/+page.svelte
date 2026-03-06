@@ -36,6 +36,14 @@
     { id: 'settings' as const, label: 'Settings' },
   ]);
 
+  function stripSophiaMeta(text: string): string {
+    return text.replace(/```sophia-meta[\s\S]*?```/g, '').trim();
+  }
+
+  function renderPass(text: string): string {
+    return renderMarkdown(stripSophiaMeta(text));
+  }
+
   function availablePasses(passes?: Partial<Record<PassKey, string>>): PassKey[] {
     if (!passes) return [];
     return PASS_ORDER.filter((key) => Boolean(passes[key]));
@@ -89,6 +97,12 @@
     console.log('[GraphViz] Jumping to references for:', nodeId);
     panelStore.openPanel();
     // TODO: scroll to specific claim/source in references panel
+  }
+
+  async function retryLastQuery(): Promise<void> {
+    const lastQuery = conversation.messages.findLast(m => m.role === 'user')?.content;
+    if (!lastQuery) return;
+    await conversation.submitQuery(lastQuery);
   }
 
   function formatDuration(ms: number): string {
@@ -178,6 +192,7 @@
                       <button
                         role="tab"
                         aria-selected={selectedPass === tab}
+                        aria-controls="{message.id}-pass-panel"
                         class="pass-tab-btn"
                         class:is-active={selectedPass === tab}
                         class:is-analysis={tab === 'analysis'}
@@ -192,6 +207,7 @@
 
                   {#if message.passes[selectedPass]}
                     <div
+                      id="{message.id}-pass-panel"
                       class="pass-content-panel"
                       class:is-analysis={selectedPass === 'analysis'}
                       class:is-critique={selectedPass === 'critique'}
@@ -211,14 +227,14 @@
                             <section id={sectionAnchorId(message.id, selectedPass, section.id)} class="structured-section">
                               <h3>{section.heading}</h3>
                               <div class="prose prose-invert prose-sm">
-                                {@html renderMarkdown(section.content)}
+                                {@html renderPass(section.content)}
                               </div>
                             </section>
                           {/each}
                         </div>
                       {:else}
                         <div class="prose prose-invert prose-sm">
-                          {@html renderMarkdown(message.passes[selectedPass] ?? '')}
+                          {@html renderPass(message.passes[selectedPass] ?? '')}
                         </div>
                       {/if}
                     </div>
@@ -226,28 +242,31 @@
                 {/if}
 
                 <!-- Confidence Assessment -->
-                {#if conversation.confidenceSummary && !conversation.isLoading}
+                {#if message.passes?.synthesis && !conversation.isLoading}
                   <div class="bg-sophia-dark-surface-raised border border-sophia-dark-border rounded-lg p-4 mt-4">
                     <h3 class="text-sm font-semibold mb-3 text-sophia-dark-text">Confidence Assessment</h3>
-                    <div class="grid grid-cols-2 gap-4 mb-4">
-                      <div>
-                        <span class="text-sophia-dark-muted text-xs block mb-1">Average Confidence</span>
-                        <div class="text-2xl font-bold text-sophia-dark-sage">
-                          {(conversation.confidenceSummary.avgConfidence * 100).toFixed(0)}%
+                    {#if conversation.confidenceSummary}
+                      <div class="grid grid-cols-2 gap-4 mb-4">
+                        <div>
+                          <span class="text-sophia-dark-muted text-xs block mb-1">Average Confidence</span>
+                          <div class="text-2xl font-bold text-sophia-dark-sage">
+                            {(conversation.confidenceSummary.avgConfidence * 100).toFixed(0)}%
+                          </div>
+                        </div>
+                        <div>
+                          <span class="text-sophia-dark-muted text-xs block mb-1">Needs Review</span>
+                          <div class="text-2xl font-bold text-sophia-dark-coral">
+                            {conversation.confidenceSummary.lowConfidenceCount}/{conversation.confidenceSummary.totalClaims}
+                          </div>
                         </div>
                       </div>
-                      <div>
-                        <span class="text-sophia-dark-muted text-xs block mb-1">Needs Review</span>
-                        <div class="text-2xl font-bold text-sophia-dark-coral">
-                          {conversation.confidenceSummary.lowConfidenceCount}/{conversation.confidenceSummary.totalClaims}
-                        </div>
-                      </div>
-                    </div>
-                    <button 
+                    {/if}
+                    <button
                       onclick={() => conversation.runVerification()}
-                      class="w-full bg-sophia-dark-sage text-sophia-dark-surface px-4 py-2 rounded font-semibold hover:opacity-90 transition-opacity"
+                      disabled={conversation.isLoading || !!conversation.currentPasses.verification}
+                      class="w-full bg-sophia-dark-sage text-sophia-dark-surface px-4 py-2 rounded font-semibold hover:opacity-90 transition-opacity disabled:opacity-50"
                     >
-                      Run Web Verification
+                      {conversation.currentPasses.verification ? 'Verification Complete' : 'Run Web Verification'}
                     </button>
                   </div>
                 {/if}
@@ -272,10 +291,16 @@
         <!-- Streaming State -->
         {#if conversation.isLoading}
           <div class="flex flex-col space-y-4">
-            {#if !conversation.currentPasses.analysis && !conversation.currentPasses.critique && !conversation.currentPasses.synthesis}
-              <div class="flex items-center gap-2 text-sophia-dark-muted">
-                <div class="w-2 h-2 bg-sophia-dark-sage rounded-full animate-pulse"></div>
-                <span class="font-mono text-sm">Thinking…</span>
+            {#if !streamingTabs.length}
+              <div class="loading-progress" aria-live="polite" aria-label="Loading analysis">
+                <div class="loading-dot" aria-hidden="true"></div>
+                <span class="loading-label">
+                  {#if conversation.currentPass}
+                    Pass {['analysis', 'critique', 'synthesis'].indexOf(conversation.currentPass) + 1} of 3 · {PASS_LABELS[conversation.currentPass]}
+                  {:else}
+                    Thinking…
+                  {/if}
+                </span>
               </div>
             {/if}
 
@@ -299,6 +324,7 @@
                   <button
                     role="tab"
                     aria-selected={activeStreamingPass === tab}
+                    aria-controls="streaming-pass-panel"
                     class="pass-tab-btn"
                     class:is-active={activeStreamingPass === tab}
                     class:is-analysis={tab === 'analysis'}
@@ -316,6 +342,7 @@
 
               {#if conversation.currentPasses[activeStreamingPass]}
                 <div
+                  id="streaming-pass-panel"
                   class="pass-content-panel"
                   class:is-live={conversation.currentPass === activeStreamingPass}
                   class:is-analysis={activeStreamingPass === 'analysis'}
@@ -323,7 +350,7 @@
                   class:is-synthesis={activeStreamingPass === 'synthesis'}
                 >
                   <div class="prose prose-invert prose-sm">
-                    {@html renderMarkdown(conversation.currentPasses[activeStreamingPass] ?? '')}
+                    {@html renderPass(conversation.currentPasses[activeStreamingPass] ?? '')}
                   </div>
                 </div>
               {/if}
@@ -332,19 +359,21 @@
         {/if}
 
         <!-- Confidence Summary Card (after synthesis completes) -->
-        {#if !conversation.isLoading && conversation.confidenceSummary}
+        {#if !conversation.isLoading && conversation.currentPasses.synthesis}
           <div class="confidence-summary-card">
-            <h3 class="confidence-summary-title">Confidence Summary</h3>
-            <div class="confidence-metrics">
-              <div class="confidence-metric">
-                <span class="confidence-label">Average Confidence:</span>
-                <span class="confidence-value">{(conversation.confidenceSummary.avgConfidence * 100).toFixed(1)}%</span>
+            {#if conversation.confidenceSummary}
+              <h3 class="confidence-summary-title">Confidence Summary</h3>
+              <div class="confidence-metrics">
+                <div class="confidence-metric">
+                  <span class="confidence-label">Average Confidence:</span>
+                  <span class="confidence-value">{(conversation.confidenceSummary.avgConfidence * 100).toFixed(1)}%</span>
+                </div>
+                <div class="confidence-metric">
+                  <span class="confidence-label">Low Confidence Claims:</span>
+                  <span class="confidence-value">{conversation.confidenceSummary.lowConfidenceCount} / {conversation.confidenceSummary.totalClaims}</span>
+                </div>
               </div>
-              <div class="confidence-metric">
-                <span class="confidence-label">Low Confidence Claims:</span>
-                <span class="confidence-value">{conversation.confidenceSummary.lowConfidenceCount} / {conversation.confidenceSummary.totalClaims}</span>
-              </div>
-            </div>
+            {/if}
             <button
               class="run-verification-btn"
               onclick={() => conversation.runVerification()}
@@ -357,8 +386,11 @@
 
         <!-- Error State -->
         {#if conversation.error}
-          <div class="bg-red-950/30 border border-red-800/50 rounded-lg px-4 py-3">
-            <p class="text-red-200 font-mono text-sm">{conversation.error}</p>
+          <div class="error-state" role="alert">
+            <p class="error-message">{conversation.error}</p>
+            <button class="error-retry-btn" onclick={retryLastQuery}>
+              Retry
+            </button>
           </div>
         {/if}
       </div>
@@ -394,7 +426,7 @@
     {#if activeTab === 'references'}
       <ReferencesTab />
     {:else if activeTab === 'history'}
-      <HistoryTab entries={historyStore.items} onSelect={handleHistorySelect} />
+      <HistoryTab entries={historyStore.items} onSelect={handleHistorySelect} onDelete={(id) => historyStore.deleteEntry(id)} />
     {:else if activeTab === 'settings'}
       <SettingsTab />
     {/if}
@@ -881,6 +913,12 @@
     color: var(--color-sage);
   }
 
+  @media (min-width: 768px) {
+    .main-content.panel-open {
+      margin-right: 380px;
+    }
+  }
+
   :global(html.reduce-motion) .main-content {
     transition: none !important;
   }
@@ -911,6 +949,147 @@
 
   :global(html.reduce-motion) .tab-live-dot {
     animation: none !important;
+  }
+
+  /* ── Loading Progress ── */
+  .loading-progress {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-muted);
+  }
+
+  .loading-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-sage);
+    animation: pulse-dot 1.1s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+
+  .loading-label {
+    font-family: var(--font-ui);
+    font-size: var(--text-meta);
+    letter-spacing: 0.06em;
+    color: var(--color-muted);
+  }
+
+  :global(html.reduce-motion) .loading-dot {
+    animation: none !important;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .loading-dot {
+      animation: none !important;
+    }
+  }
+
+  /* ── Error State ── */
+  .error-state {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: color-mix(in srgb, var(--color-coral) 8%, var(--color-surface));
+    border: 1px solid color-mix(in srgb, var(--color-coral) 30%, transparent);
+    border-radius: var(--radius-md);
+  }
+
+  .error-message {
+    flex: 1;
+    font-family: var(--font-ui);
+    font-size: var(--text-meta);
+    color: var(--color-coral);
+    margin: 0;
+  }
+
+  .error-retry-btn {
+    font-family: var(--font-ui);
+    font-size: var(--text-label);
+    letter-spacing: 0.08em;
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid color-mix(in srgb, var(--color-coral) 40%, transparent);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--color-coral) 12%, transparent);
+    color: var(--color-coral);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+    flex-shrink: 0;
+  }
+
+  .error-retry-btn:hover {
+    border-color: var(--color-coral);
+    background: color-mix(in srgb, var(--color-coral) 20%, transparent);
+  }
+
+  /* ── Confidence Summary Card ── */
+  .confidence-summary-card {
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .confidence-summary-title {
+    font-family: var(--font-ui);
+    font-size: var(--text-label);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+    margin: 0;
+  }
+
+  .confidence-metrics {
+    display: flex;
+    gap: var(--space-5);
+  }
+
+  .confidence-metric {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .confidence-label {
+    font-family: var(--font-ui);
+    font-size: var(--text-meta);
+    color: var(--color-dim);
+  }
+
+  .confidence-value {
+    font-family: var(--font-ui);
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--color-sage);
+  }
+
+  .run-verification-btn {
+    font-family: var(--font-ui);
+    font-size: var(--text-label);
+    letter-spacing: 0.08em;
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--color-sage-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-sage-bg);
+    color: var(--color-sage);
+    cursor: pointer;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+    align-self: flex-start;
+  }
+
+  .run-verification-btn:hover:not(:disabled) {
+    border-color: var(--color-sage);
+    background: rgba(127, 163, 131, 0.2);
+  }
+
+  .run-verification-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 
   .graph-container {

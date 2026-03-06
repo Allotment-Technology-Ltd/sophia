@@ -141,12 +141,14 @@
     overflow-x: hidden;
     overscroll-behavior: contain;
     transform: translateX(100%);
-    transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
-    will-change: transform;
+    opacity: 0;
+    transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.25s ease;
+    will-change: transform, opacity;
   }
 
   .side-panel.is-open {
     transform: translateX(0);
+    opacity: 1;
   }
 
   /* ── Close button ── */
@@ -189,15 +191,17 @@
   }
 
   /* ── Reduced Motion: suppress all transitions ── */
-  :global(html.reduce-motion) .side-panel {
-    transition: none !important;
-  }
-
-  :global(html.reduce-motion) .panel-backdrop {
-    transition: none !important;
-  }
-
+  :global(html.reduce-motion) .side-panel,
+  :global(html.reduce-motion) .panel-backdrop,
   :global(html.reduce-motion) .close-btn {
     transition: none !important;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .side-panel,
+    .panel-backdrop,
+    .close-btn {
+      transition: none !important;
+    }
   }
 </style>

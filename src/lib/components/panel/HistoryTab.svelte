@@ -9,9 +9,10 @@
   interface Props {
     entries?: HistoryEntry[];
     onSelect?: (id: string) => void;
+    onDelete?: (id: string) => void;
   }
 
-  let { entries = [], onSelect }: Props = $props();
+  let { entries = [], onSelect, onDelete }: Props = $props();
 
   function formatAge(date: Date): string {
     const diffMs = Date.now() - date.getTime();
@@ -32,37 +33,52 @@
     <ul class="history-list" aria-label="Past analyses">
       {#each entries as entry (entry.id)}
         <li>
-          <button
-            class="history-item"
-            onclick={() => onSelect?.(entry.id)}
-          >
-            <!-- Arc SVG: shows how many passes completed -->
-            <svg
-              class="arc-icon"
-              viewBox="0 0 24 24"
-              width="20"
-              height="20"
-              aria-hidden="true"
+            <div class="history-row">
+            <button
+              class="history-item"
+              onclick={() => onSelect?.(entry.id)}
             >
-              <!-- Background ring -->
-              <circle cx="12" cy="12" r="9" fill="none" stroke="var(--color-border)" stroke-width="1.5"/>
-              <!-- Filled arc by pass count (1=120°, 2=240°, 3=360°) -->
-              {#if entry.passCount >= 1}
-                <path
-                  d="M 12 3 A 9 9 0 0 1 {12 + 9 * Math.sin((entry.passCount / 3) * 2 * Math.PI)} {12 - 9 * Math.cos((entry.passCount / 3) * 2 * Math.PI)}"
-                  fill="none"
-                  stroke="var(--color-sage)"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                />
-              {/if}
-            </svg>
+              <!-- Arc SVG: shows how many passes completed -->
+              <svg
+                class="arc-icon"
+                viewBox="0 0 24 24"
+                width="20"
+                height="20"
+                aria-hidden="true"
+              >
+                <!-- Background ring -->
+                <circle cx="12" cy="12" r="9" fill="none" stroke="var(--color-border)" stroke-width="1.5"/>
+                <!-- Filled arc by pass count (1=120°, 2=240°, 3=360°) -->
+                {#if entry.passCount >= 1}
+                  <path
+                    d="M 12 3 A 9 9 0 0 1 {12 + 9 * Math.sin((entry.passCount / 3) * 2 * Math.PI)} {12 - 9 * Math.cos((entry.passCount / 3) * 2 * Math.PI)}"
+                    fill="none"
+                    stroke="var(--color-sage)"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                  />
+                {/if}
+              </svg>
 
-            <div class="item-body">
-              <span class="item-question">{entry.question}</span>
-              <span class="item-meta">{formatAge(entry.timestamp)}</span>
-            </div>
-          </button>
+              <div class="item-body">
+                <span class="item-question">{entry.question}</span>
+                <span class="item-meta">{formatAge(entry.timestamp)}</span>
+              </div>
+            </button>
+
+            {#if onDelete}
+              <button
+                class="delete-btn"
+                aria-label="Delete {entry.question}"
+                onclick={(e) => { e.stopPropagation(); onDelete?.(entry.id); }}
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                  <line x1="2" y1="2" x2="10" y2="10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                  <line x1="10" y1="2" x2="2" y2="10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                </svg>
+              </button>
+            {/if}
+          </div>
         </li>
       {/each}
     </ul>
@@ -97,15 +113,21 @@
     padding: 0;
   }
 
+  .history-row {
+    display: flex;
+    align-items: stretch;
+    border-bottom: 1px solid var(--color-border);
+  }
+
   .history-item {
     display: flex;
     align-items: flex-start;
     gap: var(--space-3);
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     padding: var(--space-3) var(--space-4);
     background: none;
     border: none;
-    border-bottom: 1px solid var(--color-border);
     cursor: pointer;
     text-align: left;
     transition: background var(--transition-fast);
@@ -113,6 +135,23 @@
 
   .history-item:hover {
     background: var(--color-surface-raised);
+  }
+
+  .delete-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 var(--space-3);
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--color-dim);
+    flex-shrink: 0;
+    transition: color var(--transition-fast);
+  }
+
+  .delete-btn:hover {
+    color: var(--color-coral);
   }
 
   .arc-icon {

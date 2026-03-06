@@ -188,10 +188,105 @@ phases:
 
 documentation:
   location: docs/
-  files:
-    - architecture.md           # System design, tech decisions
-    - brand-design-system.md    # Full visual identity reference
-    - visual-mockups.md         # ASCII wireframes of every screen state
-    - phase-checklist.md        # Current phase tasks and status
-    - roadmap.md                # Phased roadmap (v3.1)
-    - source-lists/3a-ethics.md # Phase 3a curated sources (30 URLs)
+  
+  structure:
+    # Single sources of truth — only these are active
+    - ROADMAP.md                   # **CANONICAL** — Current + next 2 phases, always up-to-date
+    - architecture.md              # **CANONICAL** — System design, deployment, tech stack
+    - STATUS.md (root)             # **CANONICAL** — Project health, deployment status, contacts
+    - CHANGELOG.md (root)          # **CANONICAL** — Git-friendly version history
+    
+    # Implementation guides — follow these when building
+    design/:
+      - MASTER-IMPLEMENTATION-GUIDE.md  # Phase 3c UI implementation
+      - sophia-phase3c-ui-prompt-guide.md
+      - sophia-phases-4-7-prompt-guide.md
+      - sophia-design-system-B.md        # Design tokens locked (Design B)
+    
+    # Reference docs — look here for details
+    - argument-graph.md            # SurrealDB schema reference
+    - three-pass-engine.md         # Engine architecture & dialectical philosophy
+    - prompts-reference.md         # All LLM prompt templates (by phase+domain)
+    - evaluation-methodology.md    # Testing rubric and ground truth
+    - runbooks.md                  # Operational shortcuts, health checks, common commands
+    
+    # Pivot plan — read once, reference for scope
+    - MVP-PIVOT-PLAN.md            # Phase A–J implementation detail (implementation-in-progress)
+    - AGENT-IMPLEMENTATION-PROMPT.md # Agent onboarding guide
+    - MIGRATION-QUICKSTART.md       # GCP migration quick reference
+    - GCP-ORG-MIGRATION.md          # Full migration runbook
+    
+    # Archives — historical reference only
+    archive/:
+      - phase-3a-completion-report.md
+      - phase-3b-roadmap.md, phase-3b-checklist.md
+      - And 7 more historical/completed-phase docs
+  
+  maintenance:
+    frequency: "Every sprint (2 weeks) OR after major milestone"
+    
+    script: scripts/review-docs.sh
+    # Runs:
+    #   1. Check ROADMAP.md hasn't drifted (compare to STATUS.md, CHANGELOG.md)
+    #   2. Verify all architecture paths exist (broken links detector)
+    #   3. Check for docs > 1 year old, flag for archival
+    #   4. Ensure design-tokens CSS matches design-system-B.md specs
+    
+    responsibilities:
+      - On release: update ROADMAP + STATUS + CHANGELOG (in one commit)
+      - On schema change: update argument-graph.md immediately
+      - On prompt tuning: add entry to prompts-reference.md with date
+      - On major refactor: schedule architecture.md review
+      - On phase completion: move old phase checklists to archive/
+    
+    rules:
+      - Avoid two versions of truth — if in docs/, delete old wiki/blog posts
+      - No "TODO: update this" placeholders — file an issue instead, mark with TODO comment
+      - Frontmatter: every .md must have last-updated date and phase/status
+      - If doc > 4 weeks without update and is marked "active": flag as stale
+      - Archive docs must have README.md explaining why they're archived
+      - ROADMAP.md is source of truth for what's built — check before answering "is X done?"
+  
+  conventions:
+    # Frontmatter (every doc)
+    frontmatter:
+      - Last updated: YYYY-MM-DD
+      - Status: active | archived | draft | reference
+      - Owner: Copilot | human name
+      - Related: [link to related docs]
+    
+    # Sections (standard order for implementation guides)
+    implementation_guide_sections:
+      1. Overview / Executive Summary
+      2. Prerequisites
+      3. Architecture Diagram
+      4. Implementation Sequence (A, B, C, etc.)
+      5. Per-section: Purpose, Changes, Verification
+      6. Final Checklist / Quality Gates
+    
+    # Section structure (runbooks, playbooks)
+    runbook_sections:
+      1. Quick Start (copy-paste commands)
+      2. Prerequisites
+      3. Step-by-Step with error handling
+      4. Rollback procedure
+      5. Verification
+      6. Troubleshooting
+    
+    # Links must be relative, never hardcoded domains
+    links:
+      - Use relative paths: [link](../docs/architecture.md)
+      - Never include domain: ❌ https://github.com/Allotment-Technology-Ltd/sophia/docs/...
+      - Tables: prefer Markdown tables, not embeds
+    
+    code_blocks:
+      - Always specify language: ```typescript not ```
+      - CLI commands: ```bash
+      - Pseudocode: ```typescript with // Pseudocode comments
+  
+  forbidden:
+    - Storing docs outside docs/ (except STATUS.md, CHANGELOG.md, ROADMAP.md at root)
+    - Multiple conflicting docs on the same topic (use structure above)
+    - "This is outdated" without moving to archive/
+    - Promise to update docs later without filing GitHub issue
+    - Docs longer than 100 lines without a table of contents

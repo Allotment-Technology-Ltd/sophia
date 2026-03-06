@@ -1,8 +1,7 @@
 import type { HistoryEntry } from '$lib/components/panel/HistoryTab.svelte';
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
+import { getIdToken } from '$lib/firebase';
 
-const STORAGE_KEY = 'sophia-history';
-const CACHE_STORAGE_KEY = 'sophia-query-cache';
 const MAX_CACHE_ENTRIES = 10;
 
 interface CachedPassClaims {
@@ -33,10 +32,10 @@ export interface CachedQueryResult {
   cachedAt: string;
 }
 
-function loadFromStorage(): HistoryEntry[] {
+function loadFromStorage(key: string): HistoryEntry[] {
   if (typeof localStorage === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return parsed.map((e: HistoryEntry & { timestamp: string }) => ({
@@ -48,19 +47,19 @@ function loadFromStorage(): HistoryEntry[] {
   }
 }
 
-function saveToStorage(entries: HistoryEntry[]): void {
+function saveToStorage(entries: HistoryEntry[], key: string): void {
   if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    localStorage.setItem(key, JSON.stringify(entries));
   } catch {
     // localStorage full or unavailable — silently skip
   }
 }
 
-function loadCacheFromStorage(): Record<string, CachedQueryResult> {
+function loadCacheFromStorage(key: string): Record<string, CachedQueryResult> {
   if (typeof localStorage === 'undefined') return {};
   try {
-    const raw = localStorage.getItem(CACHE_STORAGE_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return {};
     return JSON.parse(raw) as Record<string, CachedQueryResult>;
   } catch {
@@ -68,10 +67,10 @@ function loadCacheFromStorage(): Record<string, CachedQueryResult> {
   }
 }
 
-function saveCacheToStorage(cache: Record<string, CachedQueryResult>): void {
+function saveCacheToStorage(cache: Record<string, CachedQueryResult>, key: string): void {
   if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(cache));
+    localStorage.setItem(key, JSON.stringify(cache));
   } catch {
     // localStorage full or unavailable — silently skip
   }
@@ -82,13 +81,39 @@ function normalizeQuery(query: string): string {
 }
 
 function createHistoryStore() {
-  let items = $state<HistoryEntry[]>(loadFromStorage());
-  let cache = $state<Record<string, CachedQueryResult>>(loadCacheFromStorage());
+  let uid = $state<string | null>(null);
+  let items = $state<HistoryEntry[]>([]);
+  let cache = $state<Record<string, CachedQueryResult>>({});
+
+  function historyStorageKey(): string | null {
+    return uid ? `sophia-history-${uid}` : null;
+  }
+
+  function cacheStorageKey(): string | null {
+    return uid ? `sophia-query-cache-${uid}` : null;
+  }
 
   return {
     get items() { return items; },
 
+    /**
+     * Called on auth state change. Scopes all persistence to the given uid.
+     * Pass null on sign-out — clears in-memory state so no data leaks between users.
+     */
+    setUid(newUid: string | null): void {
+      uid = newUid;
+      if (newUid) {
+        items = loadFromStorage(`sophia-history-${newUid}`);
+        cache = loadCacheFromStorage(`sophia-query-cache-${newUid}`);
+      } else {
+        items = [];
+        cache = {};
+      }
+    },
+
     addEntry(question: string, passCount: number = 3): void {
+      const key = historyStorageKey();
+      if (!key) return;
       const entry: HistoryEntry = {
         id: crypto.randomUUID(),
         question,
@@ -96,12 +121,13 @@ function createHistoryStore() {
         passCount,
       };
       items = [entry, ...items];
-      saveToStorage(items);
+      saveToStorage(items, key);
     },
 
     clear(): void {
+      const key = historyStorageKey();
       items = [];
-      saveToStorage(items);
+      if (key) saveToStorage(items, key);
     },
 
     getCachedResult(query: string): CachedQueryResult | null {
@@ -109,12 +135,71 @@ function createHistoryStore() {
       return cache[key] ?? null;
     },
 
+    /**
+     * Fetches history from Firestore via /api/history and replaces in-memory items.
+     * Falls back silently — localStorage data is shown until this resolves.
+     */
+    async syncFromServer(): Promise<void> {
+      if (!uid) return;
+      try {
+        const token = await getIdToken();
+        if (!token) return;
+
+        const res = await fetch('/api/history', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) return;
+
+        const data = await res.json();
+        if (!Array.isArray(data.entries)) return;
+
+        const serverItems: HistoryEntry[] = data.entries.map(
+          (e: { id: string; question: string; timestamp: string; passCount: number }) => ({
+            id: e.id,
+            question: e.question,
+            timestamp: new Date(e.timestamp),
+            passCount: e.passCount,
+          })
+        );
+
+        items = serverItems;
+        const key = historyStorageKey();
+        if (key) saveToStorage(items, key);
+      } catch {
+        // silently fall back to localStorage data
+      }
+    },
+
+    /**
+     * Deletes a history entry by its Firestore doc ID.
+     * Removes from local state immediately; fires DELETE request best-effort.
+     */
+    async deleteEntry(entryId: string): Promise<void> {
+      items = items.filter(e => e.id !== entryId);
+      const key = historyStorageKey();
+      if (key) saveToStorage(items, key);
+
+      if (!uid) return;
+      try {
+        const token = await getIdToken();
+        if (!token) return;
+        await fetch(`/api/history?id=${encodeURIComponent(entryId)}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+      } catch {
+        // best-effort — local state already updated
+      }
+    },
+
     saveCachedResult(query: string, result: Omit<CachedQueryResult, 'query' | 'cachedAt'>): void {
-      const key = normalizeQuery(query);
+      const key = cacheStorageKey();
+      if (!key) return;
+      const normalKey = normalizeQuery(query);
 
       cache = {
         ...cache,
-        [key]: {
+        [normalKey]: {
           ...result,
           query,
           cachedAt: new Date().toISOString()
@@ -126,7 +211,7 @@ function createHistoryStore() {
       );
 
       cache = Object.fromEntries(sorted.slice(0, MAX_CACHE_ENTRIES));
-      saveCacheToStorage(cache);
+      saveCacheToStorage(cache, key);
     },
   };
 }

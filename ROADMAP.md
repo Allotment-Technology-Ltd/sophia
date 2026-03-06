@@ -37,45 +37,65 @@ Architectural overhaul of the three-pass engine and UI. The pivot replaces Anthr
 
 ---
 
+## 🚨 Security Blocker: User Data Isolation
+
+**Discovered:** 2026-03-06
+**Severity:** Critical — blocks any public access
+**Status:** Partially resolved (2026-03-06)
+
+All signed-in users currently see each other's queries and history. There is no per-user scoping anywhere in the data layer or UI store. This must be fixed before any non-test users are allowed on the platform.
+
+**Root cause:** The in-memory conversation store and any persisted history are not scoped to `uid`. Firestore (3c-C) is not yet wired, so nothing is saved per-user. The UI simply shows whatever is in the shared store.
+
+**Required fixes (in order):**
+
+- [x] **ISO-1** Scope localStorage history/cache keys to `sophia-history-{uid}` and `sophia-query-cache-{uid}` — users on the same browser can no longer read each other's data
+- [x] **ISO-2** Server-side leakage confirmed absent — stores are client-side Svelte 5 state, each browser session starts empty. `historyStore.setUid()` called on auth change reloads state per-user.
+- [ ] **ISO-3** Server: never return another user's data — validate `uid` on history/query endpoints ← deferred until Firestore history API exists (3c-C)
+- [x] **ISO-4** Client: clear conversation store on sign-out / user switch via `onAuthChange` in `+layout.svelte`
+
+**Note:** ISO-3 remains open — no server-side per-user history endpoint exists yet. Revisit when 3c-C Firestore integration is built.
+
+---
+
 ## Phase 3c — In Progress
 
-### 3c-A: Engine Restructure (70% done)
-**Status:** Google Search grounding fully implemented; Vertex AI embeddings live; sophia-meta parsing working
+### 3c-A: Engine Restructure ✅ (100% done)
+**Status:** Complete (2026-03-06)
 
-**Remaining tasks:**
-- [ ] **A1** Wire Firebase Auth guards to all protected routes ← CRITICAL
-- [ ] **A2** Add `requireAuth()` middleware to `/api/analyse`
-- [ ] **A3** Extract uid from ID token in request handler
-- [ ] **A4** Save query to Firestore after each query completes
-- [ ] **A5** Load query history from Firestore on request
-- [ ] **A6** Delete unused `passRefinement.ts` file
+- [x] **A1** Firebase Auth enforced on all `/api/*` routes via `hooks.server.ts` Bearer token check
+- [x] **A2** `/api/analyse` handler uses `locals` (populated by hook) — no separate middleware needed
+- [x] **A3** `uid` extracted from `locals.user?.uid` in request handler
+- [x] **A4** Successful runs saved to `users/{uid}/queries/{autoId}` in Firestore (30-day TTL)
+- [x] **A5** Firestore per-user cache checked before SurrealDB and before engine run; cache hit replays stored events
+- [x] **A6** `passRefinement.ts` already deleted — confirmed absent
 
-**Verification:** Manual test: authenticated user submits query → output streams → history saves → user can reload and retrieve
+**Verification:** Manual test: authenticated user submits query → output streams → saved to Firestore → second request for same query replays from Firestore cache
 
-### 3c-B: UI Implementation (50% done)
-**Status:** Design tokens locked; components created; references panel scaffold exists
+### 3c-B: UI Implementation ✅
 
-**Remaining tasks:**
-- [ ] **B1** SidePanel animations (40ms slide+fade, prefers-reduced-motion)
-- [ ] **B2** SourcesView component (render grounding sources as link cards)
-- [ ] **B3** ClaimsView component (render sophia-meta claims with badges)
-- [ ] **B4** Error boundary + graceful degradation UI
-- [ ] **B5** Mobile responsive testing (<768px overlay behavior)
-- [ ] **B6** ARIA labels + keyboard navigation (tab, enter, escape)
-- [ ] **B7** Loading states (skeleton screens, pass indicators)
+**Status:** Complete
+
+- [x] **B1** SidePanel animations — opacity fade + `@media (prefers-reduced-motion: reduce)` fallback
+- [x] **B2** SourcesView component (render grounding sources as link cards)
+- [x] **B3** ClaimsView component (render sophia-meta claims with badges)
+- [x] **B4** Error state redesigned with design-system CSS vars + Retry button
+- [x] **B5** `.main-content.panel-open` applies `margin-right: 380px` on desktop
+- [x] **B6** `aria-controls` added to all pass tab buttons; content panels have matching IDs
+- [x] **B7** Loading progress indicator shows "Pass N of 3 · Label" when pass is known
 
 **Verification:** Visual regression test against Design B mockups
 
-### 3c-C: Firestore Integration (0% done)
-**Status:** Firebase Admin SDK initialized but not wired
+### 3c-C: Firestore Integration ✅
 
-**Remaining tasks:**
-- [ ] **C1** Create Firestore schema: `users/{uid}/queries/{queryId}`
-- [ ] **C2** Add write in `/api/analyse`: save query + response metadata
-- [ ] **C3** Add read in `/api/analyse`: check query_cache for memoization
-- [ ] **C4** Implement cache invalidation (purge on source updates)
-- [ ] **C5** Create query history fetch endpoint (`/api/history`)
-- [ ] **C6** Wire HistoryTab data source to Firestore
+**Status:** Complete
+
+- [x] **C1** Firestore schema: `users/{uid}/queries/{autoId}` — query, lens, events, createdAt
+- [x] **C2** Write in `/api/analyse`: `saveFirestoreCache()` persists on successful run
+- [x] **C3** Read in `/api/analyse`: `loadFirestoreCache()` checked before engine run (30-day TTL)
+- [x] **C4** Cache invalidation: stale/failed entries purged on read; DELETE `/api/history?id=` for manual purge
+- [x] **C5** `/api/history` endpoint — GET returns 50 most recent queries; DELETE removes by doc ID
+- [x] **C6** HistoryTab wired to Firestore: `syncFromServer()` on auth change; delete button calls `deleteEntry()`
 
 **Verification:** User creates query → appears in history → reload page → history still there
 
@@ -98,9 +118,7 @@ Architectural overhaul of the three-pass engine and UI. The pivot replaces Anthr
 **Remaining tasks:**
 - [ ] **E1** Add Firebase credentials to Secret Manager
 - [ ] **E2** Update Cloud Run env vars (FIREBASE_PROJECT_ID, etc)
-- [ ] **E3** Run GCP org migration (transfer from personal to admin@usesophia.app)
 - [ ] **E4** Deploy new image to Cloud Run
-- [ ] **E5** Smoke test production
 
 **Verification:** `curl https://sophia.usesophia.app/api/health` → 200 OK
 

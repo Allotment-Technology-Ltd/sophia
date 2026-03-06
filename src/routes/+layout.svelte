@@ -3,6 +3,7 @@
   import TopBar from '$lib/components/shell/TopBar.svelte';
   import { conversation } from '$lib/stores/conversation.svelte';
   import { referencesStore } from '$lib/stores/references.svelte';
+  import { historyStore } from '$lib/stores/history.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
   import { auth, onAuthChange } from '$lib/firebase';
   import { goto } from '$app/navigation';
@@ -32,8 +33,24 @@
       }
     };
 
-    applyAuthGuard(auth?.currentUser ?? null);
-    return onAuthChange((user) => applyAuthGuard(user));
+    const initialUser = auth?.currentUser ?? null;
+    historyStore.setUid(initialUser?.uid ?? null);
+    if (initialUser?.uid) historyStore.syncFromServer();
+    applyAuthGuard(initialUser);
+
+    return onAuthChange((user) => {
+      const prevUid = auth?.currentUser?.uid ?? null;
+      const newUid = user?.uid ?? null;
+
+      // Scope history to the new user and clear in-memory state on switch/sign-out
+      historyStore.setUid(newUid);
+      if (newUid) historyStore.syncFromServer();
+      if (!newUid || newUid !== prevUid) {
+        conversation.clear();
+      }
+
+      applyAuthGuard(user);
+    });
   });
 
   let isAuthPage = $derived($page.url.pathname.startsWith('/auth'));
