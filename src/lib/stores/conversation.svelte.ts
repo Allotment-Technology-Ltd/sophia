@@ -301,9 +301,13 @@ function createConversationStore() {
       currentPasses = { ...currentPasses, verification: '' };
 
       try {
+        const idToken = await getIdToken();
         const response = await fetch('/api/verify', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${idToken}`
+          },
           body: JSON.stringify({
             claims: referencesStore.activeClaims,
             synthesisText: currentPasses.synthesis
