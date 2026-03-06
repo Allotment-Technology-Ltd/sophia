@@ -19,6 +19,7 @@
     "migrate": "bash scripts/migrate-to-europe-west2.sh"
   },
   "dependencies": {
+    "@ai-sdk/google": "^3.0.43",
     "@ai-sdk/google-vertex": "^4.0.68",
     "@anthropic-ai/sdk": "^0.26.0",
     "@google-cloud/logging": "^11.1.0",
