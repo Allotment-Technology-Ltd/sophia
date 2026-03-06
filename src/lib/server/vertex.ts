@@ -1,38 +1,46 @@
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { createVertex } from '@ai-sdk/google-vertex';
 
-// Lazy initialization - create client only when first called
-let googleInstance: ReturnType<typeof createGoogleGenerativeAI> | null = null;
+// Lazy initialization - create vertex client only when first called
+let vertexInstance: ReturnType<typeof createVertex> | null = null;
 
-function initializeGoogle() {
-  if (googleInstance) return googleInstance;
+function initializeVertex() {
+  if (vertexInstance) return vertexInstance;
 
-  const apiKey = process.env.GOOGLE_AI_API_KEY;
+  // Use process.env directly for compatibility with both SvelteKit and standalone scripts
+  const project = process.env.GOOGLE_VERTEX_PROJECT || process.env.GCP_PROJECT_ID;
+  const location = process.env.GOOGLE_VERTEX_LOCATION || process.env.GCP_LOCATION || 'us-central1';
 
-  if (!apiKey) {
-    console.error('[Google AI] FATAL: GOOGLE_AI_API_KEY is not set');
-    throw new Error('GOOGLE_AI_API_KEY is required. Set the GOOGLE_AI_API_KEY environment variable.');
+  console.log(`[Vertex] Initializing — project=${project ?? '(missing)'} location=${location}`);
+
+  if (!project) {
+    console.error('[Vertex] FATAL: No project ID found. Checked: GOOGLE_VERTEX_PROJECT, GCP_PROJECT_ID');
+    throw new Error('Vertex AI project ID is required. Set GOOGLE_VERTEX_PROJECT or GCP_PROJECT_ID environment variable.');
   }
 
   try {
-    googleInstance = createGoogleGenerativeAI({ apiKey });
-    console.log('[Google AI] Client created successfully');
+    vertexInstance = createVertex({ project, location });
+    console.log(`[Vertex] Client created successfully — project=${project} location=${location}`);
   } catch (err) {
-    console.error('[Google AI] createGoogleGenerativeAI() threw:', err instanceof Error ? err.stack : String(err));
+    console.error('[Vertex] createVertex() threw:', err instanceof Error ? err.stack : String(err));
     throw err;
   }
 
-  return googleInstance;
+  return vertexInstance;
 }
 
-const reasoningModelId = process.env.GEMINI_REASONING_MODEL || 'gemini-2.0-flash-001';
-const extractionModelId = process.env.GEMINI_EXTRACTION_MODEL || 'gemini-2.0-flash-001';
+function getVertex() {
+  return initializeVertex();
+}
+
+const reasoningModelId = process.env.GEMINI_REASONING_MODEL || 'gemini-2.0-flash';
+const extractionModelId = process.env.GEMINI_EXTRACTION_MODEL || 'gemini-2.0-flash';
 
 export function getReasoningModel() {
-  return initializeGoogle()(reasoningModelId);
+  return getVertex()(reasoningModelId);
 }
 
 export function getExtractionModel() {
-  return initializeGoogle()(extractionModelId);
+  return getVertex()(extractionModelId);
 }
 
 let sessionTokens = {
@@ -49,10 +57,8 @@ export function trackTokens(inputTokens: number, outputTokens: number): void {
 }
 
 /**
- * Get Google Search grounding tool from the Google AI provider.
- * Cast needed due to minor schema type variance between @ai-sdk/google v3 and ai v6.
+ * Get Google Search grounding tool from the Vertex AI provider.
  */
 export function getGroundingTool() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return initializeGoogle().tools.googleSearch({}) as any;
+  return getVertex().tools.googleSearch({});
 }
