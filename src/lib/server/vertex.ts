@@ -1,32 +1,38 @@
-import { google } from '@ai-sdk/google';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
 
-let initialized = false;
+// Lazy initialization - create client only when first called
+let googleInstance: ReturnType<typeof createGoogleGenerativeAI> | null = null;
 
-// Lazy verification on first use
-function ensureInitialized() {
-  if (initialized) return;
+function initializeGoogle() {
+  if (googleInstance) return googleInstance;
 
   const apiKey = process.env.GOOGLE_AI_API_KEY;
+
   if (!apiKey) {
     console.error('[Google AI] FATAL: GOOGLE_AI_API_KEY is not set');
     throw new Error('GOOGLE_AI_API_KEY is required. Set the GOOGLE_AI_API_KEY environment variable.');
   }
 
-  console.log('[Google AI] API key verified, ready to use');
-  initialized = true;
+  try {
+    googleInstance = createGoogleGenerativeAI({ apiKey });
+    console.log('[Google AI] Client created successfully');
+  } catch (err) {
+    console.error('[Google AI] createGoogleGenerativeAI() threw:', err instanceof Error ? err.stack : String(err));
+    throw err;
+  }
+
+  return googleInstance;
 }
 
 const reasoningModelId = process.env.GEMINI_REASONING_MODEL || 'gemini-2.0-flash-001';
 const extractionModelId = process.env.GEMINI_EXTRACTION_MODEL || 'gemini-2.0-flash-001';
 
 export function getReasoningModel() {
-  ensureInitialized();
-  return google(reasoningModelId);
+  return initializeGoogle()(reasoningModelId);
 }
 
 export function getExtractionModel() {
-  ensureInitialized();
-  return google(extractionModelId);
+  return initializeGoogle()(extractionModelId);
 }
 
 let sessionTokens = {
@@ -47,7 +53,6 @@ export function trackTokens(inputTokens: number, outputTokens: number): void {
  * Cast needed due to minor schema type variance between @ai-sdk/google v3 and ai v6.
  */
 export function getGroundingTool() {
-  ensureInitialized();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return google.tools.googleSearch({}) as any;
+  return initializeGoogle().tools.googleSearch({}) as any;
 }
