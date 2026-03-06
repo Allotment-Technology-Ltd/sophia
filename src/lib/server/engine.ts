@@ -117,6 +117,9 @@ async function streamPassWithContinuation(
       messages,
       tools: {
         googleSearch: getGroundingTool()
+      },
+      onError: ({ error }) => {
+        console.error(`[ENGINE] streamText error (${pass} round=${continuationRound}):`, error instanceof Error ? error.stack : String(error));
       }
     });
 
@@ -296,6 +299,9 @@ export async function runDialecticalEngine(
           messages,
           tools: {
             googleSearch: getGroundingTool()
+          },
+          onError: ({ error }) => {
+            console.error(`[ENGINE] streamText error (analysis round=${continuationRound}):`, error instanceof Error ? error.stack : String(error));
           }
         });
 
@@ -556,7 +562,10 @@ export async function runVerificationPass(
     model: getReasoningModel(),
     maxOutputTokens: 4096,
     system: VERIFICATION_SYSTEM,
-    prompt: buildVerificationUserPrompt(claims, synthesisText)
+    prompt: buildVerificationUserPrompt(claims, synthesisText),
+    onError: ({ error }) => {
+      console.error('[ENGINE] streamText error (verification):', error instanceof Error ? error.stack : String(error));
+    }
   });
 
   for await (const delta of stream.textStream) {
