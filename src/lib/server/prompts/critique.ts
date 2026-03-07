@@ -57,7 +57,7 @@ STRUCTURED METADATA BLOCK (REQUIRED):
 After completing your main critique, append a structured metadata block. This block MUST be fenced with triple backticks and the language tag 'sophia-meta'.
 
 The block contains JSON with two arrays:
-- sections: Array of {id: string, heading: string, content: string (1-2 sentence summary)}
+- sections: Array of {id: string, heading: string, content: string (2-3 paragraph substantive summary of that section)}
 - claims: Array of {id: string, text: string (1-2 sentences), badge: 'thesis'|'premise'|'objection'|'response'|'definition'|'empirical', source: string, tradition: string, confidence: 0.0-1.0}
 
 Example minimal structure:

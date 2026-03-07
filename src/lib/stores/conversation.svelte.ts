@@ -185,15 +185,11 @@ function createConversationStore() {
                 break;
 
               case 'pass_structured':
+                // Store sections for the structured/summary view.
+                // Do NOT overwrite currentPasses[pass] — the full streaming essay is canonical.
                 currentStructuredPasses = {
                   ...currentStructuredPasses,
                   [event.pass]: { sections: event.sections, wordCount: event.wordCount }
-                };
-                currentPasses = {
-                  ...currentPasses,
-                  [event.pass]: event.sections
-                    .map((section) => `## ${section.heading}\n\n${section.content}`)
-                    .join('\n\n')
                 };
                 break;
 
@@ -361,6 +357,19 @@ function createConversationStore() {
 
               case 'verification_complete':
                 currentPass = null;
+                // Patch the last assistant message so verification text persists
+                {
+                  const lastIdx = messages.findLastIndex(m => m.role === 'assistant');
+                  if (lastIdx >= 0) {
+                    const prev = messages[lastIdx];
+                    const updatedPasses = prev.passes
+                      ? { ...prev.passes, verification: currentPasses.verification }
+                      : { analysis: '', critique: '', synthesis: '', verification: currentPasses.verification };
+                    messages = messages.map((m, i) =>
+                      i === lastIdx ? { ...m, passes: updatedPasses } : m
+                    );
+                  }
+                }
                 break;
 
               case 'error':

@@ -14,7 +14,7 @@
   /* ── Text ── */
   --color-text:           #E8E6E1;   /* Primary — headings, pass content */
   --color-muted:          #9E9A93;   /* Secondary — body copy, descriptions */
-  --color-dim:            #6B6763;   /* Tertiary — labels, timestamps, inactive */
+  --color-dim:            #4A4845;   /* Tertiary — labels, timestamps, inactive */
 
   /* ── Borders ── */
   --color-border:         #2E2C29;   /* All borders and dividers, 1px */
@@ -40,7 +40,7 @@
   --color-amber-border:   rgba(196, 168, 130, 0.25);
 
   /* ── Typography ── */
-  --font-display: 'Lora', Georgia, 'Times New Roman', serif;
+  --font-display: 'Cormorant Garamond', Georgia, serif;
   --font-ui:      'JetBrains Mono', 'Courier New', monospace;
 
   /* Size scale */
@@ -84,7 +84,7 @@
   --transition-slow: 300ms ease;
 
   /* ── Layout ── */
-  --nav-height:       44px;   /* TopBar height — A2 spec: panel top: 44px */
+  --nav-height:       48px;   /* TopBar height */
   --content-max:      680px;   /* Pass content */
   --input-max:        700px;   /* Query input */
   --pass-nav-width:   200px;   /* Results left nav */

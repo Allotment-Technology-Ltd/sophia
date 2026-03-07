@@ -1,15 +1,16 @@
 <script lang="ts">
   import { auth, signOutUser, onAuthChange } from '$lib/firebase';
+  import { panelStore } from '$lib/stores/panel.svelte';
   import { goto } from '$app/navigation';
   import { browser } from '$app/environment';
 
   interface Props {
-    contextQuery?: string;      // Current question shown centred on results/loading screens
-    streamingPass?: string;     // e.g. 'Pass 1 of 3' — shown right of contextQuery when loading
-    menuDotVisible?: boolean;   // Shows live dot on panel toggle when references are streaming
-    panelOpen?: boolean;        // Current panel open state (for aria-expanded)
-    onMenuToggle?: () => void;  // Fires when panel toggle / hamburger is tapped
-    onNew?: () => void;         // Fires when + New is tapped
+    contextQuery?: string;
+    streamingPass?: string;
+    menuDotVisible?: boolean;
+    panelOpen?: boolean;
+    onMenuToggle?: () => void;
+    onNew?: () => void;
   }
 
   let { contextQuery, streamingPass, menuDotVisible, panelOpen = false, onMenuToggle, onNew }: Props = $props();
@@ -34,27 +35,10 @@
 
 <a href="#main" class="skip-link">Skip to content</a>
 
-<nav
-  class="top-bar"
-  aria-label="Main navigation"
->
+<nav class="top-bar" aria-label="Main navigation">
   <!-- Left: wordmark -->
   <a href="/" class="wordmark" aria-label="SOPHIA home">
-    <!-- Circular brand mark — matches favicon.svg -->
-    <svg
-      class="wordmark-mark"
-      viewBox="0 0 32 32"
-      width="18"
-      height="18"
-      fill="none"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <circle cx="16" cy="16" r="13" stroke="var(--color-sage)" stroke-width="1.5"/>
-      <path d="M 9 11 A 9 9 0 0 1 23 11" stroke="var(--color-copper)" stroke-width="1.5" stroke-linecap="round"/>
-      <path d="M 23 21 A 9 9 0 0 1 9 21" stroke="var(--color-blue)" stroke-width="1.5" stroke-linecap="round"/>
-      <circle cx="16" cy="16" r="2" fill="var(--color-sage)"/>
-    </svg>
+    <span class="wordmark-star" aria-hidden="true">✦</span>
     <span class="wordmark-text">SOPHIA</span>
   </a>
 
@@ -64,7 +48,7 @@
       <span class="context-query">{contextQuery}</span>
       {#if streamingPass}
         <span class="streaming-status" aria-label="Status: {streamingPass}">
-          <span class="streaming-dot" aria-hidden="true">●</span>
+          <span class="streaming-dot" aria-hidden="true"></span>
           {streamingPass}
         </span>
       {/if}
@@ -73,9 +57,16 @@
 
   <!-- Right: actions -->
   <div class="nav-actions">
-    <!-- Desktop: + New button -->
-    <button class="nav-btn desktop-only" onclick={onNew} aria-label="New conversation">
+    <button class="nav-btn-ghost" onclick={onNew} aria-label="New conversation">
       + New
+    </button>
+
+    <button
+      class="nav-link"
+      onclick={() => panelStore.toggle()}
+      aria-label="Open history"
+    >
+      History
     </button>
 
     <!-- User profile dropdown -->
@@ -93,18 +84,14 @@
             <div class="user-avatar-fallback">{currentUser.displayName?.[0] ?? '?'}</div>
           {/if}
         </button>
-        
+
         {#if userMenuOpen}
           <div class="user-dropdown" role="menu">
             <div class="user-info">
               <div class="user-name">{currentUser.displayName}</div>
               <div class="user-email">{currentUser.email}</div>
             </div>
-            <button
-              class="dropdown-item"
-              onclick={handleSignOut}
-              role="menuitem"
-            >
+            <button class="dropdown-item" onclick={handleSignOut} role="menuitem">
               Sign out
             </button>
           </div>
@@ -112,9 +99,9 @@
       </div>
     {/if}
 
-    <!-- Desktop: panel toggle -->
+    <!-- Panel toggle -->
     <button
-      class="panel-toggle desktop-only"
+      class="panel-toggle"
       aria-label="Toggle panel"
       aria-expanded={panelOpen}
       aria-controls="side-panel"
@@ -129,26 +116,29 @@
         <span class="menu-dot" aria-hidden="true"></span>
       {/if}
     </button>
-
-    <!-- Mobile: hamburger -->
-    <button
-      class="menu-toggle mobile-only"
-      aria-label="Open menu"
-      aria-expanded={panelOpen}
-      aria-controls="side-panel"
-      onclick={onMenuToggle}
-    >
-      <span class="hamburger-bar" aria-hidden="true"></span>
-      <span class="hamburger-bar" aria-hidden="true"></span>
-      <span class="hamburger-bar" aria-hidden="true"></span>
-      {#if menuDotVisible}
-        <span class="menu-dot" aria-hidden="true"></span>
-      {/if}
-    </button>
   </div>
 </nav>
 
 <style>
+  .skip-link {
+    position: absolute;
+    top: -100%;
+    left: var(--space-3);
+    z-index: 9999;
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-family: var(--font-ui);
+    font-size: var(--text-ui);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    text-decoration: none;
+  }
+
+  .skip-link:focus {
+    top: var(--space-2);
+  }
+
   .top-bar {
     position: fixed;
     top: 0;
@@ -169,27 +159,27 @@
   .wordmark {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
+    gap: 8px;
     text-decoration: none;
     flex-shrink: 0;
   }
 
-  .wordmark-mark {
+  .wordmark-star {
     color: var(--color-sage);
-    flex-shrink: 0;
+    font-size: 0.9rem;
+    line-height: 1;
   }
 
   .wordmark-text {
     font-family: var(--font-display);
     font-weight: 300;
-    font-size: 1.3rem;
-    letter-spacing: 0.3em;
-    text-transform: uppercase;
+    font-size: 1.1rem;
+    letter-spacing: 0.08em;
     color: var(--color-text);
     line-height: 1;
   }
 
-  /* Context display (results / loading) */
+  /* Context display */
   .context-display {
     display: flex;
     align-items: center;
@@ -213,7 +203,7 @@
   .streaming-status {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
     font-family: var(--font-ui);
     font-size: var(--text-meta);
     color: var(--color-sage);
@@ -222,8 +212,11 @@
   }
 
   .streaming-dot {
-    font-size: 0.5rem;
-    animation: symbol-breathe 2s ease-in-out infinite;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: symbolBreathe 2s ease-in-out infinite;
   }
 
   /* Nav actions */
@@ -234,12 +227,32 @@
     flex-shrink: 0;
   }
 
-  /* Nav button (+ New) */
-  .nav-btn {
+  /* + New ghost button */
+  .nav-btn-ghost {
     font-family: var(--font-ui);
-    font-size: var(--text-label);
+    font-size: 0.69rem;
     letter-spacing: 0.10em;
-    color: var(--color-dim);
+    text-transform: uppercase;
+    color: var(--color-muted);
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: 2px;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: border-color var(--transition-fast), color var(--transition-fast);
+  }
+
+  .nav-btn-ghost:hover {
+    border-color: var(--color-dim);
+    color: var(--color-text);
+  }
+
+  /* History text link */
+  .nav-link {
+    font-family: var(--font-ui);
+    font-size: 0.69rem;
+    letter-spacing: 0.05em;
+    color: var(--color-muted);
     background: none;
     border: none;
     cursor: pointer;
@@ -247,18 +260,18 @@
     transition: color var(--transition-fast);
   }
 
-  .nav-btn:hover {
-    color: var(--color-muted);
+  .nav-link:hover {
+    color: var(--color-text);
   }
 
-  /* Panel toggle (desktop) */
+  /* Panel toggle */
   .panel-toggle {
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 44px;
-    height: 44px;
+    width: 36px;
+    height: 36px;
     background: none;
     border: none;
     cursor: pointer;
@@ -271,45 +284,15 @@
     color: var(--color-muted);
   }
 
-  /* Hamburger (mobile) */
-  .menu-toggle {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    gap: 5px;
-    width: 44px;
-    height: 44px;
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 0;
-    color: var(--color-muted);
-  }
-
-  .hamburger-bar {
-    display: block;
-    width: 18px;
-    height: 1px;
-    background: currentColor;
-    transition: opacity var(--transition-fast);
-  }
-
-  .menu-toggle:hover .hamburger-bar {
-    opacity: 0.8;
-  }
-
-  /* Live dot on toggle buttons */
   .menu-dot {
     position: absolute;
-    top: 8px;
-    right: 8px;
+    top: 6px;
+    right: 6px;
     width: 5px;
     height: 5px;
     border-radius: 50%;
     background: var(--color-sage);
-    animation: symbol-breathe 2s ease-in-out infinite;
+    animation: symbolBreathe 2s ease-in-out infinite;
   }
 
   /* User profile */
@@ -320,14 +303,19 @@
   .user-button {
     display: flex;
     align-items: center;
-    width: 36px;
-    height: 36px;
+    width: 30px;
+    height: 30px;
     border-radius: 50%;
-    border: none;
+    border: 1px solid var(--color-border);
     background: none;
     cursor: pointer;
     padding: 0;
     overflow: hidden;
+    transition: border-color var(--transition-fast);
+  }
+
+  .user-button:hover {
+    border-color: var(--color-dim);
   }
 
   .user-avatar,
@@ -336,14 +324,13 @@
     height: 100%;
     border-radius: 50%;
     object-fit: cover;
-    border: 1px solid var(--color-border);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-weight: 500;
-    font-size: 0.875rem;
-    background: var(--color-sage);
-    color: white;
+    font-weight: 400;
+    font-size: 0.75rem;
+    background: var(--color-sage-bg);
+    color: var(--color-sage);
   }
 
   .user-dropdown {
@@ -354,7 +341,6 @@
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
     min-width: 220px;
     z-index: 1000;
   }
@@ -365,12 +351,14 @@
   }
 
   .user-name {
-    font-weight: 500;
-    font-size: var(--text-label);
+    font-family: var(--font-display);
+    font-size: 0.9rem;
+    font-weight: 400;
     color: var(--color-text);
   }
 
   .user-email {
+    font-family: var(--font-ui);
     font-size: var(--text-meta);
     color: var(--color-muted);
     margin-top: 2px;
@@ -386,24 +374,17 @@
     cursor: pointer;
     font-family: var(--font-ui);
     font-size: var(--text-label);
-    color: var(--color-text);
-    transition: background-color var(--transition-fast);
+    color: var(--color-muted);
+    transition: color var(--transition-fast);
   }
 
   .dropdown-item:hover {
-    background-color: var(--color-hover);
+    color: var(--color-text);
   }
 
-  /* Responsive visibility */
-  .mobile-only { display: none; }
-  .desktop-only { display: flex; }
-
   @media (max-width: 767px) {
-    .mobile-only { display: flex; }
-    .desktop-only { display: none; }
-
     .context-query {
-      max-width: 160px;
+      max-width: 140px;
     }
   }
 </style>
