@@ -9,8 +9,20 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* camelCase alias */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* Streaming cursor blink */
 @keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+/* camelCase alias */
+@keyframes cursorBlink {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0; }
 }
@@ -21,14 +33,32 @@
   50%       { opacity: 1;   transform: scale(1.05); }
 }
 
+/* camelCase alias */
+@keyframes symbolBreathe {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50%       { opacity: 1;   transform: scale(1.05); }
+}
+
 /* Orbital ring spin */
 @keyframes orbit-spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
 
+/* camelCase alias */
+@keyframes orbitSpin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
 /* Active pass node pulse */
 @keyframes node-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(127,163,131,0.15); }
+  50%       { box-shadow: 0 0 0 8px rgba(127,163,131,0.06); }
+}
+
+/* camelCase alias */
+@keyframes nodePulse {
   0%, 100% { box-shadow: 0 0 0 4px rgba(127,163,131,0.15); }
   50%       { box-shadow: 0 0 0 8px rgba(127,163,131,0.06); }
 }
