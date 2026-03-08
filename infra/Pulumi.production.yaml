@@ -12,3 +12,4 @@ config:
   sophia:ingestMemory: 4Gi
   sophia:ingestCpu: "2"
   sophia:ingestTimeoutSeconds: "10800"
+  sophia:appImageTag: c742bcc1b41a74dbe56e94d54154e93cc422feec
