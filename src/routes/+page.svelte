@@ -3,7 +3,6 @@
   import { referencesStore } from '$lib/stores/references.svelte';
   import { historyStore } from '$lib/stores/history.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
-  import { graphStore } from '$lib/stores/graph.svelte';
   import { renderMarkdown } from '$lib/utils/markdown';
   import { fly, fade } from 'svelte/transition';
   import { quintOut } from 'svelte/easing';
@@ -12,7 +11,6 @@
   import ReferencesTab from '$lib/components/references/ReferencesTab.svelte';
   import HistoryTab from '$lib/components/panel/HistoryTab.svelte';
   import SettingsTab from '$lib/components/panel/SettingsTab.svelte';
-  import GraphCanvas from '$lib/components/visualization/GraphCanvas.svelte';
   import QuestionInput from '$lib/components/QuestionInput.svelte';
   import Button from '$lib/components/Button.svelte';
   import PassCard from '$lib/components/PassCard.svelte';
@@ -55,8 +53,11 @@
   let lastAssistantMsg = $derived(conversation.messages.findLast(m => m.role === 'assistant'));
 
   let isQueryState = $derived(conversation.messages.length === 0 && !conversation.isLoading);
-  let isLoadingState = $derived(conversation.isLoading);
-  let isResultsState = $derived(!conversation.isLoading && !!lastAssistantMsg);
+  // Only enter loading state before the first assistant message arrives;
+  // verification runs in the background while results remain visible.
+  let isInitialLoading = $derived(conversation.isLoading && !lastAssistantMsg);
+  let isLoadingState = $derived(isInitialLoading);
+  let isResultsState = $derived(!!lastAssistantMsg && !isInitialLoading);
 
   let completedPasses = $derived.by(() => {
     const passes: string[] = [];
@@ -139,15 +140,6 @@
     await conversation.submitQuery(lastQuery);
   }
 
-  function handleNodeSelect(nodeId: string): void {
-    console.log('[GraphViz] Node selected:', nodeId);
-  }
-
-  function handleJumpToReferences(nodeId: string): void {
-    console.log('[GraphViz] Jumping to references for:', nodeId);
-    panelStore.openPanel();
-  }
-
   // ── Effects ───────────────────────────────────────────────────────────────
   $effect(() => {
     if (conversation.currentPass && ['analysis', 'critique', 'synthesis'].includes(conversation.currentPass)) {
@@ -228,20 +220,6 @@
           </aside>
 
           <div class="results-col">
-            <!-- Graph visualization when available during streaming -->
-            {#if graphStore.nodes.length > 0}
-              <div class="graph-wrap">
-                <GraphCanvas
-                  nodes={graphStore.nodes}
-                  edges={graphStore.edges}
-                  width={Math.min(720, typeof window !== 'undefined' ? window.innerWidth - 280 : 720)}
-                  height={360}
-                  onNodeSelect={handleNodeSelect}
-                  onJumpToReferences={handleJumpToReferences}
-                />
-              </div>
-            {/if}
-
             {#if conversation.currentPasses.analysis}
               <div id="pass-analysis">
                 <PassCard
@@ -278,7 +256,7 @@
       <!-- ═══════════════════════════════════════════════════════════════
            STATE 3: RESULTS — two-column layout
            ═══════════════════════════════════════════════════════════════ -->
-      {#if !isLoadingState && lastAssistantMsg && lastAssistantMsg.passes}
+      {#if isResultsState && lastAssistantMsg && lastAssistantMsg.passes}
         {@const passes = lastAssistantMsg.passes}
 
         <div class="results-layout" in:fly={{ y: 24, duration: 500, delay: 100, easing: quintOut }}>
@@ -604,15 +582,6 @@
     color: var(--color-muted);
     margin: 0;
     line-height: 1.65;
-  }
-
-  /* ── Graph visualization ────────────────────────────────────────────── */
-  .graph-wrap {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: 3px;
-    padding: var(--space-3);
-    overflow: hidden;
   }
 
   /* ── Verification section ───────────────────────────────────────────── */

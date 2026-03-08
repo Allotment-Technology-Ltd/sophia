@@ -17,8 +17,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
 import { Surreal } from 'surrealdb';
-import { VoyageAIClient } from 'voyageai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { embedTexts, EMBEDDING_DIMENSIONS } from '../src/lib/server/embeddings.js';
 import { z } from 'zod';
 import { startSpinner, startStageTimer, renderProgressBar, IS_TTY } from './progress.js';
 
@@ -57,20 +57,11 @@ import { BatchInserter } from '../src/lib/server/batch-inserter.js';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929';
-const VOYAGE_MODEL = process.env.VOYAGE_MODEL || 'voyage-4';
-const VOYAGE_DIMENSIONS = Number(process.env.VOYAGE_DIMENSIONS || '1024');
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 const CLAUDE_MODELS = parseModelList(process.env.CLAUDE_MODELS, [
 	CLAUDE_MODEL,
 	'claude-sonnet-4-5-20250929'
-]);
-
-const VOYAGE_MODELS = parseModelList(process.env.VOYAGE_MODELS, [
-	VOYAGE_MODEL,
-	'voyage-4',
-	'voyage-3',
-	'voyage-3-lite'
 ]);
 
 const GEMINI_MODELS = parseModelList(process.env.GEMINI_MODELS, [
@@ -87,7 +78,6 @@ const SURREAL_PASS = process.env.SURREAL_PASS || 'root';
 const SURREAL_NAMESPACE = process.env.SURREAL_NAMESPACE || 'sophia';
 const SURREAL_DATABASE = process.env.SURREAL_DATABASE || 'sophia';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
-const VOYAGE_API_KEY = process.env.VOYAGE_API_KEY || '';
 const GOOGLE_AI_API_KEY = process.env.GOOGLE_AI_API_KEY || '';
 const DB_CONNECT_MAX_RETRIES = Number(process.env.DB_CONNECT_MAX_RETRIES || '4');
 const DB_CONNECT_RETRY_BASE_MS = Number(process.env.DB_CONNECT_RETRY_BASE_MS || '750');
@@ -114,14 +104,14 @@ function shouldRunStage(stage: string, lastCompleted: string | null | undefined)
 interface CostTracker {
 	claudeInputTokens: number;
 	claudeOutputTokens: number;
-	voyageTokens: number;
+	vertexChars: number; // Vertex AI text-embedding-005 is character-based
 	geminiTokens: number;
 }
 
 const costs: CostTracker = {
 	claudeInputTokens: 0,
 	claudeOutputTokens: 0,
-	voyageTokens: 0,
+	vertexChars: 0,
 	geminiTokens: 0
 };
 
@@ -129,12 +119,12 @@ function estimateCost(): string {
 	// Claude Sonnet 4.5: $3/1M input, $15/1M output
 	const claudeInput = (costs.claudeInputTokens / 1_000_000) * 3;
 	const claudeOutput = (costs.claudeOutputTokens / 1_000_000) * 15;
-	// Voyage 3 Lite: $0.02/1M tokens
-	const voyage = (costs.voyageTokens / 1_000_000) * 0.02;
+	// Vertex AI text-embedding-005: $0.025/1M characters
+	const vertex = (costs.vertexChars / 1_000_000) * 0.025;
 	// Gemini 2.0 Flash: $0.075/1M input, $0.30/1M output (estimate 50/50)
 	const gemini = (costs.geminiTokens / 1_000_000) * 0.19;
 
-	const total = claudeInput + claudeOutput + voyage + gemini;
+	const total = claudeInput + claudeOutput + vertex + gemini;
 	// Convert to GBP (rough rate)
 	const gbp = total * 0.79;
 	return gbp.toFixed(4);
@@ -143,9 +133,9 @@ function estimateCost(): string {
 function estimateCostUsd(): string {
 	const claudeInput = (costs.claudeInputTokens / 1_000_000) * 3;
 	const claudeOutput = (costs.claudeOutputTokens / 1_000_000) * 15;
-	const voyage = (costs.voyageTokens / 1_000_000) * 0.02;
+	const vertex = (costs.vertexChars / 1_000_000) * 0.025;
 	const gemini = (costs.geminiTokens / 1_000_000) * 0.19;
-	return (claudeInput + claudeOutput + voyage + gemini).toFixed(4);
+	return (claudeInput + claudeOutput + vertex + gemini).toFixed(4);
 }
 
 function logClaudeCost(label: string) {
@@ -276,13 +266,6 @@ function isModelUnavailableError(error: unknown): boolean {
 		message.includes('unsupported model') ||
 		message.includes('invalid model')
 	);
-}
-
-function getVoyageModelCandidates(requiredDimension: number): string[] {
-	return VOYAGE_MODELS.filter((model) => {
-		if (requiredDimension >= 1024 && model === 'voyage-3-lite') return false;
-		return true;
-	});
 }
 
 function getSectionTokenLimit(sourceType: string): number {
@@ -709,12 +692,29 @@ async function main() {
 	// Pipeline mode: exit after stages 1-4 so the batch can start the next source's
 	// Claude extraction while Gemini validation runs for this source in a separate process.
 	const stopAfterEmbedding = args.includes('--stop-after-embedding');
+	// Domain override: when set, all claims from this source are tagged with this domain,
+	// overriding whatever domain Claude assigns during extraction.
+	const domainOverrideIdx = args.findIndex((a) => a === '--domain');
+	const domainOverride = domainOverrideIdx !== -1 ? args[domainOverrideIdx + 1] : null;
+
+	// Force-stage: re-run from a specific stage, ignoring saved progress.
+	// e.g. --force-stage embedding re-runs Stage 4 onwards.
+	const forceStageIdx = args.findIndex((a) => a === '--force-stage');
+	const forceStage = forceStageIdx !== -1 ? args[forceStageIdx + 1] : null;
+	if (forceStage && !STAGES_ORDER.includes(forceStage)) {
+		console.error(`[ERROR] Unknown --force-stage value: ${forceStage}`);
+		console.error(`Valid stages: ${STAGES_ORDER.join(', ')}`);
+		process.exit(1);
+	}
 
 	if (!filePath) {
-		console.error('Usage: npx tsx --env-file=.env scripts/ingest.ts <source-file-path> [--validate]');
+		console.error('Usage: npx tsx --env-file=.env scripts/ingest.ts <source-file-path> [--validate] [--domain <domain>]');
 		console.error('\nThe source-file-path should be a .txt file in data/sources/');
 		console.error('\nFlags:');
-		console.error('  --validate    Run Gemini cross-model validation (requires GOOGLE_AI_API_KEY)');
+		console.error('  --validate              Run Gemini cross-model validation (requires GOOGLE_AI_API_KEY)');
+		console.error('  --domain <domain>       Override claim domain tag (e.g. philosophy_of_mind)');
+		console.error('  --force-stage <stage>   Re-run from this stage onwards, ignoring saved progress');
+		console.error(`                          Valid stages: ${STAGES_ORDER.join(', ')}`);
 		console.error('\nResume is automatic — re-run the same source to pick up where it left off.');
 		process.exit(1);
 	}
@@ -722,10 +722,6 @@ async function main() {
 	// Validate environment
 	if (!ANTHROPIC_API_KEY) {
 		console.error('[ERROR] ANTHROPIC_API_KEY not set');
-		process.exit(1);
-	}
-	if (!VOYAGE_API_KEY) {
-		console.error('[ERROR] VOYAGE_API_KEY not set');
 		process.exit(1);
 	}
 	if (shouldValidate && !GOOGLE_AI_API_KEY) {
@@ -794,6 +790,14 @@ async function main() {
 		await createIngestionLog(db, sourceMeta.url, sourceMeta.title);
 	}
 
+	// --force-stage overrides the resume point regardless of what's in the DB log.
+	// e.g. --force-stage embedding re-runs Stage 4 (embedding) and everything after.
+	if (forceStage) {
+		const forceIdx = STAGES_ORDER.indexOf(forceStage);
+		resumeFromStage = forceIdx === 0 ? null : STAGES_ORDER[forceIdx - 1];
+		console.log(`[FORCE] --force-stage ${forceStage}: overriding resume point to "${resumeFromStage ?? 'none'}"`);
+	}
+
 	// Load partial results from disk if resuming
 	let partial: PartialResults;
 	if (resumeFromStage) {
@@ -834,7 +838,6 @@ async function main() {
 
 	// Initialize clients
 	const claude = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
-	const voyage = new VoyageAIClient({ apiKey: VOYAGE_API_KEY });
 
 	try {
 		// ═══════════════════════════════════════════════════════════════
@@ -1167,65 +1170,20 @@ async function main() {
 			await updateIngestionLog(db, sourceMeta.url, { status: 'embedding' });
 
 			console.log('\n┌──────────────────────────────────────────────────────────┐');
-			console.log('│ STAGE 4: EMBEDDING (Voyage AI)                          │');
+			console.log('│ STAGE 4: EMBEDDING (Vertex AI text-embedding-005)        │');
 			console.log('└──────────────────────────────────────────────────────────┘');
 
 			const claimTexts = allClaims.map((c) => c.text);
-			const BATCH_SIZE = 128;
+			console.log(`  Embedding ${claimTexts.length} claims via Vertex AI (${EMBEDDING_DIMENSIONS}-dim)...`);
 
-			console.log(`  Embedding ${claimTexts.length} claims in batches of ${BATCH_SIZE}...`);
+			allEmbeddings = await embedTexts(claimTexts);
 
-			for (let i = 0; i < claimTexts.length; i += BATCH_SIZE) {
-				const batch = claimTexts.slice(i, i + BATCH_SIZE);
-				const batchNum = Math.floor(i / BATCH_SIZE) + 1;
-				const totalBatches = Math.ceil(claimTexts.length / BATCH_SIZE);
-				console.log(`  [BATCH ${batchNum}/${totalBatches}] Embedding ${batch.length} texts...`);
+			// Track cost: Vertex AI charges per character, not per token
+			const totalChars = claimTexts.reduce((sum, t) => sum + t.length, 0);
+			costs.vertexChars += totalChars;
 
-				const voyageCandidates = getVoyageModelCandidates(VOYAGE_DIMENSIONS);
-				let response: Awaited<ReturnType<VoyageAIClient['embed']>> | null = null;
-				let voyageLastError: Error | null = null;
-
-				for (const model of voyageCandidates) {
-					try {
-						response = await voyage.embed({
-							model,
-							input: batch,
-							inputType: 'document',
-							outputDimension: VOYAGE_DIMENSIONS
-						});
-						if (model !== VOYAGE_MODEL) {
-							console.log(`  [MODEL] Voyage fallback selected: ${model}`);
-						}
-						break;
-					} catch (error) {
-						voyageLastError = error instanceof Error ? error : new Error(String(error));
-						if (!isModelUnavailableError(voyageLastError)) {
-							break;
-						}
-					}
-				}
-
-				if (!response) {
-					throw new Error(
-						`Voyage embedding failed: ${voyageLastError?.message || 'No compatible model available'}`
-					);
-				}
-
-				if (response.usage?.totalTokens) {
-					costs.voyageTokens += response.usage.totalTokens;
-				}
-
-				if (response.data) {
-					for (const item of response.data) {
-						if (item.embedding) {
-							allEmbeddings.push(item.embedding);
-						}
-					}
-				}
-			}
-
-			console.log(`  [OK] Generated ${allEmbeddings.length} embeddings (${VOYAGE_DIMENSIONS} dimensions)`);
-			console.log(`  [COST] Voyage tokens: ${costs.voyageTokens.toLocaleString()}`);
+			console.log(`  [OK] Generated ${allEmbeddings.length} embeddings (${EMBEDDING_DIMENSIONS} dimensions)`);
+			console.log(`  [COST] Vertex chars: ${totalChars.toLocaleString()} (~$${((totalChars / 1_000_000) * 0.025).toFixed(4)})}`);
 
 			partial.embeddings = allEmbeddings;
 			partial.stage_completed = 'embedding';
@@ -1490,7 +1448,7 @@ async function main() {
 					{
 						text: claim.text,
 						claim_type: claim.claim_type,
-						domain: claim.domain,
+						domain: domainOverride ?? claim.domain,
 						source: sourceId,
 						section_context: claim.section_context ?? undefined,
 						position_in_source: claim.position_in_source,
@@ -1754,7 +1712,7 @@ async function main() {
 			`║  Claude tokens:    ${`${(costs.claudeInputTokens + costs.claudeOutputTokens).toLocaleString()} (in: ${costs.claudeInputTokens.toLocaleString()}, out: ${costs.claudeOutputTokens.toLocaleString()})`.padEnd(40)} ║`
 		);
 		console.log(
-			`║  Voyage tokens:    ${costs.voyageTokens.toLocaleString().padEnd(40)} ║`
+			`║  Vertex chars:     ${costs.vertexChars.toLocaleString().padEnd(40)} ║`
 		);
 		console.log(
 			`║  Gemini tokens:    ${costs.geminiTokens.toLocaleString().padEnd(40)} ║`

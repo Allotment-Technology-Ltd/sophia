@@ -68,7 +68,7 @@ async function setupSchema() {
 
 		// Create indexes for claim table
 		await db.query(`
-			DEFINE INDEX IF NOT EXISTS claim_embedding ON claim FIELDS embedding MTREE DIMENSION 1024;
+			DEFINE INDEX IF NOT EXISTS claim_embedding ON claim FIELDS embedding MTREE DIMENSION 768;
 			DEFINE INDEX IF NOT EXISTS claim_domain ON claim FIELDS domain;
 			DEFINE INDEX IF NOT EXISTS claim_source ON claim FIELDS source;
 		`);

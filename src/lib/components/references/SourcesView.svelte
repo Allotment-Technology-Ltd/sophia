@@ -50,7 +50,8 @@
 
   const hasKbSources = $derived(referencesStore.sources.length > 0);
   const hasWebSources = $derived(referencesStore.groundingSources.length > 0);
-  const hasAnySources = $derived(hasKbSources || hasWebSources);
+  const hasClaimSources = $derived(referencesStore.claimSources.length > 0);
+  const hasAnySources = $derived(hasKbSources || hasWebSources || hasClaimSources);
 
   const passOrder: PassType[] = ['analysis', 'critique', 'synthesis', 'verification'];
 </script>
@@ -63,6 +64,57 @@
       </p>
     </div>
   {:else}
+
+    <!-- Cited Sources (derived from LLM claims) -->
+    {#if hasClaimSources}
+      <div class="section">
+        <div class="section-header">
+          <span class="section-label">Cited Works</span>
+          <span class="section-count">{referencesStore.claimSources.length} {referencesStore.claimSources.length === 1 ? 'source' : 'sources'}</span>
+        </div>
+        <div class="source-list">
+          {#each referencesStore.claimSources as cs (cs.source)}
+            <div class="cited-card">
+              {#if cs.sourceUrl}
+                <a href={cs.sourceUrl} target="_blank" rel="noopener noreferrer" class="cited-link">
+                  <div class="cited-icon" aria-hidden="true">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                    </svg>
+                  </div>
+                  <div class="cited-content">
+                    <div class="cited-title">{cs.source}</div>
+                    {#if cs.tradition}
+                      <div class="cited-tradition">{cs.tradition}</div>
+                    {/if}
+                  </div>
+                  <div class="cited-count" title="{cs.claimCount} claim{cs.claimCount !== 1 ? 's' : ''} from this source">
+                    {cs.claimCount}
+                  </div>
+                </a>
+              {:else}
+                <div class="cited-icon" aria-hidden="true">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                  </svg>
+                </div>
+                <div class="cited-content">
+                  <div class="cited-title">{cs.source}</div>
+                  {#if cs.tradition}
+                    <div class="cited-tradition">{cs.tradition}</div>
+                  {/if}
+                </div>
+                <div class="cited-count" title="{cs.claimCount} claim{cs.claimCount !== 1 ? 's' : ''} from this source">
+                  {cs.claimCount}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
 
     <!-- Knowledge Base Sources -->
     {#if hasKbSources}
@@ -207,6 +259,78 @@
     font-family: var(--font-ui);
     font-size: var(--text-meta);
     color: var(--color-dim);
+  }
+
+  /* Cited works (from LLM claims) */
+  .cited-card {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    background: var(--color-surface);
+  }
+
+  a.cited-link {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    text-decoration: none;
+    color: inherit;
+    width: 100%;
+    transition: background var(--transition-fast);
+  }
+
+  a.cited-link:hover {
+    opacity: 0.85;
+  }
+
+  .cited-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-sage);
+    flex-shrink: 0;
+  }
+
+  .cited-content {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .cited-title {
+    font-family: var(--font-display);
+    font-size: 0.85rem;
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.3;
+  }
+
+  .cited-tradition {
+    font-family: var(--font-ui);
+    font-size: var(--text-meta);
+    color: var(--color-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cited-count {
+    font-family: var(--font-ui);
+    font-size: var(--text-meta);
+    color: var(--color-sage);
+    flex-shrink: 0;
+    background: var(--color-sage-bg);
+    border: 1px solid var(--color-sage-border);
+    border-radius: 2px;
+    padding: 1px 6px;
+    line-height: 1.4;
   }
 
   /* Knowledge base cards */

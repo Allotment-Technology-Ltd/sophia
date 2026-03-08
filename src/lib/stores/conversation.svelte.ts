@@ -60,9 +60,8 @@ function createConversationStore() {
     get isAtQuestionLimit() { return questionCount >= QUESTION_LIMIT; },
 
     async submitQuery(query: string, lens?: string): Promise<void> {
-      // Enforce question limit
+      // Enforce question limit (only for live queries, not cache hits)
       if (questionCount >= QUESTION_LIMIT) return;
-      questionCount += 1;
 
       error = null;
       isLoading = true;
@@ -82,6 +81,8 @@ function createConversationStore() {
 
       const cached = historyStore.getCachedResult(query);
       if (cached) {
+        // Loading from history restarts the depth counter — fresh exploration
+        questionCount = 0;
         currentPass = null;
         currentPasses = { ...cached.passes, verification: cached.passes.verification ?? '' };
         currentStructuredPasses = {};
@@ -110,6 +111,9 @@ function createConversationStore() {
         isLoading = false;
         return;
       }
+
+      // Only count depth for live API queries (not cache/history hits)
+      questionCount += 1;
 
       try {
         const idToken = await getIdToken();

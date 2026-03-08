@@ -21,6 +21,28 @@ function createReferencesStore() {
 
   const claimCount = $derived(claims.length);
 
+  // Sources derived from LLM-cited claims — always populated when claims exist
+  const GENERIC_SOURCE_NAMES = new Set(['Analysis', 'Critique', 'Synthesis', 'Verification', '']);
+  const claimSources = $derived.by(() => {
+    const map = new Map<string, { source: string; claimCount: number; sourceUrl?: string; tradition: string }>();
+    for (const claim of activeClaims) {
+      if (GENERIC_SOURCE_NAMES.has(claim.source ?? '')) continue;
+      const existing = map.get(claim.source);
+      if (existing) {
+        existing.claimCount += 1;
+        if (!existing.sourceUrl && claim.sourceUrl) existing.sourceUrl = claim.sourceUrl;
+      } else {
+        map.set(claim.source, {
+          source: claim.source,
+          claimCount: 1,
+          sourceUrl: claim.sourceUrl,
+          tradition: claim.tradition
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.claimCount - a.claimCount);
+  });
+
   const claimsPerPhase = $derived(
     claims.reduce<Record<AnalysisPhase, number>>(
       (acc, c) => { acc[c.phase]++; return acc; },
@@ -78,6 +100,7 @@ function createReferencesStore() {
 
   return {
     get activeClaims() { return activeClaims; },
+    get claimSources() { return claimSources; },
     get relations() { return relations; },
     get sources() { return sources; },
     get groundingSources() { return groundingSources; },

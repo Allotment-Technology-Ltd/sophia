@@ -178,6 +178,35 @@ These items must be resolved before any public access:
 
 ## Upcoming Phases
 
+### Phase 3d: Domain Expansion Infrastructure ⬅ parallel track
+
+**Track:** Runs in parallel to 3c-E deployment on `domain-expansion` branch (v0.2.0)
+
+- [ ] **A1** — Embedding standardisation: update `ingest.ts` to Vertex AI `text-embedding-005` (768-dim); MTREE index dimension 1024 → 768; confirm/run `reembed-corpus.ts` against ethics corpus
+- [ ] **A2** — Idempotent pipeline: per-stage JSON checkpoints in `data/ingested/`; `--force-stage <n>` flag; DB upserts to prevent duplicate claims on re-run
+- [ ] **A3** — Pre-scan mandatory gate: `ingest-batch.ts` exits non-zero if blockers found; cost estimation added to `pre-scan.ts`; per-source $2.00 cost ceiling
+- [x] **A4** — Schema domain validation: already implemented (`ASSERT` constraints on `claim.domain` in `setup-schema.ts`)
+- [ ] **A5** — Automated source curation: `scripts/curate-source.ts` — URL reachability, PDF detection (block), duplicate detection, token size estimate
+
+### Phase 3e: Philosophy of Mind — Wave 1
+
+**Depends on:** Phase 3d
+**Coverage:** 10 sources (tiered launch — Consciousness & Qualia + AI & Machine Minds)
+
+- [ ] `data/source-list-pom.json` — Nagel, Chalmers, Jackson, Dennett, Block + Turing, Searle
+- [ ] Pre-scan gate passes for all sources
+- [ ] Wave 1 ingestion with `--domain philosophy_of_mind --validate`
+- [ ] Quality gate: 0% orphan claims, >80% argument coverage, >80% spot-check accuracy
+- [ ] Engine validation: 5 PoM test queries return knowledge graph claims
+
+### Phase 3f: Philosophy of Mind — Wave 2
+
+**Depends on:** Phase 3e quality gate
+**Coverage:** 15–20 additional sources (mind-body, personal identity, extended cognition)
+
+- [ ] Descartes, Smart, Fodor, Kim + Parfit, Locke, Olson + Clark & Chalmers, Hutchins
+- [ ] Same automated runbook as Wave 1
+
 ### Phase 4: Knowledge Graph Visualisation (Next major feature)
 
 **Depends on:** Phase 3c deployment
