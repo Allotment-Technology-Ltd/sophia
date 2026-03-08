@@ -226,7 +226,7 @@ All research methodology, evaluation results, argument graph schema, and dialect
 
 ## Author
 
-**Adam Hinton** — MA Philosophy (University of Exeter), PG student (The Open University), Senior Product Manager (NHS England, Cybersecurity Division)
+**Adam Boon** — MA Philosophy (The Open University), Senior Product Manager (NHS Englandy)
 
 Research interest: whether structured knowledge representation can improve the epistemological rigour of LLM-generated philosophical reasoning.
 
