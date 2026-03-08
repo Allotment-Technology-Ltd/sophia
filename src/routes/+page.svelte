@@ -5,6 +5,8 @@
   import { panelStore } from '$lib/stores/panel.svelte';
   import { graphStore } from '$lib/stores/graph.svelte';
   import { renderMarkdown } from '$lib/utils/markdown';
+  import { fly, fade } from 'svelte/transition';
+  import { quintOut } from 'svelte/easing';
   import SidePanel from '$lib/components/panel/SidePanel.svelte';
   import TabStrip, { type TabId, type Tab } from '$lib/components/panel/TabStrip.svelte';
   import ReferencesTab from '$lib/components/references/ReferencesTab.svelte';
@@ -18,6 +20,9 @@
   import EpistemicStatus from '$lib/components/EpistemicStatus.svelte';
   import Loading from '$lib/components/Loading.svelte';
   import FollowUpInput from '$lib/components/FollowUpInput.svelte';
+  import FollowUpHints from '$lib/components/FollowUpHints.svelte';
+  import QuestionCounter from '$lib/components/QuestionCounter.svelte';
+  import { extractFurtherQuestions } from '$lib/utils/extractQuestions';
 
   // ── State ─────────────────────────────────────────────────────────────────
   let queryInput = $state('');
@@ -123,6 +128,11 @@
     await handleSubmit();
   }
 
+  function scrollToPass(pass: string): void {
+    const el = document.getElementById(`pass-${pass}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   async function retryLastQuery(): Promise<void> {
     const lastQuery = conversation.messages.findLast(m => m.role === 'user')?.content;
     if (!lastQuery) return;
@@ -198,20 +208,22 @@
            (transitions to streaming cards as content arrives)
            ═══════════════════════════════════════════════════════════════ -->
       {#if isLoadingState && !hasStreamingContent}
-        <Loading
-          currentPass={conversation.currentPass ?? ''}
-          statusText={loadingStatusText}
-          {completedPasses}
-        />
+        <div out:fly={{ y: -30, duration: 400, easing: quintOut }}>
+          <Loading
+            currentPass={conversation.currentPass ?? ''}
+            statusText={loadingStatusText}
+            {completedPasses}
+          />
+        </div>
       {/if}
 
       {#if isLoadingState && hasStreamingContent}
-        <div class="results-layout">
+        <div class="results-layout" in:fly={{ y: 20, duration: 400, easing: quintOut }} out:fly={{ x: -40, y: -20, duration: 450, easing: quintOut }}>
           <aside class="pass-nav-col">
             <PassNavigator
               activePass={conversation.currentPass ?? 'analysis'}
               {completedPasses}
-              onSelect={(p) => activeResultPass = p as 'analysis' | 'critique' | 'synthesis'}
+              onSelect={(p) => { activeResultPass = p as 'analysis' | 'critique' | 'synthesis'; scrollToPass(p); }}
             />
           </aside>
 
@@ -231,27 +243,33 @@
             {/if}
 
             {#if conversation.currentPasses.analysis}
-              <PassCard
-                pass="analysis"
-                content={renderPass(conversation.currentPasses.analysis)}
-                streaming={conversation.currentPass === 'analysis'}
-              />
+              <div id="pass-analysis">
+                <PassCard
+                  pass="analysis"
+                  content={renderPass(conversation.currentPasses.analysis)}
+                  streaming={conversation.currentPass === 'analysis'}
+                />
+              </div>
             {/if}
 
             {#if conversation.currentPasses.critique}
-              <PassCard
-                pass="critique"
-                content={renderPass(conversation.currentPasses.critique)}
-                streaming={conversation.currentPass === 'critique'}
-              />
+              <div id="pass-critique">
+                <PassCard
+                  pass="critique"
+                  content={renderPass(conversation.currentPasses.critique)}
+                  streaming={conversation.currentPass === 'critique'}
+                />
+              </div>
             {/if}
 
             {#if conversation.currentPasses.synthesis}
-              <PassCard
-                pass="synthesis"
-                content={renderPass(conversation.currentPasses.synthesis)}
-                streaming={conversation.currentPass === 'synthesis'}
-              />
+              <div id="pass-synthesis">
+                <PassCard
+                  pass="synthesis"
+                  content={renderPass(conversation.currentPasses.synthesis)}
+                  streaming={conversation.currentPass === 'synthesis'}
+                />
+              </div>
             {/if}
           </div>
         </div>
@@ -263,12 +281,13 @@
       {#if !isLoadingState && lastAssistantMsg && lastAssistantMsg.passes}
         {@const passes = lastAssistantMsg.passes}
 
-        <div class="results-layout">
+        <div class="results-layout" in:fly={{ y: 24, duration: 500, delay: 100, easing: quintOut }}>
           <aside class="pass-nav-col">
             <PassNavigator
               activePass={activeResultPass}
               completedPasses={resultsCompletedPasses}
-              onSelect={(p) => activeResultPass = p as 'analysis' | 'critique' | 'synthesis'}
+              showVerification={!!passes.verification}
+              onSelect={(p) => { activeResultPass = p as 'analysis' | 'critique' | 'synthesis'; scrollToPass(p); }}
             />
           </aside>
 
@@ -282,15 +301,21 @@
 
             <!-- Pass cards -->
             {#if passes.analysis}
-              <PassCard pass="analysis" content={renderPass(passes.analysis)} />
+              <div id="pass-analysis">
+                <PassCard pass="analysis" content={renderPass(passes.analysis)} />
+              </div>
             {/if}
 
             {#if passes.critique}
-              <PassCard pass="critique" content={renderPass(passes.critique)} />
+              <div id="pass-critique">
+                <PassCard pass="critique" content={renderPass(passes.critique)} />
+              </div>
             {/if}
 
             {#if passes.synthesis}
-              <PassCard pass="synthesis" content={renderPass(passes.synthesis)} />
+              <div id="pass-synthesis">
+                <PassCard pass="synthesis" content={renderPass(passes.synthesis)} />
+              </div>
             {/if}
 
             <!-- Epistemic status -->
@@ -300,13 +325,36 @@
 
             <!-- Web verification section -->
             {#if passes.synthesis}
-              <div class="verification-section">
+              <div id="pass-verification" class="verification-section">
                 {#if passes.verification}
-                  <div class="verification-content">
-                    <div class="verification-eyebrow">Web Verification</div>
+                  <div class="verification-content" in:fade={{ duration: 350 }}>
+                    <div class="verification-eyebrow">
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                        <circle cx="5" cy="5" r="4" stroke="var(--color-amber)" stroke-width="1"/>
+                        <path d="M5 2v3l2 1" stroke="var(--color-amber)" stroke-width="1" stroke-linecap="round"/>
+                      </svg>
+                      Web Verification
+                    </div>
                     <div class="prose">
                       {@html renderPass(passes.verification)}
                     </div>
+                  </div>
+                {:else if conversation.isLoading && conversation.currentPass === 'verification'}
+                  <div class="verification-scanning" aria-live="polite">
+                    <div class="scan-orbital" aria-hidden="true">
+                      <svg width="48" height="48" viewBox="-4 -4 56 56" fill="none">
+                        <ellipse class="scan-ring" cx="24" cy="24" rx="22" ry="14" stroke="var(--color-amber)" stroke-width="1.2" stroke-opacity="0.5"/>
+                        <ellipse class="scan-ring-inner" cx="24" cy="24" rx="13" ry="8" stroke="var(--color-amber)" stroke-width="1" stroke-opacity="0.35"/>
+                        <circle cx="24" cy="24" r="2.5" fill="var(--color-amber)" opacity="0.7"/>
+                      </svg>
+                    </div>
+                    <div class="scan-text">
+                      <span class="scan-label">Searching web sources</span>
+                      <span class="scan-dots" aria-hidden="true">
+                        <span></span><span></span><span></span>
+                      </span>
+                    </div>
+                    <p class="scan-note">Cross-referencing claims against academic consensus and live web sources</p>
                   </div>
                 {:else}
                   <button
@@ -314,6 +362,9 @@
                     onclick={() => conversation.runVerification()}
                     disabled={conversation.isLoading}
                   >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                      <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                    </svg>
                     Run Web Verification
                   </button>
                 {/if}
@@ -334,12 +385,31 @@
               </div>
             {/if}
 
-            <!-- Follow-up input -->
+            <!-- Follow-up hints + input -->
             <div class="follow-up-wrap">
-              <FollowUpInput
-                onSubmit={(text) => conversation.submitQuery(text)}
-                disabled={conversation.isLoading}
+              <QuestionCounter
+                count={conversation.questionCount}
+                limit={conversation.questionLimit}
               />
+
+              {#if conversation.isAtQuestionLimit}
+                <p class="limit-message">
+                  You've reached the depth limit for this inquiry.
+                  Click <strong>+ NEW</strong> to explore a new question.
+                </p>
+              {:else}
+                {#if passes.synthesis}
+                  {@const hints = extractFurtherQuestions(passes.synthesis)}
+                  <FollowUpHints
+                    questions={hints}
+                    onSelect={(q) => { conversation.submitQuery(q); }}
+                  />
+                {/if}
+                <FollowUpInput
+                  onSubmit={(text) => conversation.submitQuery(text)}
+                  disabled={conversation.isLoading}
+                />
+              {/if}
             </div>
           </div>
         </div>
@@ -580,7 +650,84 @@
     color: var(--color-muted);
     cursor: pointer;
     align-self: flex-start;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     transition: border-color var(--transition-fast), color var(--transition-fast);
+  }
+
+  /* ── Verification scanning animation ───────────────────────────────── */
+  .verification-scanning {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-5);
+    background: var(--color-amber-bg);
+    border: 1px solid var(--color-amber-border);
+    border-radius: 3px;
+  }
+
+  .scan-orbital {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .scan-ring {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: orbitSpin 4s linear infinite;
+  }
+
+  .scan-ring-inner {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: orbitSpin 6s linear reverse infinite;
+  }
+
+  .scan-text {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-family: var(--font-ui);
+    font-size: 0.69rem;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--color-amber);
+  }
+
+  .scan-dots {
+    display: inline-flex;
+    gap: 3px;
+  }
+
+  .scan-dots span {
+    display: inline-block;
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--color-amber);
+    animation: dotBounce 1.2s ease-in-out infinite;
+  }
+
+  .scan-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .scan-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+  .scan-note {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: 0.85rem;
+    color: var(--color-muted);
+    text-align: center;
+    margin: 0;
+  }
+
+  @keyframes dotBounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+    40%            { transform: scale(1);   opacity: 1; }
   }
 
   .run-verification-btn:hover:not(:disabled) {
@@ -619,6 +766,29 @@
   /* ── Follow-up ──────────────────────────────────────────────────────── */
   .follow-up-wrap {
     margin-top: var(--space-6);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .limit-message {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: 0.9rem;
+    color: var(--color-dim);
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--color-border);
+    border-radius: 2px;
+    background: var(--color-surface);
+  }
+
+  .limit-message strong {
+    color: var(--color-muted);
+    font-style: normal;
+    font-family: var(--font-ui);
+    font-size: 0.65rem;
+    letter-spacing: 0.06em;
   }
 
   /* ── Error state ────────────────────────────────────────────────────── */
@@ -695,6 +865,12 @@
 
     .main-content {
       transition: none;
+    }
+
+    .scan-ring,
+    .scan-ring-inner,
+    .scan-dots span {
+      animation: none;
     }
   }
 </style>

@@ -15,6 +15,7 @@ export interface Claim {
   phase: AnalysisPhase;
   backRefIds?: string[];    // IDs of claims this references back to
   confidence?: number;      // 0.0-1.0 confidence score
+  sourceUrl?: string;       // URL to source document if available from web grounding
 }
 
 export interface RelationBundle {

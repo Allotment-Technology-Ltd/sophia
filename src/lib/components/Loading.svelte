@@ -15,9 +15,9 @@
     <!-- SVG orbital rings -->
     <svg
       class="rings"
-      width="120"
-      height="80"
-      viewBox="0 0 120 80"
+      width="160"
+      height="160"
+      viewBox="-20 -40 160 160"
       aria-hidden="true"
       fill="none"
     >
@@ -66,8 +66,8 @@
 
   .orbital-wrap {
     position: relative;
-    width: 120px;
-    height: 80px;
+    width: 160px;
+    height: 160px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -76,6 +76,7 @@
   .rings {
     position: absolute;
     inset: 0;
+    overflow: visible;
   }
 
   .ring-outer {

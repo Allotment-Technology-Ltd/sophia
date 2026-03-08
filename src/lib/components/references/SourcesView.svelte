@@ -38,19 +38,20 @@
     }
   }
 
-  // Group sources by pass
-  const sourcesByPass = $derived.by(() => {
+  // Group web sources by pass
+  const webSourcesByPass = $derived.by(() => {
     const grouped = new Map<PassType, typeof referencesStore.groundingSources>();
-    
     for (const source of referencesStore.groundingSources) {
       const existing = grouped.get(source.pass) || [];
       grouped.set(source.pass, [...existing, source]);
     }
-    
     return grouped;
   });
 
-  const hasAnySources = $derived(referencesStore.groundingSources.length > 0);
+  const hasKbSources = $derived(referencesStore.sources.length > 0);
+  const hasWebSources = $derived(referencesStore.groundingSources.length > 0);
+  const hasAnySources = $derived(hasKbSources || hasWebSources);
+
   const passOrder: PassType[] = ['analysis', 'critique', 'synthesis', 'verification'];
 </script>
 
@@ -58,51 +59,94 @@
   {#if !hasAnySources}
     <div class="empty-state">
       <p class="empty-text">
-        No web sources yet. Google Search grounding will populate this during streaming.
+        No sources yet. Sources from the knowledge base and web search will appear here.
       </p>
     </div>
   {:else}
-    {#each passOrder as pass}
-      {#if sourcesByPass.has(pass)}
-        {@const sources = sourcesByPass.get(pass)}
-        <div class="pass-section">
-          <div class="pass-header">
-            <span class="pass-badge {getPassBadgeClass(pass)}">{getPassLabel(pass)}</span>
-            <span class="source-count">{sources?.length || 0} {sources?.length === 1 ? 'source' : 'sources'}</span>
-          </div>
-          
-          <div class="source-list">
-            {#each sources || [] as source, idx (source.url + idx)}
-              <a 
-                href={source.url} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                class="source-card"
-              >
-                <div class="source-favicon">
-                  <img src={getFaviconUrl(source.url)} alt="" width="16" height="16" />
-                </div>
-                <div class="source-content">
-                  <div class="source-title">
-                    {source.title || 'Untitled'}
-                  </div>
-                  <div class="source-url">
-                    {getDomain(source.url)}
-                  </div>
-                </div>
-                <div class="source-icon">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                    <polyline points="15 3 21 3 21 9"/>
-                    <line x1="10" y1="14" x2="21" y2="3"/>
-                  </svg>
-                </div>
-              </a>
-            {/each}
-          </div>
+
+    <!-- Knowledge Base Sources -->
+    {#if hasKbSources}
+      <div class="section">
+        <div class="section-header">
+          <span class="section-label">Knowledge Base</span>
+          <span class="section-count">{referencesStore.sources.length} {referencesStore.sources.length === 1 ? 'source' : 'sources'}</span>
         </div>
-      {/if}
-    {/each}
+        <div class="source-list">
+          {#each referencesStore.sources as source (source.id)}
+            <div class="kb-card">
+              <div class="kb-icon" aria-hidden="true">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                </svg>
+              </div>
+              <div class="kb-content">
+                <div class="kb-title">{source.title}</div>
+                {#if source.author.length > 0}
+                  <div class="kb-author">{source.author.join(', ')}</div>
+                {/if}
+              </div>
+              <div class="kb-claim-count" title="{source.claimCount} claim{source.claimCount !== 1 ? 's' : ''} drawn from this source">
+                {source.claimCount}
+              </div>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
+    <!-- Web Sources -->
+    {#if hasWebSources}
+      <div class="section">
+        <div class="section-header">
+          <span class="section-label">Web Sources</span>
+          <span class="section-count">{referencesStore.groundingSources.length} {referencesStore.groundingSources.length === 1 ? 'source' : 'sources'}</span>
+        </div>
+
+        {#each passOrder as pass}
+          {#if webSourcesByPass.has(pass)}
+            {@const sources = webSourcesByPass.get(pass)}
+            <div class="pass-section">
+              <div class="pass-header">
+                <span class="pass-badge {getPassBadgeClass(pass)}">{getPassLabel(pass)}</span>
+                <span class="source-count">{sources?.length || 0} {sources?.length === 1 ? 'source' : 'sources'}</span>
+              </div>
+
+              <div class="source-list">
+                {#each sources || [] as source, idx (source.url + idx)}
+                  <a
+                    href={source.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="source-card"
+                  >
+                    <div class="source-favicon">
+                      <img src={getFaviconUrl(source.url)} alt="" width="16" height="16" />
+                    </div>
+                    <div class="source-content">
+                      <div class="source-title">
+                        {source.title || 'Untitled'}
+                      </div>
+                      <div class="source-url">
+                        {getDomain(source.url)}
+                      </div>
+                    </div>
+                    <div class="source-icon">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                        <polyline points="15 3 21 3 21 9"/>
+                        <line x1="10" y1="14" x2="21" y2="3"/>
+                      </svg>
+                    </div>
+                  </a>
+                {/each}
+              </div>
+            </div>
+          {/if}
+        {/each}
+      </div>
+    {/if}
+
   {/if}
 </div>
 
@@ -135,6 +179,101 @@
     max-width: 280px;
   }
 
+  /* Section containers */
+  .section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .section-label {
+    font-family: var(--font-ui);
+    font-size: var(--text-meta);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--color-muted);
+  }
+
+  .section-count {
+    font-family: var(--font-ui);
+    font-size: var(--text-meta);
+    color: var(--color-dim);
+  }
+
+  /* Knowledge base cards */
+  .source-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .kb-card {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    background: var(--color-surface);
+  }
+
+  .kb-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-amber);
+    flex-shrink: 0;
+  }
+
+  .kb-content {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .kb-title {
+    font-family: var(--font-display);
+    font-size: 0.85rem;
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.3;
+  }
+
+  .kb-author {
+    font-family: var(--font-ui);
+    font-size: var(--text-meta);
+    color: var(--color-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .kb-claim-count {
+    font-family: var(--font-ui);
+    font-size: var(--text-meta);
+    color: var(--color-sage);
+    flex-shrink: 0;
+    background: var(--color-sage-bg);
+    border: 1px solid var(--color-sage-border);
+    border-radius: 2px;
+    padding: 1px 6px;
+    line-height: 1.4;
+  }
+
+  /* Web source pass grouping */
   .pass-section {
     display: flex;
     flex-direction: column;
@@ -156,27 +295,27 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
     padding: 2px 8px;
-    border-radius: 4px;
+    border-radius: 2px;
   }
 
   .pass-badge-analysis {
-    background: hsl(210, 80%, 95%);
-    color: hsl(210, 80%, 40%);
+    background: var(--color-sage-bg);
+    color: var(--color-sage);
   }
 
   .pass-badge-critique {
-    background: hsl(350, 80%, 95%);
-    color: hsl(350, 80%, 40%);
+    background: var(--color-copper-bg);
+    color: var(--color-copper);
   }
 
   .pass-badge-synthesis {
-    background: hsl(160, 60%, 95%);
-    color: hsl(160, 60%, 35%);
+    background: var(--color-blue-bg);
+    color: var(--color-blue);
   }
 
   .pass-badge-verification {
-    background: hsl(280, 60%, 95%);
-    color: hsl(280, 60%, 40%);
+    background: var(--color-amber-bg);
+    color: var(--color-amber);
   }
 
   .source-count {
@@ -185,29 +324,23 @@
     color: var(--color-dim);
   }
 
-  .source-list {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-
+  /* Individual web source cards */
   .source-card {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     padding: var(--space-2);
     border: 1px solid var(--color-border);
-    border-radius: 6px;
+    border-radius: 3px;
     background: var(--color-surface);
     text-decoration: none;
     color: inherit;
-    transition: all 0.15s ease;
+    transition: background var(--transition-fast), border-color var(--transition-fast);
   }
 
   .source-card:hover {
     background: var(--color-surface-raised);
-    border-color: var(--color-primary);
-    transform: translateY(-1px);
+    border-color: var(--color-dim);
   }
 
   .source-favicon {
@@ -234,8 +367,8 @@
   }
 
   .source-title {
-    font-family: var(--font-ui);
-    font-size: var(--text-body);
+    font-family: var(--font-display);
+    font-size: 0.85rem;
     color: var(--color-text);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -244,7 +377,7 @@
   }
 
   .source-url {
-    font-family: var(--font-mono);
+    font-family: var(--font-ui);
     font-size: var(--text-meta);
     color: var(--color-dim);
     overflow: hidden;
@@ -258,10 +391,10 @@
     justify-content: center;
     flex-shrink: 0;
     color: var(--color-dim);
-    transition: color 0.15s ease;
+    transition: color var(--transition-fast);
   }
 
   .source-card:hover .source-icon {
-    color: var(--color-primary);
+    color: var(--color-muted);
   }
 </style>

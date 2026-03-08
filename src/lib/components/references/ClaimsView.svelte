@@ -41,6 +41,12 @@
 </script>
 
 <div class="claims-view" bind:this={container} aria-live="polite">
+  {#if referencesStore.activeClaims.length > 0}
+    <div class="claims-notice">
+      Claims are AI-generated from the knowledge base and live web search. Run <strong>Web Verification</strong> to cross-check factual claims against academic consensus. <em>Interpretive</em> claims represent philosophical reasoning and are not directly verifiable.
+    </div>
+  {/if}
+
   {#if referencesStore.activeClaims.length === 0}
     <div class="empty-state">
       <p class="empty-text">No claims yet. Analysis will populate this panel.</p>
@@ -70,6 +76,23 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
+  }
+
+  .claims-notice {
+    font-family: var(--font-display);
+    font-size: 0.8rem;
+    line-height: 1.55;
+    color: var(--color-dim);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: 2px;
+    background: var(--color-surface);
+  }
+
+  .claims-notice strong {
+    font-weight: 600;
+    color: var(--color-muted);
+    font-style: normal;
   }
 
   .empty-state {
