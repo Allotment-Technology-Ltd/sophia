@@ -2,21 +2,24 @@
   interface Props {
     activePass?: string;
     completedPasses?: string[];
+    showVerification?: boolean;
     onSelect?: (pass: string) => void;
   }
 
-  let { activePass = 'analysis', completedPasses = [], onSelect }: Props = $props();
+  let { activePass = 'analysis', completedPasses = [], showVerification = false, onSelect }: Props = $props();
 
-  const passes = ['analysis', 'critique', 'synthesis'] as const;
+  const corePasses = ['analysis', 'critique', 'synthesis'] as const;
+
   const labels: Record<string, string> = {
     analysis: 'Analysis',
     critique: 'Critique',
     synthesis: 'Synthesis',
+    verification: 'Verification',
   };
 </script>
 
 <nav class="navigator" aria-label="Pass navigation">
-  {#each passes as pass}
+  {#each corePasses as pass}
     <button
       class="nav-item"
       class:active={activePass === pass}
@@ -29,6 +32,18 @@
       {/if}
     </button>
   {/each}
+
+  {#if showVerification}
+    <button
+      class="nav-item verification-item"
+      class:active={activePass === 'verification'}
+      onclick={() => onSelect?.('verification')}
+      aria-current={activePass === 'verification' ? 'page' : undefined}
+    >
+      <span class="nav-label">{labels.verification}</span>
+      <span class="check" aria-label="Complete">✓</span>
+    </button>
+  {/if}
 </nav>
 
 <style>
@@ -59,9 +74,27 @@
     color: var(--color-text);
   }
 
+  .nav-item:focus-visible {
+    outline: 2px solid var(--color-sage);
+    outline-offset: -2px;
+  }
+
   .nav-item.active {
     color: var(--color-text);
     border-left-color: var(--color-sage);
+  }
+
+  /* Verification entry has amber accent */
+  .verification-item.active {
+    border-left-color: var(--color-amber);
+  }
+
+  .verification-item .nav-label {
+    color: var(--color-amber);
+  }
+
+  .verification-item:not(.active) .nav-label {
+    color: var(--color-muted);
   }
 
   .nav-label {
@@ -94,6 +127,10 @@
     .nav-item.active {
       border-left-color: transparent;
       border-bottom-color: var(--color-sage);
+    }
+
+    .verification-item.active {
+      border-bottom-color: var(--color-amber);
     }
   }
 </style>

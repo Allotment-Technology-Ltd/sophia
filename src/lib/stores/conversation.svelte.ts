@@ -43,6 +43,9 @@ function createConversationStore() {
   let currentStructuredPasses = $state<Partial<Record<PassType, { sections: Array<{ id: string; heading: string; content: string }>; wordCount: number }>>>({});
   let error = $state<string | null>(null);
   let confidenceSummary = $state<{ avgConfidence: number; lowConfidenceCount: number; totalClaims: number } | null>(null);
+  let questionCount = $state(0);
+
+  const QUESTION_LIMIT = 3;
 
   return {
     get messages() { return messages; },
@@ -52,8 +55,15 @@ function createConversationStore() {
     get currentStructuredPasses() { return currentStructuredPasses; },
     get error() { return error; },
     get confidenceSummary() { return confidenceSummary; },
+    get questionCount() { return questionCount; },
+    get questionLimit() { return QUESTION_LIMIT; },
+    get isAtQuestionLimit() { return questionCount >= QUESTION_LIMIT; },
 
     async submitQuery(query: string, lens?: string): Promise<void> {
+      // Enforce question limit
+      if (questionCount >= QUESTION_LIMIT) return;
+      questionCount += 1;
+
       error = null;
       isLoading = true;
       currentPass = null;
@@ -97,7 +107,6 @@ function createConversationStore() {
           timestamp: new Date()
         }];
 
-        historyStore.addEntry(query);
         isLoading = false;
         return;
       }
@@ -394,6 +403,7 @@ function createConversationStore() {
       currentStructuredPasses = {};
       confidenceSummary = null;
       isLoading = false;
+      questionCount = 0;
     }
   };
 }

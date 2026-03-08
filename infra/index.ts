@@ -47,9 +47,12 @@ new gcp.projects.IAMMember("app-sa-log-writer", {
   member: pulumi.interpolate`serviceAccount:${appSa.email}`,
 });
 
-// Note: firebase.admin and datastore.user roles must be manually assigned in GCP Console
-// or by a user with iam.serviceaccounts.setIamPolicy permission
-// See post-deployment setup instructions in docs/CLOUD-DEPLOYMENT.md
+// Firestore read/write — required by firebase-admin Firestore (history cache, rate limits)
+new gcp.projects.IAMMember("app-sa-datastore-user", {
+  project: projectId,
+  role: "roles/datastore.user",
+  member: pulumi.interpolate`serviceAccount:${appSa.email}`,
+});
 
 // Service account for ingestion jobs
 const ingestSa = new gcp.serviceaccount.Account("ingest-sa", {

@@ -17,7 +17,11 @@
 <div class="tracker" role="list" aria-label="Analysis progress">
   {#each passes as pass, i}
     {#if i > 0}
-      <div class="connector" aria-hidden="true"></div>
+      <div
+        class="connector"
+        class:filled={completedPasses.includes(passes[i - 1])}
+        aria-hidden="true"
+      ></div>
     {/if}
 
     <div
@@ -26,15 +30,21 @@
       class:complete={completedPasses.includes(pass)}
       role="listitem"
     >
-      <div class="node" aria-hidden="true"></div>
-      <div class="pass-label" class:active={currentPass === pass}>
+      <div class="node" aria-hidden="true">
+        {#if completedPasses.includes(pass)}
+          <svg class="check" width="6" height="6" viewBox="0 0 6 6" fill="none" aria-hidden="true">
+            <polyline points="1,3 2.5,4.5 5,1.5" stroke="var(--color-bg)" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        {/if}
+      </div>
+      <div class="pass-label" class:active={currentPass === pass} class:complete={completedPasses.includes(pass)}>
         {labels[pass]}
       </div>
       <div class="pass-status">
         {#if currentPass === pass}
-          Streaming now…
+          Streaming…
         {:else if completedPasses.includes(pass)}
-          Complete
+          Done
         {:else}
           Waiting
         {/if}
@@ -56,6 +66,11 @@
     background: var(--color-border);
     margin-top: 5px;
     min-width: 24px;
+    transition: background 600ms ease;
+  }
+
+  .connector.filled {
+    background: var(--color-sage);
   }
 
   .pass-node {
@@ -69,26 +84,32 @@
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background: var(--color-dim);
+    background: transparent;
     border: 1px solid var(--color-dim);
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 300ms ease, border-color 300ms ease, transform 300ms ease;
   }
 
+  /* Waiting → Active: scale in and pulse */
   .pass-node.active .node {
     background: var(--color-sage);
     border-color: var(--color-sage);
-    animation: nodePulse 2s ease-in-out infinite;
+    animation: nodePulse 2s ease-in-out infinite, nodeEnter 200ms ease both;
   }
 
+  /* Active → Complete: bright fill, then settle to sage-dim */
   .pass-node.complete .node {
-    background: var(--color-dim);
-    border-color: var(--color-dim);
+    background: var(--color-sage);
+    border-color: var(--color-sage);
+    animation: nodeComplete 500ms ease both;
   }
 
-  /* Waiting node: empty circle */
-  .pass-node:not(.active):not(.complete) .node {
-    background: transparent;
-    border: 1px solid var(--color-dim);
+  .check {
+    opacity: 0;
+    animation: checkAppear 300ms 200ms ease both;
   }
 
   .pass-label {
@@ -102,7 +123,11 @@
   }
 
   .pass-label.active {
-    color: var(--color-text);
+    color: var(--color-sage);
+  }
+
+  .pass-label.complete {
+    color: var(--color-muted);
   }
 
   .pass-status {
@@ -110,6 +135,7 @@
     font-size: 0.55rem;
     color: var(--color-dim);
     white-space: nowrap;
+    transition: color var(--transition-fast);
   }
 
   .pass-node.active .pass-status {
@@ -120,9 +146,35 @@
     color: var(--color-dim);
   }
 
+  @keyframes nodeEnter {
+    from { transform: scale(0.4); opacity: 0; }
+    to   { transform: scale(1);   opacity: 1; }
+  }
+
+  @keyframes nodeComplete {
+    0%   { transform: scale(1);    background: var(--color-sage); }
+    40%  { transform: scale(1.4);  background: var(--color-text); }
+    100% { transform: scale(1);    background: var(--color-sage); }
+  }
+
+  @keyframes checkAppear {
+    from { opacity: 0; transform: scale(0); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .pass-node.active .node {
       animation: none;
+    }
+    .pass-node.complete .node {
+      animation: none;
+    }
+    .check {
+      animation: none;
+      opacity: 1;
+    }
+    .connector {
+      transition: none;
     }
   }
 </style>

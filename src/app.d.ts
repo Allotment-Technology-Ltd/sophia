@@ -7,6 +7,7 @@ declare global {
         displayName: string | null;
         photoURL: string | null;
       } | null;
+      rateLimitRemaining?: number;
     }
     interface PageData {}
     interface Platform {}

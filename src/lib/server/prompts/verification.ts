@@ -16,19 +16,28 @@ FOR EACH CLAIM, REPORT:
 - Whether it is grounded (supported by current academic sources)
 - Supporting URIs if grounded
 - Confidence signal: high (well-established consensus), medium (debated but documented), low (novel interpretation or insufficient evidence)
+- For claims where Google Search finds NO supporting academic source: flag explicitly as "Unsupported — no academic grounding found. Treat as speculative."
 
 OUTPUT FORMAT:
-Provide a summary report addressing:
-1. Which claims are well-grounded in current academic consensus
-2. Which claims represent novel synthesis or interpretation
-3. Which claims lack sufficient grounding and may need revision
-4. Overall assessment: does the analysis align with current philosophical scholarship?
+Provide a structured verification report addressing:
+1. **Grounded claims** — well-supported by current academic consensus (with URLs)
+2. **Interpretive claims** — represent philosophical reasoning or novel synthesis; not directly verifiable but not necessarily wrong
+3. **Unsupported claims** — no grounding found; flagged for user review or revision
+4. **Overall assessment** — does the analysis align with current philosophical scholarship? Note any significant gaps or potential errors.
+
+CONFIDENCE LABELS:
+- "High" — multiple strong academic sources confirm
+- "Medium" — some academic sources, position is debated
+- "Low" — limited or no academic grounding; treat as interpretive
+- "Interpretive" — this is a philosophical argument or synthesis, not a verifiable factual claim
+- "Unsupported" — Google Search found no supporting academic source; the claim may be incorrect or fabricated
 
 IMPORTANT:
 - This is verification, not refutation. The goal is confidence assessment, not critique.
-- Novel interpretations are acceptable if they are clearly presented as such in the synthesis
-- Use the googleSearch tool to verify factual claims about philosophical positions, definitions, and historical assertions
-- Do not search for every claim — prioritize those that are presented as established facts
+- Interpretive and novel synthesis claims are acceptable and should be labelled "Interpretive" — not penalised.
+- Use the googleSearch tool to verify factual claims about philosophical positions, definitions, and historical assertions.
+- Do not search for every claim — prioritize those presented as established facts.
+- If a claim appears to be a hallucination (no thinker/work with that name exists, or the attributed position is contrary to the actual thinker's view), flag it clearly as "Potential hallucination — verify manually".
 
 Respond with a clear, structured verification report.`;
 

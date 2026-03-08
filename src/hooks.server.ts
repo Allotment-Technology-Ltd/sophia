@@ -1,4 +1,5 @@
 import { adminAuth } from '$lib/server/firebase-admin';
+import { checkRateLimit, DAILY_QUERY_LIMIT } from '$lib/server/rateLimit';
 import type { Handle } from '@sveltejs/kit';
 
 export const handle: Handle = async ({ event, resolve }) => {
@@ -32,6 +33,32 @@ export const handle: Handle = async ({ event, resolve }) => {
         status: 401,
         headers: { 'Content-Type': 'application/json' }
       });
+    }
+
+    // Rate limit only applies to the analyse endpoint (the expensive AI call).
+    if (event.url.pathname === '/api/analyse' && event.locals.user) {
+      try {
+        const { allowed, remaining } = await checkRateLimit(event.locals.user.uid);
+        if (!allowed) {
+          return new Response(
+            JSON.stringify({ error: 'Daily query limit reached. Try again tomorrow.' }),
+            {
+              status: 429,
+              headers: {
+                'Content-Type': 'application/json',
+                'X-RateLimit-Limit': String(DAILY_QUERY_LIMIT),
+                'X-RateLimit-Remaining': '0',
+                'Retry-After': '86400',
+              }
+            }
+          );
+        }
+        // Attach remaining count so route handlers can surface it if needed
+        event.locals.rateLimitRemaining = remaining;
+      } catch (err) {
+        // Rate limit check failure is non-fatal — log and allow the request through
+        console.error('[RATE_LIMIT] Check failed:', err instanceof Error ? err.message : String(err));
+      }
     }
   }
 

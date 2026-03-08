@@ -29,7 +29,8 @@ const SophiaMetaClaimSchema = z.object({
   badge: z.enum(['thesis', 'premise', 'objection', 'response', 'definition', 'empirical']),
   source: z.string(),
   tradition: z.string(),
-  confidence: z.number().min(0).max(1)
+  confidence: z.number().min(0).max(1),
+  sourceUrl: z.string().url().optional()
 });
 
 const SophiaMetaBlockSchema = z.object({
@@ -37,7 +38,9 @@ const SophiaMetaBlockSchema = z.object({
   claims: z.array(SophiaMetaClaimSchema).default([])
 });
 
-function extractSophiaMetaBlock(text: string): { cleanedText: string; metaBlock: z.infer<typeof SophiaMetaBlockSchema> | null } {
+export { SophiaMetaBlockSchema, SophiaMetaClaimSchema };
+
+export function extractSophiaMetaBlock(text: string): { cleanedText: string; metaBlock: z.infer<typeof SophiaMetaBlockSchema> | null } {
   // Find the sophia-meta fenced block
   const metaMatch = text.match(/```sophia-meta\n?([\s\S]*?)\n?```/);
   if (!metaMatch) {
@@ -174,7 +177,7 @@ async function streamPassWithContinuation(
   };
 }
 
-function aggregateConfidenceMetrics(claimsList: Claim[]): {
+export function aggregateConfidenceMetrics(claimsList: Claim[]): {
   avgConfidence: number;
   lowConfidenceCount: number;
   totalClaims: number;

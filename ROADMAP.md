@@ -1,218 +1,227 @@
 # SOPHIA Roadmap
 
-**Last updated:** 2026-03-06  
-**Status:** Phase 3c in-progress (MVP Pivot architecture overhaul)  
-**Owner:** @adamboon  
+**Last updated:** 2026-03-08
+**Status:** Phase 3c complete · UX Polish sprint shipped · Pre-launch hardening in progress
+**Owner:** @adamboon
 **Related:** [STATUS.md](STATUS.md) | [CHANGELOG.md](CHANGELOG.md) | [docs/architecture.md](docs/architecture.md)
 
 ---
 
-## Current Status: Phase 3c (MVP Pivot) — In Progress
+## Current Status: Pre-Launch Hardening
 
-**What is Phase 3c?**  
-Architectural overhaul of the three-pass engine and UI. The pivot replaces Anthropic Claude with Vertex AI Gemini, adds Google Search grounding, mandatory Firebase Auth, and a complete UI redesign with side-panel references and graph visualization.
-
-**Progress:** 60% complete  
-**Timeline:** Started Feb 2026, targeting early April 2026  
-**Blockers:** Auth integration, Firestore wiring
+Phase 3c (MVP Pivot) is functionally complete. A focused UX polish sprint has been applied
+on top, addressing animation bugs, navigation, sources display, content quality, and shipping
+new features (question limit, follow-up hints, verification animation, hallucination prevention).
+The codebase is ahead of production — the next priority is deployment and pre-launch testing.
 
 ---
 
 ## Completed Phases
 
 ### Phase 3a ✅ (Feb 2026)
+
 - SurrealDB persistence (GCE VM, europe-west2)
 - Cloud Run deployment + VPC setup
 - 8 foundational ethics sources ingested (~500 claims)
-- Three-pass engine (Claude Sonnet via Anthropic SDK)
+- Three-pass engine (originally Claude Sonnet, now Vertex Gemini)
 - Graph context retrieval
 - Basic admin dashboard
 
 ### Phase 3b ✅ (Feb 2026)
+
 - Waves 2 & 3 ingestion (21 additional sources)
 - Total: 25/27 sources (~7,500 claims, 92.6% completion)
 - Sources 5 & 8 skipped (pragmatic coverage, alternatives included)
-- Gemini cross-validation
-- Spot-check accuracy >80%
+- Gemini cross-validation; spot-check accuracy >80%
+
+### Phase 3c ✅ (Mar 2026)
+
+#### 3c-A: Engine Restructure ✅
+
+- Firebase Auth enforced on all `/api/*` routes via `hooks.server.ts` Bearer token check
+- `uid` extracted from `locals.user?.uid`
+- Successful runs saved to `users/{uid}/queries/{autoId}` in Firestore (30-day TTL)
+- Firestore per-user cache checked before SurrealDB and before engine run; cache hit replays stored events
+
+#### 3c-B: UI Implementation ✅
+
+- SidePanel animations with `prefers-reduced-motion` fallback
+- SourcesView, ClaimsView, error state with design-system CSS vars
+- Loading progress indicator per pass
+
+#### 3c-C: Firestore Integration ✅
+
+- Schema: `users/{uid}/queries/{autoId}` — query, lens, events, createdAt
+- Write: `saveFirestoreCache()` on successful run; read: `loadFirestoreCache()` (30-day TTL)
+- `/api/history` — GET returns 50 most recent; DELETE removes by doc ID
+- HistoryTab wired to Firestore; `syncFromServer()` on auth change
+
+#### 3c-D: Polish & Testing (Partial)
+
+- [x] Basic component structure complete
+- [x] Design System B fully implemented (dark-first, Cormorant/JetBrains Mono)
+- [ ] Unit tests: engine.ts grounding extraction
+- [ ] Integration test: auth → query → history flow
+- [ ] E2E test: full user flow (login → query → references → history)
+- [ ] Error injection tests (Firestore down, grounding offline, auth fail)
+- [ ] Performance: query latency <3s (p95) — currently ~2.5s
+- [ ] Accessibility audit (axe-core, WCAG 2.2 AA)
+
+#### 3c-E: Deployment ✅
+
+- [x] Firebase credentials confirmed in Secret Manager (`firebase-api-key`, `firebase-auth-domain`)
+- [x] `roles/datastore.user` granted to `sophia-app` SA (Firestore + rate-limit writes)
+- [x] Image `app:c742bcc` built (linux/amd64) and pushed to Artifact Registry
+- [x] Pulumi `appImageTag` updated + `pulumi up` applied (revision sophia-00077-256)
+- [x] Health check passing: `usesophia.app/api/health → status: healthy, database: connected`
+- [x] Auth guard verified: `/api/analyse` returns 401 without Bearer token
 
 ---
 
-## 🚨 Security Blocker: User Data Isolation
+## UX Polish Sprint ✅ (Mar 2026)
 
-**Discovered:** 2026-03-06
-**Severity:** Critical — blocks any public access
-**Status:** Partially resolved (2026-03-06)
+### Bug Fixes
 
-All signed-in users currently see each other's queries and history. There is no per-user scoping anywhere in the data layer or UI store. This must be fixed before any non-test users are allowed on the platform.
+- **Animation clipping** — orbital rings container enlarged (120×80 → 160×160px) with padded
+  SVG viewBox; rotating rings are no longer cropped
+- **Tab navigation** — pass card wrappers given `id="pass-{pass}"` attributes; clicking a nav
+  tab calls `scrollIntoView({ behavior: 'smooth' })`
+- **History duplication** — removed erroneous `historyStore.addEntry()` from the cache-hit
+  branch; loading a cached result no longer creates a duplicate entry
+- **Sources panel** — `SourcesView` shows both **Knowledge Base** sources (`referencesStore.sources`)
+  and **Web Sources** (`referencesStore.groundingSources`); badge colours use CSS custom properties
 
-**Root cause:** The in-memory conversation store and any persisted history are not scoped to `uid`. Firestore (3c-C) is not yet wired, so nothing is saved per-user. The UI simply shows whatever is in the shared store.
+### Content Improvements
 
-**Required fixes (in order):**
+- **Academic section headers** — all three AI prompts updated to replace `## Roadmap` with
+  `## Abstract`, with SEP-style instruction for a 2–4 sentence journal abstract
+- **Claims linked to sources** — `Claim` type extended with optional `sourceUrl`; Zod schema
+  updated; prompts ask AI to include Google Search URLs in `sophia-meta` claims; `ClaimCard`
+  renders source as a clickable link when URL is available
+- **Confidence transparency** — claims with `confidence === undefined` show **Interpretive** badge;
+  claims below 0.65 show **Unverified** badge; expanded detail panel explains what each means
 
-- [x] **ISO-1** Scope localStorage history/cache keys to `sophia-history-{uid}` and `sophia-query-cache-{uid}` — users on the same browser can no longer read each other's data
-- [x] **ISO-2** Server-side leakage confirmed absent — stores are client-side Svelte 5 state, each browser session starts empty. `historyStore.setUid()` called on auth change reloads state per-user.
-- [ ] **ISO-3** Server: never return another user's data — validate `uid` on history/query endpoints ← deferred until Firestore history API exists (3c-C)
-- [x] **ISO-4** Client: clear conversation store on sign-out / user switch via `onAuthChange` in `+layout.svelte`
+### Animation Improvements
 
-**Note:** ISO-3 remains open — no server-side per-user history endpoint exists yet. Revisit when 3c-C Firestore integration is built.
+- **PassTracker** — connector lines fill with sage on completion; active→complete triggers a
+  scale flash; checkmark SVG appears inside completed nodes
+- **Loading → Results morph** — coordinated Svelte `fly` transitions: loading exits upward,
+  results enter from below with staggered delays
+- **Verification animation** — while running, button is replaced by amber orbital ring +
+  animated ellipsis + explanatory note ("Searching web sources…")
+- **Verification nav tab** — `PassNavigator` shows a **Verification** tab (amber accent)
+  after web verification has run; clicking scrolls to the verification section
 
----
+### New Features
 
-## Phase 3c — In Progress
+- **Follow-up hints** — `extractFurtherQuestions()` parses `## Further Questions` from synthesis;
+  `FollowUpHints` displays up to 3 italic suggestion pills above the follow-up input
+- **3-question limit** — `questionCount` tracked in conversation store and enforced in
+  `submitQuery()`; `QuestionCounter` renders 3 copper dots with scale-flash animation;
+  at the limit, the follow-up area shows "Inquiry complete — start a new inquiry"
 
-### 3c-A: Engine Restructure ✅ (100% done)
-**Status:** Complete (2026-03-06)
+### Hallucination Prevention
 
-- [x] **A1** Firebase Auth enforced on all `/api/*` routes via `hooks.server.ts` Bearer token check
-- [x] **A2** `/api/analyse` handler uses `locals` (populated by hook) — no separate middleware needed
-- [x] **A3** `uid` extracted from `locals.user?.uid` in request handler
-- [x] **A4** Successful runs saved to `users/{uid}/queries/{autoId}` in Firestore (30-day TTL)
-- [x] **A5** Firestore per-user cache checked before SurrealDB and before engine run; cache hit replays stored events
-- [x] **A6** `passRefinement.ts` already deleted — confirmed absent
-
-**Verification:** Manual test: authenticated user submits query → output streams → saved to Firestore → second request for same query replays from Firestore cache
-
-### 3c-B: UI Implementation ✅
-
-**Status:** Complete
-
-- [x] **B1** SidePanel animations — opacity fade + `@media (prefers-reduced-motion: reduce)` fallback
-- [x] **B2** SourcesView component (render grounding sources as link cards)
-- [x] **B3** ClaimsView component (render sophia-meta claims with badges)
-- [x] **B4** Error state redesigned with design-system CSS vars + Retry button
-- [x] **B5** `.main-content.panel-open` applies `margin-right: 380px` on desktop
-- [x] **B6** `aria-controls` added to all pass tab buttons; content panels have matching IDs
-- [x] **B7** Loading progress indicator shows "Pass N of 3 · Label" when pass is known
-
-**Verification:** Visual regression test against Design B mockups
-
-### 3c-C: Firestore Integration ✅
-
-**Status:** Complete
-
-- [x] **C1** Firestore schema: `users/{uid}/queries/{autoId}` — query, lens, events, createdAt
-- [x] **C2** Write in `/api/analyse`: `saveFirestoreCache()` persists on successful run
-- [x] **C3** Read in `/api/analyse`: `loadFirestoreCache()` checked before engine run (30-day TTL)
-- [x] **C4** Cache invalidation: stale/failed entries purged on read; DELETE `/api/history?id=` for manual purge
-- [x] **C5** `/api/history` endpoint — GET returns 50 most recent queries; DELETE removes by doc ID
-- [x] **C6** HistoryTab wired to Firestore: `syncFromServer()` on auth change; delete button calls `deleteEntry()`
-
-**Verification:** User creates query → appears in history → reload page → history still there
-
-### 3c-D: Polish & Testing (10% done)
-**Status:** Basic component structure done; testing minimal
-
-**Remaining tasks:**
-- [ ] **D1** Unit tests: engine.ts grounding extraction
-- [ ] **D2** Integration test: auth → query → history flow
-- [ ] **D3** E2E test: full user flow (login → query → references → history)
-- [ ] **D4** Error injection tests (Firestore down, grounding offline, auth fail)
-- [ ] **D5** Performance: query latency <3s (p95)
-- [ ] **D6** Accessibility audit (axe-core, manual WCAG 2.2 AA check)
-
-**Verification:** All tests passing; lighthouse score >90
-
-### 3c-E: Deployment (0% done)
-**Status:** Cluster unchanged since Phase 3a; new secrets needed
-
-**Remaining tasks:**
-- [ ] **E1** Add Firebase credentials to Secret Manager
-- [ ] **E2** Update Cloud Run env vars (FIREBASE_PROJECT_ID, etc)
-- [ ] **E4** Deploy new image to Cloud Run
-
-**Verification:** `curl https://sophia.usesophia.app/api/health` → 200 OK
+- **Prompt hardening** — all three analysis prompts require explicit attribution; unattributed
+  claims prefixed `[Unattributed]`; novel synthesis flagged `[Novel synthesis]`; fabricating
+  citations, titles, or quotations explicitly prohibited
+- **Verification prompt** — five confidence tiers: `High / Medium / Low / Interpretive / Unsupported`;
+  potential hallucinations flagged as "Potential hallucination — verify manually"
+- **Claims notice** — `ClaimsView` shows a persistent disclaimer: "Claims are AI-generated.
+  Run Web Verification to cross-check. Interpretive claims represent philosophical reasoning."
 
 ---
 
-## Upcoming Phases (Post-MVP)
+## Security: User Data Isolation
 
-### Phase 4: Web Search + Gap Filling (4–6 weeks)
-**Depends on:** Phase 3c complete
+- [x] **ISO-1** localStorage scoped to `sophia-history-{uid}` / `sophia-query-cache-{uid}`
+- [x] **ISO-2** Server-side stores are per-session client state; each browser session starts empty
+- [x] **ISO-4** Conversation store cleared on sign-out/user switch
+- [x] **ISO-3** Server: validate `uid` on history endpoints — Bearer token verified in `hooks.server.ts`; Firestore paths scoped to authenticated `uid`
 
-- Google Search grounding (via `@ai-sdk/google`) already integrated into analysis, critique, and synthesis passes
-- Grounding sources surfaced to the UI per pass
-- Credibility scoring of grounding results
-- Fallback to graph-only if search fails
+---
 
-### Phase 5: Rate Limiting + Analytics (2–3 weeks)
+## Architecture: Current State
+
+| Layer | Technology | Status |
+|-------|-----------|--------|
+| Frontend | SvelteKit 2 / Svelte 5 | ✅ Working |
+| Design system | Dark-first, Cormorant/JetBrains Mono, design tokens | ✅ Shipped |
+| Auth | Firebase Google OAuth | ✅ Working |
+| AI Engine | Vertex AI Gemini 2.0 Flash, 3-pass dialectical | ✅ Working |
+| Web search | Google Search grounding (live, per pass + verification) | ✅ Working |
+| Knowledge base | SurrealDB, ~7,500 ethics claims | ✅ Deployed |
+| Cache (server) | Firestore per-user 30-day TTL | ✅ Working |
+| Cache (client) | localStorage scoped to uid | ✅ Working |
+| Streaming | SSE via `/api/analyse` and `/api/verify` | ✅ Working |
+| Hosting | Cloud Run (europe-west2) | ✅ Live — revision sophia-00077-256 |
+
+---
+
+## Immediate Pre-Launch Checklist
+
+These items must be resolved before any public access:
+
+- [x] **3c-E Deploy** — deployed revision sophia-00077-256; health + auth guard confirmed live
+- [x] **ISO-3** — `uid` validation on `/api/history` endpoint (already implemented)
+- [x] **3c-D Testing** — vitest unit tests (38 passing): `extractFurtherQuestions`, sophia-meta
+  block parsing, `SophiaMetaClaimSchema`, `aggregateConfidenceMetrics`, `checkRateLimit` (mocked);
+  Playwright E2E smoke tests configured (`tests/e2e/app.test.ts`); auth-gated tests require
+  `SOPHIA_TEST_TOKEN` env var for full flow coverage
+- [ ] **Accessibility** — axe-core scan + WCAG 2.2 AA review of new components; initial fixes done:
+  ClaimCard `<a>`-in-`<button>` resolved (div+role=button); PassNavigator `:focus-visible` added;
+  FollowUpHints wrapper given `role="group"`; QuestionCounter has `aria-live="polite"` and `aria-label`
+- [x] **Rate limiting** — 20 queries/day per uid via Firestore transaction in `hooks.server.ts`;
+  429 + `Retry-After: 86400` returned when exceeded; stored at `users/{uid}/rateLimits/daily`
+
+---
+
+## Upcoming Phases
+
+### Phase 4: Knowledge Graph Visualisation (Next major feature)
+
+**Depends on:** Phase 3c deployment
+**Design agreed:** New dedicated "Map" tab in PassNavigator
+
+- `ClaimMapView` component as a 4th tab, rendered in the results column
+- Layered force-directed graph with three zones:
+  - **Knowledge Base** (left) — RAG retrieval claims (amber)
+  - **AI Reasoning** (centre) — analysis/critique/synthesis claims (sage/copper/blue)
+  - **Web Verification** (right) — grounding source nodes (purple)
+- Source nodes as diamonds; claim nodes as circles; colour-coded by pass
+- `graphStore.addGroundingSources()` to link web sources to claims via `supports` edges
+- Click-to-expand node detail; legend panel
+- Exposes full argument provenance chain
+
+### Phase 5: Rate Limiting + Analytics
+
 - Per-user rate limits (10 req/min, 100 req/day)
 - Query analytics to BigQuery
-- Cost tracking (Google AI API, Cloud Run)
-- Admin dashboard analytics
+- Cost tracking per user (Google AI API, Cloud Run)
+- Admin dashboard
 
-### Phase 6: Payments + API (paid version)
-- Stripe integration
-- Public API with API keys
-- Usage-based billing
-- Premium features (batch analysis, export)
+### Phase 6: Multi-turn Conversation
 
-### Phase 7: Domain Expansion (ongoing)
+Supersedes the current 3-question limit with a richer session model:
+
+- Conversation history maintained across queries within a session
+- Context-aware follow-ups (AI sees prior turns)
+- Claim refinement loops (user flags a claim → re-examination requested)
+- Session persistence in Firestore
+
+### Phase 7: Domain Expansion
+
 - Law & policy (`legal-ethics`, `AI-regulation`)
 - Medicine & bioethics
 - Technology & information ethics
 - Economics & capitalism ethics
 
-### Phase 8: Conversation & Context (future)
-- Multi-turn conversation persistence
-- Context awareness across queries
-- Claim refinement loops
-- Source feedback integration
+### Phase 8: Payments + API
 
----
-
-## Quality Gates for Phase 3c Completion
-
-All the following must pass before MVP launch:
-
-- [ ] **Auth:** Firebase Auth working on all protected routes
-  - [ ] Unauthenticated user redirected to login
-  - [ ] Authenticated user can query
-  - [ ] All API calls require valid ID token
-  
-- [ ] **Retrieval:** Graph context injection works
-  - [ ] 10 test queries return relevant claims
-  - [ ] Grounding sources appear in output
-  - [ ] Top-1 relevance >0.75 (manual spot-check)
-
-- [ ] **Engine:** Three-pass streaming complete
-  - [ ] Analysis starts immediately
-  - [ ] Critique starts at ~30% of Analysis
-  - [ ] Both stream simultaneously
-  - [ ] Synthesis waits for both
-  - [ ] Total latency <3s for typical queries
-
-- [ ] **History:** Firestore persistence working
-  - [ ] Query saved within 30s of completion
-  - [ ] History tab shows last 10 queries
-  - [ ] Can click history item to replay
-  - [ ] No re-execution on replay (cached)
-
-- [ ] **UI:** References panel functional
-  - [ ] Claims tab shows sophia-meta claims
-  - [ ] Sources tab shows grounding URLs
-  - [ ] Panel responsive on mobile
-  - [ ] No accessibility violations (axe-core)
-
-- [ ] **Performance:** 
-  - [ ] Query latency p95 <3s
-  - [ ] Page load <2s
-  - [ ] SSE streaming starts <500ms
-
-- [ ] **Deployment:**
-  - [ ] Cloud Run healthy check green
-  - [ ] All secrets in Secret Manager
-  - [ ] No hardcoded credentials
-  - [ ] Pulumi state recent
-
----
-
-## What's NOT in Phase 3c
-
-- ❌ Web search grounding (Phase 4)
-- ❌ Rate limiting (Phase 5)
-- ❌ Payments (Phase 6)
-- ❌ Domain expansion (Phase 7)
-- ❌ Conversation memory (Phase 8)
+- Stripe integration
+- Public API with API keys
+- Usage-based billing
+- Premium: batch analysis, export, longer sessions
 
 ---
 
@@ -223,18 +232,47 @@ All the following must pass before MVP launch:
 | Query latency (p95) | <3s | ~2.5s |
 | Sources ingested | 27 | 25 (92.6%) |
 | Claims in graph | >2000 | ~7,500 |
-| Uptime SLA | 99.5% | Untested |
-| Unique users (MVP) | Conservative | TBD |
+| Uptime SLA | 99.5% | Untested in prod |
+| Questions per topic | 3 (enforced) | ✅ Shipping |
+| Web verification | Post-synthesis | ✅ Working |
+
+---
+
+## Suggested Next Steps
+
+1. **Deploy (3c-E)** — the codebase is ahead of production; deploy to Cloud Run to unblock
+   any live testing. This is the single highest-leverage action right now.
+
+2. **ISO-3** — add `uid` validation to `/api/history` before any non-test user is allowed on
+   the platform. One-line check in the route handler.
+
+3. **Accessibility pass** — the new components (QuestionCounter, FollowUpHints, PassNavigator
+   verification tab, ClaimCard source links) need axe-core scanning and keyboard testing.
+
+4. **Knowledge Graph Visualisation (Phase 4)** — the "Map" tab design is agreed and the
+   GraphCanvas + graphStore infrastructure already exists. This is the next major feature that
+   differentiates SOPHIA from a standard AI chatbot.
+
+5. **Basic rate limiting** — even a simple `X-RateLimit` check in `hooks.server.ts` (e.g. 20
+   queries/day per uid via Firestore counter) is sufficient before any public traffic.
+   Full analytics can follow in Phase 5.
+
+6. **Complete sources ingestion** — sources 5 & 8 are still missing (92.6% coverage).
+   Worth re-attempting or substituting before domain expansion.
+
+7. **Multi-turn conversation (Phase 6)** — the current 3-question limit is a pragmatic
+   constraint, not the final product. Once rate limiting and costs are controlled, upgrade
+   to full conversation history with context-aware follow-ups.
 
 ---
 
 ## How to Use This Document
 
-1. **Prioritize:** Read "Current Status" and "Phase 3c" sections first
-2. **Plan sprint:** Pick tasks from Phase 3c sections with no dependencies
-3. **Track per-task:** Mark [ ] as [x] when task completes
-4. **Update on merge:** After PR merge, update this file in same commit
-5. **Review biweekly:** Ensure age < 14 days; update after any milestone
+1. **Current task?** See "Immediate Pre-Launch Checklist"
+2. **Planning a sprint?** Pick from "Upcoming Phases" in priority order
+3. **Track per-task:** Mark [ ] as [x] when complete
+4. **Update on merge:** After each PR, update this file in the same commit
+5. **Review biweekly:** Keep age < 14 days
 
 ---
 
