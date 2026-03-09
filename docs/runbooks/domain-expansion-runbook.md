@@ -220,7 +220,7 @@ npx tsx --env-file=.env --env-file=.env.local scripts/ingest-batch.ts \
 
 - `--domain {domain}` — stamps all claims with the correct domain (overrides Claude's extraction-time domain assignment)
 - `--yes` — skips cost confirmation prompt (pre-scan already ran above)
-- `--validate` — enables Vertex AI cross-validation; uses ADC credentials (no extra API key needed — requires `GOOGLE_VERTEX_PROJECT` or `GCP_PROJECT_ID` in `.env`)
+- `--validate` — enables Gemini cross-validation; requires `GOOGLE_AI_API_KEY` in `.env.local`
 
 **Monitor DB write progress** in a separate terminal while the batch runs:
 
