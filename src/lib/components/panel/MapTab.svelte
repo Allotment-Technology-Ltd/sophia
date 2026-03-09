@@ -3,10 +3,12 @@
   import { goto, replaceState } from '$app/navigation';
   import { page } from '$app/state';
   import { graphStore } from '$lib/stores/graph.svelte';
+  import { referencesStore } from '$lib/stores/references.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
   import type { GraphEdge, GraphNode } from '$lib/types/api';
   import { trackEvent } from '$lib/utils/analytics';
   import { onMount } from 'svelte';
+  import type { AnalysisPhase, RelationBundle } from '$lib/types/references';
 
   interface Props {
     onOpenReferences?: (nodeId: string) => void;
@@ -584,6 +586,42 @@
     confidenceFilter = new Set(ALL_CONFIDENCE_BANDS);
   }
 
+  function rebuildGraphFromSession(): void {
+    const claims = referencesStore.activeClaims;
+    if (claims.length === 0) return;
+
+    const claimsByPhase: Record<AnalysisPhase, typeof claims> = {
+      analysis: [],
+      critique: [],
+      synthesis: []
+    };
+
+    for (const claim of claims) {
+      claimsByPhase[claim.phase].push(claim);
+    }
+
+    const claimPhase = new Map<string, AnalysisPhase>();
+    for (const claim of claims) {
+      claimPhase.set(claim.id, claim.phase);
+    }
+
+    const relationsByPhase: Record<AnalysisPhase, RelationBundle[]> = {
+      analysis: [],
+      critique: [],
+      synthesis: []
+    };
+
+    for (const bundle of referencesStore.relations) {
+      const phase = claimPhase.get(bundle.claimId) ?? 'analysis';
+      relationsByPhase[phase].push(bundle);
+    }
+
+    graphStore.reset();
+    for (const phase of ['analysis', 'critique', 'synthesis'] as const) {
+      graphStore.addFromClaims(phase, claimsByPhase[phase], relationsByPhase[phase]);
+    }
+  }
+
   async function copyShareLink(): Promise<void> {
     if (typeof window === 'undefined') return;
     const url = new URL(window.location.href);
@@ -661,6 +699,11 @@
     <span>{graphStore.snapshotMeta?.seedNodeIds?.length ?? 0} seed nodes</span>
     <span>sufficiency: {retrievalExplainability.contextSufficiency}</span>
     <span>v{graphStore.snapshotVersion}</span>
+    {#if !hasGraph && referencesStore.activeClaims.length > 0}
+      <button type="button" class="mini-btn" onclick={rebuildGraphFromSession}>
+        Load Graph From Analysis
+      </button>
+    {/if}
   </div>
 
   <div class="mode-row" role="tablist" aria-label="Map view modes">
