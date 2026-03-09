@@ -172,6 +172,130 @@ Key deliverables:
 - [ ] Unit tests covering all 4 deterministic rules with crafted claim/relation fixtures
 - [ ] Grant output: open-source `@sophia/epistemic-constitution` npm package (MIT)
 
+### Phase 6.5 — Dogfooding and pipeline convergence (target: 1–2 weeks after Phase 6)
+
+**Objective:** Ensure SOPHIA "eats its own dog food" by using the same constitution-aware verification pipeline internally across API and product surfaces, without introducing in-process HTTP hop overhead.
+
+**Principles:**
+
+- No server-side self-calls to `/api/v1/verify`; share orchestration via an internal module
+- One canonical verification pipeline implementation; route handlers become thin adapters
+- Feature-flagged rollout into consumer flow to manage latency/cost risk
+
+Key deliverables:
+
+- [ ] Extract a shared verification orchestrator module (e.g., `src/lib/server/verification/pipeline.ts`) that runs:
+  - Domain-agnostic reasoning
+  - Claim extraction
+  - Reasoning quality scoring
+  - Constitution evaluation
+- [ ] Refactor `POST /api/v1/verify` to call the shared orchestrator (preserve current API schema and SSE behavior)
+- [ ] Add optional constitution step to consumer analysis flow behind `ENABLE_CONSTITUTION_IN_ANALYSE` (default off)
+- [ ] Add parity tests asserting internal pipeline output parity with `/api/v1/verify` JSON mode for the same input
+- [ ] Add telemetry:
+  - constitution eval latency
+  - extra token cost
+  - violation-rate distribution by rule id
+- [ ] Rollout plan:
+  - 0% (off) -> internal testing
+  - 10% traffic flag-on
+  - 50% if p95 and cost budgets hold
+  - 100% after one week stable
+
+**Exit criteria:**
+
+- Single source of truth for verification orchestration
+- No regression in `/api/v1/verify` contract
+- Consumer flow can surface constitution output when flag is enabled
+- Observability dashboard shows latency and cost deltas clearly
+
+### Agent prompt — Phase 6.5a (shared pipeline extraction)
+
+```text
+Unify SOPHIA verification orchestration into one internal service module.
+
+CONTEXT:
+- /api/v1/verify currently orchestrates reasoning -> extraction -> reasoning quality -> constitution.
+- /api/analyse uses the dialectical engine directly and does not yet consume constitution output.
+
+GOAL:
+Create a shared pipeline module so both routes can reuse the same logic, while keeping route contracts unchanged.
+
+DO:
+1) Create src/lib/server/verification/pipeline.ts exporting:
+   - runVerificationPipeline(input: VerificationRequest | { text: string, question?: string, answer?: string }, options)
+   - return structured object containing claims, relations, reasoning_quality, constitutional_check, pass_outputs, metadata.
+2) Move orchestration logic out of /api/v1/verify into this module.
+3) Keep /api/v1/verify as a thin adapter for:
+   - auth
+   - request parsing
+   - JSON/SSE transport formatting
+4) Ensure zero contract drift in existing /api/v1/verify response fields and headers.
+5) Add focused tests for pipeline success path and failure propagation.
+
+CONSTRAINTS:
+- Do not call /api/v1/verify over HTTP from server code.
+- Do not modify consumer UI in this task.
+```
+
+### Agent prompt — Phase 6.5b (consumer dogfood integration behind flag)
+
+```text
+Integrate constitution-aware verification into consumer analysis flow behind a feature flag.
+
+CONTEXT:
+- Shared pipeline exists (Phase 6.5a).
+- Consumer endpoint /api/analyse currently streams pass events from runDialecticalEngine.
+
+GOAL:
+Allow consumer flow to optionally compute and emit constitution output without breaking existing UX.
+
+DO:
+1) Add env flag ENABLE_CONSTITUTION_IN_ANALYSE (default false).
+2) When flag is true, run constitution evaluation after claim extraction/analysis completion.
+3) Emit a new SSE event:
+   - type: "constitution_check"
+   - payload: constitutional_check
+4) Preserve existing event ordering and backward compatibility.
+5) Add tests for:
+   - flag off: no constitution event
+   - flag on: constitution event emitted with valid shape
+6) Add lightweight timing metric capture for constitution step.
+
+CONSTRAINTS:
+- Keep first-token latency unchanged for the core analysis stream.
+- No API-key auth changes.
+```
+
+### Agent prompt — Phase 6.5c (parity + observability hardening)
+
+```text
+Add parity checks and observability for constitution dogfooding rollout.
+
+GOAL:
+Prove that internal dogfood path and /api/v1/verify remain behaviorally aligned and operationally safe.
+
+DO:
+1) Add parity test fixtures:
+   - same input through shared pipeline
+   - same input through /api/v1/verify JSON path (handler-level test)
+   - assert claim IDs, relation counts, rule statuses, and overall_compliance align.
+2) Add structured logs/metrics fields:
+   - constitution_duration_ms
+   - constitution_input_tokens
+   - constitution_output_tokens
+   - constitution_rule_violations (array of rule_id)
+3) Document rollout guardrails in docs/runbooks/:
+   - latency budget threshold
+   - cost budget threshold
+   - rollback switch (flag off)
+4) Add a short dashboard query reference to STATUS.md.
+
+CONSTRAINTS:
+- Do not change public API request schema.
+- Keep metrics additive only (no breaking log format changes).
+```
+
 ### Phase 7 — Consumer polish and monetisation (target: 4 weeks after Phase 6)
 
 **Objective:** Bring the consumer product to paying-user quality. First recurring revenue.
@@ -207,7 +331,7 @@ Driven by market signal rather than a fixed sequence. Key items:
 - **Open-source epistemic constitution** — standalone `@sophia/epistemic-constitution` npm package; enables developer ecosystem adoption
 - **Developer SDK** — `@sophia/sdk` TypeScript client; handles auth, streaming, retries, type safety
 - **Batch processing API** — `POST /api/v1/verify/batch` with async webhook callback; enables enterprise document-set verification
-- **Argument graph visualisation** — full "Map" tab implementation (infrastructure already exists in `GraphCanvas` + `graphStore`)
+- **Argument graph visualisation** — full "Map" tab implementation (infrastructure already exists in `GraphCanvas` + `graphStore`; execution plan: `docs/argument-map-gold-standard-plan.md`)
 - **Formal evaluation study** — 50+ queries, three independent evaluators, inter-rater reliability, separation of graph-context vs. dialectical-structure contributions
 
 ---

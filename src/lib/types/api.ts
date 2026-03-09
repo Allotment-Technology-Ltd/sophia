@@ -1,5 +1,6 @@
 import type { PassType } from './passes';
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from './references';
+import type { ConstitutionalCheck } from './constitution';
 
 export interface AnalyseRequest {
   query: string;
@@ -95,18 +96,45 @@ export interface GraphNode {
   type: 'source' | 'claim';
   label: string;
   phase?: 'retrieval' | 'analysis' | 'critique' | 'synthesis';
+  domain?: string;
+  sourceTitle?: string;
+  traversalDepth?: number;
+  relevance?: number;
+  isSeed?: boolean;
+  isTraversed?: boolean;
+  confidenceBand?: 'high' | 'medium' | 'low';
 }
 
 export interface GraphEdge {
   from: string;
   to: string;
   type: 'contains' | 'supports' | 'contradicts' | 'responds-to' | 'depends-on';
+  weight?: number;
+  phaseOrigin?: 'retrieval' | 'analysis' | 'critique' | 'synthesis';
+}
+
+export interface GraphSnapshotMeta {
+  seedNodeIds?: string[];
+  traversedNodeIds?: string[];
+  relationTypeCounts?: Partial<Record<GraphEdge['type'], number>>;
+  maxHops?: number;
+  contextSufficiency?: 'strong' | 'moderate' | 'sparse';
+  retrievalDegraded?: boolean;
+  retrievalDegradedReason?: string;
+  retrievalTimestamp?: string;
 }
 
 export interface GraphSnapshotEvent {
   type: 'graph_snapshot';
   nodes: GraphNode[];
   edges: GraphEdge[];
+  version?: number;
+  meta?: GraphSnapshotMeta;
+}
+
+export interface ConstitutionCheckEvent {
+  type: 'constitution_check';
+  constitutional_check: ConstitutionalCheck;
 }
 
 export type SSEEvent =
@@ -121,4 +149,5 @@ export type SSEEvent =
   | SourcesEvent
   | GroundingSourcesEvent
   | ConfidenceSummaryEvent
-  | GraphSnapshotEvent;
+  | GraphSnapshotEvent
+  | ConstitutionCheckEvent;
