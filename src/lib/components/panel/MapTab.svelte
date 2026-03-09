@@ -49,7 +49,10 @@
     'supports',
     'contradicts',
     'responds-to',
-    'depends-on'
+    'depends-on',
+    'qualifies',
+    'assumes',
+    'resolves'
   ];
   const ALL_TIMELINE_PHASES: TimelinePhase[] = ['retrieval', 'analysis', 'critique', 'synthesis'];
   const ALL_CONFIDENCE_BANDS: ConfidenceBand[] = ['high', 'medium', 'low'];
@@ -59,7 +62,10 @@
     supports: 'Supports',
     contradicts: 'Contradicts',
     'responds-to': 'Responds To',
-    'depends-on': 'Depends On'
+    'depends-on': 'Depends On',
+    qualifies: 'Qualifies',
+    assumes: 'Assumes',
+    resolves: 'Resolves'
   };
 
   let containerEl = $state<HTMLDivElement | null>(null);
