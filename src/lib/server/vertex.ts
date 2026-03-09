@@ -1,10 +1,12 @@
 import { createVertex } from '@ai-sdk/google-vertex';
+import { loadServerEnv } from './env';
 
 // Lazy initialization - create vertex client only when first called
 let vertexInstance: ReturnType<typeof createVertex> | null = null;
 
 function initializeVertex() {
   if (vertexInstance) return vertexInstance;
+  loadServerEnv();
 
   // Use process.env directly for compatibility with both SvelteKit and standalone scripts
   const project =
