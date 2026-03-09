@@ -123,6 +123,7 @@ interface EngineOptions {
   domainMode?: 'auto' | 'manual';
   domain?: 'ethics' | 'philosophy_of_mind';
   queryRunId?: string;
+  depthMode?: 'quick' | 'standard' | 'deep';
 }
 
 async function streamPassWithContinuation(
@@ -240,6 +241,7 @@ export async function runDialecticalEngine(
   const isAgnosticMode = engineMode === 'agnostic';
   const selectedDomainMode = options?.domainMode ?? 'auto';
   const selectedDomain = options?.domain;
+  const depthMode = options?.depthMode ?? 'standard';
 
   // ── Domain classification ──────────────────────────────────────────────
   const domainClassification = isAgnosticMode
@@ -389,12 +391,16 @@ export async function runDialecticalEngine(
         }
       ];
 
-      while (continuationRound <= 6) {
+      const analysisMaxOutputTokens = depthMode === 'deep' ? 5500 : 4096;
+      const analysisMaxContinuationRounds = depthMode === 'deep' ? 8 : 6;
+      const critiqueStartThreshold = depthMode === 'deep' ? 2600 : 2000;
+
+      while (continuationRound <= analysisMaxContinuationRounds) {
         let segmentOutput = '';
 
         const stream = streamText({
           model: getReasoningModel(),
-          maxOutputTokens: 4096,
+          maxOutputTokens: analysisMaxOutputTokens,
           system: analysisSystem,
           messages,
           tools: {
@@ -410,10 +416,10 @@ export async function runDialecticalEngine(
           output += delta;
           callbacks.onPassChunk('analysis', delta);
 
-          // Trigger critique when analysis reaches ~2000 characters (if not already started)
-          if (!critiqueStarted && output.length >= 2000) {
+          // Trigger critique when analysis reaches threshold (if not already started)
+          if (!critiqueStarted && output.length >= critiqueStartThreshold) {
             critiqueStarted = true;
-            console.log(`[ENGINE] Analysis reached 2000 chars, starting Critique in parallel (round=${continuationRound})`);
+            console.log(`[ENGINE] Analysis reached ${critiqueStartThreshold} chars, starting Critique in parallel (round=${continuationRound})`);
             callbacks.onPassStart('critique');
             
             critiquePromise = streamPassWithContinuation(
@@ -422,7 +428,9 @@ export async function runDialecticalEngine(
               isAgnosticMode
                 ? buildReasoningCritiqueUserPrompt(query, `${output}\n[Analysis in progress...]`)
                 : buildCritiqueUserPrompt(query, `${output}\n[Analysis in progress...]`),
-              callbacks
+              callbacks,
+              depthMode === 'deep' ? 5200 : 4096,
+              depthMode === 'deep' ? 8 : 6
             );
           }
         }
@@ -513,6 +521,22 @@ export async function runDialecticalEngine(
     return;
   }
 
+  if (depthMode === 'quick') {
+    const durationMs = Date.now() - startTime;
+    console.log(`[ENGINE] Quick mode complete in ${durationMs}ms — totalIn=${totalInputTokens} totalOut=${totalOutputTokens}`);
+    callbacks.onMetadata(totalInputTokens, totalOutputTokens, durationMs, {
+      claims_retrieved: claimsRetrieved,
+      arguments_retrieved: argumentsRetrieved,
+      retrieval_degraded: retrievalDegraded,
+      retrieval_degraded_reason: retrievalDegradedReason,
+      detected_domain: domainClassification.domain ?? undefined,
+      domain_confidence: domainClassification.domain ? domainClassification.confidence : undefined,
+      selected_domain_mode: selectedDomainMode,
+      selected_domain: selectedDomainMode === 'manual' ? selectedDomain : undefined
+    });
+    return;
+  }
+
   // Phase 2: Critique (may already be running in parallel, or starts now if analysis was very short)
   try {
     const t2 = Date.now();
@@ -528,7 +552,9 @@ export async function runDialecticalEngine(
         isAgnosticMode
           ? buildReasoningCritiqueUserPrompt(query, analysisOutput)
           : buildCritiqueUserPrompt(query, analysisOutput),
-        callbacks
+        callbacks,
+        depthMode === 'deep' ? 5200 : 4096,
+        depthMode === 'deep' ? 8 : 6
       );
     } else {
       console.log('[ENGINE] Pass 2 (critique) already streaming in parallel, waiting for completion');
@@ -589,7 +615,9 @@ export async function runDialecticalEngine(
       isAgnosticMode
         ? buildReasoningSynthesisUserPrompt(query, analysisOutput, critiqueOutput)
         : buildSynthesisUserPrompt(query, analysisOutput, critiqueOutput),
-      callbacks
+      callbacks,
+      depthMode === 'deep' ? 5600 : 4096,
+      depthMode === 'deep' ? 8 : 6
     );
 
     synthesisOutput = synthesisResult.output;
