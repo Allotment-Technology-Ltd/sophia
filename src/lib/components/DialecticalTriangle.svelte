@@ -69,16 +69,6 @@
     : 0.2
   );
 
-  const statusLabel = $derived.by(() => {
-    if (mode !== 'loading') return '';
-    switch (currentPass) {
-      case 'analysis':  return 'Mapping the philosophical landscape…';
-      case 'critique':  return 'Finding the weakest premises…';
-      case 'synthesis': return 'Integrating tensions…';
-      default:          return 'Thinking…';
-    }
-  });
-
   let hovering = $state(false);
 
   function handleClick() {
@@ -148,7 +138,30 @@
       </filter>
     </defs>
 
-    <!-- ── Triangle edges ─────────────────────────────────────── -->
+    <!-- ── Triangle skeleton (always visible in loading/complete/logo) ───── -->
+    <line
+      class="edge-skeleton"
+      x1="0" y1="-45" x2="39" y2="22"
+      stroke="var(--color-sage)"
+      stroke-width="0.8"
+      stroke-linecap="round"
+    />
+    <line
+      class="edge-skeleton"
+      x1="39" y1="22" x2="-39" y2="22"
+      stroke="var(--color-copper)"
+      stroke-width="0.8"
+      stroke-linecap="round"
+    />
+    <line
+      class="edge-skeleton"
+      x1="-39" y1="22" x2="0" y2="-45"
+      stroke="var(--color-blue)"
+      stroke-width="0.8"
+      stroke-linecap="round"
+    />
+
+    <!-- ── Active edge highlights (light up on pass completion) ──────────── -->
 
     <!-- A→C (sage / analysis) -->
     <line
@@ -248,10 +261,6 @@
     {/if}
   </svg>
 
-  {#if mode === 'loading' && statusLabel}
-    <p class="status-label">{statusLabel}</p>
-  {/if}
-
   {#if mode === 'complete'}
     <p class="reveal-hint" aria-hidden="true">click to reveal ↓</p>
   {/if}
@@ -277,6 +286,11 @@
   /* Edge draw-in transition */
   .edge {
     transition: stroke-dashoffset 1.5s cubic-bezier(0.4, 0, 0.2, 1);
+    opacity: 0.95;
+  }
+
+  .edge-skeleton {
+    opacity: 0.2;
   }
 
   /* Hover wobble on edges in complete mode */
@@ -309,16 +323,6 @@
     transition: opacity 0.4s ease;
   }
 
-  .status-label {
-    font-family: var(--font-display);
-    font-style: italic;
-    font-size: 0.85rem;
-    color: var(--color-muted);
-    text-align: center;
-    margin: 0;
-    animation: fadeInUp 0.4s ease both;
-  }
-
   .reveal-hint {
     font-family: var(--font-ui);
     font-size: 0.62rem;
@@ -346,6 +350,6 @@
     .centre-dot                        { animation: none; }
     .conv-line                         { animation: none; stroke-dashoffset: 0; }
     .tri-svg.is-complete:hover .edge   { animation: none; }
-    .status-label, .reveal-hint        { animation: none; }
+    .reveal-hint                        { animation: none; }
   }
 </style>

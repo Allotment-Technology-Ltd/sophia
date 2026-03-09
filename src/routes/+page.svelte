@@ -70,11 +70,9 @@
   );
 
   let completedPasses = $derived.by(() => {
-    const passes: string[] = [];
-    if (conversation.currentPasses.analysis) passes.push('analysis');
-    if (conversation.currentPasses.critique) passes.push('critique');
-    if (conversation.currentPasses.synthesis) passes.push('synthesis');
-    return passes;
+    return conversation.completedPasses.filter((pass) =>
+      pass === 'analysis' || pass === 'critique' || pass === 'synthesis'
+    );
   });
 
   let loadingStatusText = $derived(

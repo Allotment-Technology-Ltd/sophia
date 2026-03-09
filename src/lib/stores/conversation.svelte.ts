@@ -40,6 +40,7 @@ function createConversationStore() {
   let messages = $state<Message[]>([]);
   let isLoading = $state(false);
   let currentPass = $state<PassType | null>(null);
+  let completedPasses = $state<Set<PassType>>(new Set());
   let currentPasses = $state({ analysis: '', critique: '', synthesis: '', verification: '' });
   let currentStructuredPasses = $state<Partial<Record<PassType, { sections: Array<{ id: string; heading: string; content: string }>; wordCount: number }>>>({});
   let error = $state<string | null>(null);
@@ -52,6 +53,7 @@ function createConversationStore() {
     get messages() { return messages; },
     get isLoading() { return isLoading; },
     get currentPass() { return currentPass; },
+    get completedPasses() { return [...completedPasses]; },
     get currentPasses() { return currentPasses; },
     get currentStructuredPasses() { return currentStructuredPasses; },
     get error() { return error; },
@@ -67,6 +69,7 @@ function createConversationStore() {
       error = null;
       isLoading = true;
       currentPass = null;
+      completedPasses = new Set();
       currentPasses = { analysis: '', critique: '', synthesis: '', verification: '' };
       currentStructuredPasses = {};
       confidenceSummary = null;
@@ -88,6 +91,12 @@ function createConversationStore() {
         // Loading from history restarts the depth counter — fresh exploration
         questionCount = 0;
         currentPass = null;
+        const cachedCompleted = new Set<PassType>();
+        if (cached.passes.analysis) cachedCompleted.add('analysis');
+        if (cached.passes.critique) cachedCompleted.add('critique');
+        if (cached.passes.synthesis) cachedCompleted.add('synthesis');
+        if (cached.passes.verification) cachedCompleted.add('verification');
+        completedPasses = cachedCompleted;
         currentPasses = { ...cached.passes, verification: cached.passes.verification ?? '' };
         currentStructuredPasses = {};
         referencesStore.setSources(cached.sources);
@@ -201,6 +210,7 @@ function createConversationStore() {
                 break;
 
               case 'pass_complete':
+                completedPasses = new Set([...completedPasses, event.pass]);
                 break;
 
               case 'pass_structured':
@@ -385,6 +395,7 @@ function createConversationStore() {
 
               case 'verification_complete':
                 currentPass = null;
+                completedPasses = new Set([...completedPasses, 'verification']);
                 // Patch the last assistant message so verification text persists
                 {
                   const lastIdx = messages.findLastIndex(m => m.role === 'assistant');
@@ -418,6 +429,7 @@ function createConversationStore() {
       messages = [];
       error = null;
       currentPass = null;
+      completedPasses = new Set();
       currentPasses = { analysis: '', critique: '', synthesis: '', verification: '' };
       currentStructuredPasses = {};
       confidenceSummary = null;

@@ -72,6 +72,7 @@
   let syncingFromUrl = false;
   let hasHydrated = false;
   let lastSyncedUrl = $state<string | null>(null);
+  let didAutoHydrateFromReferences = false;
   let lastDegradedReason = $state<string | null>(null);
 
   let viewMode = $state<ViewMode>('structure');
@@ -668,6 +669,17 @@
       graphStore.selectNode(pendingSelectedNodeId);
       pendingSelectedNodeId = null;
     }
+  });
+
+  $effect(() => {
+    if (hasGraph) {
+      didAutoHydrateFromReferences = false;
+      return;
+    }
+    if (didAutoHydrateFromReferences) return;
+    if (referencesStore.activeClaims.length === 0) return;
+    rebuildGraphFromSession();
+    didAutoHydrateFromReferences = true;
   });
 
   $effect(() => {
