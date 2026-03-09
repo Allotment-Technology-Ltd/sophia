@@ -137,6 +137,18 @@
   animation: pulse-ring 1.5s ease-in-out infinite;
 }
 
+/* Dialectical triangle — centre dot pulse (complete mode) */
+@keyframes centerPulse {
+  0%, 100% { opacity: 0.9; transform: scale(1); }
+  50%       { opacity: 0.55; transform: scale(1.45); }
+}
+
+/* Dialectical triangle — edge hover shimmer (complete mode) */
+@keyframes edgeWobble {
+  0%, 100% { stroke-width: 0.8; opacity: 0.85; }
+  50%       { stroke-width: 1.3; opacity: 1; }
+}
+
 /* Reduced motion: suppress all animations */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

@@ -21,11 +21,13 @@
   import FollowUpHints from '$lib/components/FollowUpHints.svelte';
   import QuestionCounter from '$lib/components/QuestionCounter.svelte';
   import { extractFurtherQuestions } from '$lib/utils/extractQuestions';
+  import DialecticalTriangle from '$lib/components/DialecticalTriangle.svelte';
 
   // ── State ─────────────────────────────────────────────────────────────────
   let queryInput = $state('');
   let activeTab = $state<TabId>('references');
   let activeResultPass = $state<'analysis' | 'critique' | 'synthesis'>('analysis');
+  let revealed = $state(false);
 
   type PassKey = 'analysis' | 'critique' | 'synthesis' | 'verification';
 
@@ -112,6 +114,7 @@
     const query = queryInput.trim();
     queryInput = '';
     activeResultPass = 'analysis';
+    revealed = false;
     await conversation.submitQuery(query);
   }
 
@@ -158,7 +161,9 @@
       {#if isQueryState}
         <div class="query-screen">
           <div class="query-center">
-            <div class="sophia-symbol" aria-hidden="true">✦</div>
+            <div class="sophia-symbol" aria-hidden="true">
+              <DialecticalTriangle mode="logo" size={80} />
+            </div>
             <h1 class="query-heading">What should I think about today?</h1>
             <p class="query-sub">Be specific · More context → richer analysis</p>
 
@@ -209,54 +214,28 @@
         </div>
       {/if}
 
-      {#if isLoadingState && hasStreamingContent}
-        <div class="results-layout" in:fly={{ y: 20, duration: 400, easing: quintOut }} out:fly={{ x: -40, y: -20, duration: 450, easing: quintOut }}>
-          <aside class="pass-nav-col">
-            <PassNavigator
-              activePass={conversation.currentPass ?? 'analysis'}
-              {completedPasses}
-              onSelect={(p) => { activeResultPass = p as 'analysis' | 'critique' | 'synthesis'; scrollToPass(p); }}
-            />
-          </aside>
-
-          <div class="results-col">
-            {#if conversation.currentPasses.analysis}
-              <div id="pass-analysis">
-                <PassCard
-                  pass="analysis"
-                  content={renderPass(conversation.currentPasses.analysis)}
-                  streaming={conversation.currentPass === 'analysis'}
-                />
-              </div>
-            {/if}
-
-            {#if conversation.currentPasses.critique}
-              <div id="pass-critique">
-                <PassCard
-                  pass="critique"
-                  content={renderPass(conversation.currentPasses.critique)}
-                  streaming={conversation.currentPass === 'critique'}
-                />
-              </div>
-            {/if}
-
-            {#if conversation.currentPasses.synthesis}
-              <div id="pass-synthesis">
-                <PassCard
-                  pass="synthesis"
-                  content={renderPass(conversation.currentPasses.synthesis)}
-                  streaming={conversation.currentPass === 'synthesis'}
-                />
-              </div>
-            {/if}
-          </div>
+      <!-- ═══════════════════════════════════════════════════════════════
+           STATE 2b: COMPLETE — click triangle to reveal results
+           ═══════════════════════════════════════════════════════════════ -->
+      {#if isResultsState && !revealed}
+        <div
+          class="complete-screen"
+          in:fade={{ duration: 500 }}
+          out:fade={{ duration: 300 }}
+        >
+          <DialecticalTriangle
+            mode="complete"
+            completedPasses={['analysis', 'critique', 'synthesis']}
+            size={240}
+            onReveal={() => { revealed = true; }}
+          />
         </div>
       {/if}
 
       <!-- ═══════════════════════════════════════════════════════════════
            STATE 3: RESULTS — two-column layout
            ═══════════════════════════════════════════════════════════════ -->
-      {#if isResultsState && lastAssistantMsg && lastAssistantMsg.passes}
+      {#if isResultsState && revealed && lastAssistantMsg && lastAssistantMsg.passes}
         {@const passes = lastAssistantMsg.passes}
 
         <div class="results-layout" in:fly={{ y: 24, duration: 500, delay: 100, easing: quintOut }}>
@@ -473,12 +452,17 @@
   }
 
   .sophia-symbol {
-    font-family: var(--font-display);
-    font-size: 2.5rem;
-    color: var(--color-sage);
-    animation: symbolBreathe 3s ease-in-out infinite;
     margin-bottom: var(--space-4);
     line-height: 1;
+  }
+
+  /* ── STATE 2b: Complete screen ──────────────────────────────────────── */
+  .complete-screen {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(100vh - var(--nav-height));
   }
 
   .query-heading {
@@ -828,10 +812,6 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .sophia-symbol {
-      animation: none;
-    }
-
     .main-content {
       transition: none;
     }

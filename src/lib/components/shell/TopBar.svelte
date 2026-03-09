@@ -3,6 +3,7 @@
   import { panelStore } from '$lib/stores/panel.svelte';
   import { goto } from '$app/navigation';
   import { browser } from '$app/environment';
+  import DialecticalTriangle from '$lib/components/DialecticalTriangle.svelte';
 
   interface Props {
     contextQuery?: string;
@@ -38,7 +39,7 @@
 <nav class="top-bar" aria-label="Main navigation">
   <!-- Left: wordmark -->
   <a href="/" class="wordmark" aria-label="SOPHIA home">
-    <span class="wordmark-star" aria-hidden="true">✦</span>
+    <DialecticalTriangle mode="logo" size={22} />
     <span class="wordmark-text">SOPHIA</span>
   </a>
 
@@ -162,12 +163,6 @@
     gap: 8px;
     text-decoration: none;
     flex-shrink: 0;
-  }
-
-  .wordmark-star {
-    color: var(--color-sage);
-    font-size: 0.9rem;
-    line-height: 1;
   }
 
   .wordmark-text {
