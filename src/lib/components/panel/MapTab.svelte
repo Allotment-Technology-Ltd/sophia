@@ -1,11 +1,14 @@
 <script lang="ts">
   import GraphCanvas from '$lib/components/visualization/GraphCanvas.svelte';
-  import { goto } from '$app/navigation';
+  import { goto, replaceState } from '$app/navigation';
+  import { page } from '$app/state';
   import { graphStore } from '$lib/stores/graph.svelte';
+  import { referencesStore } from '$lib/stores/references.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
   import type { GraphEdge, GraphNode } from '$lib/types/api';
   import { trackEvent } from '$lib/utils/analytics';
   import { onMount } from 'svelte';
+  import type { AnalysisPhase, RelationBundle } from '$lib/types/references';
 
   interface Props {
     onOpenReferences?: (nodeId: string) => void;
@@ -69,6 +72,7 @@
   let syncingFromUrl = false;
   let hasHydrated = false;
   let lastSyncedUrl = $state<string | null>(null);
+  let didAutoHydrateFromReferences = false;
   let lastDegradedReason = $state<string | null>(null);
 
   let viewMode = $state<ViewMode>('structure');
@@ -87,6 +91,7 @@
 
   const enabledTypes = $derived(Array.from(graphStore.relationFilter));
   const hasGraph = $derived(graphStore.nodes.length > 0 || graphStore.rawNodes.length > 0);
+  const isFullPageRoute = $derived(page.url.pathname === '/map');
   const selectedNodeId = $derived(graphStore.selectedNodeId);
   const selectedNode = $derived(graphStore.rawNodes.find((node) => node.id === selectedNodeId) ?? null);
   const a11ySummary = $derived.by(() => {
@@ -332,7 +337,7 @@
     const next = url.toString();
     if (next === window.location.href || next === lastSyncedUrl) return;
     lastSyncedUrl = next;
-    void goto(next, { replaceState: true, noScroll: true, keepFocus: true, invalidateAll: false });
+    replaceState(next, page.state);
   }
 
   function openFullPageMap(): void {
@@ -380,15 +385,22 @@
     return next;
   }
 
+  function claimPassesFilters(node: GraphNode): boolean {
+    if (!isClaimNode(node)) return true;
+    if (lensMode === 'seed' && !node.isSeed) return false;
+    if (lensMode === 'traversed' && !node.isTraversed) return false;
+    if (!passFilter.has((node.phase as TimelinePhase) ?? 'retrieval')) return false;
+    if (sourceFilter.size > 0 && (!node.sourceTitle || !sourceFilter.has(node.sourceTitle))) return false;
+    if (domainFilter.size > 0 && (!node.domain || !domainFilter.has(node.domain))) return false;
+    if (node.confidenceBand && !confidenceFilter.has(node.confidenceBand)) return false;
+    return true;
+  }
+
   const filteredGraph = $derived.by(() => {
     const nodes = graphStore.nodes;
     const edges = graphStore.edges;
     const nodeById = new Map(nodes.map((n) => [n.id, n]));
     let filteredEdges = edges.filter((edge) => nodeById.has(edge.from) && nodeById.has(edge.to));
-
-    if (densityMode === 'beginner') {
-      filteredEdges = filteredEdges.filter((edge) => edge.type !== 'contains');
-    }
 
     if (timelinePhase !== 'all') {
       filteredEdges = filteredEdges.filter((edge) => edge.phaseOrigin === timelinePhase || edge.type === 'contains');
@@ -398,18 +410,15 @@
       const from = nodeById.get(edge.from);
       const to = nodeById.get(edge.to);
       if (!from || !to) return false;
-
-      for (const node of [from, to]) {
-        if (!isClaimNode(node)) continue;
-        if (lensMode === 'seed' && !node.isSeed) return false;
-        if (lensMode === 'traversed' && !node.isTraversed) return false;
-        if (!passFilter.has((node.phase as TimelinePhase) ?? 'retrieval')) return false;
-        if (sourceFilter.size > 0 && (!node.sourceTitle || !sourceFilter.has(node.sourceTitle))) return false;
-        if (domainFilter.size > 0 && (!node.domain || !domainFilter.has(node.domain))) return false;
-        if (node.confidenceBand && !confidenceFilter.has(node.confidenceBand)) return false;
-      }
-      return true;
+      return claimPassesFilters(from) && claimPassesFilters(to);
     });
+
+    if (densityMode === 'beginner') {
+      const hasNonContains = filteredEdges.some((edge) => edge.type !== 'contains');
+      if (hasNonContains) {
+        filteredEdges = filteredEdges.filter((edge) => edge.type !== 'contains');
+      }
+    }
 
     const visibleNodeIds = new Set<string>();
     filteredEdges.forEach((edge) => {
@@ -419,16 +428,20 @@
     if (selectedNodeId) visibleNodeIds.add(selectedNodeId);
     pinnedNodeIds.forEach((id) => visibleNodeIds.add(id));
 
+    if (visibleNodeIds.size === 0) {
+      const claimCandidates = nodes.filter((node) => isClaimNode(node) && claimPassesFilters(node));
+      const claimCandidateIds = new Set(claimCandidates.map((node) => node.id));
+      for (const claimId of claimCandidateIds) visibleNodeIds.add(claimId);
+      // Keep source context visible for isolated claims.
+      for (const edge of graphStore.rawEdges) {
+        if (edge.type !== 'contains') continue;
+        if (claimCandidateIds.has(edge.to)) visibleNodeIds.add(edge.from);
+      }
+    }
+
     const filteredNodes = nodes.filter((node) => {
       if (!visibleNodeIds.has(node.id)) return false;
-      if (!isClaimNode(node)) return true;
-      if (lensMode === 'seed' && !node.isSeed) return false;
-      if (lensMode === 'traversed' && !node.isTraversed) return false;
-      if (!passFilter.has((node.phase as TimelinePhase) ?? 'retrieval')) return false;
-      if (sourceFilter.size > 0 && (!node.sourceTitle || !sourceFilter.has(node.sourceTitle))) return false;
-      if (domainFilter.size > 0 && (!node.domain || !domainFilter.has(node.domain))) return false;
-      if (node.confidenceBand && !confidenceFilter.has(node.confidenceBand)) return false;
-      return true;
+      return claimPassesFilters(node);
     });
 
     return { nodes: filteredNodes, edges: filteredEdges };
@@ -583,6 +596,42 @@
     confidenceFilter = new Set(ALL_CONFIDENCE_BANDS);
   }
 
+  function rebuildGraphFromSession(): void {
+    const claims = referencesStore.activeClaims;
+    if (claims.length === 0) return;
+
+    const claimsByPhase: Record<AnalysisPhase, typeof claims> = {
+      analysis: [],
+      critique: [],
+      synthesis: []
+    };
+
+    for (const claim of claims) {
+      claimsByPhase[claim.phase].push(claim);
+    }
+
+    const claimPhase = new Map<string, AnalysisPhase>();
+    for (const claim of claims) {
+      claimPhase.set(claim.id, claim.phase);
+    }
+
+    const relationsByPhase: Record<AnalysisPhase, RelationBundle[]> = {
+      analysis: [],
+      critique: [],
+      synthesis: []
+    };
+
+    for (const bundle of referencesStore.relations) {
+      const phase = claimPhase.get(bundle.claimId) ?? 'analysis';
+      relationsByPhase[phase].push(bundle);
+    }
+
+    graphStore.reset();
+    for (const phase of ['analysis', 'critique', 'synthesis'] as const) {
+      graphStore.addFromClaims(phase, claimsByPhase[phase], relationsByPhase[phase]);
+    }
+  }
+
   async function copyShareLink(): Promise<void> {
     if (typeof window === 'undefined') return;
     const url = new URL(window.location.href);
@@ -632,6 +681,17 @@
   });
 
   $effect(() => {
+    if (hasGraph) {
+      didAutoHydrateFromReferences = false;
+      return;
+    }
+    if (didAutoHydrateFromReferences) return;
+    if (referencesStore.activeClaims.length === 0) return;
+    rebuildGraphFromSession();
+    didAutoHydrateFromReferences = true;
+  });
+
+  $effect(() => {
     if (!hasHydrated || syncingFromUrl) return;
     syncToUrl();
   });
@@ -660,6 +720,11 @@
     <span>{graphStore.snapshotMeta?.seedNodeIds?.length ?? 0} seed nodes</span>
     <span>sufficiency: {retrievalExplainability.contextSufficiency}</span>
     <span>v{graphStore.snapshotVersion}</span>
+    {#if !hasGraph && referencesStore.activeClaims.length > 0}
+      <button type="button" class="mini-btn" onclick={rebuildGraphFromSession}>
+        Load Graph From Analysis
+      </button>
+    {/if}
   </div>
 
   <div class="mode-row" role="tablist" aria-label="Map view modes">
@@ -690,13 +755,13 @@
     <button type="button" class="filter-pill share" data-testid="share-view" onclick={copyShareLink}>
       {shareStatus === 'copied' ? 'Copied' : shareStatus === 'failed' ? 'Copy Failed' : 'Share View'}
     </button>
-    <button type="button" class="filter-pill" data-testid="toggle-fullscreen" onclick={toggleFullscreen}>
-      {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
-    </button>
-    {#if typeof window !== 'undefined' && window.location.pathname === '/map'}
+    {#if isFullPageRoute}
+      <button type="button" class="filter-pill" data-testid="toggle-fullscreen" onclick={toggleFullscreen}>
+        {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+      </button>
       <button type="button" class="filter-pill" onclick={openPanelMap}>Open In Panel</button>
     {:else}
-      <button type="button" class="filter-pill" onclick={openFullPageMap}>Open Full Page</button>
+      <button type="button" class="filter-pill is-active" onclick={openFullPageMap}>Open Full Page</button>
     {/if}
     <label class="share-safe-toggle">
       <input type="checkbox" bind:checked={includeSensitiveInShare} />
@@ -801,19 +866,36 @@
     </div>
   </div>
 
-  <div class="map-canvas-wrap" class:is-fullscreen={isFullscreen} bind:this={containerEl}>
-    {#if hasGraph}
+  <div class="map-canvas-wrap" class:is-fullscreen={isFullscreen} class:is-resizable={isFullPageRoute} bind:this={containerEl}>
+    {#if !isFullPageRoute}
+      <div class="map-panel-guidance" role="note" aria-live="polite">
+        <p class="map-panel-guidance-title">Graph Preview Disabled In Side Panel</p>
+        <p>Use full page mode for readable labels, interaction detail, and shortest-path exploration.</p>
+        <button type="button" class="mini-btn" onclick={openFullPageMap}>Open Full Page Map</button>
+      </div>
+    {:else if hasGraph && filteredGraph.nodes.length > 0}
       <GraphCanvas
         nodes={filteredGraph.nodes}
         edges={filteredGraph.edges}
         width={viewportWidth}
         height={viewportHeight}
+        {isFullscreen}
         pinnedNodeIds={[...pinnedNodeIds]}
         pathNodeIds={pathNodeIds}
         pathEdges={pathEdges}
+        onToggleFullscreen={toggleFullscreen}
         onNodeSelect={handleNodeSelect}
         onJumpToReferences={(nodeId) => openNodeInReferences(nodeId)}
       />
+    {:else if hasGraph}
+      <div class="map-empty">
+        <p>No nodes match the current filters.</p>
+        <p>Try enabling <code>depends-on</code> and/or switching to Expert density.</p>
+        <div class="insight-actions">
+          <button class="mini-btn" type="button" onclick={() => graphStore.resetFilters()}>Reset relations</button>
+          <button class="mini-btn" type="button" onclick={applyExpertPreset}>Expert preset</button>
+        </div>
+      </div>
     {:else if graphStore.lifecycle === 'loading'}
       <p class="map-empty">Building graph snapshot…</p>
     {:else if graphStore.lifecycle === 'degraded'}
@@ -825,7 +907,15 @@
         </button>
       </div>
     {:else}
-      <p class="map-empty">Run a query to populate the argument map.</p>
+      <div class="map-empty">
+        <p>Map is empty for this session.</p>
+        <p>How to load it:</p>
+        <ol>
+          <li>Run a new analysis query from the main prompt.</li>
+          <li>Wait for the synthesis pass to complete.</li>
+          <li>Return to the Map tab (or open <code>/map</code>).</li>
+        </ol>
+      </div>
     {/if}
   </div>
 
@@ -1053,11 +1143,18 @@
   }
 
   .map-canvas-wrap {
-    height: clamp(360px, 46vh, 560px);
+    height: clamp(420px, 62vh, 920px);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     background: var(--color-bg);
     overflow: hidden;
+  }
+
+  .map-canvas-wrap.is-resizable {
+    resize: vertical;
+    overflow: auto;
+    min-height: 420px;
+    max-height: 90vh;
   }
 
   .map-canvas-wrap.is-fullscreen {
@@ -1071,6 +1168,38 @@
     font-family: var(--font-ui);
     font-size: var(--text-ui);
     color: var(--color-dim);
+  }
+
+  .map-panel-guidance {
+    margin: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--color-sage-border);
+    background: linear-gradient(180deg, rgba(135, 176, 153, 0.08), rgba(135, 176, 153, 0.02));
+    border-radius: var(--radius-md);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    color: var(--color-dim);
+    font-family: var(--font-ui);
+    font-size: var(--text-meta);
+  }
+
+  .map-panel-guidance-title {
+    margin: 0;
+    color: var(--color-text);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-size: var(--text-ui);
+  }
+
+  .map-empty p {
+    margin: 0 0 6px 0;
+  }
+
+  .map-empty ol {
+    margin: 0;
+    padding-left: 18px;
+    font-size: var(--text-meta);
   }
 
   .map-empty.degraded {

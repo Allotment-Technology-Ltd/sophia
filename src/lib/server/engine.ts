@@ -289,13 +289,29 @@ export async function runDialecticalEngine(
 
     callbacks.onSources(Array.from(sourceMap.values()));
 
-    // Emit graph snapshot for visualization (only when retrieval succeeds)
+    // Emit graph snapshot for visualization.
+    // Always emit (even empty) so clients can render an explicit degraded reason.
     if (claimsRetrieved > 0) {
       const graphData = projectRetrievalToGraph(retrievalResult);
       console.log('[ENGINE] Emitting graph snapshot:', { nodeCount: graphData.nodes.length, edgeCount: graphData.edges.length, claimsRetrieved, argumentsRetrieved });
       callbacks.onGraphSnapshot(graphData.nodes, graphData.edges, graphData.meta, 1);
     } else {
-      console.log('[ENGINE] No claims retrieved (claimsRetrieved=0), skipping graph snapshot');
+      console.log('[ENGINE] No claims retrieved (claimsRetrieved=0), emitting empty degraded snapshot');
+      callbacks.onGraphSnapshot(
+        [],
+        [],
+        {
+          seedNodeIds: [],
+          traversedNodeIds: [],
+          relationTypeCounts: {},
+          maxHops: 0,
+          contextSufficiency: 'sparse',
+          retrievalDegraded: true,
+          retrievalDegradedReason: retrievalDegradedReason ?? 'no_claims_retrieved',
+          retrievalTimestamp: new Date().toISOString()
+        },
+        1
+      );
     }
   } catch (err) {
     console.error('[ENGINE] Retrieval failed (continuing without graph context):', err instanceof Error ? err.message : err);

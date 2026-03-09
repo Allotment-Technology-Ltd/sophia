@@ -86,15 +86,20 @@ function createHistoryStore() {
   let cache = $state<Record<string, CachedQueryResult>>({});
 
   function historyStorageKey(): string | null {
-    return uid ? `sophia-history-${uid}` : null;
+    return uid ? `sophia-history-${uid}` : 'sophia-history-local';
   }
 
   function cacheStorageKey(): string | null {
-    return uid ? `sophia-query-cache-${uid}` : null;
+    return uid ? `sophia-query-cache-${uid}` : 'sophia-query-cache-local';
   }
 
   return {
     get items() { return items; },
+    get cachedResults() {
+      return Object.values(cache).sort(
+        (a, b) => new Date(b.cachedAt).getTime() - new Date(a.cachedAt).getTime()
+      );
+    },
 
     /**
      * Called on auth state change. Scopes all persistence to the given uid.
@@ -102,13 +107,10 @@ function createHistoryStore() {
      */
     setUid(newUid: string | null): void {
       uid = newUid;
-      if (newUid) {
-        items = loadFromStorage(`sophia-history-${newUid}`);
-        cache = loadCacheFromStorage(`sophia-query-cache-${newUid}`);
-      } else {
-        items = [];
-        cache = {};
-      }
+      const nextHistoryKey = newUid ? `sophia-history-${newUid}` : 'sophia-history-local';
+      const nextCacheKey = newUid ? `sophia-query-cache-${newUid}` : 'sophia-query-cache-local';
+      items = loadFromStorage(nextHistoryKey);
+      cache = loadCacheFromStorage(nextCacheKey);
     },
 
     addEntry(question: string, passCount: number = 3): void {

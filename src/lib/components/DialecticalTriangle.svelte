@@ -35,16 +35,27 @@
   const isCritiqueDone  = $derived(completedPasses.includes('critique'));
   const isSynthesisDone = $derived(completedPasses.includes('synthesis'));
 
+  // Edge highlights are gated on completed transitions, not active-node start.
+  const showAC = $derived(
+    mode === 'logo' ||
+    mode === 'complete' ||
+    ((isAnalysisDone || currentPass === 'critique' || currentPass === 'synthesis') && currentPass !== 'analysis')
+  );
+  const showCS = $derived(
+    mode === 'logo' ||
+    mode === 'complete' ||
+    ((isCritiqueDone || currentPass === 'synthesis') && currentPass !== 'critique')
+  );
+  const showSA = $derived(
+    mode === 'logo' ||
+    mode === 'complete' ||
+    (isSynthesisDone && currentPass !== 'synthesis')
+  );
+
   // Edge offsets: length = hidden, 0 = fully drawn
-  const edgeACOffset = $derived(
-    mode === 'logo' || mode === 'complete' || isAnalysisDone || isAnalysisActive ? 0 : LEN_AC
-  );
-  const edgeCSOffset = $derived(
-    mode === 'logo' || mode === 'complete' || isCritiqueDone || isCritiqueActive ? 0 : LEN_CS
-  );
-  const edgeSAOffset = $derived(
-    mode === 'logo' || mode === 'complete' || isSynthesisDone || isSynthesisActive ? 0 : LEN_SA
-  );
+  const edgeACOffset = $derived(showAC ? 0 : LEN_AC);
+  const edgeCSOffset = $derived(showCS ? 0 : LEN_CS);
+  const edgeSAOffset = $derived(showSA ? 0 : LEN_SA);
 
   // Node opacity: 0.2 idle, 1 active, 0.65 done, 0.6 logo
   const opacityA = $derived(
@@ -68,16 +79,6 @@
     : isSynthesisDone   ? 0.65
     : 0.2
   );
-
-  const statusLabel = $derived.by(() => {
-    if (mode !== 'loading') return '';
-    switch (currentPass) {
-      case 'analysis':  return 'Mapping the philosophical landscape…';
-      case 'critique':  return 'Finding the weakest premises…';
-      case 'synthesis': return 'Integrating tensions…';
-      default:          return 'Thinking…';
-    }
-  });
 
   let hovering = $state(false);
 
@@ -148,7 +149,30 @@
       </filter>
     </defs>
 
-    <!-- ── Triangle edges ─────────────────────────────────────── -->
+    <!-- ── Triangle skeleton (always visible in loading/complete/logo) ───── -->
+    <line
+      class="edge-skeleton"
+      x1="0" y1="-45" x2="39" y2="22"
+      stroke="var(--color-sage)"
+      stroke-width="0.8"
+      stroke-linecap="round"
+    />
+    <line
+      class="edge-skeleton"
+      x1="39" y1="22" x2="-39" y2="22"
+      stroke="var(--color-copper)"
+      stroke-width="0.8"
+      stroke-linecap="round"
+    />
+    <line
+      class="edge-skeleton"
+      x1="-39" y1="22" x2="0" y2="-45"
+      stroke="var(--color-blue)"
+      stroke-width="0.8"
+      stroke-linecap="round"
+    />
+
+    <!-- ── Active edge highlights (light up on pass completion) ──────────── -->
 
     <!-- A→C (sage / analysis) -->
     <line
@@ -248,10 +272,6 @@
     {/if}
   </svg>
 
-  {#if mode === 'loading' && statusLabel}
-    <p class="status-label">{statusLabel}</p>
-  {/if}
-
   {#if mode === 'complete'}
     <p class="reveal-hint" aria-hidden="true">click to reveal ↓</p>
   {/if}
@@ -277,6 +297,11 @@
   /* Edge draw-in transition */
   .edge {
     transition: stroke-dashoffset 1.5s cubic-bezier(0.4, 0, 0.2, 1);
+    opacity: 0.95;
+  }
+
+  .edge-skeleton {
+    opacity: 0.2;
   }
 
   /* Hover wobble on edges in complete mode */
@@ -309,16 +334,6 @@
     transition: opacity 0.4s ease;
   }
 
-  .status-label {
-    font-family: var(--font-display);
-    font-style: italic;
-    font-size: 0.85rem;
-    color: var(--color-muted);
-    text-align: center;
-    margin: 0;
-    animation: fadeInUp 0.4s ease both;
-  }
-
   .reveal-hint {
     font-family: var(--font-ui);
     font-size: 0.62rem;
@@ -346,6 +361,6 @@
     .centre-dot                        { animation: none; }
     .conv-line                         { animation: none; stroke-dashoffset: 0; }
     .tri-svg.is-complete:hover .edge   { animation: none; }
-    .status-label, .reveal-hint        { animation: none; }
+    .reveal-hint                        { animation: none; }
   }
 </style>

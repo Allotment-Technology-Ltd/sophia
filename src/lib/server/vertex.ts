@@ -1,19 +1,26 @@
 import { createVertex } from '@ai-sdk/google-vertex';
+import { loadServerEnv } from './env';
 
 // Lazy initialization - create vertex client only when first called
 let vertexInstance: ReturnType<typeof createVertex> | null = null;
 
 function initializeVertex() {
   if (vertexInstance) return vertexInstance;
+  loadServerEnv();
 
   // Use process.env directly for compatibility with both SvelteKit and standalone scripts
-  const project = process.env.GOOGLE_VERTEX_PROJECT || process.env.GCP_PROJECT_ID;
+  const project =
+    process.env.GOOGLE_VERTEX_PROJECT ||
+    process.env.GCP_PROJECT_ID ||
+    process.env.GOOGLE_CLOUD_PROJECT ||
+    process.env.GCLOUD_PROJECT ||
+    process.env.VITE_FIREBASE_PROJECT_ID;
   const location = process.env.GOOGLE_VERTEX_LOCATION || process.env.GCP_LOCATION || 'us-central1';
 
   console.log(`[Vertex] Initializing — project=${project ?? '(missing)'} location=${location}`);
 
   if (!project) {
-    console.error('[Vertex] FATAL: No project ID found. Checked: GOOGLE_VERTEX_PROJECT, GCP_PROJECT_ID');
+    console.error('[Vertex] FATAL: No project ID found. Checked: GOOGLE_VERTEX_PROJECT, GCP_PROJECT_ID, GOOGLE_CLOUD_PROJECT, GCLOUD_PROJECT, VITE_FIREBASE_PROJECT_ID');
     throw new Error('Vertex AI project ID is required. Set GOOGLE_VERTEX_PROJECT or GCP_PROJECT_ID environment variable.');
   }
 

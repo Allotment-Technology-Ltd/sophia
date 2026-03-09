@@ -36,10 +36,37 @@ interface CachedPassRelations {
   relations: RelationBundle[];
 }
 
+function buildPassFallbackGraph(
+  passes: { analysis: string; critique: string; synthesis: string }
+): {
+  nodes: Array<{ id: string; type: 'claim'; label: string; phase: AnalysisPhase }>;
+  edges: Array<{ from: string; to: string; type: 'responds-to' | 'supports'; phaseOrigin: AnalysisPhase }>;
+} {
+  const snip = (text: string, fallback: string) => {
+    const clean = text.trim();
+    if (!clean) return fallback;
+    return clean.length > 96 ? `${clean.slice(0, 96)}...` : clean;
+  };
+
+  return {
+    nodes: [
+      { id: 'claim:pass-analysis', type: 'claim', phase: 'analysis', label: snip(passes.analysis, 'Analysis output') },
+      { id: 'claim:pass-critique', type: 'claim', phase: 'critique', label: snip(passes.critique, 'Critique output') },
+      { id: 'claim:pass-synthesis', type: 'claim', phase: 'synthesis', label: snip(passes.synthesis, 'Synthesis output') }
+    ],
+    edges: [
+      { from: 'claim:pass-analysis', to: 'claim:pass-critique', type: 'responds-to', phaseOrigin: 'critique' },
+      { from: 'claim:pass-critique', to: 'claim:pass-synthesis', type: 'responds-to', phaseOrigin: 'synthesis' },
+      { from: 'claim:pass-analysis', to: 'claim:pass-synthesis', type: 'supports', phaseOrigin: 'synthesis' }
+    ]
+  };
+}
+
 function createConversationStore() {
   let messages = $state<Message[]>([]);
   let isLoading = $state(false);
   let currentPass = $state<PassType | null>(null);
+  let completedPasses = $state<Set<PassType>>(new Set());
   let currentPasses = $state({ analysis: '', critique: '', synthesis: '', verification: '' });
   let currentStructuredPasses = $state<Partial<Record<PassType, { sections: Array<{ id: string; heading: string; content: string }>; wordCount: number }>>>({});
   let error = $state<string | null>(null);
@@ -52,6 +79,7 @@ function createConversationStore() {
     get messages() { return messages; },
     get isLoading() { return isLoading; },
     get currentPass() { return currentPass; },
+    get completedPasses() { return [...completedPasses]; },
     get currentPasses() { return currentPasses; },
     get currentStructuredPasses() { return currentStructuredPasses; },
     get error() { return error; },
@@ -67,6 +95,7 @@ function createConversationStore() {
       error = null;
       isLoading = true;
       currentPass = null;
+      completedPasses = new Set();
       currentPasses = { analysis: '', critique: '', synthesis: '', verification: '' };
       currentStructuredPasses = {};
       confidenceSummary = null;
@@ -88,16 +117,47 @@ function createConversationStore() {
         // Loading from history restarts the depth counter — fresh exploration
         questionCount = 0;
         currentPass = null;
+        const cachedCompleted = new Set<PassType>();
+        if (cached.passes.analysis) cachedCompleted.add('analysis');
+        if (cached.passes.critique) cachedCompleted.add('critique');
+        if (cached.passes.synthesis) cachedCompleted.add('synthesis');
+        if (cached.passes.verification) cachedCompleted.add('verification');
+        completedPasses = cachedCompleted;
         currentPasses = { ...cached.passes, verification: cached.passes.verification ?? '' };
         currentStructuredPasses = {};
         referencesStore.setSources(cached.sources);
 
         for (const { pass, claims } of cached.claimsByPass as CachedPassClaims[]) {
           referencesStore.addClaims(pass, claims, []);
+          graphStore.addFromClaims(pass, claims, []);
         }
 
         for (const { pass, relations } of cached.relationsByPass as CachedPassRelations[]) {
           referencesStore.addClaims(pass, [], relations);
+          graphStore.addFromClaims(pass, [], relations);
+        }
+
+        if (graphStore.rawNodes.length === 0 && (cached.passes.analysis || cached.passes.critique || cached.passes.synthesis)) {
+          const fallback = buildPassFallbackGraph({
+            analysis: cached.passes.analysis ?? '',
+            critique: cached.passes.critique ?? '',
+            synthesis: cached.passes.synthesis ?? ''
+          });
+          graphStore.setGraph(
+            fallback.nodes,
+            fallback.edges,
+            {
+              seedNodeIds: ['claim:pass-analysis'],
+              traversedNodeIds: ['claim:pass-critique', 'claim:pass-synthesis'],
+              relationTypeCounts: { 'responds-to': 2, supports: 1 },
+              maxHops: 2,
+              contextSufficiency: 'sparse',
+              retrievalDegraded: true,
+              retrievalDegradedReason: 'fallback_pass_graph',
+              retrievalTimestamp: new Date().toISOString()
+            },
+            1
+          );
         }
 
         referencesStore.setLive(false);
@@ -136,7 +196,7 @@ function createConversationStore() {
 
         if (!response.ok) {
           const errorBody = await response.json().catch(() => ({ error: response.statusText }));
-          throw new Error(errorBody.error || `API error: ${response.status}`);
+          throw new Error(errorBody.detail || errorBody.error || `API error: ${response.status}`);
         }
 
         if (!response.body) {
@@ -199,6 +259,7 @@ function createConversationStore() {
                 break;
 
               case 'pass_complete':
+                completedPasses = new Set([...completedPasses, event.pass]);
                 break;
 
               case 'pass_structured':
@@ -260,6 +321,29 @@ function createConversationStore() {
                 });
 
                 historyStore.addEntry(query);
+
+                if (graphStore.rawNodes.length === 0 && (currentPasses.analysis || currentPasses.critique || currentPasses.synthesis)) {
+                  const fallback = buildPassFallbackGraph({
+                    analysis: currentPasses.analysis,
+                    critique: currentPasses.critique,
+                    synthesis: currentPasses.synthesis
+                  });
+                  graphStore.setGraph(
+                    fallback.nodes,
+                    fallback.edges,
+                    {
+                      seedNodeIds: ['claim:pass-analysis'],
+                      traversedNodeIds: ['claim:pass-critique', 'claim:pass-synthesis'],
+                      relationTypeCounts: { 'responds-to': 2, supports: 1 },
+                      maxHops: 2,
+                      contextSufficiency: 'sparse',
+                      retrievalDegraded: true,
+                      retrievalDegradedReason: 'fallback_pass_graph',
+                      retrievalTimestamp: new Date().toISOString()
+                    },
+                    1
+                  );
+                }
                 break;
 
               case 'error':
@@ -321,6 +405,9 @@ function createConversationStore() {
 
       try {
         const idToken = await getIdToken();
+        if (!idToken) {
+          throw new Error('Not authenticated');
+        }
         const response = await fetch('/api/verify', {
           method: 'POST',
           headers: {
@@ -380,6 +467,7 @@ function createConversationStore() {
 
               case 'verification_complete':
                 currentPass = null;
+                completedPasses = new Set([...completedPasses, 'verification']);
                 // Patch the last assistant message so verification text persists
                 {
                   const lastIdx = messages.findLastIndex(m => m.role === 'assistant');
@@ -413,6 +501,7 @@ function createConversationStore() {
       messages = [];
       error = null;
       currentPass = null;
+      completedPasses = new Set();
       currentPasses = { analysis: '', critique: '', synthesis: '', verification: '' };
       currentStructuredPasses = {};
       confidenceSummary = null;
