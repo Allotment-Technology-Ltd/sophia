@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes, scryptSync } from 'node:crypto';
 import { Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from './firebase-admin';
 
@@ -27,8 +27,23 @@ export interface ApiKeyVerificationResult {
   error?: 'missing' | 'invalid' | 'inactive' | 'rate_limited';
 }
 
+function getApiKeyHashSecret(): string {
+  const secret = process.env.API_KEY_HASH_SECRET?.trim();
+  if (!secret) {
+    throw new Error('API_KEY_HASH_SECRET is required for API key hashing');
+  }
+  return secret;
+}
+
 export function hashApiKey(rawApiKey: string): string {
-  return createHash('sha256').update(rawApiKey).digest('hex');
+  const secret = getApiKeyHashSecret();
+  // Deterministic, computationally expensive KDF for stored API key verifier values.
+  return scryptSync(rawApiKey, secret, 32, {
+    N: 1 << 15,
+    r: 8,
+    p: 1,
+    maxmem: 64 * 1024 * 1024
+  }).toString('hex');
 }
 
 export function createApiKey(): { rawKey: string; keyId: string; keyHash: string; prefix: string } {
