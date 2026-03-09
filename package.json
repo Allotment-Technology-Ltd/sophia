@@ -1,39 +1,16 @@
 {
   "name": "sophia",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui",
-    "monitor:wave": "tsx --env-file=.env scripts/monitor-wave.ts --once",
-    "monitor:wave:watch": "tsx --env-file=.env scripts/monitor-wave.ts --interval-sec 120",
-    "ingest:wave1:retry": "tsx --env-file=.env scripts/ingest-batch.ts --wave 1 --retry --fail-fast --pre-scan",
-    "ingest:unknown:resume": "tsx --env-file=.env scripts/ingest.ts data/sources/unknown-title.txt --stop-after-embedding",
-    "health": "curl -s --max-time 30 https://usesophia.app/api/health | jq .",
-    "infra:preview": "cd infra && pulumi preview --stack production",
-    "infra:up": "cd infra && pulumi up --stack production",
-    "infra:refresh": "cd infra && pulumi refresh --stack production",
-    "infra:install": "cd infra && npm install",
-    "migrate": "bash scripts/migrate-to-europe-west2.sh"
+    "check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.58",
-    "@ai-sdk/google": "^3.0.43",
-    "@ai-sdk/google-vertex": "^4.0.68",
-    "@anthropic-ai/sdk": "^0.26.0",
-    "@google-cloud/logging": "^11.1.0",
+    "@anthropic-ai/sdk": "^0.78.0",
     "@google/generative-ai": "^0.24.1",
-    "ai": "6.0.105",
-    "firebase": "^10.13.1",
-    "firebase-admin": "^13.0.0",
-    "google-auth-library": "^10.6.1",
     "marked": "^17.0.3",
     "node-html-parser": "^7.0.2",
     "surrealdb": "^2.0.0",
@@ -41,13 +18,11 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.2",
     "@sveltejs/adapter-node": "^5.0.0",
     "@sveltejs/kit": "^2.53.4",
     "@sveltejs/vite-plugin-svelte": "^4.0.4",
     "@tailwindcss/postcss": "^4.2.1",
     "@tailwindcss/typography": "^0.5.19",
-    "@vitest/coverage-v8": "^4.0.18",
     "autoprefixer": "^10.4.27",
     "dotenv": "^17.3.1",
     "postcss": "^8.5.6",
@@ -55,15 +30,6 @@
     "svelte-check": "^4.4.4",
     "tailwindcss": "^4.2.1",
     "tsx": "^4.21.0",
-    "vite": "^5.0.0",
-    "vitest": "^4.0.18"
-  },
-  "pnpm": {
-    "overrides": {
-      "qs": ">=6.14.2",
-      "esbuild": ">=0.25.0",
-      "cookie": ">=0.7.0",
-      "undici": ">=6.23.0"
-    }
+    "vite": "^5.0.0"
   }
 }
