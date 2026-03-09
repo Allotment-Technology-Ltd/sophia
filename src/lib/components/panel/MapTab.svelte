@@ -1,6 +1,7 @@
 <script lang="ts">
   import GraphCanvas from '$lib/components/visualization/GraphCanvas.svelte';
-  import { goto } from '$app/navigation';
+  import { goto, replaceState } from '$app/navigation';
+  import { page } from '$app/state';
   import { graphStore } from '$lib/stores/graph.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
   import type { GraphEdge, GraphNode } from '$lib/types/api';
@@ -332,7 +333,7 @@
     const next = url.toString();
     if (next === window.location.href || next === lastSyncedUrl) return;
     lastSyncedUrl = next;
-    void goto(next, { replaceState: true, noScroll: true, keepFocus: true, invalidateAll: false });
+    replaceState(next, page.state);
   }
 
   function openFullPageMap(): void {

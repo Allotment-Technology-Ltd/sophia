@@ -4,7 +4,8 @@
   import { historyStore } from '$lib/stores/history.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
   import { renderMarkdown } from '$lib/utils/markdown';
-  import { goto } from '$app/navigation';
+  import { goto, replaceState } from '$app/navigation';
+  import { page } from '$app/state';
   import { fly, fade } from 'svelte/transition';
   import { quintOut } from 'svelte/easing';
   import SidePanel from '$lib/components/panel/SidePanel.svelte';
@@ -149,7 +150,7 @@
     } else {
       url.searchParams.delete('panelTab');
     }
-    void goto(url.toString(), { replaceState: true, noScroll: true, keepFocus: true, invalidateAll: false });
+    replaceState(url.toString(), page.state);
   }
 
   async function retryLastQuery(): Promise<void> {
