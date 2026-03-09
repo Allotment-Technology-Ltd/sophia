@@ -37,13 +37,13 @@
 
   // Edge offsets: length = hidden, 0 = fully drawn
   const edgeACOffset = $derived(
-    mode === 'logo' || mode === 'complete' || isAnalysisDone || isAnalysisActive ? 0 : LEN_AC
+    mode === 'logo' || mode === 'complete' || isAnalysisDone ? 0 : LEN_AC
   );
   const edgeCSOffset = $derived(
-    mode === 'logo' || mode === 'complete' || isCritiqueDone || isCritiqueActive ? 0 : LEN_CS
+    mode === 'logo' || mode === 'complete' || isCritiqueDone ? 0 : LEN_CS
   );
   const edgeSAOffset = $derived(
-    mode === 'logo' || mode === 'complete' || isSynthesisDone || isSynthesisActive ? 0 : LEN_SA
+    mode === 'logo' || mode === 'complete' || isSynthesisDone ? 0 : LEN_SA
   );
 
   // Node opacity: 0.2 idle, 1 active, 0.65 done, 0.6 logo
