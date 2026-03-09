@@ -384,15 +384,22 @@
     return next;
   }
 
+  function claimPassesFilters(node: GraphNode): boolean {
+    if (!isClaimNode(node)) return true;
+    if (lensMode === 'seed' && !node.isSeed) return false;
+    if (lensMode === 'traversed' && !node.isTraversed) return false;
+    if (!passFilter.has((node.phase as TimelinePhase) ?? 'retrieval')) return false;
+    if (sourceFilter.size > 0 && (!node.sourceTitle || !sourceFilter.has(node.sourceTitle))) return false;
+    if (domainFilter.size > 0 && (!node.domain || !domainFilter.has(node.domain))) return false;
+    if (node.confidenceBand && !confidenceFilter.has(node.confidenceBand)) return false;
+    return true;
+  }
+
   const filteredGraph = $derived.by(() => {
     const nodes = graphStore.nodes;
     const edges = graphStore.edges;
     const nodeById = new Map(nodes.map((n) => [n.id, n]));
     let filteredEdges = edges.filter((edge) => nodeById.has(edge.from) && nodeById.has(edge.to));
-
-    if (densityMode === 'beginner') {
-      filteredEdges = filteredEdges.filter((edge) => edge.type !== 'contains');
-    }
 
     if (timelinePhase !== 'all') {
       filteredEdges = filteredEdges.filter((edge) => edge.phaseOrigin === timelinePhase || edge.type === 'contains');
@@ -402,18 +409,15 @@
       const from = nodeById.get(edge.from);
       const to = nodeById.get(edge.to);
       if (!from || !to) return false;
-
-      for (const node of [from, to]) {
-        if (!isClaimNode(node)) continue;
-        if (lensMode === 'seed' && !node.isSeed) return false;
-        if (lensMode === 'traversed' && !node.isTraversed) return false;
-        if (!passFilter.has((node.phase as TimelinePhase) ?? 'retrieval')) return false;
-        if (sourceFilter.size > 0 && (!node.sourceTitle || !sourceFilter.has(node.sourceTitle))) return false;
-        if (domainFilter.size > 0 && (!node.domain || !domainFilter.has(node.domain))) return false;
-        if (node.confidenceBand && !confidenceFilter.has(node.confidenceBand)) return false;
-      }
-      return true;
+      return claimPassesFilters(from) && claimPassesFilters(to);
     });
+
+    if (densityMode === 'beginner') {
+      const hasNonContains = filteredEdges.some((edge) => edge.type !== 'contains');
+      if (hasNonContains) {
+        filteredEdges = filteredEdges.filter((edge) => edge.type !== 'contains');
+      }
+    }
 
     const visibleNodeIds = new Set<string>();
     filteredEdges.forEach((edge) => {
@@ -423,16 +427,20 @@
     if (selectedNodeId) visibleNodeIds.add(selectedNodeId);
     pinnedNodeIds.forEach((id) => visibleNodeIds.add(id));
 
+    if (visibleNodeIds.size === 0) {
+      const claimCandidates = nodes.filter((node) => isClaimNode(node) && claimPassesFilters(node));
+      const claimCandidateIds = new Set(claimCandidates.map((node) => node.id));
+      for (const claimId of claimCandidateIds) visibleNodeIds.add(claimId);
+      // Keep source context visible for isolated claims.
+      for (const edge of graphStore.rawEdges) {
+        if (edge.type !== 'contains') continue;
+        if (claimCandidateIds.has(edge.to)) visibleNodeIds.add(edge.from);
+      }
+    }
+
     const filteredNodes = nodes.filter((node) => {
       if (!visibleNodeIds.has(node.id)) return false;
-      if (!isClaimNode(node)) return true;
-      if (lensMode === 'seed' && !node.isSeed) return false;
-      if (lensMode === 'traversed' && !node.isTraversed) return false;
-      if (!passFilter.has((node.phase as TimelinePhase) ?? 'retrieval')) return false;
-      if (sourceFilter.size > 0 && (!node.sourceTitle || !sourceFilter.has(node.sourceTitle))) return false;
-      if (domainFilter.size > 0 && (!node.domain || !domainFilter.has(node.domain))) return false;
-      if (node.confidenceBand && !confidenceFilter.has(node.confidenceBand)) return false;
-      return true;
+      return claimPassesFilters(node);
     });
 
     return { nodes: filteredNodes, edges: filteredEdges };
@@ -858,7 +866,7 @@
   </div>
 
   <div class="map-canvas-wrap" class:is-fullscreen={isFullscreen} bind:this={containerEl}>
-    {#if hasGraph}
+    {#if hasGraph && filteredGraph.nodes.length > 0}
       <GraphCanvas
         nodes={filteredGraph.nodes}
         edges={filteredGraph.edges}
@@ -870,6 +878,15 @@
         onNodeSelect={handleNodeSelect}
         onJumpToReferences={(nodeId) => openNodeInReferences(nodeId)}
       />
+    {:else if hasGraph}
+      <div class="map-empty">
+        <p>No nodes match the current filters.</p>
+        <p>Try enabling <code>depends-on</code> and/or switching to Expert density.</p>
+        <div class="insight-actions">
+          <button class="mini-btn" type="button" onclick={() => graphStore.resetFilters()}>Reset relations</button>
+          <button class="mini-btn" type="button" onclick={applyExpertPreset}>Expert preset</button>
+        </div>
+      </div>
     {:else if graphStore.lifecycle === 'loading'}
       <p class="map-empty">Building graph snapshot…</p>
     {:else if graphStore.lifecycle === 'degraded'}
