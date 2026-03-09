@@ -12,6 +12,8 @@ This is the canonical operational runbook for adding any new philosophical domai
 
 All ingestion runs directly against the production SurrealDB instance on GCE. There is no local Docker database workflow — it was retired after Phase 3e Wave 1.
 
+For local app QA against production data, use `pnpm run dev:prod-db` (it manages tunnel + secret wiring automatically).
+
 **Open the IAP SSH tunnel before any ingestion command:**
 
 ```bash

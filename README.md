@@ -149,6 +149,25 @@ pnpm dev
 
 Note: without a populated SurrealDB knowledge graph, the engine will run without graph context — reasoning quality degrades but the system stays functional.
 
+### Run locally against production SurrealDB (manual QA)
+
+If you want full-fidelity manual testing with production graph data, use:
+
+```bash
+pnpm dev:prod-db
+```
+
+This command:
+- opens an IAP tunnel to `sophia-db` on `localhost:8800` (if one is not already open),
+- fetches `surreal-db-pass` from GCP Secret Manager,
+- exports `SURREAL_URL`, `SURREAL_USER`, `SURREAL_PASS`, `SURREAL_NAMESPACE`, `SURREAL_DATABASE`,
+- starts `pnpm dev`.
+
+Prerequisites:
+- `gcloud auth login` completed for project `sophia-488807`,
+- IAM access to IAP tunnel + Secret Manager,
+- `nc` installed (`netcat`).
+
 ### Ingest the ethics corpus
 
 ```bash
@@ -216,6 +235,8 @@ tests/
 | [docs/argument-graph.md](docs/argument-graph.md) | SurrealDB schema, relation types, SurrealQL examples |
 | [docs/evaluation-methodology.md](docs/evaluation-methodology.md) | Evaluation rubric, Phase 1 results, limitations, planned formal study |
 | [docs/runbooks/domain-expansion-runbook.md](docs/runbooks/domain-expansion-runbook.md) | Operational guide for adding a new philosophical domain |
+| [docs/api-development-portal-roadmap.md](docs/api-development-portal-roadmap.md) | API developer portal roadmap (MVP → Gold-Plated) |
+| [docs/runbooks/zuplo-phase1-runbook.md](docs/runbooks/zuplo-phase1-runbook.md) | Zuplo + PostHog Phase 1 implementation runbook |
 | [ROADMAP.md](ROADMAP.md) | Development phases and priorities |
 | [STATUS.md](STATUS.md) | Current deployment health and feature status |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |

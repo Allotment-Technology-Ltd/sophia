@@ -41,7 +41,7 @@
   onMount(() => {
     if (!browser) return;
 
-    const PUBLIC_ROUTES = new Set(['/auth', '/privacy', '/terms']);
+    const PUBLIC_ROUTES = new Set(['/auth', '/privacy', '/terms', '/developer', '/api-access']);
     const isPublicRoute = (path: string) =>
       PUBLIC_ROUTES.has(path) || path.startsWith('/auth');
 
@@ -77,7 +77,7 @@
     });
   });
 
-  const BARE_ROUTES = new Set(['/privacy', '/terms']);
+  const BARE_ROUTES = new Set(['/privacy', '/terms', '/developer', '/api-access']);
   let isAuthPage = $derived(
     $page.url.pathname.startsWith('/auth') || BARE_ROUTES.has($page.url.pathname)
   );

@@ -38,6 +38,7 @@
 | Per-user cache | Firestore cache checked before engine run; cache-hit replays stored events |
 | Rate limiting | 20 queries/day per uid via Firestore transaction; 429 + `Retry-After: 86400` |
 | Reasoning API (`/api/v1/verify`) | **Working** — API key auth, JSON + SSE modes, extraction + reasoning scores |
+| Constitution check (`/api/v1/verify`) | **Working** — 10-rule hybrid evaluator + compliance output |
 | API key management (`/api/v1/keys`) | **Working** — admin-gated create/list/revoke; Firestore-backed hashed keys |
 | Developer waitlist | **Working** — `/api-access` form writes to Firestore `waitlist` |
 | Lens parameter (backend) | `lens` string accepted by engine and `/api/analyse`; affects analysis system prompt |
@@ -64,6 +65,7 @@
 | Lens selector UI (`LensSelector.svelte`) | Phase 7 |
 | Depth selector UI + engine depth mode | Phase 7 |
 | Epistemic constitution evaluator | Phase 6 |
+| Constitution dogfood in `/api/analyse` | Phase 6.5 (flagged rollout) |
 | Stripe billing / subscriptions | Phase 7 |
 | Usage analytics | Phase 4 |
 | Privacy policy / terms of service pages | Phase 4 |
@@ -91,6 +93,7 @@ Sources 5 & 8 (ethics) skipped — SEP alternatives included. Source 10 (PoM) sk
 - **Latency:** 15–25s end-to-end (three sequential LLM calls). Inherent to dialectical architecture; disclosed to users.
 - **3-question limit:** Pragmatic constraint replacing full multi-turn. Will be superseded in Phase 9.
 - **No analytics:** No visibility into query patterns, completion rates, or user behaviour prior to launch.
+- **Constitution dogfood rollout pending:** `/api/analyse` constitution emission is behind `ENABLE_CONSTITUTION_IN_ANALYSE`; enable only with rollout guardrails.
 - **ARIA deadline:** 24 March 2026 — 15 days from today. Application not yet started.
 
 ---
@@ -126,3 +129,9 @@ Sources 5 & 8 (ethics) skipped — SEP alternatives included. Source 10 (PoM) sk
 | Uptime | 99.5% | Not formally monitored |
 | Daily rate limit | 20 queries/uid | Enforced |
 | Paying users | 20 (Phase 7 target) | 0 (pre-launch) |
+
+---
+
+## Ops query reference
+
+- Constitution dogfood logs: see [docs/runbooks/constitution-dogfood-rollout.md](docs/runbooks/constitution-dogfood-rollout.md) and query for `"[CONSTITUTION][ANALYSE]"` in Cloud Logging.

@@ -21,7 +21,13 @@ import { retrieveContext, buildContextBlock } from './retrieval';
 import { classifyQueryDomain, getRetrievalDomain } from './domainClassifier';
 import type { PassType } from '$lib/types/passes';
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
-import type { PassSection, GraphNode, GraphEdge, GroundingSource } from '$lib/types/api';
+import type {
+  PassSection,
+  GraphNode,
+  GraphEdge,
+  GraphSnapshotMeta,
+  GroundingSource
+} from '$lib/types/api';
 import { projectRetrievalToGraph } from './graphProjection';
 
 
@@ -85,7 +91,12 @@ export interface EngineCallbacks {
   onPassStructured(pass: PassType, sections: PassSection[], wordCount: number): void;
   onSources(sources: SourceReference[]): void;
   onGroundingSources(pass: PassType, sources: GroundingSource[]): void;
-  onGraphSnapshot(nodes: GraphNode[], edges: GraphEdge[]): void;
+  onGraphSnapshot(
+    nodes: GraphNode[],
+    edges: GraphEdge[],
+    meta?: GraphSnapshotMeta,
+    version?: number
+  ): void;
   onClaims(pass: AnalysisPhase, claims: Claim[], relations: RelationBundle[]): void;
   onConfidenceSummary?(avgConfidence: number, lowConfidenceCount: number, totalClaims: number): void;
   onMetadata(
@@ -136,7 +147,7 @@ async function streamPassWithContinuation(
       system: systemPrompt,
       messages,
       tools: {
-        googleSearch: getGroundingTool()
+        googleSearch: getGroundingTool() as any
       },
       onError: ({ error }) => {
         console.error(`[ENGINE] streamText error (${pass} round=${continuationRound}):`, error instanceof Error ? error.stack : String(error));
@@ -282,7 +293,7 @@ export async function runDialecticalEngine(
     if (claimsRetrieved > 0) {
       const graphData = projectRetrievalToGraph(retrievalResult);
       console.log('[ENGINE] Emitting graph snapshot:', { nodeCount: graphData.nodes.length, edgeCount: graphData.edges.length, claimsRetrieved, argumentsRetrieved });
-      callbacks.onGraphSnapshot(graphData.nodes, graphData.edges);
+      callbacks.onGraphSnapshot(graphData.nodes, graphData.edges, graphData.meta, 1);
     } else {
       console.log('[ENGINE] No claims retrieved (claimsRetrieved=0), skipping graph snapshot');
     }
@@ -345,7 +356,7 @@ export async function runDialecticalEngine(
           system: analysisSystem,
           messages,
           tools: {
-            googleSearch: getGroundingTool()
+            googleSearch: getGroundingTool() as any
           },
           onError: ({ error }) => {
             console.error(`[ENGINE] streamText error (analysis round=${continuationRound}):`, error instanceof Error ? error.stack : String(error));

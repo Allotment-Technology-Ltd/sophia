@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ConstitutionalCheck } from './constitution';
 
 export const VerificationClaimTypeSchema = z.enum([
   'empirical',
@@ -116,6 +117,7 @@ export interface VerificationResult {
   extracted_claims: ExtractedClaim[];
   logical_relations: ExtractedRelation[];
   reasoning_quality: ReasoningEvaluation;
+  constitutional_check: ConstitutionalCheck;
   pass_outputs?: {
     analysis?: string;
     critique?: string;
@@ -123,6 +125,10 @@ export interface VerificationResult {
   };
   metadata: {
     processing_time_ms: number;
+    constitution_duration_ms?: number;
+    constitution_input_tokens?: number;
+    constitution_output_tokens?: number;
+    constitution_rule_violations?: string[];
     input_length: number;
     model: string;
     retrieval?: {
