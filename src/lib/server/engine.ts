@@ -11,9 +11,6 @@ import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib
 import type { PassSection, GraphNode, GraphEdge, GroundingSource } from '$lib/types/api';
 import { projectRetrievalToGraph } from './graphProjection';
 
-// ─── MVP Configuration ────────────────────────────────────────────────────
-// Constrain MVP to ethics domain for focused rollout. Remove this in MVP+1.
-const MVP_DOMAIN_FILTER = 'ethics' as const;
 
 // ─── Sophia-Meta Block Parsing ────────────────────────────────────────────
 // Inline structured output within pass responses
@@ -216,7 +213,7 @@ export async function runDialecticalEngine(
 
   try {
     const t0 = Date.now();
-    const retrievalResult = await retrieveContext(query, { domain: MVP_DOMAIN_FILTER });
+    const retrievalResult = await retrieveContext(query);
     contextBlock = buildContextBlock(retrievalResult);
     claimsRetrieved = retrievalResult.claims.length;
     argumentsRetrieved = retrievalResult.arguments.length;

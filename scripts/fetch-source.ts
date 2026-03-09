@@ -22,7 +22,9 @@ function createSlug(text: string): string {
 async function fetchUrl(url: string): Promise<string> {
 	console.log(`[FETCH] Downloading from ${url}...`);
 	try {
-		const response = await fetch(url);
+		const response = await fetch(url, {
+			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SOPHIA-Fetch/1.0)' }
+		});
 		if (!response.ok) {
 			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 		}
@@ -231,6 +233,11 @@ function extractGenericContent(
 		root.querySelector('.article');
 
 	if (!mainContent) {
+		// Fallback: use body for old-style HTML documents (e.g. HTML 3.2)
+		mainContent = root.querySelector('body');
+	}
+
+	if (!mainContent) {
 		throw new Error('Could not find main content in page');
 	}
 
@@ -239,8 +246,18 @@ function extractGenericContent(
 		n.remove();
 	});
 
-	const titleNode = root.querySelector('h1, .title');
-	const title = titleNode?.text || 'Unknown Title';
+	// Try to get title from <title> tag or first heading
+	let title = 'Unknown Title';
+	const titleTag = root.querySelector('title');
+	const h1 = root.querySelector('h1, .title');
+	const h2 = root.querySelector('h2');
+	if (h1?.text?.trim()) {
+		title = h1.text.trim();
+	} else if (h2?.text?.trim()) {
+		title = h2.text.trim();
+	} else if (titleTag?.text?.trim()) {
+		title = titleTag.text.trim().replace(/\s*\|.*$/, '').trim();
+	}
 
 	const authorNode = root.querySelector('.author, [rel="author"]');
 	const author = authorNode ? [authorNode.text] : [];

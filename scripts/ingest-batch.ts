@@ -3,17 +3,19 @@
  *
  * Ingest multiple sources from the curated source list.
  *
- * Usage: npx tsx --env-file=.env scripts/ingest-batch.ts [--wave 1|2|3] [--validate] [--dry-run] [--status] [--retry] [--pre-scan] [--fast] [--fail-fast]
+ * Usage: npx tsx --env-file=.env scripts/ingest-batch.ts [--wave 1|2|3] [--validate] [--dry-run] [--status] [--retry] [--fast] [--fail-fast] [--domain <domain>] [--source-list <path>] [--yes]
  *
  * Flags:
- *   --wave N            Only ingest sources from wave N (1, 2, or 3)
- *   --validate          Run Gemini cross-validation on all sources
- *   --dry-run           Show what would be ingested without actually doing it
- *   --status            Print current ingestion progress and exit (no ingestion)
- *   --retry             Retry sources that previously failed
- *   --pre-scan          Scan all targets for token/URL issues before ingesting; abort on blockers
- *   --fast              Fast extraction mode (no validation, detailed error logging)
- *   --fail-fast         Stop launching new sources after first failure
+ *   --wave N                Only ingest sources from wave N (1, 2, or 3)
+ *   --validate              Run Gemini cross-validation on all sources
+ *   --dry-run               Show what would be ingested without actually doing it
+ *   --status                Print current ingestion progress and exit (no ingestion)
+ *   --retry                 Retry sources that previously failed
+ *   --fast                  Fast extraction mode (no validation, detailed error logging)
+ *   --fail-fast             Stop launching new sources after first failure
+ *   --domain <domain>       Override claim domain tag for all sources (e.g. philosophy_of_mind)
+ *   --source-list <path>    Path to source list JSON (default: ./data/source-list-3a.json)
+ *   --yes                   Skip cost confirmation prompt (for CI / automated runs)
  *
  * Pipeline mode (default):
  *   Phase A (stages 1-4, Claude + Voyage) runs in parallel — up to PHASE_A_CONCURRENCY.
@@ -30,7 +32,7 @@ import { Surreal } from 'surrealdb';
 import { runPreScan } from './pre-scan.js';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
-const SOURCE_LIST_PATH = './data/source-list-3a.json';
+const DEFAULT_SOURCE_LIST_PATH = './data/source-list-3a.json';
 const SOURCES_DIR = './data/sources';
 const INGESTED_DIR = './data/ingested';
 
@@ -237,7 +239,7 @@ function spawnAsync(
  * Exits after embedding via --stop-after-embedding flag.
  * Enhanced with detailed error detection for fast-mode diagnostics.
  */
-async function runPhaseA(slug: string, validate: boolean, label: string, fastMode = false): Promise<boolean> {
+async function runPhaseA(slug: string, validate: boolean, label: string, fastMode = false, domain: string | null = null): Promise<boolean> {
 	const txtPath = path.join(SOURCES_DIR, `${slug}.txt`);
 	const args = [
 		...TSX_ENV_ARGS,
@@ -246,6 +248,7 @@ async function runPhaseA(slug: string, validate: boolean, label: string, fastMod
 		'--stop-after-embedding'
 	];
 	if (validate) args.push('--validate');
+	if (domain) { args.push('--domain'); args.push(domain); }
 
 	console.log(`  [PHASE A] Running stages 1-4 (Claude+Voyage): ${label}`);
 	const phaseStart = Date.now();
@@ -283,11 +286,13 @@ async function runPhaseA(slug: string, validate: boolean, label: string, fastMod
 async function runPhaseB(
 	slug: string,
 	validate: boolean,
-	label: string
+	label: string,
+	domain: string | null = null
 ): Promise<{ success: boolean; claims?: number; relations?: number; arguments?: number; cost_gbp?: number }> {
 	const txtPath = path.join(SOURCES_DIR, `${slug}.txt`);
 	const args = [...TSX_ENV_ARGS, 'scripts/ingest.ts', txtPath];
 	if (validate) args.push('--validate');
+	if (domain) { args.push('--domain'); args.push(domain); }
 
 	console.log(`  [PHASE B] Running stages 5-6 (Gemini+Store): ${label}`);
 	const result = await spawnAsync(args, slug);
@@ -317,11 +322,13 @@ async function runPhaseB(
  */
 async function ingestSourceFull(
 	slug: string,
-	validate: boolean
+	validate: boolean,
+	domain: string | null = null
 ): Promise<{ success: boolean; claims?: number; relations?: number; arguments?: number; cost_gbp?: number }> {
 	const txtPath = path.join(SOURCES_DIR, `${slug}.txt`);
 	const args = [...TSX_ENV_ARGS, 'scripts/ingest.ts', txtPath];
 	if (validate) args.push('--validate');
+	if (domain) { args.push('--domain'); args.push(domain); }
 
 	const result = await spawnAsync(args, slug);
 	if (result.stdout) process.stdout.write(result.stdout);
@@ -484,9 +491,11 @@ async function main() {
 	let dryRun = false;
 	let statusOnly = false;
 	let retryFailed = false;
-	let preScan = false;
 	let fastMode = false;
 	let failFast = false;
+	let domainOverride: string | null = null;
+	let sourceListPath = DEFAULT_SOURCE_LIST_PATH;
+	let skipConfirm = false;
 
 	for (let i = 0; i < args.length; i++) {
 		if (args[i] === '--wave' && i + 1 < args.length) {
@@ -500,22 +509,26 @@ async function main() {
 			statusOnly = true;
 		} else if (args[i] === '--retry') {
 			retryFailed = true;
-		} else if (args[i] === '--pre-scan') {
-			preScan = true;
 		} else if (args[i] === '--fast') {
 			fastMode = true;
 			validate = false; // Fast mode disables validation
 		} else if (args[i] === '--fail-fast') {
 			failFast = true;
+		} else if (args[i] === '--domain' && i + 1 < args.length) {
+			domainOverride = args[++i];
+		} else if (args[i] === '--source-list' && i + 1 < args.length) {
+			sourceListPath = args[++i];
+		} else if (args[i] === '--yes') {
+			skipConfirm = true;
 		}
 	}
 
-	if (!fs.existsSync(SOURCE_LIST_PATH)) {
-		console.error(`[ERROR] Source list not found: ${SOURCE_LIST_PATH}`);
+	if (!fs.existsSync(sourceListPath)) {
+		console.error(`[ERROR] Source list not found: ${sourceListPath}`);
 		process.exit(1);
 	}
 
-	const sourceList: SourceEntry[] = JSON.parse(fs.readFileSync(SOURCE_LIST_PATH, 'utf-8'));
+	const sourceList: SourceEntry[] = JSON.parse(fs.readFileSync(sourceListPath, 'utf-8'));
 	let sources = sourceList;
 
 	if (waveFilter !== null) {
@@ -553,14 +566,23 @@ async function main() {
 		process.exit(0);
 	}
 
-	// ─── Pre-scan phase ─────────────────────────────────────────────────────
-	// Runs before any API calls to catch URL/token/PDF issues early.
-	if (preScan) {
+	// ─── Pre-scan phase (mandatory) ─────────────────────────────────────────
+	// Always runs before any API calls to catch URL/token/PDF/cost issues early.
+	if (!statusOnly && !dryRun) {
 		console.log('[PRE-SCAN] Scanning all targets for issues before ingestion...\n');
-		const { hasBlockers } = await runPreScan(sources, waveFilter);
+		const { results: scanResults, hasBlockers } = await runPreScan(sources, waveFilter);
 		if (hasBlockers) {
 			console.error('[PRE-SCAN] Blockers found — fix the issues above before running ingestion.');
 			process.exit(1);
+		}
+		// Cost confirmation
+		const totalCost = scanResults.reduce((sum, r) => sum + (r.costEstimate?.totalCostUsd ?? 0), 0);
+		if (totalCost > 0 && !skipConfirm) {
+			console.log(`\n[PRE-SCAN] Estimated total wave cost: $${totalCost.toFixed(2)}`);
+			console.log('[PRE-SCAN] Proceed? Press Enter to continue or Ctrl+C to abort.');
+			await new Promise<void>((resolve) => {
+				process.stdin.once('data', () => resolve());
+			});
 		}
 		console.log('[PRE-SCAN] No blockers found. Proceeding with ingestion...\n');
 	}
@@ -599,7 +621,8 @@ async function main() {
 	console.log(`Wave filter: ${waveFilter !== null ? waveFilter : 'None (all waves)'}`);
 	console.log(`Mode: ${fastMode ? '⚡ FAST (extraction only, no validation)' : dryRun ? 'DRY RUN (no actual changes)' : 'LIVE'}`);
 	console.log(`Validation: ${validate ? 'ENABLED' : 'Disabled'}`);
-	console.log(`Pre-scan: ${preScan ? 'ENABLED (already ran above)' : 'Disabled (use --pre-scan to enable)'}`);
+	console.log(`Pre-scan: MANDATORY (ran above)`);
+	if (domainOverride) console.log(`Domain override: ${domainOverride}`);
 	console.log(`Retry failed: ${retryFailed ? 'YES' : 'No'}`);
 	console.log(`Fail fast: ${failFast ? 'ENABLED' : 'Disabled'}`);
 	if (validate) {
@@ -762,7 +785,7 @@ async function main() {
 				const phaseATask = (async () => {
 					await phaseASem.acquire();
 					try {
-						const phaseAOk = await runPhaseA(capturedSlug, validate, capturedLabel, fastMode);
+						const phaseAOk = await runPhaseA(capturedSlug, validate, capturedLabel, fastMode, domainOverride);
 
 						if (!phaseAOk) {
 							console.error(`  [FAILED] Phase A failed for: ${capturedSource.title}`);
@@ -783,7 +806,7 @@ async function main() {
 						console.log(`  [PIPELINE] Phase A complete — handing off to Phase B (background)`);
 
 						await sem.acquire();
-						const phaseBTask = runPhaseB(capturedSlug, validate, capturedLabel)
+						const phaseBTask = runPhaseB(capturedSlug, validate, capturedLabel, domainOverride)
 							.then((result) => {
 								if (result.success) {
 									successCount++;
@@ -830,7 +853,7 @@ async function main() {
 			} else {
 				// ── Non-pipelined mode (no Gemini) ──────────────────────────
 				// No Gemini validation, so no benefit to pipelining — run sequentially.
-				const ingestResult = await ingestSourceFull(ingestSlug, validate);
+				const ingestResult = await ingestSourceFull(ingestSlug, validate, domainOverride);
 
 				if (!ingestResult.success) {
 					console.error('  [FAILED] Ingestion failed');

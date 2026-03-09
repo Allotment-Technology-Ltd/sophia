@@ -111,8 +111,14 @@ export async function retrieveContext(
 		}
 
 		// ── Step 2: Vector search for seed claims ────────────────────
-		const domainFilter = domain ? `AND domain = $domain` : '';
-		const confidenceFilter = minConfidence > 0 ? `AND confidence >= $minConfidence` : '';
+		// SurrealDB v2: MTREE KNN operator (<|N|>) does not support additional
+		// WHERE conditions inline. Use a subquery to KNN-search a larger pool,
+		// then filter/rank in the outer query.
+		const knnPool = domain || minConfidence > 0 ? topK * 4 : topK;
+		const postFilters: string[] = [];
+		if (domain) postFilters.push('domain = $domain');
+		if (minConfidence > 0) postFilters.push('confidence >= $minConfidence');
+		const postWhere = postFilters.length > 0 ? `WHERE ${postFilters.join(' AND ')}` : '';
 
 		type SeedRow = {
 			id: string;
@@ -140,10 +146,13 @@ export async function retrieveContext(
 					section_context,
 					source.title AS source_title,
 					source.author AS source_author
-				FROM claim
-				WHERE embedding <|${topK}|> $query_embedding
-					${domainFilter}
-					${confidenceFilter}`,
+				FROM (
+					SELECT *
+					FROM claim
+					WHERE embedding <|${knnPool}|> $query_embedding
+				)
+				${postWhere}
+				LIMIT ${topK}`,
 				{
 					query_embedding: queryEmbedding,
 					...(domain ? { domain } : {}),

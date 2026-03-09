@@ -46,6 +46,40 @@ export interface SourceEntry {
 	wave: number;
 }
 
+// Cost estimation constants
+// Claude Sonnet 4.5: $3/1M input tokens, $15/1M output tokens
+// Vertex AI text-embedding-005: $0.025/1M characters
+// Gemini 2.5 Flash: ~$0.19/1M tokens blended (est. 50/50 input/output)
+const CLAUDE_INPUT_COST_PER_1M = 3.0;
+const CLAUDE_OUTPUT_COST_PER_1M = 15.0;
+const VERTEX_COST_PER_1M_CHARS = 0.025;
+const GEMINI_COST_PER_1M_TOKENS = 0.19;
+// Claims per token of input (rough empirical rate from ethics ingestion)
+const CLAIMS_PER_1K_INPUT_TOKENS = 10;
+// Token overhead for Claude system prompt + formatting per section
+const CLAUDE_OVERHEAD_TOKENS_PER_SECTION = 2_000;
+// Average chars per claim for Vertex AI embedding
+const AVG_CHARS_PER_CLAIM = 300;
+// Per-source cost ceiling — pre-scan blocks if estimated cost exceeds this
+export const PER_SOURCE_COST_CEILING_USD = 2.0;
+
+export interface SourceCostEstimate {
+	/** Estimated Claude input tokens (extraction across all sections) */
+	claudeInputTokens: number;
+	/** Estimated Claude output tokens */
+	claudeOutputTokens: number;
+	/** Estimated number of extracted claims */
+	estimatedClaims: number;
+	/** Estimated Vertex AI characters (embedding) */
+	vertexChars: number;
+	/** Estimated Gemini tokens (validation, if enabled) */
+	geminiTokens: number;
+	/** Total estimated cost in USD */
+	totalCostUsd: number;
+	/** True if cost exceeds PER_SOURCE_COST_CEILING_USD */
+	exceedsCeiling: boolean;
+}
+
 export interface ScanResult {
 	id: number;
 	title: string;
@@ -66,6 +100,8 @@ export interface ScanResult {
 	sectionCount?: number;
 	/** Token count of the largest section */
 	maxSectionTokens?: number;
+	/** Cost estimate (only present for cached sources) */
+	costEstimate?: SourceCostEstimate;
 	/** Non-fatal issues */
 	warnings: string[];
 	/** Hard error / blocker reason */
@@ -73,6 +109,39 @@ export interface ScanResult {
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+function estimateSourceCost(totalTokens: number, sectionCount: number, withValidation = false): SourceCostEstimate {
+	// Extraction: each section is one Claude call with system prompt overhead + section tokens
+	const claudeInputTokens = sectionCount * (CLAUDE_OVERHEAD_TOKENS_PER_SECTION + Math.ceil(totalTokens / sectionCount));
+	// Output: roughly 1 output token per 1k input tokens × claims per section
+	const estimatedClaims = Math.ceil((totalTokens / 1000) * CLAIMS_PER_1K_INPUT_TOKENS);
+	const claudeOutputTokens = estimatedClaims * 100; // ~100 tokens per claim JSON
+	// Relations + grouping: 2 more Claude calls per source, each ~totalTokens input
+	const relGroupInputTokens = 2 * (CLAUDE_OVERHEAD_TOKENS_PER_SECTION + totalTokens);
+	const relGroupOutputTokens = relGroupInputTokens * 0.3;
+	const totalClaudeInput = claudeInputTokens + relGroupInputTokens;
+	const totalClaudeOutput = claudeOutputTokens + relGroupOutputTokens;
+	// Vertex AI embedding: one call per claim, average 300 chars each
+	const vertexChars = estimatedClaims * AVG_CHARS_PER_CLAIM;
+	// Gemini validation: optional; ~totalTokens input + ~20% output
+	const geminiTokens = withValidation ? Math.ceil(totalTokens * 1.2) : 0;
+
+	const claudeInputCost = (totalClaudeInput / 1_000_000) * CLAUDE_INPUT_COST_PER_1M;
+	const claudeOutputCost = (totalClaudeOutput / 1_000_000) * CLAUDE_OUTPUT_COST_PER_1M;
+	const vertexCost = (vertexChars / 1_000_000) * VERTEX_COST_PER_1M_CHARS;
+	const geminiCost = (geminiTokens / 1_000_000) * GEMINI_COST_PER_1M_TOKENS;
+	const totalCostUsd = claudeInputCost + claudeOutputCost + vertexCost + geminiCost;
+
+	return {
+		claudeInputTokens: Math.ceil(totalClaudeInput),
+		claudeOutputTokens: Math.ceil(totalClaudeOutput),
+		estimatedClaims,
+		vertexChars,
+		geminiTokens,
+		totalCostUsd,
+		exceedsCeiling: totalCostUsd > PER_SOURCE_COST_CEILING_USD
+	};
+}
 
 function createSlug(text: string): string {
 	return text
@@ -254,6 +323,7 @@ async function scanSource(source: SourceEntry): Promise<ScanResult> {
 
 		const totalTokens = estimateTokens(text);
 		const { count, maxTokens, tokenCounts } = estimateSections(text);
+		const costEstimate = estimateSourceCost(totalTokens, count);
 
 		// Check for sections that are still larger than threshold (auto-split will handle them,
 		// but it's useful to know in advance)
@@ -275,6 +345,10 @@ async function scanSource(source: SourceEntry): Promise<ScanResult> {
 			);
 		}
 
+		const costError = costEstimate.exceedsCeiling
+			? `Estimated cost $${costEstimate.totalCostUsd.toFixed(2)} exceeds per-source ceiling $${PER_SOURCE_COST_CEILING_USD.toFixed(2)}`
+			: undefined;
+
 		return {
 			id: source.id,
 			title: source.title,
@@ -286,7 +360,9 @@ async function scanSource(source: SourceEntry): Promise<ScanResult> {
 			totalTokens,
 			sectionCount: count,
 			maxSectionTokens: maxTokens,
-			warnings
+			costEstimate,
+			warnings,
+			error: costError
 		};
 	} else {
 		// ── Source not cached — check URL reachability ───────────────────
@@ -373,9 +449,10 @@ function formatReport(results: ScanResult[], waveFilter: number | null): void {
 		console.log(hr);
 		for (const r of clean) {
 			if (r.cached) {
+				const cost = r.costEstimate ? `, est. $${r.costEstimate.totalCostUsd.toFixed(2)}` : '';
 				console.log(
 					`  [${r.id}] ${r.title} (wave ${r.wave}) ` +
-						`— ~${Math.round(r.totalTokens! / 1000)}k tokens, ${r.sectionCount} section(s)`
+						`— ~${Math.round(r.totalTokens! / 1000)}k tokens, ${r.sectionCount} section(s)${cost}`
 				);
 			} else {
 				console.log(`  [${r.id}] ${r.title} (wave ${r.wave}) — reachable, not yet fetched`);
@@ -406,6 +483,8 @@ function formatReport(results: ScanResult[], waveFilter: number | null): void {
 		console.log(
 			`  Total estimated sections:     ${totalSections}  (= Claude extraction API calls)`
 		);
+		const totalEstimatedCost = cached.reduce((sum, r) => sum + (r.costEstimate?.totalCostUsd ?? 0), 0);
+		console.log(`  Estimated wave cost (USD):    $${totalEstimatedCost.toFixed(2)} (ceiling $${PER_SOURCE_COST_CEILING_USD}/source)`);
 	}
 
 	if (blockers.length > 0) {
@@ -475,6 +554,7 @@ async function main() {
 	const args = process.argv.slice(2);
 	let waveFilter: number | null = null;
 	let jsonOutput = false;
+	let sourceListPath = SOURCE_LIST_PATH;
 
 	for (let i = 0; i < args.length; i++) {
 		if (args[i] === '--wave' && i + 1 < args.length) {
@@ -482,15 +562,17 @@ async function main() {
 			i++;
 		} else if (args[i] === '--json') {
 			jsonOutput = true;
+		} else if (args[i] === '--source-list' && i + 1 < args.length) {
+			sourceListPath = args[++i];
 		}
 	}
 
-	if (!fs.existsSync(SOURCE_LIST_PATH)) {
-		console.error(`[ERROR] Source list not found: ${SOURCE_LIST_PATH}`);
+	if (!fs.existsSync(sourceListPath)) {
+		console.error(`[ERROR] Source list not found: ${sourceListPath}`);
 		process.exit(1);
 	}
 
-	let sources: SourceEntry[] = JSON.parse(fs.readFileSync(SOURCE_LIST_PATH, 'utf-8'));
+	let sources: SourceEntry[] = JSON.parse(fs.readFileSync(sourceListPath, 'utf-8'));
 	if (waveFilter !== null) {
 		sources = sources.filter((s) => s.wave === waveFilter);
 	}
