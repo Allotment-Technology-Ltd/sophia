@@ -31,7 +31,7 @@
     "@google-cloud/logging": "^11.1.0",
     "@google/generative-ai": "^0.24.1",
     "ai": "6.0.105",
-    "firebase": "^10.13.1",
+    "firebase": "^12.10.0",
     "firebase-admin": "^13.0.0",
     "google-auth-library": "^10.6.1",
     "marked": "^17.0.3",
