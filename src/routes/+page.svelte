@@ -25,6 +25,7 @@
   import QuestionCounter from '$lib/components/QuestionCounter.svelte';
   import { extractFurtherQuestions } from '$lib/utils/extractQuestions';
   import DialecticalTriangle from '$lib/components/DialecticalTriangle.svelte';
+  import { getRandomExamples } from '$lib/constants/examples';
 
   // ── State ─────────────────────────────────────────────────────────────────
   let queryInput = $state('');
@@ -34,11 +35,10 @@
 
   type PassKey = 'analysis' | 'critique' | 'synthesis' | 'verification';
 
-  const EXAMPLE_QUESTIONS = [
-    'Is it ethical to use AI in hiring?',
-    'Is free will compatible with determinism?',
-    'How should I think about this career decision?',
-  ];
+  const SUGGESTION_SLOT_COUNT = 3;
+  const ROTATE_INTERVAL_MS = 8000;
+  let suggestionTick = $state(0);
+  let baseExamplePool = $state<string[]>([]);
 
   const LOADING_STATUS: Record<string, string> = {
     analysis: 'Mapping the philosophical landscape…',
@@ -192,6 +192,105 @@
     }
     return 'SOPHIA — Philosophical Reasoning Engine';
   });
+
+  function normalizeText(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function tokenize(text: string): string[] {
+    const stopWords = new Set([
+      'the', 'and', 'for', 'with', 'that', 'this', 'from', 'what', 'when', 'where', 'which',
+      'should', 'would', 'could', 'about', 'into', 'over', 'than', 'have', 'been', 'your',
+      'their', 'there', 'does', 'is', 'are', 'how', 'why'
+    ]);
+    return normalizeText(text)
+      .split(' ')
+      .filter((token) => token.length >= 4 && !stopWords.has(token));
+  }
+
+  function collectContextTerms(): Set<string> {
+    const terms = new Set<string>();
+    const seed = queryInput.trim().length > 0
+      ? [queryInput]
+      : historyStore.items.slice(0, 4).map((item) => item.question);
+    for (const text of seed) {
+      for (const token of tokenize(text)) terms.add(token);
+    }
+    return terms;
+  }
+
+  function scoreRelevance(question: string, terms: Set<string>): number {
+    if (terms.size === 0) return 0;
+    const qTokens = tokenize(question);
+    if (qTokens.length === 0) return 0;
+    let matches = 0;
+    for (const token of qTokens) {
+      if (terms.has(token)) matches += 1;
+    }
+    return matches;
+  }
+
+  const followOnSuggestions = $derived.by(() => {
+    const contextTerms = collectContextTerms();
+    const seen = new Set<string>();
+    const scored: Array<{ text: string; score: number; recency: number }> = [];
+    const cached = historyStore.cachedResults;
+
+    for (let i = 0; i < cached.length; i += 1) {
+      const result = cached[i];
+      const questions = extractFurtherQuestions(result.passes?.synthesis ?? '');
+      for (const question of questions) {
+        const trimmed = question.trim();
+        if (trimmed.length < 12) continue;
+        const key = normalizeText(trimmed);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        scored.push({ text: trimmed, score: scoreRelevance(trimmed, contextTerms), recency: i });
+      }
+    }
+
+    scored.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.recency - b.recency;
+    });
+    return scored.map((entry) => entry.text);
+  });
+
+  const rotatingQuestions = $derived.by(() => {
+    const merged = [...followOnSuggestions, ...baseExamplePool];
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const question of merged) {
+      const key = normalizeText(question);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(question);
+    }
+
+    if (deduped.length === 0) return [];
+    if (deduped.length <= SUGGESTION_SLOT_COUNT) return deduped;
+
+    const start = suggestionTick % deduped.length;
+    const rotating: string[] = [];
+    for (let i = 0; i < SUGGESTION_SLOT_COUNT; i += 1) {
+      rotating.push(deduped[(start + i) % deduped.length]);
+    }
+    return rotating;
+  });
+
+  $effect(() => {
+    if (baseExamplePool.length > 0) return;
+    baseExamplePool = getRandomExamples(12).map((item) => item.text);
+  });
+
+  $effect(() => {
+    if (!isQueryState) return;
+    if (typeof window === 'undefined') return;
+    const timer = window.setInterval(() => {
+      suggestionTick += 1;
+    }, ROTATE_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  });
 </script>
 
 <svelte:head>
@@ -233,7 +332,7 @@
               </div>
 
               <div class="example-pills" aria-label="Example questions">
-                {#each EXAMPLE_QUESTIONS as q}
+                {#each rotatingQuestions as q}
                   <button
                     class="pill"
                     onclick={() => { queryInput = q; handleSubmit(); }}

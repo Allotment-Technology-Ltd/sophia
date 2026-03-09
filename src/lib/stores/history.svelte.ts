@@ -95,6 +95,11 @@ function createHistoryStore() {
 
   return {
     get items() { return items; },
+    get cachedResults() {
+      return Object.values(cache).sort(
+        (a, b) => new Date(b.cachedAt).getTime() - new Date(a.cachedAt).getTime()
+      );
+    },
 
     /**
      * Called on auth state change. Scopes all persistence to the given uid.

@@ -91,6 +91,7 @@
 
   const enabledTypes = $derived(Array.from(graphStore.relationFilter));
   const hasGraph = $derived(graphStore.nodes.length > 0 || graphStore.rawNodes.length > 0);
+  const isFullPageRoute = $derived(page.url.pathname === '/map');
   const selectedNodeId = $derived(graphStore.selectedNodeId);
   const selectedNode = $derived(graphStore.rawNodes.find((node) => node.id === selectedNodeId) ?? null);
   const a11ySummary = $derived.by(() => {
@@ -754,13 +755,13 @@
     <button type="button" class="filter-pill share" data-testid="share-view" onclick={copyShareLink}>
       {shareStatus === 'copied' ? 'Copied' : shareStatus === 'failed' ? 'Copy Failed' : 'Share View'}
     </button>
-    <button type="button" class="filter-pill" data-testid="toggle-fullscreen" onclick={toggleFullscreen}>
-      {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
-    </button>
-    {#if typeof window !== 'undefined' && window.location.pathname === '/map'}
+    {#if isFullPageRoute}
+      <button type="button" class="filter-pill" data-testid="toggle-fullscreen" onclick={toggleFullscreen}>
+        {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+      </button>
       <button type="button" class="filter-pill" onclick={openPanelMap}>Open In Panel</button>
     {:else}
-      <button type="button" class="filter-pill" onclick={openFullPageMap}>Open Full Page</button>
+      <button type="button" class="filter-pill is-active" onclick={openFullPageMap}>Open Full Page</button>
     {/if}
     <label class="share-safe-toggle">
       <input type="checkbox" bind:checked={includeSensitiveInShare} />
@@ -865,16 +866,24 @@
     </div>
   </div>
 
-  <div class="map-canvas-wrap" class:is-fullscreen={isFullscreen} bind:this={containerEl}>
-    {#if hasGraph && filteredGraph.nodes.length > 0}
+  <div class="map-canvas-wrap" class:is-fullscreen={isFullscreen} class:is-resizable={isFullPageRoute} bind:this={containerEl}>
+    {#if !isFullPageRoute}
+      <div class="map-panel-guidance" role="note" aria-live="polite">
+        <p class="map-panel-guidance-title">Graph Preview Disabled In Side Panel</p>
+        <p>Use full page mode for readable labels, interaction detail, and shortest-path exploration.</p>
+        <button type="button" class="mini-btn" onclick={openFullPageMap}>Open Full Page Map</button>
+      </div>
+    {:else if hasGraph && filteredGraph.nodes.length > 0}
       <GraphCanvas
         nodes={filteredGraph.nodes}
         edges={filteredGraph.edges}
         width={viewportWidth}
         height={viewportHeight}
+        {isFullscreen}
         pinnedNodeIds={[...pinnedNodeIds]}
         pathNodeIds={pathNodeIds}
         pathEdges={pathEdges}
+        onToggleFullscreen={toggleFullscreen}
         onNodeSelect={handleNodeSelect}
         onJumpToReferences={(nodeId) => openNodeInReferences(nodeId)}
       />
@@ -1134,11 +1143,18 @@
   }
 
   .map-canvas-wrap {
-    height: clamp(360px, 46vh, 560px);
+    height: clamp(420px, 62vh, 920px);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     background: var(--color-bg);
     overflow: hidden;
+  }
+
+  .map-canvas-wrap.is-resizable {
+    resize: vertical;
+    overflow: auto;
+    min-height: 420px;
+    max-height: 90vh;
   }
 
   .map-canvas-wrap.is-fullscreen {
@@ -1152,6 +1168,28 @@
     font-family: var(--font-ui);
     font-size: var(--text-ui);
     color: var(--color-dim);
+  }
+
+  .map-panel-guidance {
+    margin: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--color-sage-border);
+    background: linear-gradient(180deg, rgba(135, 176, 153, 0.08), rgba(135, 176, 153, 0.02));
+    border-radius: var(--radius-md);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    color: var(--color-dim);
+    font-family: var(--font-ui);
+    font-size: var(--text-meta);
+  }
+
+  .map-panel-guidance-title {
+    margin: 0;
+    color: var(--color-text);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-size: var(--text-ui);
   }
 
   .map-empty p {

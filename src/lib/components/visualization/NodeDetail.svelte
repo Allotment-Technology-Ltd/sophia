@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import type { GraphNode, GraphEdge } from '$lib/types/api';
 
 	interface Props {
@@ -18,6 +19,7 @@
 		onClose,
 		onJumpToReferences
 	}: Props = $props();
+	let detailEl = $state<HTMLDivElement | null>(null);
 
 	// Find connected nodes
 	const connectedEdges = $derived(
@@ -42,6 +44,16 @@
 		}
 	}
 
+	// Keep close keyboard path reliable even if focus leaves the dialog.
+	onMount(() => {
+		if (detailEl) detailEl.focus();
+		const onWindowKeyDown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') onClose();
+		};
+		window.addEventListener('keydown', onWindowKeyDown);
+		return () => window.removeEventListener('keydown', onWindowKeyDown);
+	});
+
 	function getEdgeLabel(type: string): string {
 		const labels: Record<string, string> = {
 			'contains': 'contains',
@@ -65,6 +77,7 @@
 </script>
 
 <div
+	bind:this={detailEl}
 	class="node-detail"
 	style:left="{position.x}px"
 	style:top="{position.y}px"
@@ -73,6 +86,8 @@
 	aria-modal="true"
 	tabindex="-1"
 	onkeydown={handleKeyDown}
+	onclick={(e) => e.stopPropagation()}
+	onmousedown={(e) => e.stopPropagation()}
 >
 	<div class="detail-header">
 		<h3 id="detail-heading" class="detail-title">
