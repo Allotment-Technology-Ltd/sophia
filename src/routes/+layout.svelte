@@ -116,9 +116,58 @@
 {/if}
 
 {#if isAuthPage || authResolved}
-  <div id="main" style={isAuthPage ? '' : 'padding-top: var(--nav-height);'}>
-    {#if isAuthPage || isAuthenticated || BARE_ROUTES.has($page.url.pathname)}
-      {@render children()}
-    {/if}
+  <div class="layout-shell">
+    <div id="main" class="layout-main" style={isAuthPage ? '' : 'padding-top: var(--nav-height);'}>
+      {#if isAuthPage || isAuthenticated || BARE_ROUTES.has($page.url.pathname)}
+        {@render children()}
+      {/if}
+    </div>
+    <footer class="site-footer" aria-label="Site footer">
+      <nav class="footer-nav" aria-label="Legal links">
+        <a href="/privacy" aria-current={$page.url.pathname === '/privacy' ? 'page' : undefined}>Privacy</a>
+        <a href="/terms" aria-current={$page.url.pathname === '/terms' ? 'page' : undefined}>Terms</a>
+      </nav>
+    </footer>
   </div>
 {/if}
+
+<style>
+  .layout-shell {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .layout-main {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .site-footer {
+    border-top: 1px solid var(--color-border);
+    background: var(--color-bg);
+    padding: 10px var(--space-3);
+  }
+
+  .footer-nav {
+    display: flex;
+    justify-content: center;
+    gap: 18px;
+    align-items: center;
+    font-family: var(--font-ui);
+    font-size: 0.64rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .footer-nav a {
+    color: var(--color-dim);
+    text-decoration: none;
+    transition: color var(--transition-base);
+  }
+
+  .footer-nav a:hover,
+  .footer-nav a[aria-current='page'] {
+    color: var(--color-text);
+  }
+</style>
