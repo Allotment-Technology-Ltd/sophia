@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from './firebase-admin';
 
@@ -27,8 +27,21 @@ export interface ApiKeyVerificationResult {
   error?: 'missing' | 'invalid' | 'inactive' | 'rate_limited';
 }
 
-export function hashApiKey(rawApiKey: string): string {
+function getApiKeyHashSecret(): string | null {
+  const secret = process.env.API_KEY_HASH_SECRET?.trim();
+  return secret && secret.length > 0 ? secret : null;
+}
+
+function hashApiKeyLegacy(rawApiKey: string): string {
   return createHash('sha256').update(rawApiKey).digest('hex');
+}
+
+export function hashApiKey(rawApiKey: string): string {
+  const secret = getApiKeyHashSecret();
+  if (!secret) {
+    return hashApiKeyLegacy(rawApiKey);
+  }
+  return createHmac('sha256', secret).update(rawApiKey).digest('hex');
 }
 
 export function createApiKey(): { rawKey: string; keyId: string; keyHash: string; prefix: string } {
@@ -63,13 +76,24 @@ export async function verifyApiKey(request: Request): Promise<ApiKeyVerification
     return { valid: false, key_id: null, error: 'invalid' };
   }
 
-  const keyHash = hashApiKey(rawApiKey);
+  const hmacHash = hashApiKey(rawApiKey);
+  const legacyHash = hashApiKeyLegacy(rawApiKey);
 
-  const snapshot = await adminDb
+  let snapshot = await adminDb
     .collection('api_keys')
-    .where('key_hash', '==', keyHash)
+    .where('key_hash', '==', hmacHash)
     .limit(1)
     .get();
+
+  let matchedViaLegacy = false;
+  if (snapshot.empty && hmacHash !== legacyHash) {
+    snapshot = await adminDb
+      .collection('api_keys')
+      .where('key_hash', '==', legacyHash)
+      .limit(1)
+      .get();
+    matchedViaLegacy = !snapshot.empty;
+  }
 
   if (snapshot.empty) {
     return { valid: false, key_id: null, error: 'invalid' };
@@ -103,14 +127,20 @@ export async function verifyApiKey(request: Request): Promise<ApiKeyVerification
       return { valid: false, error: 'rate_limited' as const, remaining: 0 };
     }
 
-    tx.update(doc.ref, {
+    const updatePayload: Record<string, unknown> = {
       usage_count: (latest.usage_count ?? 0) + 1,
       daily_count: currentDailyCount + 1,
       daily_reset_at: shouldReset
         ? Timestamp.fromDate(new Date(now.getTime() + 24 * 60 * 60 * 1000))
         : latest.daily_reset_at ?? Timestamp.fromDate(new Date(now.getTime() + 24 * 60 * 60 * 1000)),
       last_used_at: nowTimestamp
-    });
+    };
+
+    if (matchedViaLegacy && getApiKeyHashSecret()) {
+      updatePayload.key_hash = hmacHash;
+    }
+
+    tx.update(doc.ref, updatePayload);
 
     return {
       valid: true,
