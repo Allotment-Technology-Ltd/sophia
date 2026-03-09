@@ -35,16 +35,27 @@
   const isCritiqueDone  = $derived(completedPasses.includes('critique'));
   const isSynthesisDone = $derived(completedPasses.includes('synthesis'));
 
+  // Edge highlights are gated on completed transitions, not active-node start.
+  const showAC = $derived(
+    mode === 'logo' ||
+    mode === 'complete' ||
+    ((isAnalysisDone || currentPass === 'critique' || currentPass === 'synthesis') && currentPass !== 'analysis')
+  );
+  const showCS = $derived(
+    mode === 'logo' ||
+    mode === 'complete' ||
+    ((isCritiqueDone || currentPass === 'synthesis') && currentPass !== 'critique')
+  );
+  const showSA = $derived(
+    mode === 'logo' ||
+    mode === 'complete' ||
+    (isSynthesisDone && currentPass !== 'synthesis')
+  );
+
   // Edge offsets: length = hidden, 0 = fully drawn
-  const edgeACOffset = $derived(
-    mode === 'logo' || mode === 'complete' || isAnalysisDone ? 0 : LEN_AC
-  );
-  const edgeCSOffset = $derived(
-    mode === 'logo' || mode === 'complete' || isCritiqueDone ? 0 : LEN_CS
-  );
-  const edgeSAOffset = $derived(
-    mode === 'logo' || mode === 'complete' || isSynthesisDone ? 0 : LEN_SA
-  );
+  const edgeACOffset = $derived(showAC ? 0 : LEN_AC);
+  const edgeCSOffset = $derived(showCS ? 0 : LEN_CS);
+  const edgeSAOffset = $derived(showSA ? 0 : LEN_SA);
 
   // Node opacity: 0.2 idle, 1 active, 0.65 done, 0.6 logo
   const opacityA = $derived(

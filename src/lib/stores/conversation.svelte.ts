@@ -36,6 +36,32 @@ interface CachedPassRelations {
   relations: RelationBundle[];
 }
 
+function buildPassFallbackGraph(
+  passes: { analysis: string; critique: string; synthesis: string }
+): {
+  nodes: Array<{ id: string; type: 'claim'; label: string; phase: AnalysisPhase }>;
+  edges: Array<{ from: string; to: string; type: 'responds-to' | 'supports'; phaseOrigin: AnalysisPhase }>;
+} {
+  const snip = (text: string, fallback: string) => {
+    const clean = text.trim();
+    if (!clean) return fallback;
+    return clean.length > 96 ? `${clean.slice(0, 96)}...` : clean;
+  };
+
+  return {
+    nodes: [
+      { id: 'claim:pass-analysis', type: 'claim', phase: 'analysis', label: snip(passes.analysis, 'Analysis output') },
+      { id: 'claim:pass-critique', type: 'claim', phase: 'critique', label: snip(passes.critique, 'Critique output') },
+      { id: 'claim:pass-synthesis', type: 'claim', phase: 'synthesis', label: snip(passes.synthesis, 'Synthesis output') }
+    ],
+    edges: [
+      { from: 'claim:pass-analysis', to: 'claim:pass-critique', type: 'responds-to', phaseOrigin: 'critique' },
+      { from: 'claim:pass-critique', to: 'claim:pass-synthesis', type: 'responds-to', phaseOrigin: 'synthesis' },
+      { from: 'claim:pass-analysis', to: 'claim:pass-synthesis', type: 'supports', phaseOrigin: 'synthesis' }
+    ]
+  };
+}
+
 function createConversationStore() {
   let messages = $state<Message[]>([]);
   let isLoading = $state(false);
@@ -109,6 +135,29 @@ function createConversationStore() {
         for (const { pass, relations } of cached.relationsByPass as CachedPassRelations[]) {
           referencesStore.addClaims(pass, [], relations);
           graphStore.addFromClaims(pass, [], relations);
+        }
+
+        if (graphStore.rawNodes.length === 0 && (cached.passes.analysis || cached.passes.critique || cached.passes.synthesis)) {
+          const fallback = buildPassFallbackGraph({
+            analysis: cached.passes.analysis ?? '',
+            critique: cached.passes.critique ?? '',
+            synthesis: cached.passes.synthesis ?? ''
+          });
+          graphStore.setGraph(
+            fallback.nodes,
+            fallback.edges,
+            {
+              seedNodeIds: ['claim:pass-analysis'],
+              traversedNodeIds: ['claim:pass-critique', 'claim:pass-synthesis'],
+              relationTypeCounts: { 'responds-to': 2, supports: 1 },
+              maxHops: 2,
+              contextSufficiency: 'sparse',
+              retrievalDegraded: true,
+              retrievalDegradedReason: 'fallback_pass_graph',
+              retrievalTimestamp: new Date().toISOString()
+            },
+            1
+          );
         }
 
         referencesStore.setLive(false);
@@ -272,6 +321,29 @@ function createConversationStore() {
                 });
 
                 historyStore.addEntry(query);
+
+                if (graphStore.rawNodes.length === 0 && (currentPasses.analysis || currentPasses.critique || currentPasses.synthesis)) {
+                  const fallback = buildPassFallbackGraph({
+                    analysis: currentPasses.analysis,
+                    critique: currentPasses.critique,
+                    synthesis: currentPasses.synthesis
+                  });
+                  graphStore.setGraph(
+                    fallback.nodes,
+                    fallback.edges,
+                    {
+                      seedNodeIds: ['claim:pass-analysis'],
+                      traversedNodeIds: ['claim:pass-critique', 'claim:pass-synthesis'],
+                      relationTypeCounts: { 'responds-to': 2, supports: 1 },
+                      maxHops: 2,
+                      contextSufficiency: 'sparse',
+                      retrievalDegraded: true,
+                      retrievalDegradedReason: 'fallback_pass_graph',
+                      retrievalTimestamp: new Date().toISOString()
+                    },
+                    1
+                  );
+                }
                 break;
 
               case 'error':
