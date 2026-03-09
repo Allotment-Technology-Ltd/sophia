@@ -826,7 +826,15 @@
         </button>
       </div>
     {:else}
-      <p class="map-empty">Run a query to populate the argument map.</p>
+      <div class="map-empty">
+        <p>Map is empty for this session.</p>
+        <p>How to load it:</p>
+        <ol>
+          <li>Run a new analysis query from the main prompt.</li>
+          <li>Wait for the synthesis pass to complete.</li>
+          <li>Return to the Map tab (or open <code>/map</code>).</li>
+        </ol>
+      </div>
     {/if}
   </div>
 
@@ -1072,6 +1080,16 @@
     font-family: var(--font-ui);
     font-size: var(--text-ui);
     color: var(--color-dim);
+  }
+
+  .map-empty p {
+    margin: 0 0 6px 0;
+  }
+
+  .map-empty ol {
+    margin: 0;
+    padding-left: 18px;
+    font-size: var(--text-meta);
   }
 
   .map-empty.degraded {

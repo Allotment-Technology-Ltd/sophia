@@ -427,6 +427,7 @@
       {#if conversation.error}
         <div class="error-state" role="alert">
           <p class="error-message">We hit a temporary issue. Please try again.</p>
+          <p class="error-detail">{conversation.error}</p>
           <button class="error-retry" onclick={retryLastQuery}>Retry</button>
         </div>
       {/if}
@@ -813,6 +814,14 @@
     font-size: 1rem;
     color: var(--color-copper);
     margin: 0;
+  }
+
+  .error-detail {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: 0.68rem;
+    color: var(--color-dim);
+    word-break: break-word;
   }
 
   .error-retry {

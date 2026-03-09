@@ -94,10 +94,12 @@ function createConversationStore() {
 
         for (const { pass, claims } of cached.claimsByPass as CachedPassClaims[]) {
           referencesStore.addClaims(pass, claims, []);
+          graphStore.addFromClaims(pass, claims, []);
         }
 
         for (const { pass, relations } of cached.relationsByPass as CachedPassRelations[]) {
           referencesStore.addClaims(pass, [], relations);
+          graphStore.addFromClaims(pass, [], relations);
         }
 
         referencesStore.setLive(false);
@@ -136,7 +138,7 @@ function createConversationStore() {
 
         if (!response.ok) {
           const errorBody = await response.json().catch(() => ({ error: response.statusText }));
-          throw new Error(errorBody.error || `API error: ${response.status}`);
+          throw new Error(errorBody.detail || errorBody.error || `API error: ${response.status}`);
         }
 
         if (!response.body) {
@@ -321,6 +323,9 @@ function createConversationStore() {
 
       try {
         const idToken = await getIdToken();
+        if (!idToken) {
+          throw new Error('Not authenticated');
+        }
         const response = await fetch('/api/verify', {
           method: 'POST',
           headers: {

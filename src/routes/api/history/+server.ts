@@ -39,13 +39,8 @@ export const GET: RequestHandler = async ({ locals }) => {
     return json({ entries });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const isCredentialError = /default credentials|could not load/i.test(message);
-    if (process.env.NODE_ENV !== 'production' && isCredentialError) {
-      console.warn('[HISTORY] Firebase Admin credentials unavailable in local dev; returning empty history.');
-      return json({ entries: [] });
-    }
-    console.error('[HISTORY] Fetch failed:', message);
-    return json({ error: 'Failed to load history' }, { status: 500 });
+    console.warn('[HISTORY] Fetch failed; returning empty history:', message);
+    return json({ entries: [] });
   }
 };
 
@@ -69,12 +64,7 @@ export const DELETE: RequestHandler = async ({ locals, url }) => {
     return json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const isCredentialError = /default credentials|could not load/i.test(message);
-    if (process.env.NODE_ENV !== 'production' && isCredentialError) {
-      console.warn('[HISTORY] Firebase Admin credentials unavailable in local dev; skipping delete.');
-      return json({ ok: true, skipped: true });
-    }
-    console.error('[HISTORY] Delete failed:', message);
-    return json({ error: 'Failed to delete entry' }, { status: 500 });
+    console.warn('[HISTORY] Delete failed; skipping:', message);
+    return json({ ok: true, skipped: true });
   }
 };
