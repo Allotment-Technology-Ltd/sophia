@@ -4,11 +4,13 @@
   import { historyStore } from '$lib/stores/history.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
   import { renderMarkdown } from '$lib/utils/markdown';
+  import { goto } from '$app/navigation';
   import { fly, fade } from 'svelte/transition';
   import { quintOut } from 'svelte/easing';
   import SidePanel from '$lib/components/panel/SidePanel.svelte';
   import TabStrip, { type TabId, type Tab } from '$lib/components/panel/TabStrip.svelte';
   import ReferencesTab from '$lib/components/references/ReferencesTab.svelte';
+  import MapTab from '$lib/components/panel/MapTab.svelte';
   import HistoryTab from '$lib/components/panel/HistoryTab.svelte';
   import SettingsTab from '$lib/components/panel/SettingsTab.svelte';
   import QuestionInput from '$lib/components/QuestionInput.svelte';
@@ -47,6 +49,7 @@
   // ── Tabs for SidePanel ───────────────────────────────────────────────────
   const tabs: Tab[] = $derived([
     { id: 'references' as const, label: 'References', showLiveDot: referencesStore.isLive },
+    { id: 'map' as const, label: 'Map' },
     { id: 'history' as const, label: 'History' },
     { id: 'settings' as const, label: 'Settings' },
   ]);
@@ -137,6 +140,18 @@
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  function handleTabChange(tab: TabId): void {
+    activeTab = tab;
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (tab === 'map') {
+      url.searchParams.set('panelTab', 'map');
+    } else {
+      url.searchParams.delete('panelTab');
+    }
+    void goto(url.toString(), { replaceState: true, noScroll: true, keepFocus: true, invalidateAll: false });
+  }
+
   async function retryLastQuery(): Promise<void> {
     const lastQuery = conversation.messages.findLast(m => m.role === 'user')?.content;
     if (!lastQuery) return;
@@ -148,6 +163,24 @@
     if (conversation.currentPass && ['analysis', 'critique', 'synthesis'].includes(conversation.currentPass)) {
       activeResultPass = conversation.currentPass as 'analysis' | 'critique' | 'synthesis';
     }
+  });
+
+  $effect(() => {
+    if (typeof window === 'undefined') return;
+
+    const syncTabFromUrl = () => {
+      const url = new URL(window.location.href);
+      const panelTab = url.searchParams.get('panelTab');
+      const hasMapState = url.searchParams.has('mapNode') || url.searchParams.has('mapRel');
+      if (panelTab === 'map' || hasMapState) {
+        activeTab = 'map';
+        panelStore.openPanel();
+      }
+    };
+
+    syncTabFromUrl();
+    window.addEventListener('popstate', syncTabFromUrl);
+    return () => window.removeEventListener('popstate', syncTabFromUrl);
   });
 
   let pageTitle = $derived.by(() => {
@@ -401,10 +434,12 @@
 
     <!-- Side panel (References / History / Settings) -->
     <SidePanel open={panelStore.open} onClose={() => panelStore.close()}>
-      <TabStrip {tabs} {activeTab} onTabChange={(tab) => activeTab = tab} />
+      <TabStrip {tabs} {activeTab} onTabChange={handleTabChange} />
 
       {#if activeTab === 'references'}
         <ReferencesTab />
+      {:else if activeTab === 'map'}
+        <MapTab onOpenReferences={() => { activeTab = 'references'; }} />
       {:else if activeTab === 'history'}
         <HistoryTab
           entries={historyStore.items}
