@@ -44,9 +44,13 @@ const SURREAL_DATABASE = process.env.SURREAL_DATABASE || 'sophia';
 const GEMINI_CONCURRENCY = parseInt(process.env.GEMINI_CONCURRENCY || '2', 10);
 const PHASE_A_CONCURRENCY = parseInt(process.env.PHASE_A_CONCURRENCY || '4', 10);
 
-// When .env file exists (local dev), pass --env-file=.env to child tsx processes.
+// Pass --env-file args to child tsx processes so they inherit the same env.
+// Supports split env files (e.g. .env for infra, .env.local for API keys).
 // On Cloud Run, env vars are injected by the platform so no file is needed.
-const TSX_ENV_ARGS: string[] = fs.existsSync('.env') ? ['tsx', '--env-file=.env'] : ['tsx'];
+const _envFileArgs: string[] = [];
+if (fs.existsSync('.env')) _envFileArgs.push('--env-file=.env');
+if (fs.existsSync('.env.local')) _envFileArgs.push('--env-file=.env.local');
+const TSX_ENV_ARGS: string[] = ['tsx', ..._envFileArgs];
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 interface SourceEntry {
@@ -746,35 +750,37 @@ async function main() {
 				}
 			}
 
-			// Ensure source is fetched locally
+			// Ensure source is fetched locally.
+			// Always resolve by URL first (findFetchedSlug) before falling back to the
+			// title-derived slug — prevents slug collision where two sources share the
+			// same title and the second incorrectly reuses the first source's file.
 			let ingestSlug = slug;
-			const fetched = isSourceFetched(slug);
-			if (!fetched) {
-				const existingSlug = findFetchedSlug(source.url);
-				if (existingSlug) {
-					console.log(`  [INFO] Source already fetched as '${existingSlug}' (slug mismatch resolved)`);
-					ingestSlug = existingSlug;
+			const fetchedSlugByUrl = findFetchedSlug(source.url);
+			if (fetchedSlugByUrl) {
+				ingestSlug = fetchedSlugByUrl;
+				if (fetchedSlugByUrl !== slug) {
+					console.log(`  [INFO] Source already fetched as '${fetchedSlugByUrl}' (slug mismatch resolved)`);
 				} else {
-					console.log('  [INFO] Source not yet fetched locally');
-					const fetchSuccess = fetchSource(source.url, source.source_type);
-					if (!fetchSuccess) {
-						console.error('  [FAILED] Fetch failed');
-						logBatchFailure(source, 'fetch', 'Fetch failed');
-						results.push({ id: source.id, title: source.title, status: 'failed', reason: 'Fetch failed' });
-						failedCount++;
-						if (failFast) {
-							stopLaunchingNewSources = true;
-						}
-						console.log('');
-						continue;
-					}
-					ingestSlug = findFetchedSlug(source.url) ?? slug;
-					if (ingestSlug !== slug) {
-						console.log(`  [INFO] Fetch saved as '${ingestSlug}' (title-derived slug was '${slug}')`);
-					}
+					console.log('  [INFO] Source already fetched');
 				}
 			} else {
-				console.log('  [INFO] Source already fetched');
+				console.log('  [INFO] Source not yet fetched locally');
+				const fetchSuccess = fetchSource(source.url, source.source_type);
+				if (!fetchSuccess) {
+					console.error('  [FAILED] Fetch failed');
+					logBatchFailure(source, 'fetch', 'Fetch failed');
+					results.push({ id: source.id, title: source.title, status: 'failed', reason: 'Fetch failed' });
+					failedCount++;
+					if (failFast) {
+						stopLaunchingNewSources = true;
+					}
+					console.log('');
+					continue;
+				}
+				ingestSlug = findFetchedSlug(source.url) ?? slug;
+				if (ingestSlug !== slug) {
+					console.log(`  [INFO] Fetch saved as '${ingestSlug}' (title-derived slug was '${slug}')`);
+				}
 			}
 
 			if (validate) {
