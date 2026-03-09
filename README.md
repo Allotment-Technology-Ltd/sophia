@@ -84,7 +84,7 @@ After synthesis, users can optionally trigger a fourth pass that cross-checks ke
 | Rate limiting | **Working** — 20 queries/day per user |
 | Web UI | **Working** — SvelteKit, dark-first design, mobile-responsive |
 | Argument graph visualisation | **Partial** — infrastructure exists; full "Map" tab not yet complete |
-| Domain coverage | **Ethics only** — a `MVP_DOMAIN_FILTER` constrains the live query path to the ethics corpus; Philosophy of Mind expansion is in progress on the `domain-expansion` branch |
+| Domain coverage | **Ethics + Philosophy of Mind** — ~10,900 claims across both domains; PoM Wave 1 ingested (3,418 claims); domain routing in engine is not yet query-aware |
 | Formal evaluation | **Not yet done** — Phase 1 results are preliminary (see below) |
 | Public API | **Not built** |
 
@@ -98,7 +98,7 @@ After synthesis, users can optionally trigger a fourth pass that cross-checks ke
 | Database | SurrealDB v2 | Graph + vector + document in one query path |
 | AI — query runtime | Vertex AI Gemini 2.5 Flash + Google Search Grounding | Three-pass engine; grounding provides per-pass web sources |
 | AI — ingestion pipeline | Anthropic Claude Sonnet (claim + relation extraction); Gemini (cross-validation) | Runs offline, not at query time |
-| Embeddings | Vertex AI text-embedding-005 | Query-time retrieval; ingestion corpus uses Voyage AI (migration planned — see [architecture](docs/architecture.md)) |
+| Embeddings | Vertex AI text-embedding-005 (768-dim) | Standardised across ingestion and query-time retrieval as of Phase 3d |
 | Auth | Firebase Auth (Google Sign-In) | ID tokens verified server-side |
 | History / Cache | Firestore | Per-user, serverless, pairs with Firebase UIDs |
 | Hosting | Google Cloud Run + GCE | Containerised app + persistent DB VM |

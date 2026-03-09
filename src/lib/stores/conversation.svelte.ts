@@ -6,6 +6,7 @@ import { referencesStore } from '$lib/stores/references.svelte';
 import { historyStore } from '$lib/stores/history.svelte';
 import { graphStore } from '$lib/stores/graph.svelte';
 import { getIdToken } from '$lib/firebase';
+import { trackEvent } from '$lib/utils/analytics';
 
 export interface Message {
   id: string;
@@ -79,8 +80,11 @@ function createConversationStore() {
         timestamp: new Date()
       }];
 
+      trackEvent('query_submitted', { query_length: query.length, has_lens: !!lens });
+
       const cached = historyStore.getCachedResult(query);
       if (cached) {
+        trackEvent('cache_hit');
         // Loading from history restarts the depth counter — fresh exploration
         questionCount = 0;
         currentPass = null;
@@ -216,6 +220,11 @@ function createConversationStore() {
 
               case 'metadata':
                 gotMetadata = true;
+                trackEvent('analysis_complete', {
+                  duration_ms: event.duration_ms,
+                  claims_retrieved: event.claims_retrieved ?? 0,
+                  detected_domain: event.detected_domain ?? 'unknown'
+                });
                 messages = [...messages, {
                   id: crypto.randomUUID(),
                   role: 'assistant',
@@ -308,6 +317,7 @@ function createConversationStore() {
       isLoading = true;
       currentPass = 'verification';
       currentPasses = { ...currentPasses, verification: '' };
+      trackEvent('verification_triggered');
 
       try {
         const idToken = await getIdToken();

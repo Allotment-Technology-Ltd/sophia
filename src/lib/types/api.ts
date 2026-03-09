@@ -45,6 +45,8 @@ export interface MetadataEvent {
   arguments_retrieved?: number;
   retrieval_degraded?: boolean;
   retrieval_degraded_reason?: string;
+  detected_domain?: string;
+  domain_confidence?: 'high' | 'medium' | 'low';
 }
 
 export interface ErrorEvent {

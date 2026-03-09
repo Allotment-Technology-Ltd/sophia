@@ -1,6 +1,7 @@
 <script lang="ts">
   import { signInWithGoogle } from '$lib/firebase';
   import { goto } from '$app/navigation';
+  import DialecticalTriangle from '$lib/components/DialecticalTriangle.svelte';
 
   let isLoading = $state(false);
   let error = $state('');
@@ -21,7 +22,7 @@
 </script>
 
 <svelte:head>
-  <title>Sign In — SOPHIA</title>
+  <title>SOPHIA — Sign In</title>
 </svelte:head>
 
 <div class="auth-page" style="background: linear-gradient(135deg, var(--color-bg) 0%, #2a2520 50%, var(--color-surface-raised) 100%);">
@@ -31,10 +32,7 @@
       <!-- Header with logo -->
       <div class="auth-header">
         <div class="logo">
-          <svg class="logo-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5" fill="none"/>
-            <path d="M12 7 Q 15 9 15 12 Q 15 15 12 17 Q 9 15 9 12 Q 9 9 12 7" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>
-          </svg>
+          <DialecticalTriangle mode="logo" size={72} />
         </div>
         <h1 class="auth-title">SOPHIA</h1>
         <p class="auth-subtitle">Structured ontological & philosophical intelligence agent</p>
@@ -78,7 +76,7 @@
 
       <!-- Footer -->
       <div class="auth-footer">
-        <p>By signing in, you agree to our <a href="#terms">Terms of Service</a> and <a href="#privacy">Privacy Policy</a></p>
+        <p>By signing in, you agree to our <a href="/terms">Terms of Service</a> and <a href="/privacy">Privacy Policy</a></p>
       </div>
     </div>
   </div>
@@ -111,22 +109,9 @@
   }
 
   .logo {
-    display: inline-flex;
-    align-items: center;
+    display: flex;
     justify-content: center;
-    width: 48px;
-    height: 48px;
-    margin-bottom: 24px;
-    border-radius: 50%;
-    background: var(--color-sage-bg);
-    border: 1.5px solid var(--color-sage);
-  }
-
-  .logo-svg {
-    width: 24px;
-    height: 24px;
-    color: var(--color-sage);
-    stroke: currentColor;
+    margin-bottom: 8px;
   }
 
   .auth-title {

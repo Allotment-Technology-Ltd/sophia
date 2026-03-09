@@ -6,6 +6,7 @@ import { getCritiqueSystemPrompt, buildCritiqueUserPrompt } from './prompts/crit
 import { getSynthesisSystemPrompt, buildSynthesisUserPrompt } from './prompts/synthesis';
 import { VERIFICATION_SYSTEM, buildVerificationUserPrompt } from './prompts/verification';
 import { retrieveContext, buildContextBlock } from './retrieval';
+import { classifyQueryDomain, getRetrievalDomain } from './domainClassifier';
 import type { PassType } from '$lib/types/passes';
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
 import type { PassSection, GraphNode, GraphEdge, GroundingSource } from '$lib/types/api';
@@ -80,6 +81,8 @@ export interface EngineCallbacks {
       arguments_retrieved: number;
       retrieval_degraded?: boolean;
       retrieval_degraded_reason?: string;
+      detected_domain?: string;
+      domain_confidence?: 'high' | 'medium' | 'low';
     }
   ): void;
   onError(error: string): void;
@@ -200,11 +203,23 @@ export async function runDialecticalEngine(
 ): Promise<void> {
   const startTime = Date.now();
   const queryPreview = query.slice(0, 60).replace(/\n/g, ' ');
-  console.log(`[ENGINE] Starting — query="${queryPreview}" lens=${options?.lens ?? 'none'}`);
+
+  // ── Domain classification ──────────────────────────────────────────────
+  const domainClassification = classifyQueryDomain(query);
+  const retrievalDomain = getRetrievalDomain(domainClassification);
+  console.log(
+    `[ENGINE] Starting — query="${queryPreview}" lens=${options?.lens ?? 'none'} ` +
+    `domain=${domainClassification.domain ?? 'unknown'} ` +
+    `confidence=${domainClassification.confidence} ` +
+    `retrieval_filter=${retrievalDomain ?? 'none'}`
+  );
+
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
-  // ── Retrieve argument-graph context (ethics domain only for MVP) ────────
+  // ── Retrieve argument-graph context ─────────────────────────────────────
+  // Domain filter applied when classifier is high-confidence and domain has graph data.
+  // Falls back to cross-domain search for uncertain or uningested domains.
   let contextBlock = '';
   let claimsRetrieved = 0;
   let argumentsRetrieved = 0;
@@ -213,7 +228,7 @@ export async function runDialecticalEngine(
 
   try {
     const t0 = Date.now();
-    const retrievalResult = await retrieveContext(query);
+    const retrievalResult = await retrieveContext(query, { domain: retrievalDomain });
     contextBlock = buildContextBlock(retrievalResult);
     claimsRetrieved = retrievalResult.claims.length;
     argumentsRetrieved = retrievalResult.arguments.length;
@@ -541,7 +556,9 @@ export async function runDialecticalEngine(
     claims_retrieved: claimsRetrieved,
     arguments_retrieved: argumentsRetrieved,
     retrieval_degraded: retrievalDegraded,
-    retrieval_degraded_reason: retrievalDegradedReason
+    retrieval_degraded_reason: retrievalDegradedReason,
+    detected_domain: domainClassification.domain ?? undefined,
+    domain_confidence: domainClassification.domain ? domainClassification.confidence : undefined
   });
 }
 

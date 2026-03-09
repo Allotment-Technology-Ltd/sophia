@@ -7,7 +7,7 @@
 
 ## Overview
 
-SOPHIA is a SvelteKit full-stack application backed by a SurrealDB argument graph and deployed on GCP. The core is a **three-pass dialectical engine** that runs three sequential LLM calls (Analysis → Critique → Synthesis) against a typed philosophical knowledge graph (~7,500 claims, 25 sources). Output streams progressively to the browser via Server-Sent Events. All users are authenticated via Firebase Auth; query history and server-side cache are stored in Firestore.
+SOPHIA is a SvelteKit full-stack application backed by a SurrealDB argument graph and deployed on GCP. The core is a **three-pass dialectical engine** that runs three sequential LLM calls (Analysis → Critique → Synthesis) against a typed philosophical knowledge graph (~10,900 claims across ethics and philosophy of mind, 34 sources). Output streams progressively to the browser via Server-Sent Events. All users are authenticated via Firebase Auth; query history and server-side cache are stored in Firestore.
 
 ---
 
@@ -75,7 +75,7 @@ SvelteKit App  ──  Cloud Run (europe-west2, 0–3 instances, 512Mi)
 
 | File | Description |
 | --- | --- |
-| `src/lib/server/engine.ts` | Three-pass dialectical engine. Entry: `runDialecticalEngine()`. Contains `MVP_DOMAIN_FILTER = 'ethics'` — remove this when Philosophy of Mind ingestion clears quality gates. |
+| `src/lib/server/engine.ts` | Three-pass dialectical engine. Entry: `runDialecticalEngine()`. Domain-agnostic — calls `retrieveContext()` without domain filter since Phase 3d. Accepts `lens?: string` in `EngineOptions`. |
 | `src/lib/server/vertex.ts` | Vertex AI client. `getReasoningModel()` → Gemini 2.5 Flash. `getGroundingTool()` → Google Search Grounding. `embedQuery()` → `text-embedding-005`. |
 | `src/lib/server/retrieval.ts` | Knowledge graph retrieval. `retrieveContext()` → embed → vector search → graph traversal → context block. |
 | `src/lib/server/db.ts` | SurrealDB HTTP SQL client. Stateless, retries, typed errors. |
@@ -135,7 +135,7 @@ Source URL
         Stage 7: Store                — SurrealDB (typed graph with edges)
 ```
 
-**Embedding inconsistency (known issue, Phase 3d-A1):** The ethics corpus was ingested with Voyage AI embeddings (1024-dim). The runtime query path uses Vertex AI `text-embedding-005` (768-dim). Retrieval works across the dimension gap because both are normalised for cosine similarity, but a full re-embedding migration (`scripts/reembed-corpus.ts`) is required before expanding to new domains. The MTREE index dimension must also be updated (1024 → 768). This is the primary blocker for Phase 3e.
+**Embedding standardisation (Phase 3d complete):** All ingestion now uses Vertex AI `text-embedding-005` (768-dim), matching the runtime query path. The MTREE index dimension was updated from 1024 to 768 as part of Phase 3d. The ethics corpus was re-embedded during Phase 3d. The PoM corpus was ingested directly with the correct embedding model.
 
 ---
 
@@ -171,8 +171,8 @@ Zero infrastructure overhead for auth. Pairs naturally with Firestore for per-us
 **Why Firestore for history/cache?**
 Serverless, free-tier sufficient for MVP. Per-user paths (`users/{uid}/...`) pair directly with Firebase Auth UIDs. The cache layer means repeat queries cost nothing — important for demo traffic where the same questions are asked repeatedly.
 
-**Why an MVP domain filter?**
-The knowledge graph covers 25 sources but currently only the ethics domain is populated. Exposing non-ethics queries to the full retrieval pipeline before other domains are ingested would return empty or misleading context. The filter (`MVP_DOMAIN_FILTER = 'ethics'` in `engine.ts`) is temporary and will be removed when Philosophy of Mind ingestion clears quality gates.
+**Why no domain filter in the engine?**
+The `MVP_DOMAIN_FILTER` was removed in Phase 3d once Philosophy of Mind Wave 1 ingestion completed. The engine now calls `retrieveContext()` without a domain constraint, returning the most semantically relevant claims across all domains. A query-aware domain classifier or explicit domain parameter will be added once PoM Wave 2 is complete and the retrieval signal is strong enough to warrant routing.
 
 ---
 
@@ -180,11 +180,10 @@ The knowledge graph covers 25 sources but currently only the ethics domain is po
 
 | Constraint | Impact | Resolution |
 | --- | --- | --- |
-| Embedding dimension mismatch (Voyage AI 1024-dim vs. Vertex AI 768-dim) | Must re-embed corpus before domain expansion; MTREE index must be rebuilt | Phase 3d-A1: `reembed-corpus.ts` + index migration |
+| No domain routing in engine | Ethics and PoM claims retrieved together for all queries; no query-aware domain selection | Implement domain classifier or explicit domain parameter in Phase 3f / Phase 4 |
 | Three sequential LLM calls | ~15–25s end-to-end latency per query | Inherent to dialectical architecture; disclosed to users; Critique starts at ~30% of Pass 1 to reduce perceived wait |
-| MVP domain filter hardcoded in engine | Non-ethics queries get no knowledge graph context | Remove after Phase 3e quality gate passes |
 | SurrealDB on single GCE VM | No HA; if VM goes down, queries degrade to no-graph mode | GCE persistent disk + graceful degradation; HA is a post-MVP concern |
-| Phase 1 evaluation self-assessed | Preliminary results not statistically robust | Formal evaluation planned for Phase 6 |
+| Phase 1 evaluation self-assessed | Preliminary results not statistically robust | Formal evaluation planned for Phase 9 |
 
 ---
 
