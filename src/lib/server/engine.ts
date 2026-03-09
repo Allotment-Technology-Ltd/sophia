@@ -4,8 +4,21 @@ import { getExtractionModel, getReasoningModel, trackTokens, getGroundingTool } 
 import { getAnalysisSystemPrompt, buildAnalysisUserPrompt } from './prompts/analysis';
 import { getCritiqueSystemPrompt, buildCritiqueUserPrompt } from './prompts/critique';
 import { getSynthesisSystemPrompt, buildSynthesisUserPrompt } from './prompts/synthesis';
+import {
+  buildReasoningAnalysisUserPrompt,
+  getReasoningAnalysisSystemPrompt
+} from './prompts/reasoning-analysis';
+import {
+  buildReasoningCritiqueUserPrompt,
+  getReasoningCritiqueSystemPrompt
+} from './prompts/reasoning-critique';
+import {
+  buildReasoningSynthesisUserPrompt,
+  getReasoningSynthesisSystemPrompt
+} from './prompts/reasoning-synthesis';
 import { VERIFICATION_SYSTEM, buildVerificationUserPrompt } from './prompts/verification';
 import { retrieveContext, buildContextBlock } from './retrieval';
+import { classifyQueryDomain, getRetrievalDomain } from './domainClassifier';
 import type { PassType } from '$lib/types/passes';
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
 import type { PassSection, GraphNode, GraphEdge, GroundingSource } from '$lib/types/api';
@@ -37,7 +50,10 @@ const SophiaMetaBlockSchema = z.object({
 
 export { SophiaMetaBlockSchema, SophiaMetaClaimSchema };
 
-export function extractSophiaMetaBlock(text: string): { cleanedText: string; metaBlock: z.infer<typeof SophiaMetaBlockSchema> | null } {
+export function extractSophiaMetaBlock<T extends z.ZodTypeAny = typeof SophiaMetaBlockSchema>(
+  text: string,
+  schema?: T
+): { cleanedText: string; metaBlock: z.infer<T> | null } {
   // Find the sophia-meta fenced block
   const metaMatch = text.match(/```sophia-meta\n?([\s\S]*?)\n?```/);
   if (!metaMatch) {
@@ -46,7 +62,8 @@ export function extractSophiaMetaBlock(text: string): { cleanedText: string; met
 
   try {
     const metaJson = JSON.parse(metaMatch[1]);
-    const validated = SophiaMetaBlockSchema.safeParse(metaJson);
+    const parser = schema ?? SophiaMetaBlockSchema;
+    const validated = parser.safeParse(metaJson);
     if (!validated.success) {
       console.warn('[SOPHIA-META] Failed to validate block:', validated.error);
       return { cleanedText: text, metaBlock: null };
@@ -54,7 +71,7 @@ export function extractSophiaMetaBlock(text: string): { cleanedText: string; met
 
     // Remove the sophia-meta block from the text
     const cleanedText = text.replace(/```sophia-meta\n?([\s\S]*?)\n?```\n?/, '').trim();
-    return { cleanedText, metaBlock: validated.data };
+    return { cleanedText, metaBlock: validated.data as z.infer<T> };
   } catch (err) {
     console.warn('[SOPHIA-META] Failed to parse block:', err instanceof Error ? err.message : err);
     return { cleanedText: text, metaBlock: null };
@@ -80,6 +97,8 @@ export interface EngineCallbacks {
       arguments_retrieved: number;
       retrieval_degraded?: boolean;
       retrieval_degraded_reason?: string;
+      detected_domain?: string;
+      domain_confidence?: 'high' | 'medium' | 'low';
     }
   ): void;
   onError(error: string): void;
@@ -87,6 +106,7 @@ export interface EngineCallbacks {
 
 interface EngineOptions {
   lens?: string;
+  mode?: 'philosophy' | 'agnostic';
 }
 
 async function streamPassWithContinuation(
@@ -200,11 +220,27 @@ export async function runDialecticalEngine(
 ): Promise<void> {
   const startTime = Date.now();
   const queryPreview = query.slice(0, 60).replace(/\n/g, ' ');
-  console.log(`[ENGINE] Starting — query="${queryPreview}" lens=${options?.lens ?? 'none'}`);
+  const engineMode = options?.mode ?? 'philosophy';
+  const isAgnosticMode = engineMode === 'agnostic';
+
+  // ── Domain classification ──────────────────────────────────────────────
+  const domainClassification = isAgnosticMode
+    ? { domain: null, confidence: 'low' as const, scores: {} }
+    : classifyQueryDomain(query);
+  const retrievalDomain = isAgnosticMode ? undefined : getRetrievalDomain(domainClassification);
+  console.log(
+    `[ENGINE] Starting — mode=${engineMode} query="${queryPreview}" lens=${options?.lens ?? 'none'} ` +
+    `domain=${domainClassification.domain ?? 'unknown'} ` +
+    `confidence=${domainClassification.confidence} ` +
+    `retrieval_filter=${retrievalDomain ?? 'none'}`
+  );
+
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
-  // ── Retrieve argument-graph context (ethics domain only for MVP) ────────
+  // ── Retrieve argument-graph context ─────────────────────────────────────
+  // Domain filter applied when classifier is high-confidence and domain has graph data.
+  // Falls back to cross-domain search for uncertain or uningested domains.
   let contextBlock = '';
   let claimsRetrieved = 0;
   let argumentsRetrieved = 0;
@@ -213,7 +249,7 @@ export async function runDialecticalEngine(
 
   try {
     const t0 = Date.now();
-    const retrievalResult = await retrieveContext(query);
+    const retrievalResult = await retrieveContext(query, { domain: retrievalDomain });
     contextBlock = buildContextBlock(retrievalResult);
     claimsRetrieved = retrievalResult.claims.length;
     argumentsRetrieved = retrievalResult.arguments.length;
@@ -256,9 +292,15 @@ export async function runDialecticalEngine(
   }
 
   // Build system prompts with contextual knowledge injected
-  const analysisSystem = getAnalysisSystemPrompt(contextBlock);
-  const critiqueSystem = getCritiqueSystemPrompt(contextBlock);
-  const synthesisSystem = getSynthesisSystemPrompt(contextBlock);
+  const analysisSystem = isAgnosticMode
+    ? getReasoningAnalysisSystemPrompt(contextBlock)
+    : getAnalysisSystemPrompt(contextBlock);
+  const critiqueSystem = isAgnosticMode
+    ? getReasoningCritiqueSystemPrompt(contextBlock)
+    : getCritiqueSystemPrompt(contextBlock);
+  const synthesisSystem = isAgnosticMode
+    ? getReasoningSynthesisSystemPrompt(contextBlock)
+    : getSynthesisSystemPrompt(contextBlock);
 
   // ── HYBRID PARALLELISM: Analysis → Critique (when Analysis ~30% done) → Synthesis ──
   let analysisOutput = '';
@@ -286,7 +328,12 @@ export async function runDialecticalEngine(
       let allSources: GroundingSource[] = [];
 
       const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
-        { role: 'user', content: buildAnalysisUserPrompt(query, options?.lens) }
+        {
+          role: 'user',
+          content: isAgnosticMode
+            ? buildReasoningAnalysisUserPrompt(query, options?.lens)
+            : buildAnalysisUserPrompt(query, options?.lens)
+        }
       ];
 
       while (continuationRound <= 6) {
@@ -319,7 +366,9 @@ export async function runDialecticalEngine(
             critiquePromise = streamPassWithContinuation(
               'critique',
               critiqueSystem,
-              buildCritiqueUserPrompt(query, output + '\n[Analysis in progress...]'),
+              isAgnosticMode
+                ? buildReasoningCritiqueUserPrompt(query, `${output}\n[Analysis in progress...]`)
+                : buildCritiqueUserPrompt(query, `${output}\n[Analysis in progress...]`),
               callbacks
             );
           }
@@ -423,7 +472,9 @@ export async function runDialecticalEngine(
       critiquePromise = streamPassWithContinuation(
         'critique',
         critiqueSystem,
-        buildCritiqueUserPrompt(query, analysisOutput),
+        isAgnosticMode
+          ? buildReasoningCritiqueUserPrompt(query, analysisOutput)
+          : buildCritiqueUserPrompt(query, analysisOutput),
         callbacks
       );
     } else {
@@ -482,7 +533,9 @@ export async function runDialecticalEngine(
     const synthesisResult = await streamPassWithContinuation(
       'synthesis',
       synthesisSystem,
-      buildSynthesisUserPrompt(query, analysisOutput, critiqueOutput),
+      isAgnosticMode
+        ? buildReasoningSynthesisUserPrompt(query, analysisOutput, critiqueOutput)
+        : buildSynthesisUserPrompt(query, analysisOutput, critiqueOutput),
       callbacks
     );
 
@@ -541,7 +594,9 @@ export async function runDialecticalEngine(
     claims_retrieved: claimsRetrieved,
     arguments_retrieved: argumentsRetrieved,
     retrieval_degraded: retrievalDegraded,
-    retrieval_degraded_reason: retrievalDegradedReason
+    retrieval_degraded_reason: retrievalDegradedReason,
+    detected_domain: domainClassification.domain ?? undefined,
+    domain_confidence: domainClassification.domain ? domainClassification.confidence : undefined
   });
 }
 

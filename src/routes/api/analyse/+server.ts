@@ -244,7 +244,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
                     claims_retrieved: retrieval.claims_retrieved,
                     arguments_retrieved: retrieval.arguments_retrieved,
                     retrieval_degraded: retrieval.retrieval_degraded,
-                    retrieval_degraded_reason: retrieval.retrieval_degraded_reason
+                    retrieval_degraded_reason: retrieval.retrieval_degraded_reason,
+                    detected_domain: retrieval.detected_domain,
+                    domain_confidence: retrieval.domain_confidence
                   }
                 : {})
             });

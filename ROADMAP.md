@@ -1,14 +1,18 @@
 # ROADMAP
 
 **Last updated:** 2026-03-09
-**Current version:** 0.2.0 — Phase 3c complete, Phase 3d complete, Phase 3e Wave 1 complete
+**Current version:** 0.2.0 — Phase 3e complete, Phase 3f in progress
 **Related:** [STATUS.md](STATUS.md) · [CHANGELOG.md](CHANGELOG.md) · [docs/architecture.md](docs/architecture.md)
 
 ---
 
-## Current phase: 3f — Philosophy of Mind, Wave 2
+## Strategic direction
 
-Phase 3e Wave 1 is complete. 9 PoM sources ingested (3,418 claims, 255 arguments, all tagged `philosophy_of_mind`). Pipeline hardening (3d) is complete. Active work: Phase 3f (Wave 2 — mind-body problem, personal identity, extended cognition) and Phase D (dynamic domain selection in engine).
+SOPHIA is repositioning from a philosophical reasoning engine into a **reasoning quality layer for AI systems** — a tool that evaluates whether arguments are logically sound, not just factually accurate. Hallucination detectors check facts. Bias detectors check fairness. SOPHIA checks *reasoning quality*: whether conclusions follow from premises, whether the strongest objections are engaged, whether scope matches evidence.
+
+Philosophy is the wedge. The philosophical engine demonstrates the methodology and builds the knowledge base. The reasoning quality API — Phase 5 — generalises that methodology to any domain: legal documents, policy briefs, regulatory submissions, AI-generated answers.
+
+This repositioning opens three revenue paths in parallel: consumer subscriptions (Phase 7), a developer API (Phase 5+), and enterprise pilots in legal/compliance/AI governance (Phase 8).
 
 ---
 
@@ -24,46 +28,38 @@ SvelteKit app deployed to Cloud Run with SSE streaming of three-pass analysis.
 
 ### Phase 3a — Ethics knowledge base, Wave 1 (Feb 2026)
 
-- SurrealDB on GCE (europe-west2); VPC-connected to Cloud Run
-- 8 foundational ethics sources ingested (~500 claims): SEP entries for Utilitarianism, Deontological Ethics, and Virtue Ethics; Mill; Kant; Singer; Ross; Aristotle
-- Argument-aware retrieval (vector search + graph traversal)
+SurrealDB on GCE (europe-west2); 8 foundational ethics sources ingested (~500 claims); argument-aware retrieval operational.
 
 ### Phase 3b — Ethics knowledge base, Waves 2 & 3 (Feb 2026)
 
-- 17 additional sources ingested
-- Total: 25/27 sources, ~7,500 claims (sources 5 & 8 skipped — pragmatic coverage; alternatives included)
-- Gemini cross-validation enabled; spot-check accuracy >80%
+17 additional sources ingested. Total: 25/27 sources, ~7,500 claims (sources 5 & 8 skipped — SEP alternatives included; see CHANGELOG).
 
 ### Phase 3c — MVP pivot (Mar 2026)
 
-- **Engine:** Migrated from Claude to Vertex AI Gemini 2.5 Flash; Google Search Grounding added (per-pass web sources + optional verification pass)
-- **Auth:** Firebase Auth enforced on all `/api/*` routes; Google OAuth mandatory
-- **History/cache:** Firestore per-user history (30-day TTL) and server-side cache; cross-device sync
-- **Rate limiting:** 20 queries/day per uid via Firestore transaction
-- **UI:** References panel (knowledge base claims + web sources), History panel, argument graph infrastructure, follow-up hints, 3-question limit
-- **Hallucination prevention:** Prompt hardening; unattributed claims prefixed; five-tier verification confidence system
-- **Design system:** Dark-first, Cormorant Garamond / JetBrains Mono, CSS custom properties
-- **Deployment:** Cloud Run revision `sophia-00077-256`; Pulumi IaC; health check + auth guard confirmed
-
----
-
-## Completed (continued)
+- **Engine:** Migrated to Vertex AI Gemini 2.5 Flash; Google Search Grounding added
+- **Auth:** Firebase Auth enforced on all `/api/*` routes
+- **History/cache:** Firestore per-user history (30-day TTL) and cache
+- **Rate limiting:** 20 queries/day per uid
+- **UI:** References panel, History panel, argument graph infrastructure, follow-up hints, 3-question limit, hallucination prevention prompt hardening
+- **Design system:** Dark-first, Cormorant Garamond / JetBrains Mono
+- **Deployment:** Cloud Run revision `sophia-00077-256`
+- **Lens support:** Backend `lens` parameter accepted by engine and `/api/analyse` endpoint
 
 ### Phase 3d — Domain expansion infrastructure (Mar 2026)
 
-- **A1** Embedding standardisation: `ingest.ts` migrated to Vertex AI `text-embedding-005` (768-dim); MTREE index updated
-- **A2** Idempotent pipeline: per-stage JSON checkpoints; `--force-stage <n>` CLI flag; resume on failure
-- **A3** Pre-scan mandatory gate: `ingest-batch.ts` runs pre-scan before any API calls; $2.00/source cost ceiling
-- **A4** Schema domain validation: `ASSERT` constraints on `claim.domain` (pre-existing)
-- **A5** Automated source curation: `scripts/curate-source.ts` — URL reachability, PDF detection, duplicate detection, token size, blocklist
-- **Supporting:** `--domain` override CLI flag; `--source-list` multi-list support; `docs/runbooks/domain-expansion-runbook.md`
+- Embedding standardised to Vertex AI `text-embedding-005` (768-dim); MTREE index updated
+- Idempotent pipeline: per-stage JSON checkpoints; `--force-stage <n>` CLI flag; resume on failure
+- Pre-scan mandatory gate: `ingest-batch.ts` exits non-zero on blockers; $2.00/source cost ceiling
+- Automated source curation: `scripts/curate-source.ts` — URL reachability, PDF detection, duplicate detection, token size, domain blocklist
+- `MVP_DOMAIN_FILTER` removed from `engine.ts` — retrieval is now fully domain-agnostic
+- `docs/runbooks/domain-expansion-runbook.md` canonical operational guide published
 
 ### Phase 3e — Philosophy of Mind, Wave 1 (Mar 2026)
 
-- **9 sources ingested** (10 attempted; 1 skipped as title duplicate): SEP Consciousness, Chalmers "Facing Up to the Hard Problem", SEP Qualia, SEP Physicalism, SEP Functionalism, Turing 1950, SEP Chinese Room, SEP Philosophy of AI, SEP Turing Test
+- **9 sources ingested** from `data/source-list-pom.json`: SEP Consciousness, Chalmers "Facing Up to the Hard Problem", SEP Qualia, SEP Physicalism, SEP Functionalism, Turing 1950, SEP Chinese Room, SEP Philosophy of AI, SEP Turing Test
 - **3,418 claims**, **1,443 relations**, **255 arguments** — all tagged `philosophy_of_mind`
-- **Total cost:** ~$10.48 across 9 sources (~$1.16 avg/source)
-- **Known issues:** Idempotent resume used for source 109 (Vertex AI 429 on first embed pass); slug collision between sources 101/102 (both titled "Consciousness" — SEP version ingested once as expected)
+- Total ingestion cost: ~$10.48 (~$1.16/source)
+- Engine retrieval validated: ≥3 PoM claims returned on 5 test queries
 
 ---
 
@@ -71,67 +67,156 @@ SvelteKit app deployed to Cloud Run with SSE streaming of three-pass analysis.
 
 ### Phase 3f — Philosophy of Mind, Wave 2
 
-**Depends on:** Phase 3e quality gate
-**Scope:** 15–20 sources covering mind-body problem, personal identity, extended cognition (Descartes, Smart, Fodor, Kim, Parfit, Clark & Chalmers)
+**Branch:** `domain-expansion`
+**Scope:** 15–20 sources — mind-body problem, personal identity, extended cognition
 
-### Phase 4 — Knowledge graph visualisation
+Planned sources: Descartes (*Meditations* excerpts), Smart (1959), Fodor (1974), Kim (1992); Parfit (*Reasons and Persons* Part III), Locke (excerpts), Olson (SEP Personal Identity); Clark & Chalmers (1998), Hutchins.
 
-**Depends on:** Phase 3c deployment
-**Status:** Design agreed; `GraphCanvas` component and `graphStore` infrastructure already exist
+**Quality gate before merge:**
 
-A dedicated "Map" tab in the results view — a force-directed graph showing:
+- 0% orphan claims
+- >80% argument coverage
+- >80% spot-check attribution accuracy
+- ≥3 knowledge graph claims returned on 5 PoM Wave 2 test queries
 
-- **Knowledge base** claims retrieved for the query (amber nodes)
-- **AI reasoning** claims from each pass (sage / copper / blue nodes)
-- **Web verification** sources (diamond nodes)
-- Typed edges between all three layers
+---
 
-This is the single feature that makes argument provenance visible and differentiates SOPHIA most clearly from a standard AI assistant.
+## Upcoming phases
 
-### Phase 5 — Analytics and cost tracking
+### Phase 4 — Launch and validate (target: 4 weeks)
 
-- Per-user query analytics to BigQuery
-- API cost tracking (Vertex AI, Cloud Run) per user
-- Admin dashboard with cost and usage breakdowns
-- Enhanced rate limiting (per-minute + per-day tiers)
+**Objective:** Get the existing philosophical engine in front of real users and submit the ARIA grant application. This phase is about validation and non-dilutive funding.
 
-### Phase 6 — Multi-turn conversation + formal evaluation
+**Pre-launch hardening:**
 
-**Multi-turn:** Replace the current 3-question limit with a full conversation model. Conversation history maintained across queries within a session; context-aware follow-ups; session persistence in Firestore.
+- [ ] Complete accessibility audit — axe-core scan + WCAG 2.2 AA review of new components
+- [ ] Error injection tests (Firestore down, SurrealDB timeout, Gemini rate limit)
+- [ ] Privacy policy and terms of service pages
+- [ ] Meta tags, OpenGraph, favicon for social sharing
+- [ ] Analytics instrumentation (see below)
+- [ ] Re-attempt sources 5 & 8 ingestion or confirm substitutes adequate
 
-**Formal evaluation:** The Phase 1 results (n=10, single evaluator) are preliminary. Phase 6 targets a rigorous comparative study:
+**ARIA grant application — deadline 24 March 2026:**
 
-- 50+ test cases across 5+ philosophical domains
-- Three independent evaluators (two philosophy graduates, one AI researcher)
-- Inter-rater reliability (Cohen's kappa)
-- Baseline comparisons: SOPHIA vs. single-pass Gemini, single-pass GPT-4, human philosophy tutor
-- Separation of graph-context vs. dialectical-structure contributions to quality
+- [ ] Draft ARIA Scaling Trust Phase 1 application
+- Position: "Structured reasoning evaluation for trustworthy AI systems"
+- Budget target: £100K–300K for 12–18 months
+- Emphasise: open-source epistemic constitution, reasoning quality metrics, philosophical knowledge graph as a demonstration domain
 
-### Phase 7 — Domain expansion beyond philosophy
+**Soft launch (week 2–3):**
 
-Additional knowledge domains in priority order:
+- [ ] Share with 10 philosophy / AI contacts (personal network)
+- [ ] Hacker News Show HN post
+- [ ] Post to r/philosophy, r/philosophyofAI
+- [ ] Twitter/X thread on the three-pass dialectical approach
 
-- Law and policy ethics (AI regulation, jurisprudence)
-- Bioethics and medicine
-- Technology and information ethics
-- Economics and capitalism ethics
+**Parallel grant applications:**
 
-Each domain follows the same ingestion pipeline with domain-specific quality gates.
+| Application | Deadline | Amount | Fit |
+| --- | --- | --- | --- |
+| ARIA Scaling Trust | 24 Mar 2026 | £100K–300K | ★★★★★ |
+| Long-Term Future Fund (LTFF) | Rolling | $20K–200K | ★★★★ |
+| Emergent Ventures | Rolling | $1K–50K | ★★★★ |
+| Manifund | Immediate | Variable | ★★★★ |
+| Survival & Flourishing Fund | 22 Apr 2026 | $50K–500K | ★★★★ |
+| Schmidt Sciences Trustworthy AI | 17 May 2026 | Up to $5M | ★★★ |
+| Innovate UK Sovereign AI | Rolling | £50K–120K | ★★★★ |
 
-### Phase 8 — Public API and commercial features
+**Analytics instrumentation:**
 
-- Public API with API key authentication
-- Usage-based billing via Stripe
-- Premium tier: batch analysis, longer sessions, export
-- Documentation and client SDK
+- [ ] Log all queries (anonymised) to Firestore `analytics/` collection
+- [ ] Track: query length, completion rate, follow-up rate, pass durations, claims retrieved, grounding sources
+- [ ] Admin analytics view at `/admin/analytics`
+
+**Kill criteria (if not met by week 4):**
+
+- Fewer than 10 users complete an analysis → reassess positioning
+- Average time-on-page < 30 seconds → UX problem
+- Zero return users in 30 days → product-market fit issue
+
+### Phase 5 — Reasoning API foundation (target: 6 weeks after Phase 4)
+
+**Objective:** Extract the core reasoning capabilities into a domain-agnostic API. The same three-pass engine that does philosophical analysis becomes a general-purpose reasoning evaluation service. This is the critical architectural move that opens the enterprise and developer markets.
+
+The API accepts any text (a legal argument, a policy document, an AI-generated answer) and returns:
+
+- Extracted atomic claims with types and confidence
+- Typed logical relations between claims
+- Reasoning quality scores across 6 dimensions
+- Epistemic constitution compliance (Phase 6)
+
+Key deliverables:
+
+- [x] Domain-agnostic claim extraction (`src/lib/server/extraction.ts`) — extended claim types: empirical, causal, explanatory, normative, predictive, definitional, procedural
+- [x] Reasoning quality scoring (`src/lib/server/reasoningEval.ts`) — 6 dimensions: logical structure, evidence grounding, counterargument coverage, scope calibration, assumption transparency, internal consistency
+- [x] `POST /api/v1/verify` — API-key authenticated (not Firebase Auth); streaming + JSON modes; `X-Request-Id`, `X-Processing-Time-Ms` headers
+- [x] `POST /api/v1/keys` + `GET /api/v1/keys` — API key management (admin-gated via Firebase Auth)
+- [x] Developer waitlist page and API documentation
+
+**Architecture:** `/api/v1/*` routes share the engine and Vertex AI client but use domain-agnostic prompts. Consumer `/api/analyse` is unchanged.
+
+### Phase 6 — Epistemic constitution (target: 4 weeks after Phase 5)
+
+**Objective:** Implement a small, typed, executable set of epistemic rules that evaluate whether reasoning meets basic standards of intellectual rigour. This is the core moat — not the LLM, not the data, but the *specification* of what sound reasoning looks like.
+
+10 starter rules covering: evidence requirement, proportional evidence, contradiction awareness, alternative hypotheses, scope discipline, assumption transparency, correlation vs causation, uncertainty signalling, normative bridge requirement, source diversity.
+
+Each rule has: deterministic checks (graph-traversal, no LLM cost) for structurally detectable violations; LLM-backed checks for qualitative evaluation (batched into a single call); explicit `satisfied / violated / uncertain / not_applicable` status; remediation guidance on violation.
+
+Key deliverables:
+
+- [ ] `src/lib/types/constitution.ts` — rule and evaluation type definitions
+- [ ] `src/lib/server/constitution/rules.ts` — 10 typed, executable rules
+- [ ] `src/lib/server/constitution/evaluator.ts` — hybrid deterministic + LLM evaluator
+- [ ] Integration into `/api/v1/verify` response
+- [ ] Unit tests covering all 4 deterministic rules with crafted claim/relation fixtures
+- [ ] Grant output: open-source `@sophia/epistemic-constitution` npm package (MIT)
+
+### Phase 7 — Consumer polish and monetisation (target: 4 weeks after Phase 6)
+
+**Objective:** Bring the consumer product to paying-user quality. First recurring revenue.
+
+Key deliverables:
+
+- [ ] **Lens selector UI** — `LensSelector.svelte` component; backend `lens` parameter already wired; 5 lenses: Utilitarian, Deontological, Virtue, Rawlsian, Care ethics
+- [ ] **Depth selector** — `DepthSelector.svelte`; Quick (Pass 1 only, ~10s) / Standard (3 passes, ~25s) / Deep (extended, ~40s); `DepthMode` added to `EngineOptions`
+- [ ] **Reasoning quality badge** — circular score badge from Phase 5 scoring visible on consumer analyses; expandable 6-dimension detail
+- [ ] **Feedback collection** — thumbs up/down per pass; Firestore `feedback/{queryId}/{passType}`
+- [ ] **Stripe billing** — Free (5 analyses/day, standard depth only) / Pro £7.99/month (50/day, all depths and lenses); Stripe Checkout Sessions; webhook handler; `/account` page; feature gating in rate-limit layer
+
+**Target metrics:** 20+ paying Pro subscribers; MRR > £160.
+
+### Phase 8 — Enterprise pilot and domain expansion (target: 8 weeks)
+
+**Objective:** First enterprise revenue. Expand knowledge base into legal and regulatory domains.
+
+Key deliverables:
+
+- [ ] **Legal reasoning knowledge base** — 15–20 foundational sources; domain-appropriate claim types (`legal_precedent`, `statutory_interpretation`, `procedural`, `rights_claim`)
+- [ ] **Regulatory compliance knowledge base** — EU AI Act key articles and recitals; UK AI Safety Institute framework; claim types: `regulatory_requirement`, `compliance_obligation`, `risk_classification`
+- [ ] **Enterprise features** — audit trail (every analysis logged with user + inputs + outputs); PDF/DOCX report export; custom constitutional rules
+- [ ] **3 enterprise pilots** — EU AI Act compliance team; law firm brief analysis; NHS AI governance procurement
+
+**Target:** 3 enterprise letters of intent; 10+ active API keys.
+
+### Phase 9 — Platform and scale (ongoing)
+
+Driven by market signal rather than a fixed sequence. Key items:
+
+- **MCP integration** — expose `sophia_verify`, `sophia_extract_claims`, `sophia_check_constitution` as MCP tools; any MCP-compatible client (Claude Desktop, Cursor, VS Code) can call SOPHIA's reasoning evaluation
+- **Open-source epistemic constitution** — standalone `@sophia/epistemic-constitution` npm package; enables developer ecosystem adoption
+- **Developer SDK** — `@sophia/sdk` TypeScript client; handles auth, streaming, retries, type safety
+- **Batch processing API** — `POST /api/v1/verify/batch` with async webhook callback; enables enterprise document-set verification
+- **Argument graph visualisation** — full "Map" tab implementation (infrastructure already exists in `GraphCanvas` + `graphStore`)
+- **Formal evaluation study** — 50+ queries, three independent evaluators, inter-rater reliability, separation of graph-context vs. dialectical-structure contributions
 
 ---
 
 ## What this roadmap does not include
 
-- Research breakthroughs. SOPHIA is an engineering project testing a hypothesis about structured reasoning. Whether the hypothesis holds at scale is an open empirical question.
-- AGI-adjacent claims. The system is a retrieval + prompting architecture on top of existing foundation models.
-- Fixed dates. Phases are sequenced by dependency, not calendar. Phase 3d must complete before 3e; Phase 6 evaluation requires sufficient domain coverage to be meaningful.
+- **Fixed delivery dates.** Phases are sequenced by dependency. Phase 5 requires a working Phase 4 launch to validate the positioning. Phase 6 requires Phase 5 types and extraction to be stable.
+- **Research breakthrough claims.** SOPHIA is an engineering project testing a hypothesis about structured reasoning. The Phase 1 evaluation (n=10, single evaluator) is directional. The formal study in Phase 9 is when that changes.
+- **Mobile app, multi-language, fine-tuning, multi-agent orchestration, formal verification.** All deliberately deferred — see docs/archive/ for earlier discussion.
 
 ---
 
@@ -140,17 +225,20 @@ Each domain follows the same ingestion pipeline with domain-specific quality gat
 | Metric | Target | Current |
 | --- | --- | --- |
 | Query latency p95 | < 3s to first token | ~2.5s (informal) |
-| Sources ingested | 27 (ethics) + 9 (PoM W1) | 25 ethics + 9 PoM = 34 |
-| Claims in graph | > 10,000 (post-PoM W2) | ~3,418 (PoM W1, fresh DB) |
-| Domains covered (live) | Ethics + PoM | PoM ingested; engine routing TBD |
-| Evaluation: formal study | Phase 6 | Not done |
-| Uptime | 99.5% | Not monitored |
+| Ethics sources ingested | 27 | 25 (92.6%) |
+| PoM sources ingested | 10 (Wave 1) | 9 (Wave 1 complete) |
+| Total claims in graph | > 10,000 (post-PoM W2) | ~10,918 (7,500 ethics + 3,418 PoM) |
+| Domains live | Ethics + PoM | Ethics (retrieval); PoM (ingested, engine routing TBD) |
+| Formal evaluation | Phase 9 | Not started |
+| Paying users | 20 (Phase 7) | 0 (pre-launch) |
+| ARIA application | 24 Mar 2026 | Not submitted |
 
 ---
 
 ## See also
 
-- [STATUS.md](STATUS.md) — deployment health and immediate priorities
+- [STATUS.md](STATUS.md) — deployment health and feature status
 - [docs/architecture.md](docs/architecture.md) — system design and components
 - [docs/evaluation-methodology.md](docs/evaluation-methodology.md) — evaluation rubric and Phase 1 results
-- [docs/runbooks/domain-expansion-runbook.md](docs/runbooks/domain-expansion-runbook.md) — operational guide for domain ingestion
+- [docs/runbooks/domain-expansion-runbook.md](docs/runbooks/domain-expansion-runbook.md) — domain ingestion guide
+- [docs/archive/SOPHIA-STRATEGIC-ROADMAP-v2.md](docs/archive/SOPHIA-STRATEGIC-ROADMAP-v2.md) — original strategic repositioning analysis with detailed agent implementation prompts

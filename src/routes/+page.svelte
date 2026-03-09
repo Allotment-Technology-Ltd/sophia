@@ -55,11 +55,15 @@
   let lastAssistantMsg = $derived(conversation.messages.findLast(m => m.role === 'assistant'));
 
   let isQueryState = $derived(conversation.messages.length === 0 && !conversation.isLoading);
-  // Only enter loading state before the first assistant message arrives;
-  // verification runs in the background while results remain visible.
-  let isInitialLoading = $derived(conversation.isLoading && !lastAssistantMsg);
-  let isLoadingState = $derived(isInitialLoading);
-  let isResultsState = $derived(!!lastAssistantMsg && !isInitialLoading);
+  // Loading screen covers all three analysis passes; verification runs in the
+  // background while results remain visible (currentPass === 'verification').
+  let isLoadingState = $derived(
+    conversation.isLoading && conversation.currentPass !== 'verification'
+  );
+  let isResultsState = $derived(
+    !!lastAssistantMsg &&
+    (!conversation.isLoading || conversation.currentPass === 'verification')
+  );
 
   let completedPasses = $derived.by(() => {
     const passes: string[] = [];
@@ -68,10 +72,6 @@
     if (conversation.currentPasses.synthesis) passes.push('synthesis');
     return passes;
   });
-
-  let hasStreamingContent = $derived(
-    !!(conversation.currentPasses.analysis || conversation.currentPasses.critique || conversation.currentPasses.synthesis)
-  );
 
   let loadingStatusText = $derived(
     conversation.currentPass
@@ -149,7 +149,22 @@
       activeResultPass = conversation.currentPass as 'analysis' | 'critique' | 'synthesis';
     }
   });
+
+  let pageTitle = $derived.by(() => {
+    const lastUser = conversation.messages.findLast(m => m.role === 'user')?.content;
+    if (isLoadingState) return 'Analysing… — SOPHIA';
+    if (isResultsState && !revealed) return 'Analysis complete — SOPHIA';
+    if (lastUser) {
+      const truncated = lastUser.length > 60 ? lastUser.slice(0, 60) + '…' : lastUser;
+      return `${truncated} — SOPHIA`;
+    }
+    return 'SOPHIA — Philosophical Reasoning Engine';
+  });
 </script>
+
+<svelte:head>
+  <title>{pageTitle}</title>
+</svelte:head>
 
 <div class="app-shell">
   <div class="app-body">
@@ -204,7 +219,7 @@
            STATE 2: LOADING — orbital animation + pass tracker
            (transitions to streaming cards as content arrives)
            ═══════════════════════════════════════════════════════════════ -->
-      {#if isLoadingState && !hasStreamingContent}
+      {#if isLoadingState}
         <div out:fly={{ y: -30, duration: 400, easing: quintOut }}>
           <Loading
             currentPass={conversation.currentPass ?? ''}

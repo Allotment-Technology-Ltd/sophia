@@ -13,7 +13,7 @@
 | --- | --- | --- |
 | App (Cloud Run) | **Live** | `sophia-210020077715.europe-west2.run.app` |
 | Database (SurrealDB / GCE) | **Live** | `sophia-db` VM, europe-west2-b, persistent disk |
-| Firebase Auth | **Live** | Google OAuth enforced on all `/api/*` routes |
+| Firebase Auth | **Live** | Google OAuth enforced on consumer/admin APIs; `/api/v1/verify` uses API keys |
 | Firestore | **Live** | Per-user history + rate-limit counters |
 | Health endpoint | **Passing** | `/api/health` → `{ status: healthy, database: connected }` |
 | Auth guard | **Enforced** | `/api/analyse` returns 401 without Bearer token |
@@ -37,6 +37,9 @@
 | Per-user history | Firestore `users/{uid}/queries/{autoId}`, 30-day TTL, cross-device sync |
 | Per-user cache | Firestore cache checked before engine run; cache-hit replays stored events |
 | Rate limiting | 20 queries/day per uid via Firestore transaction; 429 + `Retry-After: 86400` |
+| Reasoning API (`/api/v1/verify`) | **Working** — API key auth, JSON + SSE modes, extraction + reasoning scores |
+| API key management (`/api/v1/keys`) | **Working** — admin-gated create/list/revoke; Firestore-backed hashed keys |
+| Developer waitlist | **Working** — `/api-access` form writes to Firestore `waitlist` |
 | Lens parameter (backend) | `lens` string accepted by engine and `/api/analyse`; affects analysis system prompt |
 | Follow-up hints | Synthesis parsed for `## Further Questions`; up to 3 suggestion pills shown |
 | 3-question limit | Per-topic cap enforced in conversation store |
@@ -60,14 +63,12 @@
 | --- | --- |
 | Lens selector UI (`LensSelector.svelte`) | Phase 7 |
 | Depth selector UI + engine depth mode | Phase 7 |
-| Reasoning quality scoring API (`/api/v1/verify`) | Phase 5 |
 | Epistemic constitution evaluator | Phase 6 |
 | Stripe billing / subscriptions | Phase 7 |
 | Usage analytics | Phase 4 |
 | Privacy policy / terms of service pages | Phase 4 |
 | Multi-turn conversation | Phase 9 |
 | Formal evaluation study | Phase 9 |
-| Public API with API keys | Phase 5 |
 
 ---
 
