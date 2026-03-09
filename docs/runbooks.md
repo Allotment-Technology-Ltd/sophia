@@ -3,6 +3,7 @@
 ## Quick commands
 - Install dependencies: `pnpm install`
 - Start dev server: `pnpm run dev`
+- Start dev server wired to production SurrealDB (auto tunnel + secret): `pnpm run dev:prod-db`
 - Run checks: `pnpm run check` (runs svelte-check + custom scripts if configured)
 
 ## Infra (Pulumi)

@@ -3,27 +3,47 @@ import type { RequestHandler } from './$types';
 import { Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from '$lib/server/firebase-admin';
 import { createApiKey, isAdminUid } from '$lib/server/apiAuth';
+import { problemJson, resolveRequestId } from '$lib/server/problem';
+import { logServerAnalytics } from '$lib/server/analytics';
 
-function requireAdmin(uid: string | undefined): Response | null {
+function getAuthContext(uid: string | undefined): { uid: string; isAdmin: boolean } | Response {
   if (!uid) {
-    return json({ error: 'Authentication required' }, { status: 401 });
+    return problemJson({
+      status: 401,
+      title: 'Authentication required',
+      detail: 'Provide a valid Firebase bearer token.'
+    });
   }
 
-  if (!isAdminUid(uid)) {
-    return json({ error: 'Admin access required' }, { status: 403 });
-  }
-
-  return null;
+  return { uid, isAdmin: isAdminUid(uid) };
 }
 
-export const GET: RequestHandler = async ({ locals, url }) => {
-  const adminError = requireAdmin(locals.user?.uid);
-  if (adminError) return adminError;
+function requestHeaders(requestId: string): HeadersInit {
+  return {
+    'X-Request-Id': requestId
+  };
+}
 
-  const ownerUid = url.searchParams.get('owner_uid');
+export const GET: RequestHandler = async ({ locals, request, url }) => {
+  const requestId = resolveRequestId(request);
+  const auth = getAuthContext(locals.user?.uid);
+  if (auth instanceof Response) return auth;
+
+  const ownerUidParam = url.searchParams.get('owner_uid')?.trim();
+  if (!auth.isAdmin && ownerUidParam && ownerUidParam !== auth.uid) {
+    return problemJson({
+      status: 403,
+      title: 'Forbidden',
+      detail: 'You can only list your own API keys.',
+      requestId
+    });
+  }
+
   let query = adminDb.collection('api_keys').orderBy('created_at', 'desc').limit(100);
-  if (ownerUid) {
-    query = query.where('owner_uid', '==', ownerUid) as typeof query;
+  if (ownerUidParam) {
+    query = query.where('owner_uid', '==', ownerUidParam) as typeof query;
+  } else if (!auth.isAdmin) {
+    query = query.where('owner_uid', '==', auth.uid) as typeof query;
   }
 
   const snapshot = await query.get();
@@ -40,16 +60,28 @@ export const GET: RequestHandler = async ({ locals, url }) => {
       last_used_at: data.last_used_at?.toDate?.()?.toISOString() ?? null,
       usage_count: data.usage_count ?? 0,
       daily_count: data.daily_count ?? 0,
-      daily_quota: data.rate_limit?.daily_quota ?? 100
+      daily_quota: data.rate_limit?.daily_quota ?? 100,
+      daily_reset_at: data.daily_reset_at?.toDate?.()?.toISOString() ?? null
     };
   });
 
-  return json({ keys });
+  await logServerAnalytics({
+    event: 'developer_key_list',
+    uid: auth.uid,
+    request_id: requestId,
+    route: '/api/v1/keys',
+    success: true,
+    status: 200,
+    key_count: keys.length
+  });
+
+  return json({ keys }, { headers: requestHeaders(requestId) });
 };
 
 export const POST: RequestHandler = async ({ locals, request }) => {
-  const adminError = requireAdmin(locals.user?.uid);
-  if (adminError) return adminError;
+  const requestId = resolveRequestId(request);
+  const auth = getAuthContext(locals.user?.uid);
+  if (auth instanceof Response) return auth;
 
   let body: { name?: string; owner_uid?: string; daily_quota?: number };
   try {
@@ -58,13 +90,19 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     body = {};
   }
 
-  const ownerUid = body.owner_uid?.trim() || locals.user?.uid;
-  const name = body.name?.trim() || 'API key';
-  const dailyQuota = Number.isFinite(body.daily_quota) ? Number(body.daily_quota) : 100;
-
-  if (!ownerUid) {
-    return json({ error: 'owner_uid is required' }, { status: 400 });
+  const ownerUid = body.owner_uid?.trim() || auth.uid;
+  if (!auth.isAdmin && ownerUid !== auth.uid) {
+    return problemJson({
+      status: 403,
+      title: 'Forbidden',
+      detail: 'You can only create keys for your own account.',
+      requestId
+    });
   }
+
+  const name = body.name?.trim() || 'API key';
+  const requestedQuota = Number(body.daily_quota);
+  const dailyQuota = Number.isFinite(requestedQuota) && requestedQuota > 0 ? Math.floor(requestedQuota) : 100;
 
   const { rawKey, keyId, keyHash, prefix } = createApiKey();
   const now = Timestamp.now();
@@ -84,19 +122,35 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     }
   });
 
-  return json({
+  await logServerAnalytics({
+    event: 'developer_key_create',
+    uid: auth.uid,
     key_id: keyId,
-    api_key: rawKey,
-    name,
+    request_id: requestId,
+    route: '/api/v1/keys',
+    success: true,
+    status: 200,
     owner_uid: ownerUid,
-    daily_quota: dailyQuota,
-    created_at: now.toDate().toISOString()
+    daily_quota: dailyQuota
   });
+
+  return json(
+    {
+      key_id: keyId,
+      api_key: rawKey,
+      name,
+      owner_uid: ownerUid,
+      daily_quota: dailyQuota,
+      created_at: now.toDate().toISOString()
+    },
+    { headers: requestHeaders(requestId) }
+  );
 };
 
 export const DELETE: RequestHandler = async ({ locals, request, url }) => {
-  const adminError = requireAdmin(locals.user?.uid);
-  if (adminError) return adminError;
+  const requestId = resolveRequestId(request);
+  const auth = getAuthContext(locals.user?.uid);
+  if (auth instanceof Response) return auth;
 
   let keyId = url.searchParams.get('key_id');
 
@@ -110,13 +164,50 @@ export const DELETE: RequestHandler = async ({ locals, request, url }) => {
   }
 
   if (!keyId) {
-    return json({ error: 'key_id is required' }, { status: 400 });
+    return problemJson({
+      status: 400,
+      title: 'Invalid request',
+      detail: 'key_id is required.',
+      requestId
+    });
   }
 
-  await adminDb.collection('api_keys').doc(keyId).update({
+  const keyRef = adminDb.collection('api_keys').doc(keyId);
+  const keyDoc = await keyRef.get();
+  if (!keyDoc.exists) {
+    return problemJson({
+      status: 404,
+      title: 'Not found',
+      detail: 'API key not found.',
+      requestId
+    });
+  }
+
+  const keyData = keyDoc.data();
+  const ownerUid = String(keyData?.owner_uid ?? '');
+  if (!auth.isAdmin && ownerUid !== auth.uid) {
+    return problemJson({
+      status: 403,
+      title: 'Forbidden',
+      detail: 'You can only revoke your own API keys.',
+      requestId
+    });
+  }
+
+  await keyRef.update({
     active: false,
     revoked_at: Timestamp.now()
   });
 
-  return json({ ok: true, key_id: keyId });
+  await logServerAnalytics({
+    event: 'developer_key_revoke',
+    uid: auth.uid,
+    key_id: keyId,
+    request_id: requestId,
+    route: '/api/v1/keys',
+    success: true,
+    status: 200
+  });
+
+  return json({ ok: true, key_id: keyId }, { headers: requestHeaders(requestId) });
 };

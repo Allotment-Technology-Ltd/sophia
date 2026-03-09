@@ -11,12 +11,26 @@
 | [three-pass-engine.md](three-pass-engine.md) | Engine rationale, per-pass contract, example output |
 | [evaluation-methodology.md](evaluation-methodology.md) | Evaluation rubric, Phase 1 results, limitations, planned formal study |
 | [prompts-reference.md](prompts-reference.md) | All LLM prompt templates, organised by pass |
+| [api-development-portal-roadmap.md](api-development-portal-roadmap.md) | Phased API developer portal roadmap (MVP → Gold-Plated) |
 
 ## Operations
 
 | Document | Purpose |
 | --- | --- |
 | [runbooks/domain-expansion-runbook.md](runbooks/domain-expansion-runbook.md) | End-to-end guide for adding a new philosophical domain |
+| [runbooks/zuplo-phase1-runbook.md](runbooks/zuplo-phase1-runbook.md) | Phase 1 setup for Zuplo gateway + PostHog analytics |
+
+## API Contracts
+
+| Document | Purpose |
+| --- | --- |
+| [openapi/sophia-v1.yaml](openapi/sophia-v1.yaml) | OpenAPI 3.1 contract for `POST /api/v1/verify` (Zuplo import) |
+
+## Planning and Strategy
+
+| Document | Purpose |
+| --- | --- |
+| [argument-map-gold-standard-plan.md](argument-map-gold-standard-plan.md) | Gold-standard delivery plan for the Phase 9 argument map experience |
 
 ## Archive
 

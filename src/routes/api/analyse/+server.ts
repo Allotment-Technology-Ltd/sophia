@@ -5,12 +5,13 @@ import type { SSEEvent } from '$lib/types/api';
 import { createHash } from 'node:crypto';
 import { query as dbQuery } from '$lib/server/db';
 import { adminDb } from '$lib/server/firebase-admin';
+import { runVerificationPipeline } from '$lib/server/verification/pipeline';
 
 // Store only replay-relevant events — excludes high-volume pass_chunk events
 const REPLAY_EVENT_TYPES = new Set([
   'pass_start', 'pass_structured', 'pass_complete',
   'sources', 'grounding_sources', 'claims', 'relations',
-  'confidence_summary', 'metadata', 'graph_snapshot'
+  'confidence_summary', 'metadata', 'graph_snapshot', 'constitution_check'
 ]);
 
 const FIRESTORE_CACHE_TTL_DAYS = 30;
@@ -96,6 +97,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   const queryText = query.trim();
   const queryHash = buildQueryHash(queryText, lens);
+  const constitutionInAnalyseEnabled =
+    process.env.ENABLE_CONSTITUTION_IN_ANALYSE?.toLowerCase() === 'true';
 
   let cachedEvents: SSEEvent[] | null = null;
   let cacheHit = false;
@@ -218,8 +221,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           onGroundingSources(pass, sources) {
             sendEventWithCapture({ type: 'grounding_sources', pass, sources });
           },
-          onGraphSnapshot(nodes, edges) {
-            sendEventWithCapture({ type: 'graph_snapshot', nodes, edges });
+          onGraphSnapshot(nodes, edges, meta, version) {
+            sendEventWithCapture({ type: 'graph_snapshot', nodes, edges, meta, version });
           },
           onClaims(pass, claims, relations) {
             sendEventWithCapture({ type: 'claims', pass, claims });
@@ -255,6 +258,31 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             sendEventWithCapture({ type: 'error', message: error });
           }
         }, { lens });
+
+        if (constitutionInAnalyseEnabled) {
+          const constitutionStartedAt = Date.now();
+          const constitutionResult = await runVerificationPipeline(
+            {
+              text: queryText
+            },
+            {
+              includePassOutputs: false
+            }
+          );
+
+          sendEventWithCapture({
+            type: 'constitution_check',
+            constitutional_check: constitutionResult.constitutional_check
+          });
+
+          console.log('[CONSTITUTION][ANALYSE]', {
+            constitution_duration_ms: constitutionResult.constitution_duration_ms,
+            constitution_input_tokens: constitutionResult.constitution_input_tokens,
+            constitution_output_tokens: constitutionResult.constitution_output_tokens,
+            constitution_rule_violations: constitutionResult.constitution_rule_violations,
+            elapsed_ms: Date.now() - constitutionStartedAt
+          });
+        }
 
         // Persist cache only for successful runs (metadata present, no error event)
         const hasErrorEvent = replayEvents.some((event) => event.type === 'error');

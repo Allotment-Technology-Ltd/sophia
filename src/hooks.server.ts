@@ -1,5 +1,6 @@
 import { adminAuth } from '$lib/server/firebase-admin';
 import { checkRateLimit, DAILY_QUERY_LIMIT } from '$lib/server/rateLimit';
+import { problemJson, resolveRequestId } from '$lib/server/problem';
 import type { Handle } from '@sveltejs/kit';
 
 export const handle: Handle = async ({ event, resolve }) => {
@@ -12,11 +13,14 @@ export const handle: Handle = async ({ event, resolve }) => {
     !event.url.pathname.startsWith('/api/v1/verify');
 
   if (isProtectedApi) {
+    const requestId = resolveRequestId(event.request);
     const authHeader = event.request.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
-      return new Response(JSON.stringify({ error: 'Authentication required' }), {
+      return problemJson({
         status: 401,
-        headers: { 'Content-Type': 'application/json' }
+        title: 'Authentication required',
+        detail: 'Provide a valid Firebase bearer token in Authorization header.',
+        requestId
       });
     }
 
@@ -29,10 +33,12 @@ export const handle: Handle = async ({ event, resolve }) => {
         displayName: decoded.name ?? null,
         photoURL: decoded.picture ?? null
       };
-    } catch (error) {
-      return new Response(JSON.stringify({ error: 'Invalid token' }), {
+    } catch {
+      return problemJson({
         status: 401,
-        headers: { 'Content-Type': 'application/json' }
+        title: 'Authentication failed',
+        detail: 'The provided Firebase bearer token is invalid.',
+        requestId
       });
     }
 
@@ -41,18 +47,17 @@ export const handle: Handle = async ({ event, resolve }) => {
       try {
         const { allowed, remaining } = await checkRateLimit(event.locals.user.uid);
         if (!allowed) {
-          return new Response(
-            JSON.stringify({ error: 'Daily query limit reached. Try again tomorrow.' }),
-            {
-              status: 429,
-              headers: {
-                'Content-Type': 'application/json',
-                'X-RateLimit-Limit': String(DAILY_QUERY_LIMIT),
-                'X-RateLimit-Remaining': '0',
-                'Retry-After': '86400',
-              }
+          return problemJson({
+            status: 429,
+            title: 'Rate limit exceeded',
+            detail: 'Daily query limit reached. Try again tomorrow.',
+            requestId,
+            headers: {
+              'X-RateLimit-Limit': String(DAILY_QUERY_LIMIT),
+              'X-RateLimit-Remaining': '0',
+              'Retry-After': '86400'
             }
-          );
+          });
         }
         // Attach remaining count so route handlers can surface it if needed
         event.locals.rateLimitRemaining = remaining;

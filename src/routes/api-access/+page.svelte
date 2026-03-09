@@ -14,6 +14,10 @@
     <p class="mb-10 font-mono text-sm text-sophia-dark-muted">
       Join the developer waitlist for early access to the domain-agnostic reasoning verification API.
     </p>
+    <p class="mb-6 font-mono text-xs text-sophia-dark-muted">
+      Phase 1 developer tooling is now available at
+      <a class="text-sophia-dark-sage underline" href="/developer">/developer</a>.
+    </p>
 
     <form method="POST" class="space-y-5 rounded border border-sophia-dark-border bg-sophia-dark-surface p-6">
       <label class="block">

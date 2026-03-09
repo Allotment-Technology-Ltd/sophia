@@ -44,16 +44,20 @@ export function handleSSEEvent(event: SSEEvent): boolean {
 
     case 'graph_snapshot': {
       console.log('[SSE] Received graph_snapshot:', { nodeCount: event.nodes.length, edgeCount: event.edges.length });
-      graphStore.setGraph(event.nodes, event.edges);
+      graphStore.setGraph(event.nodes, event.edges, event.meta, event.version);
       return true;
     }
 
     case 'pass_start':
+      graphStore.setLoading();
       referencesStore.setPhase(event.pass as 'analysis' | 'critique' | 'synthesis');
       referencesStore.setLive(true);
       return false;
 
     case 'metadata':
+      if (event.retrieval_degraded && graphStore.rawNodes.length === 0) {
+        graphStore.setDegraded(event.retrieval_degraded_reason ?? 'retrieval_degraded');
+      }
       referencesStore.setLive(false);
       referencesStore.setPhase(null);
       return false;

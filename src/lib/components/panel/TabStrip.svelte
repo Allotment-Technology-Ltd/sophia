@@ -1,5 +1,5 @@
 <script lang="ts">
-  export type TabId = 'references' | 'history' | 'settings';
+  export type TabId = 'references' | 'map' | 'history' | 'settings';
 
   export interface Tab {
     id: TabId;
