@@ -1,4 +1,6 @@
 <script lang="ts">
+  import DialecticalTriangle from './DialecticalTriangle.svelte';
+
   interface Props {
     onNew?: () => void;
     onHistory?: () => void;
@@ -9,7 +11,7 @@
 
 <nav class="nav" aria-label="Main navigation">
   <a href="/" class="brand" aria-label="SOPHIA home">
-    <span class="brand-star" aria-hidden="true">✦</span>
+    <DialecticalTriangle mode="logo" size={22} />
     <span class="brand-name">SOPHIA</span>
   </a>
 
@@ -47,11 +49,6 @@
 
   .brand:hover {
     text-decoration: none;
-  }
-
-  .brand-star {
-    color: var(--color-sage);
-    font-size: 0.9rem;
   }
 
   .brand-name {
