@@ -12,8 +12,12 @@ import { GoogleAuth } from 'google-auth-library';
 export const EMBEDDING_MODEL = 'text-embedding-005';
 export const EMBEDDING_DIMENSIONS = 768; // text-embedding-005 native dimension
 
-const PROJECT_ID = process.env.GOOGLE_VERTEX_PROJECT || 
-	process.env.GCP_PROJECT_ID;
+const PROJECT_ID =
+	process.env.GOOGLE_VERTEX_PROJECT ||
+	process.env.GCP_PROJECT_ID ||
+	process.env.GOOGLE_CLOUD_PROJECT ||
+	process.env.GCLOUD_PROJECT ||
+	process.env.VITE_FIREBASE_PROJECT_ID;
 
 const LOCATION = process.env.GOOGLE_VERTEX_LOCATION || 
 	process.env.GCP_LOCATION || 
