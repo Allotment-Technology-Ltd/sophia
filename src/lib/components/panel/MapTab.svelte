@@ -7,6 +7,7 @@
   import { panelStore } from '$lib/stores/panel.svelte';
   import type { GraphEdge, GraphNode } from '$lib/types/api';
   import { trackEvent } from '$lib/utils/analytics';
+  import { formatTraceTag, getNodeTraceTags } from '$lib/utils/graphTrace';
   import { onMount } from 'svelte';
   import type { AnalysisPhase, RelationBundle } from '$lib/types/references';
 
@@ -49,7 +50,10 @@
     'supports',
     'contradicts',
     'responds-to',
-    'depends-on'
+    'depends-on',
+    'qualifies',
+    'assumes',
+    'resolves'
   ];
   const ALL_TIMELINE_PHASES: TimelinePhase[] = ['retrieval', 'analysis', 'critique', 'synthesis'];
   const ALL_CONFIDENCE_BANDS: ConfidenceBand[] = ['high', 'medium', 'low'];
@@ -59,7 +63,10 @@
     supports: 'Supports',
     contradicts: 'Contradicts',
     'responds-to': 'Responds To',
-    'depends-on': 'Depends On'
+    'depends-on': 'Depends On',
+    qualifies: 'Qualifies',
+    assumes: 'Assumes',
+    resolves: 'Resolves'
   };
 
   let containerEl = $state<HTMLDivElement | null>(null);
@@ -79,6 +86,7 @@
   let lensMode = $state<LensMode>('all');
   let densityMode = $state<DensityMode>('beginner');
   let timelinePhase = $state<TimelinePhase>('all');
+  let showRejectedLayer = $state(true);
 
   let passFilter = $state<Set<TimelinePhase>>(new Set(ALL_TIMELINE_PHASES));
   let sourceFilter = $state<Set<string>>(new Set());
@@ -146,8 +154,28 @@
       maxHops: meta?.maxHops ?? 0,
       contextSufficiency: meta?.contextSufficiency ?? 'moderate',
       degraded: meta?.retrievalDegraded ?? false,
-      degradedReason: meta?.retrievalDegradedReason ?? ''
+      degradedReason: meta?.retrievalDegradedReason ?? '',
+      trace: meta?.retrievalTrace
     };
+  });
+
+  const enrichmentExplainability = $derived.by(() => graphStore.enrichmentStatus);
+  const rejectedGhostNodes = $derived.by(() => graphStore.snapshotMeta?.rejectedNodes ?? []);
+  const rejectedGhostEdges = $derived.by(() =>
+    (graphStore.snapshotMeta?.rejectedEdges ?? []).filter((edge) => graphStore.relationFilter.has(edge.type))
+  );
+  const rejectedReasonSummary = $derived.by(() => {
+    const reasonCounts = new Map<string, number>();
+    for (const node of rejectedGhostNodes) {
+      reasonCounts.set(node.reasonCode, (reasonCounts.get(node.reasonCode) ?? 0) + 1);
+    }
+    for (const edge of rejectedGhostEdges) {
+      reasonCounts.set(edge.reasonCode, (reasonCounts.get(edge.reasonCode) ?? 0) + 1);
+    }
+    return [...reasonCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([reason, count]) => `${formatTraceTag(reason)} (${count})`);
   });
 
   const contradictionHotspots = $derived.by(() => {
@@ -501,6 +529,11 @@
     return graphStore.rawNodes.find((node) => node.id === nodeId)?.label ?? nodeId;
   }
 
+  function getNodeTraceSummary(node: GraphNode): string {
+    const tags = getNodeTraceTags(node).slice(0, 5);
+    return tags.length > 0 ? tags.map((tag) => formatTraceTag(tag)).join(' · ') : 'n/a';
+  }
+
   function strongestChain(edgeFilter: (edge: GraphEdge) => boolean): string[] {
     const edges = filteredGraph.edges.filter(edgeFilter);
     if (edges.length === 0) return [];
@@ -717,6 +750,8 @@
   <div class="map-metrics">
     <span>{filteredGraph.nodes.length} nodes</span>
     <span>{filteredGraph.edges.length} edges</span>
+    <span>{rejectedGhostNodes.length} rejected nodes</span>
+    <span>{rejectedGhostEdges.length} rejected edges</span>
     <span>{graphStore.snapshotMeta?.seedNodeIds?.length ?? 0} seed nodes</span>
     <span>sufficiency: {retrievalExplainability.contextSufficiency}</span>
     <span>v{graphStore.snapshotVersion}</span>
@@ -800,6 +835,15 @@
 
     <button type="button" class="preset-btn" onclick={applyBeginnerPreset}>Beginner Preset</button>
     <button type="button" class="preset-btn" onclick={applyExpertPreset}>Expert Preset</button>
+    <button
+      type="button"
+      class="preset-btn"
+      class:is-active={showRejectedLayer}
+      onclick={() => showRejectedLayer = !showRejectedLayer}
+      title="Show candidates considered by retrieval but gated out"
+    >
+      {showRejectedLayer ? 'Hide Rejected Layer' : 'Show Rejected Layer'}
+    </button>
   </div>
 
   <div class="expert-row">
@@ -877,6 +921,9 @@
       <GraphCanvas
         nodes={filteredGraph.nodes}
         edges={filteredGraph.edges}
+        ghostNodes={rejectedGhostNodes}
+        ghostEdges={rejectedGhostEdges}
+        showGhostLayer={showRejectedLayer}
         width={viewportWidth}
         height={viewportHeight}
         {isFullscreen}
@@ -942,10 +989,13 @@
         <p class="insight-row"><strong>Label:</strong> {selectedNode.label}</p>
         <p class="insight-row"><strong>Type:</strong> {selectedNode.type}</p>
         <p class="insight-row"><strong>Phase:</strong> {selectedNode.phase ?? 'unknown'}</p>
+        <p class="insight-row"><strong>Trace tags:</strong> {getNodeTraceSummary(selectedNode)}</p>
         <p class="insight-row"><strong>Traversal depth:</strong> {selectedNode.traversalDepth ?? 'n/a'}</p>
         <p class="insight-row"><strong>Seed/Traversed:</strong> {selectedNode.isSeed ? 'Seed' : selectedNode.isTraversed ? 'Traversed' : 'N/A'}</p>
         <p class="insight-row"><strong>Confidence:</strong> {selectedNode.confidenceBand ?? 'n/a'}</p>
         <p class="insight-row"><strong>Domain:</strong> {selectedNode.domain ?? 'n/a'}</p>
+        <p class="insight-row"><strong>Provenance:</strong> {selectedNode.provenance_id ?? 'n/a'}</p>
+        <p class="insight-row"><strong>Tension cluster:</strong> {selectedNode.unresolved_tension_id ?? 'n/a'}</p>
         <div class="insight-actions">
           <button class="mini-btn" onclick={pinSelectedNode}>{pinnedNodeIds.has(selectedNode.id) ? 'Unpin' : 'Pin'}</button>
           <button class="mini-btn" data-testid="open-in-references" onclick={() => openNodeInReferences(selectedNode.id)}>Open in References</button>
@@ -964,8 +1014,37 @@
       <p class="insight-row">Avg traversal depth: {retrievalExplainability.avgDepth.toFixed(2)}</p>
       <p class="insight-row">Max hops: {retrievalExplainability.maxHops}</p>
       <p class="insight-row">Context sufficiency: {retrievalExplainability.contextSufficiency}</p>
+      <p class="insight-row">Rejected nodes (gated): {rejectedGhostNodes.length}</p>
+      <p class="insight-row">Rejected edges (gated): {rejectedGhostEdges.length}</p>
+      {#if retrievalExplainability.trace}
+        <p class="insight-subtitle">Traversal ledger</p>
+        <p class="insight-row">Seed pool examined: {retrievalExplainability.trace.seedPoolCount}</p>
+        <p class="insight-row">Seeds selected: {retrievalExplainability.trace.selectedSeedCount}</p>
+        <p class="insight-row">Claims discovered by traversal: {retrievalExplainability.trace.traversedClaimCount}</p>
+        <p class="insight-row">Relation candidates checked: {retrievalExplainability.trace.relationCandidateCount}</p>
+        <p class="insight-row">Relations retained: {retrievalExplainability.trace.relationKeptCount}</p>
+        <p class="insight-row">Arguments checked: {retrievalExplainability.trace.argumentCandidateCount}</p>
+        <p class="insight-row">Arguments retained: {retrievalExplainability.trace.argumentKeptCount}</p>
+        <p class="insight-row">Rejected claim candidates: {retrievalExplainability.trace.rejectedClaimCount ?? 0}</p>
+        <p class="insight-row">Rejected relation candidates: {retrievalExplainability.trace.rejectedRelationCount ?? 0}</p>
+      {/if}
+      {#if rejectedReasonSummary.length > 0}
+        <p class="insight-subtitle">Top rejection reasons</p>
+        {#each rejectedReasonSummary as row}
+          <p class="insight-row">{row}</p>
+        {/each}
+      {/if}
       {#if retrievalExplainability.degraded}
         <p class="insight-row warning">Degraded retrieval: {retrievalExplainability.degradedReason || 'unknown'}</p>
+      {/if}
+      {#if enrichmentExplainability}
+        <p class="insight-subtitle">Enrichment gating</p>
+        <p class="insight-row">Status: {enrichmentExplainability.status}</p>
+        <p class="insight-row">Staged candidates: {enrichmentExplainability.stagedCount ?? 0}</p>
+        <p class="insight-row">Promoted to canonical: {enrichmentExplainability.promotedCount ?? 0}</p>
+        {#if enrichmentExplainability.reason}
+          <p class="insight-row">Suppression/decision reason: {enrichmentExplainability.reason}</p>
+        {/if}
       {/if}
     </div>
 
@@ -1053,8 +1132,9 @@
   .map-header p, .map-metrics, .chip-empty, .insight-row, .legend-line {
     margin: 0;
     font-family: var(--font-ui);
-    font-size: var(--text-meta);
-    color: var(--color-dim);
+    font-size: var(--text-ui);
+    color: var(--color-muted);
+    line-height: 1.45;
   }
 
   .map-metrics {
@@ -1075,9 +1155,9 @@
 
   .legend-title, .chip-label, .insight-title, .insight-subtitle {
     font-family: var(--font-ui);
-    font-size: var(--text-meta);
+    font-size: var(--text-ui);
     text-transform: uppercase;
-    color: var(--color-muted);
+    color: var(--color-text);
     letter-spacing: 0.06em;
     margin: 0;
   }
@@ -1095,24 +1175,30 @@
     gap: 6px;
     margin-left: auto;
     font-family: var(--font-ui);
-    font-size: var(--text-meta);
-    color: var(--color-dim);
+    font-size: var(--text-ui);
+    color: var(--color-muted);
   }
 
   .mode-btn, .filter-pill, .preset-btn, .chip-btn, .mini-btn {
     border: 1px solid var(--color-border);
     background: transparent;
-    color: var(--color-dim);
+    color: var(--color-muted);
     border-radius: var(--radius-sm);
     padding: 6px 8px;
     font-family: var(--font-ui);
-    font-size: var(--text-meta);
+    font-size: var(--text-ui);
     text-transform: uppercase;
     letter-spacing: 0.04em;
     cursor: pointer;
+    transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
   }
 
-  .mode-btn.is-active, .chip-btn.is-active, .filter-pill.is-active {
+  .mode-btn:hover, .filter-pill:hover, .preset-btn:hover, .chip-btn:hover, .mini-btn:hover {
+    color: var(--color-text);
+    border-color: var(--color-muted);
+  }
+
+  .mode-btn.is-active, .chip-btn.is-active, .filter-pill.is-active, .preset-btn.is-active {
     color: var(--color-text);
     border-color: var(--color-sage-border);
   }
@@ -1122,7 +1208,7 @@
     align-items: center;
     gap: 6px;
     font-family: var(--font-ui);
-    font-size: var(--text-meta);
+    font-size: var(--text-ui);
     color: var(--color-muted);
   }
 
@@ -1131,8 +1217,8 @@
     border: 1px solid var(--color-border);
     color: var(--color-text);
     font-family: var(--font-ui);
-    font-size: var(--text-meta);
-    padding: 4px 6px;
+    font-size: var(--text-ui);
+    padding: 5px 7px;
   }
 
   .chip-group {
@@ -1167,7 +1253,7 @@
     padding: var(--space-4);
     font-family: var(--font-ui);
     font-size: var(--text-ui);
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .map-panel-guidance {
@@ -1181,7 +1267,7 @@
     gap: 8px;
     color: var(--color-dim);
     font-family: var(--font-ui);
-    font-size: var(--text-meta);
+    font-size: var(--text-ui);
   }
 
   .map-panel-guidance-title {
@@ -1199,7 +1285,7 @@
   .map-empty ol {
     margin: 0;
     padding-left: 18px;
-    font-size: var(--text-meta);
+    font-size: var(--text-ui);
   }
 
   .map-empty.degraded {
@@ -1229,7 +1315,7 @@
   }
 
   .mini-btn {
-    font-size: 0.58rem;
+    font-size: 0.68rem;
     padding: 4px 6px;
   }
 

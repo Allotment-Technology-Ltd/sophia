@@ -26,6 +26,7 @@ This forces the model to engage with genuine philosophical tension rather than p
 - Does NOT resolve tensions or reach a verdict
 
 **Input:** Query + argument-graph context (claims, relations, arguments from the knowledge base)
+**Proposed extension:** Optional lightweight runtime context from user-provided links (`/api/analyse`) to direct the pass without running full ingestion inline.
 
 **Characteristic output features:**
 - Named traditions (Kantian deontology, utilitarian calculus, virtue ethics)
@@ -44,6 +45,7 @@ This forces the model to engage with genuine philosophical tension rather than p
 - Does NOT synthesise or reach conclusions
 
 **Input:** Query + argument-graph context + Pass 1 output
+**Proposed extension:** Critique can use the same lightweight user-link context when present.
 
 **Characteristic output features:**
 - Exposes internal tensions within a position (not just between positions)
@@ -63,6 +65,7 @@ This forces the model to engage with genuine philosophical tension rather than p
 - Cites specific claims from the argument graph where relevant
 
 **Input:** Query + argument-graph context + Pass 1 output + Pass 2 output
+**Proposed extension:** Synthesis incorporates user-link runtime context, while heavy source ingestion is deferred to nightly processing.
 
 **Characteristic output features:**
 - Explicitly tracks which objections are decisive vs. which can be answered
@@ -132,3 +135,4 @@ The Proponent uses this to ground positions in specific thinkers. The Sceptic lo
 - **Token cost**: ~3,000–5,000 input tokens + ~2,000–3,000 output tokens per query
 - **Streaming**: All three passes stream progressively; the user sees Pass 1 completing before Pass 2 starts
 - **Graceful degradation**: If SurrealDB is unavailable, the engine runs without graph context — reasoning quality degrades but the system remains functional
+- **Proposed two-speed source handling**: runtime uses lightweight link intake only; full ingestion for opted-in links runs nightly (02:00 UTC) via deferred batch processing.

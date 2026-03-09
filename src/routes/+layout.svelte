@@ -94,6 +94,19 @@
       : undefined
   );
 
+  let streamingModel = $derived.by(() => {
+    if (!conversation.isLoading || !conversation.currentPass) return undefined;
+    const passModel = conversation.passModels[conversation.currentPass];
+    if (passModel) {
+      return passModel.provider === 'anthropic' ? 'Claude' : 'Gemini';
+    }
+    return conversation.loadingModelProvider === 'anthropic'
+      ? 'Claude'
+      : conversation.loadingModelProvider === 'vertex'
+        ? 'Gemini'
+        : 'Auto';
+  });
+
   let menuDotVisible = $derived(referencesStore.isLive);
 </script>
 
@@ -108,6 +121,7 @@
   <TopBar
     {contextQuery}
     {streamingPass}
+    {streamingModel}
     {menuDotVisible}
     panelOpen={panelStore.open}
     onMenuToggle={() => panelStore.toggle()}

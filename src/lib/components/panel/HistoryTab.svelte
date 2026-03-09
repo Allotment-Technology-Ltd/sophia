@@ -4,6 +4,9 @@
     question: string;
     timestamp: Date;
     passCount: number; // 1–3 passes completed
+    modelProvider?: 'auto' | 'vertex' | 'anthropic';
+    modelId?: string;
+    depthMode?: 'quick' | 'standard' | 'deep';
   }
 
   interface Props {
@@ -63,6 +66,19 @@
               <div class="item-body">
                 <span class="item-question">{entry.question}</span>
                 <span class="item-meta">{formatAge(entry.timestamp)}</span>
+                <span class="item-meta-row">
+                  {#if entry.modelProvider}
+                    <span class="model-chip">
+                      {entry.modelProvider === 'anthropic' ? 'Claude' : entry.modelProvider === 'vertex' ? 'Gemini' : 'Auto'}
+                      {#if entry.modelId}
+                        <span class="model-id">{entry.modelId}</span>
+                      {/if}
+                    </span>
+                  {/if}
+                  {#if entry.depthMode}
+                    <span class="depth-chip">{entry.depthMode}</span>
+                  {/if}
+                </span>
               </div>
             </button>
 
@@ -179,5 +195,34 @@
     font-family: var(--font-ui);
     font-size: var(--text-meta);
     color: var(--color-dim);
+  }
+
+  .item-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .model-chip,
+  .depth-chip {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    padding: 2px 7px;
+    font-family: var(--font-ui);
+    font-size: 0.58rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+    background: var(--color-surface-raised);
+    gap: 6px;
+  }
+
+  .model-id {
+    color: var(--color-dim);
+    font-size: 0.54rem;
+    text-transform: none;
+    letter-spacing: 0;
   }
 </style>

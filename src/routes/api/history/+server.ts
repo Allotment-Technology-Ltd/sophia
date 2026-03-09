@@ -7,6 +7,9 @@ type HistoryEntry = {
   question: string;
   timestamp: string; // ISO string
   passCount: number;
+  modelProvider?: 'auto' | 'vertex' | 'anthropic';
+  modelId?: string;
+  depthMode?: 'quick' | 'standard' | 'deep';
 };
 
 export const GET: RequestHandler = async ({ locals }) => {
@@ -27,12 +30,22 @@ export const GET: RequestHandler = async ({ locals }) => {
       const data = doc.data();
       const events = Array.isArray(data.events) ? data.events : [];
       const passCount = events.filter((e: { type: string }) => e.type === 'pass_complete').length;
+      const metadataEvent = events.find((e: { type?: string }) => e.type === 'metadata') as
+        | {
+            selected_model_provider?: 'auto' | 'vertex' | 'anthropic';
+            selected_model_id?: string;
+            depth_mode?: 'quick' | 'standard' | 'deep';
+          }
+        | undefined;
 
       return {
         id: doc.id,
         question: data.query ?? '',
         timestamp: data.createdAt?.toDate?.()?.toISOString() ?? new Date().toISOString(),
         passCount: Math.max(1, passCount),
+        modelProvider: data.model_provider ?? metadataEvent?.selected_model_provider ?? undefined,
+        modelId: data.model_id ?? metadataEvent?.selected_model_id ?? undefined,
+        depthMode: data.depth_mode ?? metadataEvent?.depth_mode ?? undefined
       };
     });
 

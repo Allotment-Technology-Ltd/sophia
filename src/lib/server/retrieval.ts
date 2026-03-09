@@ -52,11 +52,44 @@ export interface RetrievedArgument {
 	key_premises: string[];
 }
 
+export type RejectedClaimReasonCode = 'seed_pool_pruned' | 'duplicate_traversal' | 'confidence_gate';
+export type RejectedRelationReasonCode = 'duplicate_relation' | 'missing_endpoint';
+
+export interface RejectedClaimCandidate {
+	id: string;
+	text: string;
+	source_title: string;
+	confidence?: number;
+	reason_code: RejectedClaimReasonCode;
+	considered_in: 'seed_pool' | 'traversal';
+	anchor_claim_id?: string;
+}
+
+export interface RejectedRelationCandidate {
+	from_claim_id: string;
+	to_claim_id: string;
+	relation_type: string;
+	reason_code: RejectedRelationReasonCode;
+	strength?: string;
+	note?: string;
+}
+
 export interface RetrievalResult {
 	claims: RetrievedClaim[];
 	relations: RetrievedRelation[];
 	arguments: RetrievedArgument[];
 	seed_claim_ids: string[];
+	trace?: {
+		seed_pool_count: number;
+		selected_seed_count: number;
+		traversed_claim_count: number;
+		relation_candidate_count: number;
+		relation_kept_count: number;
+		argument_candidate_count: number;
+		argument_kept_count: number;
+		rejected_claims?: RejectedClaimCandidate[];
+		rejected_relations?: RejectedRelationCandidate[];
+	};
 	degraded: boolean;
 	degraded_reason?: string;
 }
@@ -135,6 +168,15 @@ export async function retrieveContext(
 		};
 
 		let seedClaims: SeedRow[];
+		let seedPoolCount = 0;
+		const rejectedClaimsByKey = new Map<string, RejectedClaimCandidate>();
+		const rejectedRelations: RejectedRelationCandidate[] = [];
+
+		const addRejectedClaim = (candidate: RejectedClaimCandidate): void => {
+			const key = `${candidate.id}|${candidate.reason_code}`;
+			if (rejectedClaimsByKey.has(key)) return;
+			rejectedClaimsByKey.set(key, candidate);
+		};
 		try {
 			console.log('[RETRIEVAL] Starting vector search for topK=', topK);
 			seedClaims = await query<SeedRow[]>(
@@ -154,7 +196,7 @@ export async function retrieveContext(
 					WHERE embedding <|${knnPool}|> $query_embedding
 				)
 				${postWhere}
-				LIMIT ${topK}`,
+				LIMIT ${knnPool}`,
 				{
 					query_embedding: queryEmbedding,
 					...(domain ? { domain } : {}),
@@ -162,6 +204,7 @@ export async function retrieveContext(
 				}
 			);
 			console.log('[RETRIEVAL] ✓ Vector search returned:', seedClaims?.length || 0, 'claims');
+			seedPoolCount = seedClaims?.length || 0;
 		} catch (dbErr) {
 			if (isDatabaseUnavailable(dbErr)) {
 				console.warn('[RETRIEVAL] Database unavailable during seed retrieval');
@@ -179,10 +222,48 @@ export async function retrieveContext(
 			return EMPTY_RESULT;
 		}
 
+		const seedPool = [...seedClaims];
+
+		// Diversity-aware seed selection: prefer source variety before filling by rank.
+		// This reduces flat neighborhoods dominated by one source.
+		if (seedClaims.length > 1) {
+			const diverse: SeedRow[] = [];
+			const seenSources = new Set<string>();
+			for (const claim of seedClaims) {
+				const sourceKey = claim.source_title || 'unknown';
+				if (!seenSources.has(sourceKey)) {
+					diverse.push(claim);
+					seenSources.add(sourceKey);
+				}
+				if (diverse.length >= topK) break;
+			}
+			if (diverse.length < topK) {
+				for (const claim of seedClaims) {
+					if (diverse.includes(claim)) continue;
+					diverse.push(claim);
+					if (diverse.length >= topK) break;
+				}
+			}
+			seedClaims = diverse.slice(0, topK);
+		}
+
 		console.log(`[RETRIEVAL] Found ${seedClaims.length} seed claims`);
 		const seedClaimIds = seedClaims.map((seed) =>
 			typeof seed.id === 'object' ? String(seed.id) : seed.id
 		);
+		const selectedSeedIds = new Set(seedClaimIds);
+		for (const candidate of seedPool) {
+			const candidateId = typeof candidate.id === 'object' ? String(candidate.id) : candidate.id;
+			if (selectedSeedIds.has(candidateId)) continue;
+			addRejectedClaim({
+				id: candidateId,
+				text: candidate.text,
+				source_title: candidate.source_title ?? 'Unknown',
+				confidence: candidate.confidence,
+				reason_code: 'seed_pool_pruned',
+				considered_in: 'seed_pool'
+			});
+		}
 
 		// ── Step 3: Graph traversal for each seed claim ──────────────
 		// Collect all claim IDs and argument IDs discovered via traversal
@@ -252,7 +333,6 @@ export async function retrieveContext(
 					if (!claims || !Array.isArray(claims)) return;
 					for (const c of claims) {
 						const cId = typeof c.id === 'object' ? String(c.id) : c.id;
-						if (allGraphClaims.has(cId)) continue; // already seen
 
 						// Resolve source fields — may be nested object or record link
 						let sourceTitle = 'Unknown';
@@ -260,6 +340,18 @@ export async function retrieveContext(
 						if (c.source && typeof c.source === 'object' && 'title' in c.source) {
 							sourceTitle = (c.source as { title: string }).title;
 							sourceAuthor = (c.source as { author: string[] }).author ?? [];
+						}
+						if (allGraphClaims.has(cId)) {
+							addRejectedClaim({
+								id: cId,
+								text: c.text,
+								source_title: sourceTitle,
+								confidence: c.confidence,
+								reason_code: 'duplicate_traversal',
+								considered_in: 'traversal',
+								anchor_claim_id: seedId
+							});
+							continue; // already seen
 						}
 
 						allGraphClaims.set(cId, {
@@ -306,6 +398,8 @@ export async function retrieveContext(
 		// ── Step 5: Resolve relations between claims in result set ───
 		const relations: RetrievedRelation[] = [];
 		const claimIds = claims.map((c) => c.id);
+		let relationCandidateCount = 0;
+		const keptRelationKeys = new Set<string>();
 
 		if (claimIds.length >= 2) {
 			type RelRow = {
@@ -334,14 +428,40 @@ export async function retrieveContext(
 						{ ids: claimIds, table }
 					);
 
-					if (rels && Array.isArray(rels)) {
-						for (const rel of rels) {
-							const fromId = typeof rel.in === 'object' ? String(rel.in) : rel.in;
-							const toId = typeof rel.out === 'object' ? String(rel.out) : rel.out;
-							const fromIdx = claimIdToIndex.get(fromId);
-							const toIdx = claimIdToIndex.get(toId);
+						if (rels && Array.isArray(rels)) {
+							relationCandidateCount += rels.length;
+							for (const rel of rels) {
+								const fromId = typeof rel.in === 'object' ? String(rel.in) : rel.in;
+								const toId = typeof rel.out === 'object' ? String(rel.out) : rel.out;
+								const fromIdx = claimIdToIndex.get(fromId);
+								const toIdx = claimIdToIndex.get(toId);
 
-							if (fromIdx !== undefined && toIdx !== undefined) {
+								if (fromIdx === undefined || toIdx === undefined) {
+									rejectedRelations.push({
+										from_claim_id: fromId,
+										to_claim_id: toId,
+										relation_type: table,
+										reason_code: 'missing_endpoint',
+										strength: rel.strength,
+										note: rel.note
+									});
+									continue;
+								}
+
+								const relationKey = `${fromIdx}|${toIdx}|${table}`;
+								if (keptRelationKeys.has(relationKey)) {
+									rejectedRelations.push({
+										from_claim_id: fromId,
+										to_claim_id: toId,
+										relation_type: table,
+										reason_code: 'duplicate_relation',
+										strength: rel.strength,
+										note: rel.note
+									});
+									continue;
+								}
+
+								keptRelationKeys.add(relationKey);
 								relations.push({
 									from_index: fromIdx,
 									to_index: toIdx,
@@ -351,8 +471,7 @@ export async function retrieveContext(
 								});
 							}
 						}
-					}
-				} catch (relErr) {
+					} catch (relErr) {
 					console.warn(
 						`[RETRIEVAL] Failed to query ${table} relations:`,
 						relErr instanceof Error ? relErr.message : relErr
@@ -444,6 +563,17 @@ export async function retrieveContext(
 			relations,
 			arguments: arguments_,
 			seed_claim_ids: seedClaimIds,
+			trace: {
+				seed_pool_count: seedPoolCount,
+				selected_seed_count: seedClaimIds.length,
+				traversed_claim_count: Math.max(claims.length - seedClaimIds.length, 0),
+				relation_candidate_count: relationCandidateCount,
+				relation_kept_count: relations.length,
+				argument_candidate_count: argumentIds.size,
+				argument_kept_count: arguments_.length,
+				rejected_claims: Array.from(rejectedClaimsByKey.values()).slice(0, 60),
+				rejected_relations: rejectedRelations.slice(0, 80)
+			},
 			degraded: false
 		};
 	} catch (err) {

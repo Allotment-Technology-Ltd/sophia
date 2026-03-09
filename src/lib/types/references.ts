@@ -3,7 +3,14 @@ export type AnalysisPhase = 'analysis' | 'critique' | 'synthesis';
 
 export type BadgeVariant = 'thesis' | 'premise' | 'objection' | 'response' | 'definition' | 'empirical';
 
-export type RelationType = 'supports' | 'contradicts' | 'responds-to' | 'depends-on';
+export type RelationType =
+  | 'supports'
+  | 'contradicts'
+  | 'responds-to'
+  | 'depends-on'
+  | 'qualifies'
+  | 'assumes'
+  | 'resolves';
 
 export interface Claim {
   id: string;

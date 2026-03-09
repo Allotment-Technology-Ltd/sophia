@@ -3,6 +3,8 @@
     mode: 'logo' | 'loading' | 'complete';
     currentPass?: string | null;
     completedPasses?: string[];
+    depthMode?: 'quick' | 'standard' | 'deep';
+    completionReady?: boolean;
     size?: number;
     onReveal?: () => void;
   }
@@ -11,6 +13,8 @@
     mode,
     currentPass = null,
     completedPasses = [],
+    depthMode = 'standard',
+    completionReady = false,
     size = 240,
     onReveal,
   }: Props = $props();
@@ -23,8 +27,11 @@
 
   // Edge lengths in SVG units
   const LEN_AC = Math.sqrt(39 ** 2 + 67 ** 2); // A→C ≈ 77.52
-  const LEN_CS = 78;                             // C→S
-  const LEN_SA = LEN_AC;                         // S→A ≈ 77.52
+  const LEN_CS = 78; // C→S
+  const LEN_SA = LEN_AC; // S→A ≈ 77.52
+  const LEN_AO = 45; // A→O
+  const LEN_CO = Math.sqrt(39 ** 2 + 22 ** 2); // C→O ≈ 44.78
+  const LEN_SO = LEN_CO; // S→O ≈ 44.78
 
   // Pass state
   const isAnalysisActive  = $derived(currentPass === 'analysis');
@@ -35,50 +42,71 @@
   const isCritiqueDone  = $derived(completedPasses.includes('critique'));
   const isSynthesisDone = $derived(completedPasses.includes('synthesis'));
 
-  // Edge highlights are gated on completed transitions, not active-node start.
+  const isQuickDepth = $derived(depthMode === 'quick');
+
+  // Edge highlights are gated on completed transitions.
   const showAC = $derived(
     mode === 'logo' ||
-    mode === 'complete' ||
-    ((isAnalysisDone || currentPass === 'critique' || currentPass === 'synthesis') && currentPass !== 'analysis')
+    (!isQuickDepth && (
+      mode === 'complete' ||
+      isAnalysisDone ||
+      currentPass === 'critique' ||
+      currentPass === 'synthesis'
+    ))
   );
   const showCS = $derived(
     mode === 'logo' ||
-    mode === 'complete' ||
-    ((isCritiqueDone || currentPass === 'synthesis') && currentPass !== 'critique')
+    (!isQuickDepth && (mode === 'complete' || isCritiqueDone))
   );
   const showSA = $derived(
     mode === 'logo' ||
-    mode === 'complete' ||
-    (isSynthesisDone && currentPass !== 'synthesis')
+    (!isQuickDepth && (mode === 'complete' || isSynthesisDone))
   );
+  const showAO = $derived(mode === 'logo' || mode === 'complete' || isAnalysisDone);
+  const showCO = $derived(mode === 'logo' || mode === 'complete' || isCritiqueDone);
+  const showSO = $derived(mode === 'logo' || mode === 'complete' || isSynthesisDone);
 
   // Edge offsets: length = hidden, 0 = fully drawn
   const edgeACOffset = $derived(showAC ? 0 : LEN_AC);
   const edgeCSOffset = $derived(showCS ? 0 : LEN_CS);
   const edgeSAOffset = $derived(showSA ? 0 : LEN_SA);
+  const edgeAOOffset = $derived(showAO ? 0 : LEN_AO);
+  const edgeCOOffset = $derived(showCO ? 0 : LEN_CO);
+  const edgeSOOffset = $derived(showSO ? 0 : LEN_SO);
 
-  // Node opacity: 0.2 idle, 1 active, 0.65 done, 0.6 logo
+  // Node opacity: 0.25 idle, 1 active, 0.82 done, 0.6 logo
   const opacityA = $derived(
-    mode === 'logo'     ? 0.6
-    : mode === 'complete'   ? 0.85
-    : isAnalysisActive  ? 1
-    : isAnalysisDone    ? 0.65
-    : 0.2
+    mode === 'logo' ? 0.6
+      : mode === 'complete'
+        ? (isQuickDepth ? (isAnalysisDone ? 0.95 : 0.25) : 0.9)
+        : isAnalysisActive ? 1
+          : isAnalysisDone ? 0.82
+            : 0.25
   );
   const opacityC = $derived(
-    mode === 'logo'    ? 0.6
-    : mode === 'complete'  ? 0.85
-    : isCritiqueActive ? 1
-    : isCritiqueDone   ? 0.65
-    : 0.2
+    mode === 'logo' ? 0.6
+      : mode === 'complete'
+        ? (isQuickDepth ? 0.25 : 0.9)
+        : isCritiqueActive ? 1
+          : isCritiqueDone ? 0.82
+            : 0.25
   );
   const opacityS = $derived(
-    mode === 'logo'     ? 0.6
-    : mode === 'complete'   ? 0.85
-    : isSynthesisActive ? 1
-    : isSynthesisDone   ? 0.65
-    : 0.2
+    mode === 'logo' ? 0.6
+      : mode === 'complete'
+        ? (isQuickDepth ? 0.25 : 0.9)
+        : isSynthesisActive ? 1
+          : isSynthesisDone ? 0.82
+            : 0.25
   );
+  const isCenterLit = $derived(mode === 'complete' || completionReady);
+  const centerOpacity = $derived(
+    mode === 'logo' ? 0.28
+      : mode === 'complete' ? 0.95
+        : isCenterLit ? 0.82
+          : 0.35
+  );
+  const centerFill = $derived(isCenterLit ? 'var(--color-amber)' : 'var(--color-border)');
 
   let hovering = $state(false);
 
@@ -96,6 +124,7 @@
 
 <div class="tri-wrap">
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <svg
     role={mode === 'complete' ? 'button' : 'img'}
     aria-label={mode === 'complete'
@@ -149,30 +178,53 @@
       </filter>
     </defs>
 
-    <!-- ── Triangle skeleton (always visible in loading/complete/logo) ───── -->
+    <!-- ── Triangle skeleton (always visible) ─────────────────────────────── -->
     <line
       class="edge-skeleton"
       x1="0" y1="-45" x2="39" y2="22"
-      stroke="var(--color-sage)"
+      stroke="var(--color-border)"
       stroke-width="0.8"
       stroke-linecap="round"
     />
     <line
       class="edge-skeleton"
       x1="39" y1="22" x2="-39" y2="22"
-      stroke="var(--color-copper)"
+      stroke="var(--color-border)"
       stroke-width="0.8"
       stroke-linecap="round"
     />
     <line
       class="edge-skeleton"
       x1="-39" y1="22" x2="0" y2="-45"
-      stroke="var(--color-blue)"
+      stroke="var(--color-border)"
       stroke-width="0.8"
       stroke-linecap="round"
     />
 
-    <!-- ── Active edge highlights (light up on pass completion) ──────────── -->
+    <!-- Internal skeleton stays visible through all states -->
+    <line
+      class="internal-skeleton"
+      x1="0" y1="-45" x2="0" y2="0"
+      stroke="var(--color-border)"
+      stroke-width="0.6"
+      stroke-linecap="round"
+    />
+    <line
+      class="internal-skeleton"
+      x1="39" y1="22" x2="0" y2="0"
+      stroke="var(--color-border)"
+      stroke-width="0.6"
+      stroke-linecap="round"
+    />
+    <line
+      class="internal-skeleton"
+      x1="-39" y1="22" x2="0" y2="0"
+      stroke="var(--color-border)"
+      stroke-width="0.8"
+      stroke-linecap="round"
+    />
+
+    <!-- ── Colored edges draw in when each pass completes ─────────────────── -->
 
     <!-- A→C (sage / analysis) -->
     <line
@@ -207,17 +259,34 @@
       stroke-dashoffset={edgeSAOffset}
     />
 
-    <!-- ── Convergence lines (complete mode only) ─────────────── -->
-    {#if mode === 'complete'}
-      <line class="conv-line" x1="0" y1="-45" x2="0" y2="0"
-        stroke="var(--color-sage)" stroke-width="0.5" stroke-opacity="0.55" />
-      <line class="conv-line" x1="39" y1="22" x2="0" y2="0"
-        stroke="var(--color-copper)" stroke-width="0.5" stroke-opacity="0.55"
-        style="animation-delay: 0.15s" />
-      <line class="conv-line" x1="-39" y1="22" x2="0" y2="0"
-        stroke="var(--color-blue)" stroke-width="0.5" stroke-opacity="0.55"
-        style="animation-delay: 0.3s" />
-    {/if}
+    <!-- A→O / C→O / S→O colored draws -->
+    <line
+      class="edge edge-inner"
+      x1="0" y1="-45" x2="0" y2="0"
+      stroke="var(--color-sage)"
+      stroke-width="0.6"
+      stroke-linecap="round"
+      stroke-dasharray={LEN_AO}
+      stroke-dashoffset={edgeAOOffset}
+    />
+    <line
+      class="edge edge-inner"
+      x1="39" y1="22" x2="0" y2="0"
+      stroke="var(--color-copper)"
+      stroke-width="0.6"
+      stroke-linecap="round"
+      stroke-dasharray={LEN_CO}
+      stroke-dashoffset={edgeCOOffset}
+    />
+    <line
+      class="edge edge-inner"
+      x1="-39" y1="22" x2="0" y2="0"
+      stroke="var(--color-blue)"
+      stroke-width="0.6"
+      stroke-linecap="round"
+      stroke-dasharray={LEN_SO}
+      stroke-dashoffset={edgeSOOffset}
+    />
 
     <!-- ── Nodes ───────────────────────────────────────────────── -->
 
@@ -225,30 +294,33 @@
     <circle
       class="node"
       class:node-active={isAnalysisActive}
+      class:node-lit={isAnalysisDone || (mode === 'complete' && !isQuickDepth)}
       cx="0" cy="-45" r="4"
       fill="var(--color-sage)"
       opacity={opacityA}
-      filter={isAnalysisActive ? 'url(#glow-sage-dt)' : undefined}
+      filter={isAnalysisActive || isAnalysisDone || (mode === 'complete' && !isQuickDepth) ? 'url(#glow-sage-dt)' : undefined}
     />
 
     <!-- C — Critique (bottom-right, copper) -->
     <circle
       class="node"
       class:node-active={isCritiqueActive}
+      class:node-lit={isCritiqueDone || (mode === 'complete' && !isQuickDepth)}
       cx="39" cy="22" r="4"
       fill="var(--color-copper)"
       opacity={opacityC}
-      filter={isCritiqueActive ? 'url(#glow-copper-dt)' : undefined}
+      filter={isCritiqueActive || isCritiqueDone || (mode === 'complete' && !isQuickDepth) ? 'url(#glow-copper-dt)' : undefined}
     />
 
     <!-- S — Synthesis (bottom-left, blue) -->
     <circle
       class="node"
       class:node-active={isSynthesisActive}
+      class:node-lit={isSynthesisDone || (mode === 'complete' && !isQuickDepth)}
       cx="-39" cy="22" r="4"
       fill="var(--color-blue)"
       opacity={opacityS}
-      filter={isSynthesisActive ? 'url(#glow-blue-dt)' : undefined}
+      filter={isSynthesisActive || isSynthesisDone || (mode === 'complete' && !isQuickDepth) ? 'url(#glow-blue-dt)' : undefined}
     />
 
     <!-- Labels: single-letter in loading/complete, hidden in logo -->
@@ -261,15 +333,15 @@
         fill="var(--color-blue)" opacity={opacityS}>S</text>
     {/if}
 
-    <!-- Centre dot (complete mode) -->
-    {#if mode === 'complete'}
-      <circle
-        class="centre-dot"
-        cx="0" cy="0" r="5"
-        fill="var(--color-amber)"
-        filter="url(#glow-amber-dt)"
-      />
-    {/if}
+    <!-- Centre dot skeleton always visible -->
+    <circle
+      class="centre-dot"
+      class:lit={isCenterLit}
+      cx="0" cy="0" r="5"
+      fill={centerFill}
+      opacity={centerOpacity}
+      filter={isCenterLit ? 'url(#glow-amber-dt)' : undefined}
+    />
   </svg>
 
   {#if mode === 'complete'}
@@ -294,14 +366,21 @@
     cursor: pointer;
   }
 
-  /* Edge draw-in transition */
   .edge {
-    transition: stroke-dashoffset 1.5s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: stroke-dashoffset 1.2s cubic-bezier(0.4, 0, 0.2, 1);
     opacity: 0.95;
   }
 
   .edge-skeleton {
-    opacity: 0.2;
+    opacity: 0.4;
+  }
+
+  .internal-skeleton {
+    opacity: 0.36;
+  }
+
+  .edge-inner {
+    opacity: 0.85;
   }
 
   /* Hover wobble on edges in complete mode */
@@ -310,21 +389,23 @@
   }
 
   .node {
-    transition: opacity 0.6s ease;
+    transition: opacity 0.6s ease, transform 0.4s ease;
+  }
+
+  .node-lit {
+    transform: scale(1.03);
   }
 
   .node-active {
-    animation: nodeGlow 2s ease-in-out infinite;
-  }
-
-  /* Convergence lines draw in on mount */
-  .conv-line {
-    stroke-dasharray: 50;
-    animation: convDraw 0.7s cubic-bezier(0.4, 0, 0.2, 1) both;
+    animation: nodeGlow 1.8s ease-in-out infinite;
   }
 
   .centre-dot {
-    animation: centerPulse 2.5s ease-in-out infinite;
+    transition: opacity 0.4s ease, fill 0.4s ease;
+  }
+
+  .centre-dot.lit {
+    animation: centerPulse 2.4s ease-in-out infinite;
   }
 
   .lbl {
@@ -347,19 +428,28 @@
 
   @keyframes nodeGlow {
     0%, 100% { opacity: 1; }
-    50%       { opacity: 0.65; }
+    50% { opacity: 0.75; }
   }
 
-  @keyframes convDraw {
-    from { stroke-dashoffset: 50; }
-    to   { stroke-dashoffset: 0; }
+  @keyframes centerPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.08); }
+  }
+
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes edgeWobble {
+    0%, 100% { opacity: 0.95; }
+    50% { opacity: 0.78; }
   }
 
   @media (prefers-reduced-motion: reduce) {
     .edge                              { transition: none; }
     .node-active                       { animation: none; }
     .centre-dot                        { animation: none; }
-    .conv-line                         { animation: none; stroke-dashoffset: 0; }
     .tri-svg.is-complete:hover .edge   { animation: none; }
     .reveal-hint                        { animation: none; }
   }

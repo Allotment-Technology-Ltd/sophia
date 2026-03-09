@@ -42,6 +42,20 @@ vi.mock('$lib/server/verification/pipeline', () => ({
   }))
 }));
 
+vi.mock('$lib/server/enrichment/pipeline', () => ({
+  runDepthEnrichment: vi.fn(async () => ({
+    status: 'staged',
+    reason: undefined,
+    stagedCount: 2,
+    promotedCount: 0,
+    queryRunId: 'run:test',
+    snapshotId: 'snapshot:test',
+    parentSnapshotId: 'snapshot:parent',
+    snapshotNodes: [],
+    snapshotEdges: []
+  }))
+}));
+
 vi.mock('$lib/server/db', () => ({
   query: vi.fn(async () => [])
 }));
@@ -96,6 +110,7 @@ describe('/api/analyse constitution flag', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.ENABLE_CONSTITUTION_IN_ANALYSE;
+    delete process.env.ENABLE_DEPTH_ENRICHMENT;
   });
 
   it('does not emit constitution_check when flag is disabled', async () => {
@@ -128,5 +143,36 @@ describe('/api/analyse constitution flag', () => {
     const constitutionEvent = events.find((event) => event.type === 'constitution_check');
     expect(constitutionEvent).toBeTruthy();
     expect(constitutionEvent.constitutional_check.rules_evaluated).toBe(10);
+  });
+
+  it('rejects invalid manual domain payloads', async () => {
+    const request = new Request('http://localhost/api/analyse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: 'test query',
+        domain_mode: 'manual'
+      })
+    });
+
+    const response = await POST({ request, locals: { user: null } } as never);
+    expect(response.status).toBe(400);
+  });
+
+  it('emits enrichment_status when depth enrichment is enabled', async () => {
+    process.env.ENABLE_DEPTH_ENRICHMENT = 'true';
+
+    const request = new Request('http://localhost/api/analyse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'test query' })
+    });
+
+    const response = await POST({ request, locals: { user: null } } as never);
+    const events = await readSseEvents(response);
+    const enrichmentEvent = events.find((event) => event.type === 'enrichment_status');
+
+    expect(enrichmentEvent).toBeTruthy();
+    expect(enrichmentEvent.status).toBe('staged');
   });
 });

@@ -59,7 +59,7 @@ export async function promoteEnrichment(
 
 export async function recordSnapshotLineage(record: SnapshotLineageRecord): Promise<void> {
   try {
-    await create('graph_snapshot_lineage', record as Record<string, unknown>);
+    await create('graph_snapshot_lineage', record as unknown as Record<string, unknown>);
   } catch (err) {
     console.warn('[ENRICHMENT] Failed snapshot lineage write:', err instanceof Error ? err.message : String(err));
   }

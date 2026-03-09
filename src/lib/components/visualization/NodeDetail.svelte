@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { GraphNode, GraphEdge } from '$lib/types/api';
+	import { formatTraceTag, getNodeTraceTags } from '$lib/utils/graphTrace';
 
 	interface Props {
 		node: GraphNode;
@@ -20,6 +21,8 @@
 		onJumpToReferences
 	}: Props = $props();
 	let detailEl = $state<HTMLDivElement | null>(null);
+
+	const nodeTraceTags = $derived(getNodeTraceTags(node));
 
 	// Find connected nodes
 	const connectedEdges = $derived(
@@ -117,6 +120,34 @@
 
 	<div class="detail-body">
 		<p class="node-label">{node.label}</p>
+
+		{#if nodeTraceTags.length > 0}
+			<section class="connections">
+				<h4 class="connections-heading">Trace tags</h4>
+				<div class="trace-tag-list">
+					{#each nodeTraceTags as tag}
+						<span class="trace-tag">{formatTraceTag(tag)}</span>
+					{/each}
+				</div>
+			</section>
+		{/if}
+
+		{#if node.provenance_id || node.unresolved_tension_id || (node.derived_from && node.derived_from.length > 0)}
+			<section class="connections">
+				<h4 class="connections-heading">Trace metadata</h4>
+				<div class="trace-meta-list">
+					{#if node.provenance_id}
+						<p class="trace-meta-row"><strong>Provenance:</strong> {node.provenance_id}</p>
+					{/if}
+					{#if node.unresolved_tension_id}
+						<p class="trace-meta-row"><strong>Tension:</strong> {node.unresolved_tension_id}</p>
+					{/if}
+					{#if node.derived_from && node.derived_from.length > 0}
+						<p class="trace-meta-row"><strong>Derived from:</strong> {node.derived_from.slice(0, 3).join(', ')}</p>
+					{/if}
+				</div>
+			</section>
+		{/if}
 
 		{#if connectedNodes.length > 0}
 			<section class="connections">
@@ -271,6 +302,38 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-2);
+	}
+
+	.trace-tag-list {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+
+	.trace-tag {
+		border: 1px solid var(--color-border);
+		background: var(--color-surface);
+		color: var(--color-text);
+		border-radius: 999px;
+		padding: 2px 8px;
+		font-family: var(--font-ui);
+		font-size: 0.65rem;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+
+	.trace-meta-list {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.trace-meta-row {
+		margin: 0;
+		font-family: var(--font-ui);
+		font-size: 0.72rem;
+		color: var(--color-muted);
+		line-height: 1.35;
 	}
 
 	.connection-item {

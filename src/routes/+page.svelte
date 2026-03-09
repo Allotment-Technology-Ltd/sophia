@@ -6,6 +6,8 @@
   import { renderMarkdown } from '$lib/utils/markdown';
   import { goto, replaceState } from '$app/navigation';
   import { page } from '$app/state';
+  import { onMount } from 'svelte';
+  import { getIdToken } from '$lib/firebase';
   import { fly, fade } from 'svelte/transition';
   import { quintOut } from 'svelte/easing';
   import SidePanel from '$lib/components/panel/SidePanel.svelte';
@@ -17,28 +19,62 @@
   import QuestionInput from '$lib/components/QuestionInput.svelte';
   import Button from '$lib/components/Button.svelte';
   import PassCard from '$lib/components/PassCard.svelte';
+  import LensSelector from '$lib/components/LensSelector.svelte';
+  import ModelSelector from '$lib/components/ModelSelector.svelte';
+  import DepthSelector from '$lib/components/DepthSelector.svelte';
+  import ReasoningQualityBadge from '$lib/components/ReasoningQualityBadge.svelte';
+  import ConstitutionImpactPanel from '$lib/components/ConstitutionImpactPanel.svelte';
+  import PassFeedback from '$lib/components/PassFeedback.svelte';
   import PassNavigator from '$lib/components/PassNavigator.svelte';
   import EpistemicStatus from '$lib/components/EpistemicStatus.svelte';
   import Loading from '$lib/components/Loading.svelte';
+  import ModelComparePanel from '$lib/components/ModelComparePanel.svelte';
   import FollowUpInput from '$lib/components/FollowUpInput.svelte';
   import FollowUpHints from '$lib/components/FollowUpHints.svelte';
   import QuestionCounter from '$lib/components/QuestionCounter.svelte';
   import { extractFurtherQuestions } from '$lib/utils/extractQuestions';
   import DialecticalTriangle from '$lib/components/DialecticalTriangle.svelte';
-  import { getRandomExamples } from '$lib/constants/examples';
+  import { getRandomExamples, type LensId } from '$lib/constants/examples';
 
   // ── State ─────────────────────────────────────────────────────────────────
   let queryInput = $state('');
+  let selectedLens = $state<string>('');
+  type ModelProvider = 'auto' | 'vertex' | 'anthropic';
+  type ModelOption = {
+    value: string;
+    label: string;
+    description: string;
+    provider: 'vertex' | 'anthropic';
+    id: string;
+  };
+
+  let modelOptions = $state<ModelOption[]>([]);
+  let selectedModelValue = $state<string>('auto');
+  const FALLBACK_MODEL_OPTIONS: ModelOption[] = [
+    {
+      value: 'vertex::gemini-2.0-flash',
+      label: 'Gemini · gemini-2.0-flash',
+      description: 'Vertex reasoning model',
+      provider: 'vertex',
+      id: 'gemini-2.0-flash'
+    }
+  ];
+  let selectedDepth = $state<'quick' | 'standard' | 'deep'>('standard');
+  let selectedDomain = $state<'auto' | 'ethics' | 'philosophy_of_mind'>('auto');
+  const domainSelectorEnabled =
+    (import.meta.env.PUBLIC_ENABLE_DOMAIN_OVERRIDE_UI ?? 'true').toLowerCase() === 'true';
   let activeTab = $state<TabId>('references');
-  let activeResultPass = $state<'analysis' | 'critique' | 'synthesis'>('analysis');
+  let activeResultPass = $state<'analysis' | 'critique' | 'synthesis' | 'verification'>('analysis');
   let revealed = $state(false);
 
   type PassKey = 'analysis' | 'critique' | 'synthesis' | 'verification';
 
-  const SUGGESTION_SLOT_COUNT = 3;
+  const SUGGESTION_SLOT_COUNT = 1;
   const ROTATE_INTERVAL_MS = 8000;
+  const FINAL_DRAW_SETTLE_MS = 850;
   let suggestionTick = $state(0);
   let baseExamplePool = $state<string[]>([]);
+  let completionAnimationSettled = $state(false);
 
   const LOADING_STATUS: Record<string, string> = {
     analysis: 'Mapping the philosophical landscape…',
@@ -46,6 +82,72 @@
     synthesis: 'Integrating tensions…',
     verification: 'Running web verification…',
   };
+
+  const PASS_LABELS: Record<string, string> = {
+    analysis: 'Analysis',
+    critique: 'Critique',
+    synthesis: 'Synthesis',
+    verification: 'Verification'
+  };
+
+  const DEPTH_LABELS: Record<'quick' | 'standard' | 'deep', { auto: string; vertex: string; anthropic: string }> = {
+    quick: {
+      auto: 'Quick (~10s)',
+      vertex: 'Quick (~10s)',
+      anthropic: 'Quick (~20s)'
+    },
+    standard: {
+      auto: 'Standard (~25s)',
+      vertex: 'Standard (~25s)',
+      anthropic: 'Standard (~45-70s)'
+    },
+    deep: {
+      auto: 'Deep (~40s)',
+      vertex: 'Deep (~40s)',
+      anthropic: 'Deep (~80-140s)'
+    }
+  };
+
+  const DOMAIN_ALLOWED_LENSES: Record<'auto' | 'ethics' | 'philosophy_of_mind', string[]> = {
+    auto: [''],
+    ethics: ['', 'utilitarian', 'deontological', 'virtue_ethics', 'rawlsian', 'care_ethics'],
+    philosophy_of_mind: ['', 'physicalist', 'dualist', 'functionalist', 'enactivist', 'phenomenological']
+  };
+
+  function parseSelectedModel(selection: string): { provider: ModelProvider; modelId?: string } {
+    if (!selection || selection === 'auto') return { provider: 'auto' };
+    const splitIdx = selection.indexOf('::');
+    if (splitIdx <= 0) return { provider: 'auto' };
+    const provider = selection.slice(0, splitIdx) as 'vertex' | 'anthropic';
+    const modelId = selection.slice(splitIdx + 2);
+    if (!modelId) return { provider: 'auto' };
+    return { provider, modelId };
+  }
+
+  const selectedModel = $derived(parseSelectedModel(selectedModelValue));
+
+  onMount(async () => {
+    try {
+      const token = await getIdToken();
+      const response = await fetch('/api/models', {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined
+      });
+      if (!response.ok) throw new Error(`status ${response.status}`);
+      const payload = await response.json();
+      const fetched = Array.isArray(payload.models) ? payload.models : [];
+      modelOptions = fetched
+        .filter((item: any) => item?.id && (item?.provider === 'vertex' || item?.provider === 'anthropic'))
+        .map((item: any) => ({
+          value: `${item.provider}::${item.id}`,
+          label: item.label ?? `${item.provider === 'anthropic' ? 'Claude' : 'Gemini'} · ${item.id}`,
+          description: item.description ?? 'Reasoning model',
+          provider: item.provider,
+          id: item.id
+        }));
+    } catch {
+      modelOptions = [...FALLBACK_MODEL_OPTIONS];
+    }
+  });
 
   // ── Tabs for SidePanel ───────────────────────────────────────────────────
   const tabs: Tab[] = $derived([
@@ -59,11 +161,11 @@
   let lastAssistantMsg = $derived(conversation.messages.findLast(m => m.role === 'assistant'));
 
   let isQueryState = $derived(conversation.messages.length === 0 && !conversation.isLoading);
-  // Loading screen covers all three analysis passes; verification runs in the
-  // background while results remain visible (currentPass === 'verification').
-  let isLoadingState = $derived(
-    conversation.isLoading && conversation.currentPass !== 'verification'
-  );
+  const requiredPassesByDepth: Record<'quick' | 'standard' | 'deep', Array<'analysis' | 'critique' | 'synthesis'>> = {
+    quick: ['analysis'],
+    standard: ['analysis', 'critique', 'synthesis'],
+    deep: ['analysis', 'critique', 'synthesis']
+  };
   let isResultsState = $derived(
     !!lastAssistantMsg &&
     (!conversation.isLoading || conversation.currentPass === 'verification')
@@ -74,12 +176,69 @@
       pass === 'analysis' || pass === 'critique' || pass === 'synthesis'
     );
   });
-
-  let loadingStatusText = $derived(
-    conversation.currentPass
-      ? (LOADING_STATUS[conversation.currentPass] ?? 'Thinking…')
-      : 'Thinking…'
+  let completionReadyForDepth = $derived.by(() => {
+    const required = requiredPassesByDepth[selectedDepth];
+    return required.every((pass) => completedPasses.includes(pass));
+  });
+  // Loading screen covers all three analysis passes; verification runs in the
+  // background while results remain visible (currentPass === 'verification').
+  let isLoadingState = $derived(
+    (
+      conversation.isLoading &&
+      conversation.currentPass !== 'verification'
+    ) || (
+      !revealed &&
+      completionReadyForDepth &&
+      !completionAnimationSettled
+    )
   );
+
+  let availablePasses = $derived.by(() => {
+    if (!lastAssistantMsg?.passes) return ['analysis'];
+    const available: Array<'analysis' | 'critique' | 'synthesis' | 'verification'> = [];
+    if (lastAssistantMsg.passes.analysis) available.push('analysis');
+    if (lastAssistantMsg.passes.critique) available.push('critique');
+    if (lastAssistantMsg.passes.synthesis) available.push('synthesis');
+    // Verification tab should always be available once any analysis result exists.
+    available.push('verification');
+    return available.length > 0 ? available : ['analysis'];
+  });
+
+  let loadingStatusText = $derived.by(() => {
+    if (!conversation.currentPass) return 'Thinking…';
+    const base = LOADING_STATUS[conversation.currentPass] ?? 'Thinking…';
+    const provider = conversation.passModels[conversation.currentPass]?.provider ?? conversation.loadingModelProvider;
+    if (provider === 'anthropic' && (conversation.currentPass === 'critique' || conversation.currentPass === 'synthesis')) {
+      return `${base} Claude deep reasoning can take longer.`;
+    }
+    return base;
+  });
+
+  let loadingPassLabel = $derived(
+    conversation.currentPass ? (PASS_LABELS[conversation.currentPass] ?? 'Analysis') : 'Analysis'
+  );
+
+  let loadingModelLabel = $derived.by(() => {
+    const passModel = conversation.currentPass ? conversation.passModels[conversation.currentPass] : undefined;
+    if (passModel) return `${passModel.provider === 'anthropic' ? 'Claude' : 'Gemini'} · ${passModel.modelId}`;
+    if (conversation.loadingModelProvider === 'anthropic') return `Claude${conversation.loadingModelId ? ` · ${conversation.loadingModelId}` : ''}`;
+    if (conversation.loadingModelProvider === 'vertex') return `Gemini${conversation.loadingModelId ? ` · ${conversation.loadingModelId}` : ''}`;
+    return 'Auto';
+  });
+
+  let loadingDepthLabel = $derived.by(() => {
+    const passModel = conversation.currentPass ? conversation.passModels[conversation.currentPass] : undefined;
+    const provider =
+      passModel?.provider ??
+      (conversation.loadingModelProvider === 'auto' ? 'auto' : conversation.loadingModelProvider);
+    return DEPTH_LABELS[selectedDepth][provider];
+  });
+
+  let loadingWorkingLines = $derived.by(() => {
+    const pass = conversation.currentPass;
+    if (!pass) return [] as string[];
+    return (conversation.passWorkings[pass] ?? []).slice(-1);
+  });
 
   let epistemicContent = $derived.by(() => {
     if (!conversation.confidenceSummary) return null;
@@ -89,8 +248,94 @@
 
   let resultsCompletedPasses = $derived.by(() => {
     if (!lastAssistantMsg?.passes) return [];
-    return (['analysis', 'critique', 'synthesis'] as const).filter(k => !!lastAssistantMsg!.passes![k]);
+    return (['analysis', 'critique', 'synthesis', 'verification'] as const).filter(
+      (k) => !!lastAssistantMsg!.passes![k]
+    );
   });
+
+  const resultDepthMode = $derived(
+    lastAssistantMsg?.metadata?.depth_mode ?? null
+  );
+
+  const currentDepthMode = $derived(
+    resultDepthMode ?? selectedDepth
+  );
+
+  const nextDepthUpgrade = $derived.by(() => {
+    // Upgrades are only valid when the current result explicitly reports depth.
+    if (resultDepthMode === 'quick') return 'standard' as const;
+    if (resultDepthMode === 'standard') return 'deep' as const;
+    return null;
+  });
+
+  const currentQueryModelProvider = $derived(
+    lastAssistantMsg?.metadata?.selected_model_provider ?? selectedModel.provider
+  );
+  const currentQueryModelId = $derived(
+    lastAssistantMsg?.metadata?.selected_model_id ?? selectedModel.modelId
+  );
+
+  const alternateModelOptions = $derived.by(() => {
+    const all = modelOptions;
+    if (all.length === 0) return [] as ModelOption[];
+    return all.filter(
+      (option) =>
+        option.provider !== currentQueryModelProvider ||
+        option.id !== currentQueryModelId
+    );
+  });
+
+  const compareOption = $derived.by(() => {
+    const crossProvider = alternateModelOptions.find((option) => option.provider !== currentQueryModelProvider);
+    if (crossProvider) return crossProvider;
+    if (alternateModelOptions.length === 0) return null;
+    return alternateModelOptions[0];
+  });
+
+  const currentQuery = $derived(
+    conversation.messages.findLast((m) => m.role === 'user')?.content ?? ''
+  );
+
+  const geminiCachedResult = $derived.by(() =>
+    !currentQuery
+      ? null
+      : historyStore.getCachedResult(currentQuery, {
+          lens: selectedLens || undefined,
+          depthMode: currentDepthMode,
+          modelProvider: 'vertex',
+          modelId: modelOptions.find((option) => option.provider === 'vertex')?.id,
+          domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+          domain: selectedDomain === 'auto' ? undefined : selectedDomain
+        })
+  );
+
+  const claudeCachedResult = $derived.by(() =>
+    !currentQuery
+      ? null
+      : historyStore.getCachedResult(currentQuery, {
+          lens: selectedLens || undefined,
+          depthMode: currentDepthMode,
+          modelProvider: 'anthropic',
+          modelId: modelOptions.find((option) => option.provider === 'anthropic')?.id,
+          domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+          domain: selectedDomain === 'auto' ? undefined : selectedDomain
+        })
+  );
+
+  const hasCachedGemini = $derived(!!geminiCachedResult);
+  const hasCachedClaude = $derived(!!claudeCachedResult);
+
+  function getCachedForModel(option: ModelOption | null): ReturnType<typeof historyStore.getCachedResult> {
+    if (!option || !currentQuery) return null;
+    return historyStore.getCachedResult(currentQuery, {
+      lens: selectedLens || undefined,
+      depthMode: currentDepthMode,
+      modelProvider: option.provider,
+      modelId: option.id,
+      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+      domain: selectedDomain === 'auto' ? undefined : selectedDomain
+    });
+  }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   function stripSophiaMeta(text: string): string {
@@ -105,6 +350,20 @@
     return (inputTokens * 3 + outputTokens * 15) / 1_000_000;
   }
 
+  function calculateDisplayedCost(metadata: {
+    total_input_tokens: number;
+    total_output_tokens: number;
+    model_cost_breakdown?: { total_estimated_cost_usd: number };
+  }): number {
+    return metadata.model_cost_breakdown?.total_estimated_cost_usd ??
+      calculateCost(metadata.total_input_tokens, metadata.total_output_tokens);
+  }
+
+  function formatModelLabel(provider: 'vertex' | 'anthropic', model: string): string {
+    const shortModel = model.length > 28 ? `${model.slice(0, 28)}…` : model;
+    return `${provider}:${shortModel}`;
+  }
+
   function formatDuration(ms: number): string {
     if (ms < 1000) return `${ms}ms`;
     return `${(ms / 1000).toFixed(1)}s`;
@@ -117,7 +376,13 @@
     queryInput = '';
     activeResultPass = 'analysis';
     revealed = false;
-    await conversation.submitQuery(query);
+    await conversation.submitQuery(query, selectedLens || undefined, {
+      depthMode: selectedDepth,
+      modelProvider: selectedModel.provider,
+      modelId: selectedModel.modelId,
+      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+      domain: selectedDomain === 'auto' ? undefined : selectedDomain
+    });
   }
 
   function handleKeydown(e: KeyboardEvent): void {
@@ -132,11 +397,6 @@
     if (!entry) return;
     queryInput = entry.question;
     await handleSubmit();
-  }
-
-  function scrollToPass(pass: string): void {
-    const el = document.getElementById(`pass-${pass}`);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   function handleTabChange(tab: TabId): void {
@@ -154,13 +414,125 @@
   async function retryLastQuery(): Promise<void> {
     const lastQuery = conversation.messages.findLast(m => m.role === 'user')?.content;
     if (!lastQuery) return;
-    await conversation.submitQuery(lastQuery);
+    await conversation.submitQuery(lastQuery, selectedLens || undefined, {
+      depthMode: selectedDepth,
+      modelProvider: selectedModel.provider,
+      modelId: selectedModel.modelId,
+      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+      domain: selectedDomain === 'auto' ? undefined : selectedDomain
+    });
+  }
+
+  async function rerunWithModel(modelOption: ModelOption): Promise<void> {
+    if (conversation.isLoading) return;
+    const lastQuery = conversation.messages.findLast((m) => m.role === 'user')?.content;
+    if (!lastQuery) return;
+    selectedModelValue = modelOption.value;
+    activeResultPass = 'analysis';
+    revealed = false;
+    await conversation.submitQuery(lastQuery, selectedLens || undefined, {
+      depthMode: currentDepthMode,
+      modelProvider: modelOption.provider,
+      modelId: modelOption.id,
+      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+      domain: selectedDomain === 'auto' ? undefined : selectedDomain,
+      bypassQuestionLimit: true
+    });
+  }
+
+  async function switchToModelResult(modelOption: ModelOption): Promise<void> {
+    if (conversation.isLoading) return;
+    const lastQuery = conversation.messages.findLast((m) => m.role === 'user')?.content;
+    if (!lastQuery) return;
+    selectedModelValue = modelOption.value;
+    activeResultPass = 'analysis';
+    const switched = conversation.showCachedVariant(lastQuery, {
+      lens: selectedLens || undefined,
+      depthMode: currentDepthMode,
+      modelProvider: modelOption.provider,
+      modelId: modelOption.id,
+      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+      domain: selectedDomain === 'auto' ? undefined : selectedDomain
+    });
+    if (switched) {
+      revealed = true;
+      return;
+    }
+    revealed = false;
+    await rerunWithModel(modelOption);
+  }
+
+  async function upgradeDepth(): Promise<void> {
+    if (!nextDepthUpgrade || conversation.isLoading) return;
+    const lastQuery = conversation.messages.findLast((m) => m.role === 'user')?.content;
+    if (!lastQuery) return;
+    const previousPasses = lastAssistantMsg?.passes;
+    const reuse =
+      currentDepthMode === 'quick' && nextDepthUpgrade === 'standard'
+        ? {
+            fromDepth: 'quick' as const,
+            analysis: previousPasses?.analysis
+          }
+        : currentDepthMode === 'standard' && nextDepthUpgrade === 'deep'
+          ? {
+              fromDepth: 'standard' as const,
+              analysis: previousPasses?.analysis,
+              critique: previousPasses?.critique,
+              synthesis: previousPasses?.synthesis
+            }
+          : undefined;
+    selectedDepth = nextDepthUpgrade;
+    activeResultPass = 'analysis';
+    revealed = false;
+    await conversation.submitQuery(lastQuery, selectedLens || undefined, {
+      depthMode: nextDepthUpgrade,
+      modelProvider: selectedModel.provider,
+      modelId: selectedModel.modelId,
+      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+      domain: selectedDomain === 'auto' ? undefined : selectedDomain,
+      bypassQuestionLimit: true,
+      reuse
+    });
   }
 
   // ── Effects ───────────────────────────────────────────────────────────────
   $effect(() => {
-    if (conversation.currentPass && ['analysis', 'critique', 'synthesis'].includes(conversation.currentPass)) {
-      activeResultPass = conversation.currentPass as 'analysis' | 'critique' | 'synthesis';
+    if (selectedDomain === 'auto' && selectedLens !== '') {
+      selectedLens = '';
+      return;
+    }
+    const allowed = DOMAIN_ALLOWED_LENSES[selectedDomain];
+    if (allowed && !allowed.includes(selectedLens)) {
+      selectedLens = '';
+    }
+  });
+
+  $effect(() => {
+    if (!completionReadyForDepth) {
+      completionAnimationSettled = false;
+      return;
+    }
+
+    if (completionAnimationSettled) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      completionAnimationSettled = true;
+    }, FINAL_DRAW_SETTLE_MS);
+    return () => clearTimeout(timer);
+  });
+
+  $effect(() => {
+    if (
+      conversation.currentPass &&
+      ['analysis', 'critique', 'synthesis', 'verification'].includes(conversation.currentPass)
+    ) {
+      activeResultPass = conversation.currentPass as
+        | 'analysis'
+        | 'critique'
+        | 'synthesis'
+        | 'verification';
     }
   });
 
@@ -219,6 +591,55 @@
     return terms;
   }
 
+  const DOMAIN_KEYWORDS: Record<'ethics' | 'philosophy_of_mind', string[]> = {
+    ethics: [
+      'moral', 'ethic', 'duty', 'rights', 'justice', 'obligation', 'harm', 'welfare',
+      'virtue', 'fairness', 'care', 'deontological', 'utilitarian', 'rawls'
+    ],
+    philosophy_of_mind: [
+      'mind', 'consciousness', 'qualia', 'experience', 'brain', 'physicalism',
+      'dualism', 'self', 'identity', 'intentionality', 'free will', 'functionalism'
+    ]
+  };
+
+  const LENS_KEYWORDS: Record<string, string[]> = {
+    utilitarian: ['consequence', 'utility', 'welfare', 'aggregate', 'outcome', 'maximize'],
+    deontological: ['duty', 'rule', 'right', 'obligation', 'principle', 'constraint'],
+    virtue_ethics: ['virtue', 'character', 'flourishing', 'habit', 'wisdom'],
+    rawlsian: ['fairness', 'justice', 'equality', 'basic liberty', 'veil', 'difference principle'],
+    care_ethics: ['care', 'relationship', 'dependency', 'vulnerability', 'empathy', 'context'],
+    physicalist: ['physicalism', 'brain', 'neural', 'material', 'reduction', 'naturalism'],
+    dualist: ['dualism', 'soul', 'mental substance', 'zombie', 'qualia', 'non-physical'],
+    functionalist: ['function', 'causal role', 'multiple realizability', 'computation', 'state machine'],
+    enactivist: ['embodied', 'enactive', 'sensorimotor', 'situated cognition', 'environment'],
+    phenomenological: ['lived experience', 'first-person', 'intentionality', 'phenomenology', 'subjective']
+  };
+
+  function scoreKeywordMatch(text: string, keywords: string[]): number {
+    const normalized = normalizeText(text);
+    if (!normalized || keywords.length === 0) return 0;
+    let score = 0;
+    for (const keyword of keywords) {
+      if (normalized.includes(keyword)) score += 1;
+    }
+    return score;
+  }
+
+  function inferAutoDomain(): 'ethics' | 'philosophy_of_mind' {
+    const seed = [
+      queryInput,
+      ...historyStore.items.slice(0, 3).map((item) => item.question)
+    ].filter(Boolean);
+    const joined = seed.join(' ');
+    const ethicsScore = scoreKeywordMatch(joined, DOMAIN_KEYWORDS.ethics);
+    const mindScore = scoreKeywordMatch(joined, DOMAIN_KEYWORDS.philosophy_of_mind);
+    return mindScore > ethicsScore ? 'philosophy_of_mind' : 'ethics';
+  }
+
+  const suggestionDomain = $derived(
+    selectedDomain === 'auto' ? inferAutoDomain() : selectedDomain
+  );
+
   function scoreRelevance(question: string, terms: Set<string>): number {
     if (terms.size === 0) return 0;
     const qTokens = tokenize(question);
@@ -230,14 +651,36 @@
     return matches;
   }
 
+  function matchesDomainContext(result: {
+    domain?: 'ethics' | 'philosophy_of_mind';
+    domain_mode?: 'auto' | 'manual';
+    query: string;
+  }): boolean {
+    if (result.domain_mode === 'manual' && result.domain) {
+      return result.domain === suggestionDomain;
+    }
+    // For legacy/auto cached items, infer from query text as fallback.
+    return scoreKeywordMatch(result.query, DOMAIN_KEYWORDS[suggestionDomain]) > 0;
+  }
+
+  function matchesLensContext(result: { lens?: string; query: string }): boolean {
+    if (!selectedLens) return true;
+    if (result.lens) return result.lens === selectedLens;
+    // Legacy cache fallback: infer from query text.
+    return scoreKeywordMatch(result.query, LENS_KEYWORDS[selectedLens] ?? []) > 0;
+  }
+
   const followOnSuggestions = $derived.by(() => {
     const contextTerms = collectContextTerms();
     const seen = new Set<string>();
-    const scored: Array<{ text: string; score: number; recency: number }> = [];
+    const strict: Array<{ text: string; score: number; recency: number }> = [];
+    const fallback: Array<{ text: string; score: number; recency: number }> = [];
     const cached = historyStore.cachedResults;
 
     for (let i = 0; i < cached.length; i += 1) {
       const result = cached[i];
+      const isDomainMatch = matchesDomainContext(result);
+      const isLensMatch = matchesLensContext(result);
       const questions = extractFurtherQuestions(result.passes?.synthesis ?? '');
       for (const question of questions) {
         const trimmed = question.trim();
@@ -245,15 +688,30 @@
         const key = normalizeText(trimmed);
         if (!key || seen.has(key)) continue;
         seen.add(key);
-        scored.push({ text: trimmed, score: scoreRelevance(trimmed, contextTerms), recency: i });
+        const relevanceScore = scoreRelevance(trimmed, contextTerms);
+        const domainScore = scoreKeywordMatch(trimmed, DOMAIN_KEYWORDS[suggestionDomain]);
+        const lensScore = selectedLens ? scoreKeywordMatch(trimmed, LENS_KEYWORDS[selectedLens] ?? []) : 0;
+        const item = {
+          text: trimmed,
+          score: relevanceScore + domainScore * 2 + lensScore * 2 + (isDomainMatch ? 2 : 0) + (isLensMatch ? 2 : 0),
+          recency: i
+        };
+        if (isDomainMatch && isLensMatch) strict.push(item);
+        else fallback.push(item);
       }
     }
 
-    scored.sort((a, b) => {
+    strict.sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
       return a.recency - b.recency;
     });
-    return scored.map((entry) => entry.text);
+    fallback.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.recency - b.recency;
+    });
+
+    const chosen = strict.length >= SUGGESTION_SLOT_COUNT ? strict : [...strict, ...fallback];
+    return chosen.map((entry) => entry.text);
   });
 
   const rotatingQuestions = $derived.by(() => {
@@ -279,8 +737,10 @@
   });
 
   $effect(() => {
-    if (baseExamplePool.length > 0) return;
-    baseExamplePool = getRandomExamples(12).map((item) => item.text);
+    baseExamplePool = getRandomExamples(20, {
+      domain: suggestionDomain,
+      lens: (selectedLens as LensId) || ''
+    }).map((item) => item.text);
   });
 
   $effect(() => {
@@ -314,6 +774,35 @@
             <p class="query-sub">Be specific · More context → richer analysis</p>
 
             <div class="query-input-wrap">
+              <div class="reasoning-frame">
+                <div class="frame-title">Reasoning Frame</div>
+                {#if domainSelectorEnabled}
+                  <div class="domain-row">
+                    <label for="domain-select">Domain</label>
+                    <select id="domain-select" bind:value={selectedDomain}>
+                      <option value="auto">Auto</option>
+                      <option value="ethics">Ethics</option>
+                      <option value="philosophy_of_mind">Philosophy of Mind</option>
+                    </select>
+                  </div>
+                {/if}
+                <LensSelector bind:value={selectedLens} domain={selectedDomain} disabled={conversation.isLoading} />
+                <ModelSelector
+                  bind:value={selectedModelValue}
+                  options={[
+                    { value: 'auto', label: 'Auto', description: 'Default depth-aware routing' },
+                    ...modelOptions.map((option) => ({
+                      value: option.value,
+                      label: option.label,
+                      description: option.description
+                    }))
+                  ]}
+                  disabled={conversation.isLoading}
+                />
+              </div>
+
+              <DepthSelector bind:value={selectedDepth} disabled={conversation.isLoading} />
+
               <QuestionInput
                 bind:value={queryInput}
                 onSubmit={handleSubmit}
@@ -331,7 +820,12 @@
                 </Button>
               </div>
 
-              <div class="example-pills" aria-label="Example questions">
+              <div class="suggested-questions">
+                <div class="suggested-header">
+                  <h3>Suggested Questions</h3>
+                  <p>Tailored to your selected domain and lens.</p>
+                </div>
+                <div class="example-pills" aria-label="Suggested questions">
                 {#each rotatingQuestions as q}
                   <button
                     class="pill"
@@ -340,6 +834,7 @@
                     {q}
                   </button>
                 {/each}
+                </div>
               </div>
             </div>
           </div>
@@ -356,6 +851,12 @@
             currentPass={conversation.currentPass ?? ''}
             statusText={loadingStatusText}
             {completedPasses}
+            depthMode={selectedDepth}
+            completionReady={completionAnimationSettled}
+            passLabel={loadingPassLabel}
+            depthLabel={loadingDepthLabel}
+            modelLabel={loadingModelLabel}
+            workingLines={loadingWorkingLines}
           />
         </div>
       {/if}
@@ -363,7 +864,7 @@
       <!-- ═══════════════════════════════════════════════════════════════
            STATE 2b: COMPLETE — click triangle to reveal results
            ═══════════════════════════════════════════════════════════════ -->
-      {#if isResultsState && !revealed}
+      {#if isResultsState && completionAnimationSettled && !revealed}
         <div
           class="complete-screen"
           in:fade={{ duration: 500 }}
@@ -371,7 +872,9 @@
         >
           <DialecticalTriangle
             mode="complete"
-            completedPasses={['analysis', 'critique', 'synthesis']}
+            completedPasses={completedPasses}
+            depthMode={currentDepthMode}
+            completionReady={true}
             size={240}
             onReveal={() => { revealed = true; }}
           />
@@ -389,8 +892,11 @@
             <PassNavigator
               activePass={activeResultPass}
               completedPasses={resultsCompletedPasses}
-              showVerification={!!passes.verification}
-              onSelect={(p) => { activeResultPass = p as 'analysis' | 'critique' | 'synthesis'; scrollToPass(p); }}
+              {availablePasses}
+              showVerification={true}
+              onSelect={(p) => {
+                activeResultPass = p as 'analysis' | 'critique' | 'synthesis' | 'verification';
+              }}
             />
           </aside>
 
@@ -402,32 +908,44 @@
               </div>
             {/if}
 
-            <!-- Pass cards -->
-            {#if passes.analysis}
+            <!-- Pass cards (tabbed: one visible at a time) -->
+            {#if activeResultPass === 'analysis' && passes.analysis}
               <div id="pass-analysis">
                 <PassCard pass="analysis" content={renderPass(passes.analysis)} />
+                <div class="pass-feedback-row">
+                  <PassFeedback queryId={lastAssistantMsg.metadata?.query_run_id} passType="analysis" />
+                </div>
               </div>
             {/if}
 
-            {#if passes.critique}
+            {#if activeResultPass === 'critique' && passes.critique}
               <div id="pass-critique">
                 <PassCard pass="critique" content={renderPass(passes.critique)} />
+                <div class="pass-feedback-row">
+                  <PassFeedback queryId={lastAssistantMsg.metadata?.query_run_id} passType="critique" />
+                </div>
               </div>
             {/if}
 
-            {#if passes.synthesis}
+            {#if activeResultPass === 'synthesis' && passes.synthesis}
               <div id="pass-synthesis">
                 <PassCard pass="synthesis" content={renderPass(passes.synthesis)} />
+                <div class="pass-feedback-row">
+                  <PassFeedback queryId={lastAssistantMsg.metadata?.query_run_id} passType="synthesis" />
+                </div>
               </div>
             {/if}
+
+            <ReasoningQualityBadge reasoningQuality={lastAssistantMsg.reasoningQuality} />
+            <ConstitutionImpactPanel deltas={lastAssistantMsg.constitutionDeltas} />
 
             <!-- Epistemic status -->
             {#if epistemicContent}
               <EpistemicStatus content={epistemicContent} />
             {/if}
 
-            <!-- Web verification section -->
-            {#if passes.synthesis}
+            <!-- Web verification section (tabbed) -->
+            {#if activeResultPass === 'verification'}
               <div id="pass-verification" class="verification-section">
                 {#if passes.verification}
                   <div class="verification-content" in:fade={{ duration: 350 }}>
@@ -484,8 +1002,68 @@
                 <span class="dot">·</span>
                 <span>{formatDuration(m.duration_ms)}</span>
                 <span class="dot">·</span>
-                <span>${calculateCost(m.total_input_tokens, m.total_output_tokens).toFixed(6)}</span>
+                <span>${calculateDisplayedCost(m).toFixed(6)}</span>
               </div>
+              {#if m.model_cost_breakdown?.by_model?.length}
+                <div class="model-cost-breakdown" aria-label="Model cost breakdown">
+                  {#each m.model_cost_breakdown.by_model as item}
+                    <span class="model-cost-chip">
+                      <strong>{formatModelLabel(item.provider, item.model)}</strong>
+                      <span>{item.input_tokens} in</span>
+                      <span>{item.output_tokens} out</span>
+                      <span>${item.estimated_cost_usd.toFixed(6)}</span>
+                    </span>
+                  {/each}
+                </div>
+              {/if}
+              {#if nextDepthUpgrade}
+                <div class="upgrade-row">
+                  <button
+                    class="upgrade-btn"
+                    onclick={upgradeDepth}
+                    disabled={conversation.isLoading}
+                  >
+                    Upgrade to {nextDepthUpgrade === 'standard' ? 'Standard' : 'Deep'}
+                  </button>
+                  <span class="upgrade-note">
+                    Re-run same query with richer pass depth.
+                  </span>
+                </div>
+              {/if}
+              {#if compareOption}
+                {@const compareCached = getCachedForModel(compareOption)}
+                <div class="upgrade-row">
+                  <button
+                    class="upgrade-btn"
+                    onclick={() => switchToModelResult(compareOption)}
+                    disabled={conversation.isLoading}
+                  >
+                    {compareCached ? `View ${compareOption.label}` : `Run again with ${compareOption.label}`}
+                  </button>
+                  <span class="upgrade-note">
+                    {compareCached
+                      ? 'Open cached result instantly.'
+                      : 'Compare pass outputs across concrete models.'}
+                  </span>
+                </div>
+              {/if}
+            {/if}
+
+            {#if geminiCachedResult && claudeCachedResult}
+              <ModelComparePanel
+                geminiPasses={{
+                  analysis: geminiCachedResult.passes.analysis,
+                  critique: geminiCachedResult.passes.critique,
+                  synthesis: geminiCachedResult.passes.synthesis,
+                  verification: geminiCachedResult.passes.verification
+                }}
+                claudePasses={{
+                  analysis: claudeCachedResult.passes.analysis,
+                  critique: claudeCachedResult.passes.critique,
+                  synthesis: claudeCachedResult.passes.synthesis,
+                  verification: claudeCachedResult.passes.verification
+                }}
+              />
             {/if}
 
             <!-- Follow-up hints + input -->
@@ -504,12 +1082,27 @@
                 {#if passes.synthesis}
                   {@const hints = extractFurtherQuestions(passes.synthesis)}
                   <FollowUpHints
-                    questions={hints}
-                    onSelect={(q) => { conversation.submitQuery(q); }}
+                    questions={hints.slice(0, 1)}
+                    onSelect={(q) => {
+                      conversation.submitQuery(q, selectedLens || undefined, {
+                        depthMode: selectedDepth,
+                        modelProvider: selectedModel.provider,
+                        modelId: selectedModel.modelId,
+                        domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+                        domain: selectedDomain === 'auto' ? undefined : selectedDomain
+                      });
+                    }}
                   />
                 {/if}
                 <FollowUpInput
-                  onSubmit={(text) => conversation.submitQuery(text)}
+                  onSubmit={(text) =>
+                    conversation.submitQuery(text, selectedLens || undefined, {
+                      depthMode: selectedDepth,
+                      modelProvider: selectedModel.provider,
+                      modelId: selectedModel.modelId,
+                      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+                      domain: selectedDomain === 'auto' ? undefined : selectedDomain
+                    })}
                   disabled={conversation.isLoading}
                 />
               {/if}
@@ -642,10 +1235,92 @@
     gap: var(--space-3);
   }
 
+  .reasoning-frame {
+    width: min(700px, 100%);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    border-radius: 4px;
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .frame-title {
+    font-family: var(--font-ui);
+    font-size: 0.66rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-dim);
+    text-align: left;
+  }
+
+  .domain-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--space-2);
+    font-family: var(--font-ui);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    color: var(--color-muted);
+    text-transform: uppercase;
+  }
+
+  .domain-row select {
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    padding: 6px 8px;
+    font-size: 0.78rem;
+    text-transform: none;
+    letter-spacing: 0;
+    min-width: 180px;
+  }
+
   .query-actions {
     display: flex;
     justify-content: center;
     margin-top: var(--space-2);
+  }
+
+  .suggested-questions {
+    width: min(700px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  .suggested-header {
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .suggested-header h3 {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: 0.78rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+  }
+
+  .suggested-header p {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    color: var(--color-dim);
+  }
+
+  .pass-feedback-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 6px;
   }
 
   .example-pills {
@@ -854,11 +1529,71 @@
     align-items: center;
     gap: var(--space-2);
     font-family: var(--font-ui);
-    font-size: 0.6rem;
-    color: var(--color-dim);
+    font-size: 0.68rem;
+    color: var(--color-muted);
     padding-top: var(--space-2);
     border-top: 1px solid var(--color-border);
     flex-wrap: wrap;
+  }
+
+  .model-cost-breakdown {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: 6px;
+  }
+
+  .model-cost-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-family: var(--font-ui);
+    font-size: 0.65rem;
+    color: var(--color-muted);
+    background: var(--color-surface);
+  }
+
+  .model-cost-chip strong {
+    color: var(--color-text);
+    font-weight: 600;
+  }
+
+  .upgrade-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: -6px;
+  }
+
+  .upgrade-btn {
+    font-family: var(--font-ui);
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border: 1px solid var(--color-sage-border);
+    color: var(--color-sage);
+    background: transparent;
+    border-radius: 3px;
+    padding: 6px 10px;
+    cursor: pointer;
+  }
+
+  .upgrade-btn:hover {
+    background: color-mix(in srgb, var(--color-sage) 12%, transparent);
+  }
+
+  .upgrade-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .upgrade-note {
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    color: var(--color-dim);
   }
 
   .dot {

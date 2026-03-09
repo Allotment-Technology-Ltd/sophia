@@ -2,11 +2,18 @@
   interface Props {
     activePass?: string;
     completedPasses?: string[];
+    availablePasses?: string[];
     showVerification?: boolean;
     onSelect?: (pass: string) => void;
   }
 
-  let { activePass = 'analysis', completedPasses = [], showVerification = false, onSelect }: Props = $props();
+  let {
+    activePass = 'analysis',
+    completedPasses = [],
+    availablePasses = ['analysis'],
+    showVerification = false,
+    onSelect
+  }: Props = $props();
 
   const corePasses = ['analysis', 'critique', 'synthesis'] as const;
 
@@ -23,8 +30,10 @@
     <button
       class="nav-item"
       class:active={activePass === pass}
+      class:disabled={!availablePasses.includes(pass)}
       onclick={() => onSelect?.(pass)}
       aria-current={activePass === pass ? 'page' : undefined}
+      disabled={!availablePasses.includes(pass)}
     >
       <span class="nav-label">{labels[pass]}</span>
       {#if completedPasses.includes(pass)}
@@ -37,11 +46,15 @@
     <button
       class="nav-item verification-item"
       class:active={activePass === 'verification'}
+      class:disabled={!availablePasses.includes('verification')}
       onclick={() => onSelect?.('verification')}
       aria-current={activePass === 'verification' ? 'page' : undefined}
+      disabled={!availablePasses.includes('verification')}
     >
       <span class="nav-label">{labels.verification}</span>
-      <span class="check" aria-label="Complete">✓</span>
+      {#if completedPasses.includes('verification')}
+        <span class="check" aria-label="Complete">✓</span>
+      {/if}
     </button>
   {/if}
 </nav>
@@ -68,6 +81,11 @@
     cursor: pointer;
     text-align: left;
     transition: color var(--transition-fast), border-color var(--transition-fast);
+  }
+
+  .nav-item.disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   .nav-item:hover {

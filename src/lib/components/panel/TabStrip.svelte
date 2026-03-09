@@ -66,17 +66,17 @@
     border: none;
     cursor: pointer;
     font-family: var(--font-ui);
-    font-size: var(--text-label);
+    font-size: var(--text-ui);
     font-weight: 400;
     letter-spacing: 0.10em;
     text-transform: uppercase;
-    color: var(--color-dim);
+    color: var(--color-muted);
     transition: color var(--transition-base);
     position: relative;
   }
 
   .tab-btn:hover {
-    color: var(--color-muted);
+    color: var(--color-text);
   }
 
   .tab-btn.is-active {
