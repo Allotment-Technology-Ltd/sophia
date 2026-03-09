@@ -56,6 +56,7 @@ export interface RetrievalResult {
 	claims: RetrievedClaim[];
 	relations: RetrievedRelation[];
 	arguments: RetrievedArgument[];
+	seed_claim_ids: string[];
 	degraded: boolean;
 	degraded_reason?: string;
 }
@@ -73,6 +74,7 @@ const EMPTY_RESULT: RetrievalResult = {
 	claims: [],
 	relations: [],
 	arguments: [],
+	seed_claim_ids: [],
 	degraded: false
 };
 
@@ -178,6 +180,9 @@ export async function retrieveContext(
 		}
 
 		console.log(`[RETRIEVAL] Found ${seedClaims.length} seed claims`);
+		const seedClaimIds = seedClaims.map((seed) =>
+			typeof seed.id === 'object' ? String(seed.id) : seed.id
+		);
 
 		// ── Step 3: Graph traversal for each seed claim ──────────────
 		// Collect all claim IDs and argument IDs discovered via traversal
@@ -434,7 +439,13 @@ export async function retrieveContext(
 
 		console.log(`[RETRIEVAL] ${arguments_.length} arguments assembled`);
 
-		return { claims, relations, arguments: arguments_, degraded: false };
+		return {
+			claims,
+			relations,
+			arguments: arguments_,
+			seed_claim_ids: seedClaimIds,
+			degraded: false
+		};
 	} catch (err) {
 		// Top-level catch: SurrealDB unreachable, unexpected errors, etc.
 		console.error(

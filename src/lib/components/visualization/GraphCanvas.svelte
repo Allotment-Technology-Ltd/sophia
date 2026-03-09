@@ -8,6 +8,9 @@
 		edges: GraphEdge[];
 		width?: number;
 		height?: number;
+		pinnedNodeIds?: string[];
+		pathNodeIds?: string[];
+		pathEdges?: Array<{ from: string; to: string }>;
 		onNodeSelect?: (nodeId: string) => void;
 		onJumpToReferences?: (nodeId: string) => void;
 	}
@@ -17,6 +20,9 @@
 		edges = [],
 		width = 800,
 		height = 600,
+		pinnedNodeIds = [],
+		pathNodeIds = [],
+		pathEdges = [],
 		onNodeSelect,
 		onJumpToReferences
 	}: Props = $props();
@@ -89,6 +95,8 @@
 	function isNodeHighlighted(nodeId: string): boolean {
 		if (highlightedNodeId === nodeId) return true;
 		if (selectedNodeId === nodeId) return true;
+		if (pinnedNodeIds.includes(nodeId)) return true;
+		if (pathNodeIds.includes(nodeId)) return true;
 		const connectedEdge = highlightedEdges.find(
 			(e) => e.from === nodeId || e.to === nodeId
 		);
@@ -96,6 +104,15 @@
 	}
 
 	function isEdgeHighlighted(edge: GraphEdge): boolean {
+		if (
+			pathEdges.some(
+				(pathEdge) =>
+					(pathEdge.from === edge.from && pathEdge.to === edge.to) ||
+					(pathEdge.from === edge.to && pathEdge.to === edge.from)
+			)
+		) {
+			return true;
+		}
 		return highlightedEdges.some((e) => e.from === edge.from && e.to === edge.to);
 	}
 
@@ -219,10 +236,12 @@
 					{@const radius = getNodeRadius(node)}
 					{@const isHighlighted = isNodeHighlighted(node.id)}
 					{@const isSelected = selectedNodeId === node.id}
+					{@const isPinned = pinnedNodeIds.includes(node.id)}
 					<g
 						class="graph-node"
 						class:highlighted={isHighlighted}
 						class:selected={isSelected}
+						class:pinned={isPinned}
 						transform="translate({pos.x}, {pos.y})"
 						style:animation-delay="{i * 30}ms"
 					>
@@ -247,6 +266,17 @@
 								stroke="var(--color-sage)"
 								stroke-width="1.5"
 								opacity="0.5"
+							/>
+						{/if}
+
+						{#if isPinned}
+							<circle
+								class="node-pinned-ring"
+								r={radius + 9}
+								fill="none"
+								stroke="var(--color-amber)"
+								stroke-width="1.5"
+								opacity="0.55"
 							/>
 						{/if}
 

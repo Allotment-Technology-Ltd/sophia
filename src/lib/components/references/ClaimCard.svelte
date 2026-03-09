@@ -28,6 +28,7 @@
 </script>
 
 <div
+  id={`claim-card-${claim.id}`}
   class="claim-card"
   class:low-confidence={isLowConfidence}
   role="button"

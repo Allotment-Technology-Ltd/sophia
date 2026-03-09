@@ -105,6 +105,89 @@ test.describe('Authenticated query flow', () => {
     const loadingIndicator = page.locator('.orbital-wrap, .tracker, [aria-live="polite"]').first();
     await expect(loadingIndicator).toBeVisible({ timeout: 5_000 });
   });
+
+  test('map pathfinding works with fixture graph', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as any).__SOPHIA_MAP_FIXTURE__ = {
+        nodes: [
+          { id: 'source:Demo', type: 'source', label: 'Demo Source', phase: 'retrieval' },
+          {
+            id: 'claim:alpha',
+            type: 'claim',
+            label: 'Alpha claim',
+            phase: 'analysis',
+            isSeed: true,
+            confidenceBand: 'high',
+            sourceTitle: 'Demo Source'
+          },
+          {
+            id: 'claim:beta',
+            type: 'claim',
+            label: 'Beta claim',
+            phase: 'critique',
+            isTraversed: true,
+            confidenceBand: 'medium',
+            sourceTitle: 'Demo Source'
+          }
+        ],
+        edges: [
+          { from: 'source:Demo', to: 'claim:alpha', type: 'contains' },
+          { from: 'source:Demo', to: 'claim:beta', type: 'contains' },
+          { from: 'claim:alpha', to: 'claim:beta', type: 'supports', phaseOrigin: 'analysis' }
+        ],
+        meta: {
+          seedNodeIds: ['claim:alpha'],
+          traversedNodeIds: ['claim:beta'],
+          relationTypeCounts: { contains: 2, supports: 1 },
+          maxHops: 1,
+          contextSufficiency: 'strong'
+        }
+      };
+    });
+
+    await page.goto('/?panelTab=map&mapFixture=1');
+    await expect(page.getByTestId('map-root')).toBeVisible({ timeout: 8_000 });
+
+    await page.getByRole('button', { name: /claim node: Alpha claim/i }).click();
+    await page.getByTestId('set-path-start').click();
+
+    await page.getByRole('button', { name: /claim node: Beta claim/i }).click();
+    await page.getByTestId('set-path-end').click();
+
+    await expect(page.getByTestId('path-length')).toContainText('1 hops');
+  });
+
+  test('map deep-link persists selected node and opens references', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as any).__SOPHIA_MAP_FIXTURE__ = {
+        nodes: [
+          { id: 'source:Demo', type: 'source', label: 'Demo Source', phase: 'retrieval' },
+          {
+            id: 'claim:beta',
+            type: 'claim',
+            label: 'Beta claim',
+            phase: 'analysis',
+            isSeed: true,
+            confidenceBand: 'high',
+            sourceTitle: 'Demo Source'
+          }
+        ],
+        edges: [{ from: 'source:Demo', to: 'claim:beta', type: 'contains' }],
+        meta: { seedNodeIds: ['claim:beta'], traversedNodeIds: [], relationTypeCounts: { contains: 1 }, maxHops: 0 }
+      };
+    });
+
+    await page.goto('/?panelTab=map&mapFixture=1');
+    await page.getByRole('button', { name: /claim node: Beta claim/i }).click();
+    await expect(page).toHaveURL(/mapNode=claim%3Abeta/);
+
+    await page.reload();
+    await expect(page).toHaveURL(/mapNode=claim%3Abeta/);
+    await expect(page.getByText(/Label:\s*Beta claim/i)).toBeVisible({ timeout: 8_000 });
+
+    await page.getByTestId('open-in-references').click();
+    await expect(page.getByRole('tab', { name: 'References' })).toHaveAttribute('aria-selected', 'true');
+  });
 });
 
 // ─── Accessibility smoke checks ───────────────────────────────────────────
