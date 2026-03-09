@@ -17,7 +17,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import Anthropic from '@anthropic-ai/sdk';
 import { Surreal } from 'surrealdb';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { generateText } from 'ai';
+import { createVertex } from '@ai-sdk/google-vertex';
 import { embedTexts, EMBEDDING_DIMENSIONS } from '../src/lib/server/embeddings.js';
 import { z } from 'zod';
 import { startSpinner, startStageTimer, renderProgressBar, IS_TTY } from './progress.js';
@@ -78,7 +79,8 @@ const SURREAL_PASS = process.env.SURREAL_PASS || 'root';
 const SURREAL_NAMESPACE = process.env.SURREAL_NAMESPACE || 'sophia';
 const SURREAL_DATABASE = process.env.SURREAL_DATABASE || 'sophia';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
-const GOOGLE_AI_API_KEY = process.env.GOOGLE_AI_API_KEY || '';
+const GOOGLE_VERTEX_PROJECT = process.env.GOOGLE_VERTEX_PROJECT || process.env.GCP_PROJECT_ID || '';
+const GOOGLE_VERTEX_LOCATION = process.env.GOOGLE_VERTEX_LOCATION || process.env.GCP_LOCATION || 'us-central1';
 const DB_CONNECT_MAX_RETRIES = Number(process.env.DB_CONNECT_MAX_RETRIES || '4');
 const DB_CONNECT_RETRY_BASE_MS = Number(process.env.DB_CONNECT_RETRY_BASE_MS || '750');
 
@@ -724,8 +726,8 @@ async function main() {
 		console.error('[ERROR] ANTHROPIC_API_KEY not set');
 		process.exit(1);
 	}
-	if (shouldValidate && !GOOGLE_AI_API_KEY) {
-		console.error('[ERROR] --validate flag requires GOOGLE_AI_API_KEY');
+	if (shouldValidate && !GOOGLE_VERTEX_PROJECT) {
+		console.error('[ERROR] --validate flag requires GOOGLE_VERTEX_PROJECT (or GCP_PROJECT_ID) — uses Vertex AI ADC');
 		process.exit(1);
 	}
 
@@ -761,7 +763,7 @@ async function main() {
 	const existingLog = await getIngestionLog(db, sourceMeta.url);
 
 	if (existingLog) {
-		if (existingLog.status === 'complete') {
+		if (existingLog.status === 'complete' && !forceStage) {
 			console.log(`[SKIP] "${sourceMeta.title}" already ingested (status: complete)`);
 			await db.close();
 			process.exit(0);
@@ -1227,7 +1229,7 @@ async function main() {
 				console.log('│ STAGE 5: CROSS-MODEL VALIDATION (Gemini)                │');
 				console.log('└──────────────────────────────────────────────────────────┘');
 
-				const gemini = new GoogleGenerativeAI(GOOGLE_AI_API_KEY);
+				const vertex = createVertex({ project: GOOGLE_VERTEX_PROJECT, location: GOOGLE_VERTEX_LOCATION });
 
 				const validationPrompt =
 					VALIDATION_SYSTEM +
@@ -1254,18 +1256,12 @@ async function main() {
 								await sleep(delay);
 							}
 
-							const model = gemini.getGenerativeModel({ model: modelName });
-							const result = await model.generateContent({
-								contents: [{ role: 'user', parts: [{ text: validationPrompt }] }],
-								generationConfig: { temperature: 0.1 }
+							const { text: responseText, usage } = await generateText({
+								model: vertex(modelName),
+								messages: [{ role: 'user', content: validationPrompt }],
+								temperature: 0.1
 							});
-
-							const response = result.response;
-							if (response?.usageMetadata?.totalTokenCount) {
-								costs.geminiTokens += response.usageMetadata.totalTokenCount;
-							}
-
-							const responseText = response?.text() || '';
+							costs.geminiTokens += (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
 							const parsed = parseJsonResponse(responseText);
 							validationResult = ValidationOutputSchema.parse(parsed);
 							if (modelName !== GEMINI_MODEL) {
