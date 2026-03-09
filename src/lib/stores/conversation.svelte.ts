@@ -88,7 +88,11 @@ function createConversationStore() {
     get questionLimit() { return QUESTION_LIMIT; },
     get isAtQuestionLimit() { return questionCount >= QUESTION_LIMIT; },
 
-    async submitQuery(query: string, lens?: string): Promise<void> {
+    async submitQuery(
+      query: string,
+      lens?: string,
+      options?: { domainMode?: 'auto' | 'manual'; domain?: 'ethics' | 'philosophy_of_mind' }
+    ): Promise<void> {
       // Enforce question limit (only for live queries, not cache hits)
       if (questionCount >= QUESTION_LIMIT) return;
 
@@ -109,7 +113,12 @@ function createConversationStore() {
         timestamp: new Date()
       }];
 
-      trackEvent('query_submitted', { query_length: query.length, has_lens: !!lens });
+      const domainMode = options?.domainMode ?? 'auto';
+      const domain = options?.domain;
+      trackEvent('query_submitted', {
+        query_length: query.length,
+        has_lens: !!lens
+      });
 
       const cached = historyStore.getCachedResult(query);
       if (cached) {
@@ -191,7 +200,12 @@ function createConversationStore() {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${idToken}`
           },
-          body: JSON.stringify({ query, lens })
+          body: JSON.stringify({
+            query,
+            lens,
+            domain_mode: domainMode,
+            ...(domainMode === 'manual' && domain ? { domain } : {})
+          })
         });
 
         if (!response.ok) {

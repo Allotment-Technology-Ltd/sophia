@@ -58,7 +58,12 @@ export function projectRetrievalToGraph(retrieval: RetrievalResult): {
         type: 'source',
         label: `${claim.source_title} (${authors})`,
         phase: 'retrieval',
-        sourceTitle: claim.source_title
+        sourceTitle: claim.source_title,
+        depth_level: 0,
+        evidence_strength: 1,
+        novelty_score: 0,
+        pass_origin: 'retrieval',
+        conflict_status: 'none'
       });
     }
   }
@@ -76,7 +81,12 @@ export function projectRetrievalToGraph(retrieval: RetrievalResult): {
       relevance: 1 - idx / Math.max(retrieval.claims.length, 1),
       isSeed: seedClaimIds.has(claim.id),
       isTraversed: !seedClaimIds.has(claim.id),
-      confidenceBand: claim.confidence >= 0.85 ? 'high' : claim.confidence >= 0.65 ? 'medium' : 'low'
+      confidenceBand: claim.confidence >= 0.85 ? 'high' : claim.confidence >= 0.65 ? 'medium' : 'low',
+      depth_level: claimDepth.get(claim.id) ?? 0,
+      evidence_strength: claim.confidence,
+      novelty_score: seedClaimIds.has(claim.id) ? 0 : 0.2,
+      pass_origin: 'retrieval',
+      conflict_status: 'none'
     });
     if (!seedClaimIds.has(claim.id)) {
       traversedNodeIds.push(`claim:${claim.id}`);
@@ -87,7 +97,12 @@ export function projectRetrievalToGraph(retrieval: RetrievalResult): {
     edges.push({
       from: sourceId,
       to: `claim:${claim.id}`,
-      type: 'contains'
+      type: 'contains',
+      depth_level: 0,
+      evidence_strength: 1,
+      novelty_score: 0,
+      pass_origin: 'retrieval',
+      conflict_status: 'none'
     });
   }
 
@@ -102,7 +117,16 @@ export function projectRetrievalToGraph(retrieval: RetrievalResult): {
         from: `claim:${fromClaim.id}`,
         to: `claim:${toClaim.id}`,
         type: edgeType,
-        phaseOrigin: 'retrieval'
+        phaseOrigin: 'retrieval',
+        depth_level: Math.max(claimDepth.get(fromClaim.id) ?? 0, claimDepth.get(toClaim.id) ?? 0),
+        evidence_strength: relation.strength === 'strong' ? 0.85 : relation.strength === 'weak' ? 0.55 : 0.7,
+        novelty_score: 0.25,
+        pass_origin: 'retrieval',
+        conflict_status: edgeType === 'contradicts' ? 'contested' : 'none',
+        relation_rationale: relation.note,
+        relation_confidence: relation.strength === 'strong' ? 0.85 : relation.strength === 'weak' ? 0.55 : 0.7,
+        evidence_count: relation.note ? 1 : 0,
+        evidence_sources: relation.note ? [`note:${relation.note.slice(0, 40)}`] : []
       });
     }
   }

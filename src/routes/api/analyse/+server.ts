@@ -2,16 +2,20 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { runDialecticalEngine } from '$lib/server/engine';
 import type { SSEEvent } from '$lib/types/api';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { query as dbQuery } from '$lib/server/db';
 import { adminDb } from '$lib/server/firebase-admin';
 import { runVerificationPipeline } from '$lib/server/verification/pipeline';
+import { runDepthEnrichment } from '$lib/server/enrichment/pipeline';
+import { recordSnapshotLineage } from '$lib/server/enrichment/store';
+import type { AnalysisPhase, Claim, RelationBundle } from '$lib/types/references';
+import type { GraphEdge, GraphNode, GraphSnapshotMeta } from '$lib/types/api';
 
 // Store only replay-relevant events — excludes high-volume pass_chunk events
 const REPLAY_EVENT_TYPES = new Set([
   'pass_start', 'pass_structured', 'pass_complete',
   'sources', 'grounding_sources', 'claims', 'relations',
-  'confidence_summary', 'metadata', 'graph_snapshot', 'constitution_check'
+  'confidence_summary', 'metadata', 'graph_snapshot', 'constitution_check', 'enrichment_status'
 ]);
 
 const FIRESTORE_CACHE_TTL_DAYS = 30;
@@ -42,6 +46,8 @@ async function saveFirestoreCache(
   queryHash: string,
   queryText: string,
   lens: string | undefined,
+  domainMode: 'auto' | 'manual',
+  domain: 'ethics' | 'philosophy_of_mind' | undefined,
   events: SSEEvent[]
 ): Promise<void> {
   try {
@@ -53,6 +59,8 @@ async function saveFirestoreCache(
         queryHash,
         query: queryText,
         lens: lens ?? null,
+        domain_mode: domainMode,
+        domain: domain ?? null,
         events: storageEvents,
         createdAt: new Date()
       });
@@ -62,16 +70,24 @@ async function saveFirestoreCache(
   }
 }
 
-function buildQueryHash(query: string, lens?: string): string {
+function buildQueryHash(
+  query: string,
+  lens?: string,
+  domainMode: 'auto' | 'manual' = 'auto',
+  domain?: 'ethics' | 'philosophy_of_mind'
+): string {
   const normalized = query.trim().toLowerCase();
   const lensKey = (lens || '').trim().toLowerCase();
-  return createHash('sha256').update(`${normalized}::${lensKey}`).digest('hex');
+  const domainKey = domainMode === 'manual' ? (domain ?? 'unknown') : 'auto';
+  return createHash('sha256').update(`${normalized}::${lensKey}::${domainMode}::${domainKey}`).digest('hex');
 }
 
 type QueryCacheRow = {
   query_hash: string;
   query_text: string;
   lens?: string;
+  domain_mode?: 'auto' | 'manual';
+  domain?: 'ethics' | 'philosophy_of_mind';
   events: SSEEvent[];
   created_at?: string;
   expires_at?: string;
@@ -82,7 +98,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // A2/A3: uid is guaranteed non-null here — hooks.server.ts already verified the Bearer token
   const uid = locals.user?.uid ?? null;
 
-  let body: { query?: string; lens?: string };
+  let body: {
+    query?: string;
+    lens?: string;
+    domain_mode?: 'auto' | 'manual';
+    domain?: 'ethics' | 'philosophy_of_mind';
+  };
   try {
     body = await request.json();
   } catch {
@@ -90,13 +111,28 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   const { query, lens } = body;
+  const domainMode = body.domain_mode ?? 'auto';
+  const domain = body.domain;
+  const domainOverrideEnabled =
+    process.env.ENABLE_DOMAIN_OVERRIDE_UI?.toLowerCase() !== 'false';
+
+  if (domainMode === 'manual' && !domainOverrideEnabled) {
+    return json({ error: 'domain override is disabled' }, { status: 400 });
+  }
+
+  if (domainMode === 'manual' && domain !== 'ethics' && domain !== 'philosophy_of_mind') {
+    return json(
+      { error: 'domain is required when domain_mode is manual (ethics | philosophy_of_mind)' },
+      { status: 400 }
+    );
+  }
 
   if (!query || typeof query !== 'string' || !query.trim()) {
     return json({ error: 'Query is required and must be a non-empty string' }, { status: 400 });
   }
 
   const queryText = query.trim();
-  const queryHash = buildQueryHash(queryText, lens);
+  const queryHash = buildQueryHash(queryText, lens, domainMode, domain);
   const constitutionInAnalyseEnabled =
     process.env.ENABLE_CONSTITUTION_IN_ANALYSE?.toLowerCase() === 'true';
 
@@ -195,6 +231,20 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
       // Cache miss: run the engine and collect events
       const replayEvents: SSEEvent[] = [];
+      const queryRunId = `run:${randomUUID()}`;
+      const passClaims: Partial<Record<AnalysisPhase, Claim[]>> = {};
+      const passRelations: Partial<Record<AnalysisPhase, RelationBundle[]>> = {};
+      const groundingSources: Array<{ url: string; title?: string; pass: string }> = [];
+      let latestGraphNodes: GraphNode[] = [];
+      let latestGraphEdges: GraphEdge[] = [];
+      let latestGraphMeta: GraphSnapshotMeta | undefined;
+      let latestSnapshotId: string | undefined;
+      let latestRetrievalMeta:
+        | {
+            claims_retrieved?: number;
+            retrieval_degraded?: boolean;
+          }
+        | undefined;
 
       const sendEventWithCapture = (event: SSEEvent): void => {
         replayEvents.push(event);
@@ -220,11 +270,31 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           },
           onGroundingSources(pass, sources) {
             sendEventWithCapture({ type: 'grounding_sources', pass, sources });
+            for (const source of sources) {
+              groundingSources.push({ url: source.url, title: source.title, pass });
+            }
           },
           onGraphSnapshot(nodes, edges, meta, version) {
+            latestGraphNodes = nodes;
+            latestGraphEdges = edges;
+            latestGraphMeta = meta;
+            latestSnapshotId = meta?.snapshot_id;
             sendEventWithCapture({ type: 'graph_snapshot', nodes, edges, meta, version });
+            if (meta?.snapshot_id) {
+              void recordSnapshotLineage({
+                snapshot_id: meta.snapshot_id,
+                query_run_id: meta.query_run_id ?? queryRunId,
+                parent_snapshot_id: meta.parent_snapshot_id,
+                pass_sequence: meta.pass_sequence ?? 0,
+                nodes,
+                edges,
+                created_at: new Date().toISOString()
+              });
+            }
           },
           onClaims(pass, claims, relations) {
+            passClaims[pass] = [...(passClaims[pass] ?? []), ...claims];
+            passRelations[pass] = [...(passRelations[pass] ?? []), ...relations];
             sendEventWithCapture({ type: 'claims', pass, claims });
             sendEventWithCapture({ type: 'relations', pass, relations });
           },
@@ -237,6 +307,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             });
           },
           onMetadata(totalInputTokens, totalOutputTokens, durationMs, retrieval) {
+            latestRetrievalMeta = retrieval
+              ? {
+                  claims_retrieved: retrieval.claims_retrieved,
+                  retrieval_degraded: retrieval.retrieval_degraded
+                }
+              : undefined;
             sendEventWithCapture({
               type: 'metadata',
               total_input_tokens: totalInputTokens,
@@ -249,7 +325,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
                     retrieval_degraded: retrieval.retrieval_degraded,
                     retrieval_degraded_reason: retrieval.retrieval_degraded_reason,
                     detected_domain: retrieval.detected_domain,
-                    domain_confidence: retrieval.domain_confidence
+                    domain_confidence: retrieval.domain_confidence,
+                    selected_domain_mode: retrieval.selected_domain_mode,
+                    selected_domain: retrieval.selected_domain
                   }
                 : {})
             });
@@ -257,7 +335,50 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           onError(error) {
             sendEventWithCapture({ type: 'error', message: error });
           }
-        }, { lens });
+        }, { lens, domainMode, domain, queryRunId });
+
+        const depthEnrichmentEnabled = process.env.ENABLE_DEPTH_ENRICHMENT?.toLowerCase() === 'true';
+        if (depthEnrichmentEnabled) {
+          const enrichment = await runDepthEnrichment({
+            query: queryText,
+            queryRunId,
+            parentSnapshotId: latestSnapshotId,
+            passClaims,
+            passRelations,
+            baseNodes: latestGraphNodes,
+            baseEdges: latestGraphEdges,
+            retrieval: {
+              claims_retrieved: latestRetrievalMeta?.claims_retrieved,
+              retrieval_degraded: latestRetrievalMeta?.retrieval_degraded
+            },
+            groundingSources
+          });
+
+          if (enrichment.snapshotNodes && enrichment.snapshotEdges) {
+            sendEventWithCapture({
+              type: 'graph_snapshot',
+              nodes: enrichment.snapshotNodes,
+              edges: enrichment.snapshotEdges,
+              meta: {
+                ...(latestGraphMeta ?? {}),
+                snapshot_id: enrichment.snapshotId,
+                query_run_id: enrichment.queryRunId,
+                parent_snapshot_id: enrichment.parentSnapshotId,
+                pass_sequence: 4
+              },
+              version: 2
+            });
+          }
+
+          sendEventWithCapture({
+            type: 'enrichment_status',
+            status: enrichment.status,
+            reason: enrichment.reason,
+            stagedCount: enrichment.stagedCount,
+            promotedCount: enrichment.promotedCount,
+            queryRunId: enrichment.queryRunId
+          });
+        }
 
         if (constitutionInAnalyseEnabled) {
           const constitutionStartedAt = Date.now();
@@ -291,7 +412,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         if (!hasErrorEvent && hasMetadataEvent) {
           // A4: Save to Firestore (per-user)
           if (uid) {
-            await saveFirestoreCache(uid, queryHash, queryText, lens, replayEvents);
+            await saveFirestoreCache(uid, queryHash, queryText, lens, domainMode, domain, replayEvents);
           }
 
           // Also save to SurrealDB shared cache (best-effort)
@@ -302,11 +423,20 @@ export const POST: RequestHandler = async ({ request, locals }) => {
                 query_hash: $query_hash,
                 query_text: $query_text,
                 lens: $lens,
+                domain_mode: $domain_mode,
+                domain: $domain,
                 events: $events,
                 hit_count: 0,
                 created_at: time::now()
               }`,
-              { query_hash: queryHash, query_text: queryText, lens: lens ?? null, events: replayEvents }
+              {
+                query_hash: queryHash,
+                query_text: queryText,
+                lens: lens ?? null,
+                domain_mode: domainMode,
+                domain: domain ?? null,
+                events: replayEvents
+              }
             );
           } catch (err) {
             console.warn('[CACHE] SurrealDB write failed:', err instanceof Error ? err.message : String(err));

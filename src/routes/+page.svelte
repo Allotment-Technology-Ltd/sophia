@@ -29,6 +29,9 @@
 
   // ── State ─────────────────────────────────────────────────────────────────
   let queryInput = $state('');
+  let selectedDomain = $state<'auto' | 'ethics' | 'philosophy_of_mind'>('auto');
+  const domainSelectorEnabled =
+    (import.meta.env.PUBLIC_ENABLE_DOMAIN_OVERRIDE_UI ?? 'true').toLowerCase() === 'true';
   let activeTab = $state<TabId>('references');
   let activeResultPass = $state<'analysis' | 'critique' | 'synthesis'>('analysis');
   let revealed = $state(false);
@@ -117,7 +120,10 @@
     queryInput = '';
     activeResultPass = 'analysis';
     revealed = false;
-    await conversation.submitQuery(query);
+    await conversation.submitQuery(query, undefined, {
+      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+      domain: selectedDomain === 'auto' ? undefined : selectedDomain
+    });
   }
 
   function handleKeydown(e: KeyboardEvent): void {
@@ -154,7 +160,10 @@
   async function retryLastQuery(): Promise<void> {
     const lastQuery = conversation.messages.findLast(m => m.role === 'user')?.content;
     if (!lastQuery) return;
-    await conversation.submitQuery(lastQuery);
+    await conversation.submitQuery(lastQuery, undefined, {
+      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+      domain: selectedDomain === 'auto' ? undefined : selectedDomain
+    });
   }
 
   // ── Effects ───────────────────────────────────────────────────────────────
@@ -314,6 +323,17 @@
             <p class="query-sub">Be specific · More context → richer analysis</p>
 
             <div class="query-input-wrap">
+              {#if domainSelectorEnabled}
+                <div class="domain-row">
+                  <label for="domain-select">Domain</label>
+                  <select id="domain-select" bind:value={selectedDomain}>
+                    <option value="auto">Auto</option>
+                    <option value="ethics">Ethics</option>
+                    <option value="philosophy_of_mind">Philosophy of Mind</option>
+                  </select>
+                </div>
+              {/if}
+
               <QuestionInput
                 bind:value={queryInput}
                 onSubmit={handleSubmit}
@@ -505,11 +525,20 @@
                   {@const hints = extractFurtherQuestions(passes.synthesis)}
                   <FollowUpHints
                     questions={hints}
-                    onSelect={(q) => { conversation.submitQuery(q); }}
+                    onSelect={(q) => {
+                      conversation.submitQuery(q, undefined, {
+                        domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+                        domain: selectedDomain === 'auto' ? undefined : selectedDomain
+                      });
+                    }}
                   />
                 {/if}
                 <FollowUpInput
-                  onSubmit={(text) => conversation.submitQuery(text)}
+                  onSubmit={(text) =>
+                    conversation.submitQuery(text, undefined, {
+                      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+                      domain: selectedDomain === 'auto' ? undefined : selectedDomain
+                    })}
                   disabled={conversation.isLoading}
                 />
               {/if}
@@ -640,6 +669,30 @@
     flex-direction: column;
     align-items: center;
     gap: var(--space-3);
+  }
+
+  .domain-row {
+    width: min(700px, 100%);
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    font-family: var(--font-ui);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    color: var(--color-muted);
+    text-transform: uppercase;
+  }
+
+  .domain-row select {
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    padding: 6px 8px;
+    font-size: 0.78rem;
+    text-transform: none;
+    letter-spacing: 0;
   }
 
   .query-actions {

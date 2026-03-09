@@ -154,7 +154,7 @@ export async function retrieveContext(
 					WHERE embedding <|${knnPool}|> $query_embedding
 				)
 				${postWhere}
-				LIMIT ${topK}`,
+				LIMIT ${knnPool}`,
 				{
 					query_embedding: queryEmbedding,
 					...(domain ? { domain } : {}),
@@ -177,6 +177,29 @@ export async function retrieveContext(
 		if (!seedClaims || seedClaims.length === 0) {
 			console.log('[RETRIEVAL] No seed claims found via vector search');
 			return EMPTY_RESULT;
+		}
+
+		// Diversity-aware seed selection: prefer source variety before filling by rank.
+		// This reduces flat neighborhoods dominated by one source.
+		if (seedClaims.length > 1) {
+			const diverse: SeedRow[] = [];
+			const seenSources = new Set<string>();
+			for (const claim of seedClaims) {
+				const sourceKey = claim.source_title || 'unknown';
+				if (!seenSources.has(sourceKey)) {
+					diverse.push(claim);
+					seenSources.add(sourceKey);
+				}
+				if (diverse.length >= topK) break;
+			}
+			if (diverse.length < topK) {
+				for (const claim of seedClaims) {
+					if (diverse.includes(claim)) continue;
+					diverse.push(claim);
+					if (diverse.length >= topK) break;
+				}
+			}
+			seedClaims = diverse.slice(0, topK);
 		}
 
 		console.log(`[RETRIEVAL] Found ${seedClaims.length} seed claims`);

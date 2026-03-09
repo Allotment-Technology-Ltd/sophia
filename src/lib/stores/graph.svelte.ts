@@ -8,7 +8,10 @@ const ALL_RELATION_TYPES: GraphEdge['type'][] = [
   'supports',
   'contradicts',
   'responds-to',
-  'depends-on'
+  'depends-on',
+  'qualifies',
+  'assumes',
+  'resolves'
 ];
 
 function createGraphStore() {

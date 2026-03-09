@@ -1,6 +1,7 @@
 import type { PassType } from './passes';
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from './references';
 import type { ConstitutionalCheck } from './constitution';
+import type { ReasoningEvaluation } from './verification';
 
 export interface AnalyseRequest {
   query: string;
@@ -50,6 +51,9 @@ export interface MetadataEvent {
   retrieval_degraded_reason?: string;
   detected_domain?: string;
   domain_confidence?: 'high' | 'medium' | 'low';
+  selected_domain_mode?: 'auto' | 'manual';
+  selected_domain?: 'ethics' | 'philosophy_of_mind';
+  query_run_id?: string;
 }
 
 export interface ErrorEvent {
@@ -172,6 +176,20 @@ export interface EnrichmentStatusEvent {
   queryRunId?: string;
 }
 
+export interface ReasoningQualityEvent {
+  type: 'reasoning_quality';
+  reasoning_quality: ReasoningEvaluation;
+}
+
+export interface ConstitutionDeltaEvent {
+  type: 'constitution_delta';
+  pass: 'analysis' | 'critique' | 'synthesis';
+  introduced_violations: string[];
+  resolved_violations: string[];
+  unresolved_violations: string[];
+  overall_compliance: 'pass' | 'partial' | 'fail';
+}
+
 export type SSEEvent =
   | PassStartEvent
   | PassChunkEvent
@@ -186,4 +204,6 @@ export type SSEEvent =
   | ConfidenceSummaryEvent
   | GraphSnapshotEvent
   | ConstitutionCheckEvent
-  | EnrichmentStatusEvent;
+  | EnrichmentStatusEvent
+  | ReasoningQualityEvent
+  | ConstitutionDeltaEvent;

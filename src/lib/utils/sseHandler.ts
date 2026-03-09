@@ -48,6 +48,13 @@ export function handleSSEEvent(event: SSEEvent): boolean {
       return true;
     }
 
+    case 'enrichment_status': {
+      if (event.status === 'suppressed' || event.status === 'failed') {
+        console.info('[SSE] enrichment_status:', event.status, event.reason ?? '');
+      }
+      return true;
+    }
+
     case 'pass_start':
       graphStore.setLoading();
       referencesStore.setPhase(event.pass as 'analysis' | 'critique' | 'synthesis');

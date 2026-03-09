@@ -110,6 +110,8 @@ export interface EngineCallbacks {
       retrieval_degraded_reason?: string;
       detected_domain?: string;
       domain_confidence?: 'high' | 'medium' | 'low';
+      selected_domain_mode?: 'auto' | 'manual';
+      selected_domain?: 'ethics' | 'philosophy_of_mind';
     }
   ): void;
   onError(error: string): void;
@@ -118,6 +120,9 @@ export interface EngineCallbacks {
 interface EngineOptions {
   lens?: string;
   mode?: 'philosophy' | 'agnostic';
+  domainMode?: 'auto' | 'manual';
+  domain?: 'ethics' | 'philosophy_of_mind';
+  queryRunId?: string;
 }
 
 async function streamPassWithContinuation(
@@ -233,12 +238,18 @@ export async function runDialecticalEngine(
   const queryPreview = query.slice(0, 60).replace(/\n/g, ' ');
   const engineMode = options?.mode ?? 'philosophy';
   const isAgnosticMode = engineMode === 'agnostic';
+  const selectedDomainMode = options?.domainMode ?? 'auto';
+  const selectedDomain = options?.domain;
 
   // ── Domain classification ──────────────────────────────────────────────
   const domainClassification = isAgnosticMode
     ? { domain: null, confidence: 'low' as const, scores: {} }
     : classifyQueryDomain(query);
-  const retrievalDomain = isAgnosticMode ? undefined : getRetrievalDomain(domainClassification);
+  const retrievalDomain = isAgnosticMode
+    ? undefined
+    : selectedDomainMode === 'manual' && selectedDomain
+      ? selectedDomain
+      : getRetrievalDomain(domainClassification);
   console.log(
     `[ENGINE] Starting — mode=${engineMode} query="${queryPreview}" lens=${options?.lens ?? 'none'} ` +
     `domain=${domainClassification.domain ?? 'unknown'} ` +
@@ -293,9 +304,21 @@ export async function runDialecticalEngine(
     // Always emit (even empty) so clients can render an explicit degraded reason.
     if (claimsRetrieved > 0) {
       const graphData = projectRetrievalToGraph(retrievalResult);
+      const snapshotId = `snapshot:${crypto.randomUUID()}`;
       console.log('[ENGINE] Emitting graph snapshot:', { nodeCount: graphData.nodes.length, edgeCount: graphData.edges.length, claimsRetrieved, argumentsRetrieved });
-      callbacks.onGraphSnapshot(graphData.nodes, graphData.edges, graphData.meta, 1);
+      callbacks.onGraphSnapshot(
+        graphData.nodes,
+        graphData.edges,
+        {
+          ...graphData.meta,
+          snapshot_id: snapshotId,
+          query_run_id: options?.queryRunId,
+          pass_sequence: 0
+        },
+        2
+      );
     } else {
+      const snapshotId = `snapshot:${crypto.randomUUID()}`;
       console.log('[ENGINE] No claims retrieved (claimsRetrieved=0), emitting empty degraded snapshot');
       callbacks.onGraphSnapshot(
         [],
@@ -308,9 +331,12 @@ export async function runDialecticalEngine(
           contextSufficiency: 'sparse',
           retrievalDegraded: true,
           retrievalDegradedReason: retrievalDegradedReason ?? 'no_claims_retrieved',
-          retrievalTimestamp: new Date().toISOString()
+          retrievalTimestamp: new Date().toISOString(),
+          snapshot_id: snapshotId,
+          query_run_id: options?.queryRunId,
+          pass_sequence: 0
         },
-        1
+        2
       );
     }
   } catch (err) {
@@ -623,7 +649,9 @@ export async function runDialecticalEngine(
     retrieval_degraded: retrievalDegraded,
     retrieval_degraded_reason: retrievalDegradedReason,
     detected_domain: domainClassification.domain ?? undefined,
-    domain_confidence: domainClassification.domain ? domainClassification.confidence : undefined
+    domain_confidence: domainClassification.domain ? domainClassification.confidence : undefined,
+    selected_domain_mode: selectedDomainMode,
+    selected_domain: selectedDomainMode === 'manual' ? selectedDomain : undefined
   });
 }
 
