@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { randomBytes, scryptSync } from 'node:crypto';
 import { Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from './firebase-admin';
 
@@ -27,21 +27,23 @@ export interface ApiKeyVerificationResult {
   error?: 'missing' | 'invalid' | 'inactive' | 'rate_limited';
 }
 
-function getApiKeyHashSecret(): string | null {
+function getApiKeyHashSecret(): string {
   const secret = process.env.API_KEY_HASH_SECRET?.trim();
-  return secret && secret.length > 0 ? secret : null;
-}
-
-function hashApiKeyLegacy(rawApiKey: string): string {
-  return createHash('sha256').update(rawApiKey).digest('hex');
+  if (!secret) {
+    throw new Error('API_KEY_HASH_SECRET is required for API key hashing');
+  }
+  return secret;
 }
 
 export function hashApiKey(rawApiKey: string): string {
   const secret = getApiKeyHashSecret();
-  if (!secret) {
-    return hashApiKeyLegacy(rawApiKey);
-  }
-  return createHmac('sha256', secret).update(rawApiKey).digest('hex');
+  // Deterministic, computationally expensive KDF for stored API key verifier values.
+  return scryptSync(rawApiKey, secret, 32, {
+    N: 1 << 15,
+    r: 8,
+    p: 1,
+    maxmem: 64 * 1024 * 1024
+  }).toString('hex');
 }
 
 export function createApiKey(): { rawKey: string; keyId: string; keyHash: string; prefix: string } {
@@ -76,24 +78,13 @@ export async function verifyApiKey(request: Request): Promise<ApiKeyVerification
     return { valid: false, key_id: null, error: 'invalid' };
   }
 
-  const hmacHash = hashApiKey(rawApiKey);
-  const legacyHash = hashApiKeyLegacy(rawApiKey);
+  const keyHash = hashApiKey(rawApiKey);
 
-  let snapshot = await adminDb
+  const snapshot = await adminDb
     .collection('api_keys')
-    .where('key_hash', '==', hmacHash)
+    .where('key_hash', '==', keyHash)
     .limit(1)
     .get();
-
-  let matchedViaLegacy = false;
-  if (snapshot.empty && hmacHash !== legacyHash) {
-    snapshot = await adminDb
-      .collection('api_keys')
-      .where('key_hash', '==', legacyHash)
-      .limit(1)
-      .get();
-    matchedViaLegacy = !snapshot.empty;
-  }
 
   if (snapshot.empty) {
     return { valid: false, key_id: null, error: 'invalid' };
@@ -127,20 +118,14 @@ export async function verifyApiKey(request: Request): Promise<ApiKeyVerification
       return { valid: false, error: 'rate_limited' as const, remaining: 0 };
     }
 
-    const updatePayload: Record<string, unknown> = {
+    tx.update(doc.ref, {
       usage_count: (latest.usage_count ?? 0) + 1,
       daily_count: currentDailyCount + 1,
       daily_reset_at: shouldReset
         ? Timestamp.fromDate(new Date(now.getTime() + 24 * 60 * 60 * 1000))
         : latest.daily_reset_at ?? Timestamp.fromDate(new Date(now.getTime() + 24 * 60 * 60 * 1000)),
       last_used_at: nowTimestamp
-    };
-
-    if (matchedViaLegacy && getApiKeyHashSecret()) {
-      updatePayload.key_hash = hmacHash;
-    }
-
-    tx.update(doc.ref, updatePayload);
+    });
 
     return {
       valid: true,
