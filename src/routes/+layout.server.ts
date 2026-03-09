@@ -3,7 +3,7 @@ import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = async ({ locals, url }) => {
   // Skip email check on public pages
-  const publicPaths = ['/auth', '/access-denied'];
+  const publicPaths = ['/auth', '/access-denied', '/api-access', '/developer'];
   if (publicPaths.some(p => url.pathname.startsWith(p))) {
     return {};
   }

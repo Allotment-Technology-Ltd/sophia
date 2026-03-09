@@ -147,11 +147,11 @@ The API accepts any text (a legal argument, a policy document, an AI-generated a
 
 Key deliverables:
 
-- [ ] Domain-agnostic claim extraction (`src/lib/server/extraction.ts`) — extended claim types: empirical, causal, explanatory, normative, predictive, definitional, procedural
-- [ ] Reasoning quality scoring (`src/lib/server/reasoningEval.ts`) — 6 dimensions: logical structure, evidence grounding, counterargument coverage, scope calibration, assumption transparency, internal consistency
-- [ ] `POST /api/v1/verify` — API-key authenticated (not Firebase Auth); streaming + JSON modes; `X-Request-Id`, `X-Processing-Time-Ms` headers
-- [ ] `POST /api/v1/keys` + `GET /api/v1/keys` — API key management (admin-gated via Firebase Auth)
-- [ ] Developer waitlist page and API documentation
+- [x] Domain-agnostic claim extraction (`src/lib/server/extraction.ts`) — extended claim types: empirical, causal, explanatory, normative, predictive, definitional, procedural
+- [x] Reasoning quality scoring (`src/lib/server/reasoningEval.ts`) — 6 dimensions: logical structure, evidence grounding, counterargument coverage, scope calibration, assumption transparency, internal consistency
+- [x] `POST /api/v1/verify` — API-key authenticated (not Firebase Auth); streaming + JSON modes; `X-Request-Id`, `X-Processing-Time-Ms` headers
+- [x] `POST /api/v1/keys` + `GET /api/v1/keys` — API key management (admin-gated via Firebase Auth)
+- [x] Developer waitlist page and API documentation
 
 **Architecture:** `/api/v1/*` routes share the engine and Vertex AI client but use domain-agnostic prompts. Consumer `/api/analyse` is unchanged.
 

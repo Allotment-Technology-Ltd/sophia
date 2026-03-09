@@ -1,7 +1,8 @@
 <script lang="ts">
 	import type { PageData } from './$types';
+	import type { ActionData } from './$types';
 
-	let { data }: { data: PageData } = $props();
+	let { data, form }: { data: PageData; form?: ActionData } = $props();
 
 	// Table sorting state
 	let sortColumn: 'title' | 'source_type' | 'claim_count' | 'status' | 'ingested_at' = $state('ingested_at');
@@ -257,6 +258,80 @@
 				{:else}
 					<p class="text-sophia-dark-dim font-mono text-sm text-center py-8">No recent ingestions</p>
 				{/if}
+			</div>
+		</div>
+
+		<!-- API Keys -->
+		<div class="mb-8">
+			<h2 class="text-xl font-serif text-sophia-dark-text mb-4">API Keys</h2>
+			<div class="mb-4 bg-sophia-dark-surface border border-sophia-dark-border rounded p-4">
+				<form method="POST" action="?/generateKey" class="grid grid-cols-4 gap-3">
+					<input
+						name="name"
+						placeholder="Key name"
+						class="col-span-2 rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-sm text-sophia-dark-text"
+					/>
+					<input
+						name="owner_uid"
+						placeholder="Owner UID"
+						class="rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-sm text-sophia-dark-text"
+					/>
+					<input
+						name="daily_quota"
+						type="number"
+						min="1"
+						value="100"
+						class="rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-sm text-sophia-dark-text"
+					/>
+					<button
+						type="submit"
+						class="col-span-4 rounded border border-sophia-dark-sage px-4 py-2 font-mono text-sm text-sophia-dark-sage hover:bg-sophia-dark-sage/10 transition-colors"
+					>
+						Generate New Key
+					</button>
+				</form>
+				{#if form?.generatedKey}
+					<p class="mt-3 font-mono text-xs text-sophia-dark-sage break-all">
+						New key (shown once): {form.generatedKey}
+					</p>
+				{/if}
+			</div>
+
+			<div class="bg-sophia-dark-surface border border-sophia-dark-border rounded overflow-hidden">
+				<table class="w-full">
+					<thead class="bg-sophia-dark-surface-raised border-b border-sophia-dark-border">
+						<tr>
+							<th class="text-left px-4 py-3 text-xs font-mono text-sophia-dark-muted">NAME</th>
+							<th class="text-left px-4 py-3 text-xs font-mono text-sophia-dark-muted">OWNER</th>
+							<th class="text-left px-4 py-3 text-xs font-mono text-sophia-dark-muted">PREFIX</th>
+							<th class="text-right px-4 py-3 text-xs font-mono text-sophia-dark-muted">USAGE</th>
+							<th class="text-left px-4 py-3 text-xs font-mono text-sophia-dark-muted">CREATED</th>
+							<th class="text-left px-4 py-3 text-xs font-mono text-sophia-dark-muted">STATUS</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each data.apiKeys as key}
+							<tr class="border-b border-sophia-dark-border last:border-0 hover:bg-sophia-dark-surface-raised/50 transition-colors">
+								<td class="px-4 py-3 font-mono text-sm text-sophia-dark-text">{key.name}</td>
+								<td class="px-4 py-3 font-mono text-xs text-sophia-dark-muted">{key.owner_uid}</td>
+								<td class="px-4 py-3 font-mono text-sm text-sophia-dark-text">{key.key_prefix}</td>
+								<td class="px-4 py-3 font-mono text-sm text-sophia-dark-text text-right">{key.usage_count}</td>
+								<td class="px-4 py-3 font-mono text-sm text-sophia-dark-muted">{formatDate(key.created_at)}</td>
+								<td class="px-4 py-3">
+									<span class="px-2 py-1 text-xs font-mono border rounded {key.active ? 'bg-sophia-dark-sage/20 text-sophia-dark-sage border-sophia-dark-sage/40' : 'bg-sophia-dark-copper/20 text-sophia-dark-copper border-sophia-dark-copper/40'}">
+										{key.active ? 'active' : 'revoked'}
+									</span>
+								</td>
+							</tr>
+						{:else}
+							<tr>
+								<td colspan="6" class="px-4 py-8 text-center text-sophia-dark-dim font-mono text-sm">
+									No API keys generated yet
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
 			</div>
 		</div>
 	</div>

@@ -8,7 +8,8 @@ export const handle: Handle = async ({ event, resolve }) => {
   // client-side via onAuthStateChanged in the layout.
   const isProtectedApi =
     event.url.pathname.startsWith('/api/') &&
-    !event.url.pathname.startsWith('/api/health');
+    !event.url.pathname.startsWith('/api/health') &&
+    !event.url.pathname.startsWith('/api/v1/verify');
 
   if (isProtectedApi) {
     const authHeader = event.request.headers.get('Authorization');
