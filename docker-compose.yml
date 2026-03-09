@@ -14,6 +14,7 @@ services:
     ports:
       - "8000:8000"
     command: start --user root --pass root file:/data/sophia.db
+    user: "0:0"
     volumes:
       - surrealdb-data:/data
 

@@ -1,218 +1,224 @@
-# SOPHIA: Structured Ontological & Philosophical Heuristic Intelligence Agent
+# SOPHIA
 
-**A structured-reasoning engine for philosophical analysis using a three-pass dialectical approach and argument graph retrieval.**
+**A structured philosophical reasoning engine combining a typed argument graph with a three-pass dialectical LLM pipeline.**
 
 [![Deploy to Cloud Run](https://github.com/Allotment-Technology-Ltd/sophia/actions/workflows/deploy.yml/badge.svg)](https://github.com/Allotment-Technology-Ltd/sophia/actions/workflows/deploy.yml)
 
----
+**[Live demo →](https://sophia-210020077715.europe-west2.run.app)** *(Google account required)*
 
-## Research Question
-
-Can structured argument retrieval combined with dialectical prompting produce measurably more rigorous philosophical analyses than standard single-pass LLM responses?
-
-SOPHIA tests this hypothesis by storing philosophical knowledge as an **argument graph** (claims linked by typed logical relations) and using a **three-pass dialectical engine** (Analysis → Critique → Synthesis) that mirrors genuine philosophical methodology. Phase 1 validation showed the structured approach outperformed single-pass on 8/10 test cases using a blinded rubric assessing argument quality, counterargument acknowledgement, and conclusion justification.
+Try: *"Is moral relativism defensible?"* or *"Can consequentialism justify torture in ticking-bomb cases?"*
 
 ---
 
-## Live Demo
+## What it is
 
-**[https://sophia-210020077715.europe-west2.run.app](https://sophia-210020077715.europe-west2.run.app)**
+SOPHIA is a research prototype testing whether structured knowledge representation and dialectical prompt architecture can produce measurably more rigorous philosophical reasoning than standard single-pass LLM outputs.
 
-Try: *"Is moral relativism defensible?"* or *"Assess the ethical assumptions behind the EU AI Act's risk classification system"*
+The system stores philosophical knowledge not as flat text chunks but as a **typed argument graph** — claims linked by logical relations (`supports`, `contradicts`, `responds_to`, `depends_on`). When a query arrives, the engine retrieves the relevant argumentative structure via vector search + graph traversal, then runs **three sequential LLM passes** that mirror genuine philosophical debate: a Proponent builds the case, a Sceptic attacks it, a Synthesiser integrates the result.
+
+A preliminary evaluation (n=10, single blinded evaluator — see [limitations](#evaluation)) showed the structured approach outperformed single-pass on 8/10 test cases, with the largest gains in counterargument coverage and philosophical grounding.
+
+---
+
+## The problem
+
+Single-pass LLM responses to contested philosophical questions hedge towards consensus. Asked "Is moral relativism defensible?", a typical response lists arguments for and against, then concludes "it depends on your perspective." That answer is epistemically safe but philosophically empty — it doesn't identify which objections are decisive, where genuine disagreement lies, or what the most defensible position actually is.
+
+SOPHIA tests whether forcing explicit role separation — Proponent cannot synthesise; Sceptic cannot build an alternative; Synthesiser must account for what the Sceptic said — produces outputs that engage with philosophical tension rather than performing balance around it.
 
 ---
 
 ## Architecture
 
-### Three-Pass Dialectical Engine
+### Three-pass dialectical engine
 
-Rather than a single LLM call, SOPHIA uses three sequential passes that mirror philosophical debate:
+| Pass | Role | Receives | Does |
+| --- | --- | --- | --- |
+| **Analysis** | The Proponent | Query + graph context | Builds the strongest case(s), grounds claims in named traditions, states premises explicitly |
+| **Critique** | The Sceptic | Query + graph context + Pass 1 | Attacks hidden assumptions, raises strongest counterarguments, questions the framing |
+| **Synthesis** | The Synthesiser | Query + graph context + Pass 1 + Pass 2 | Tracks which objections are decisive, reaches a qualified conclusion with stated confidence |
 
-| Pass | Role | What it does |
-|------|------|-------------|
-| **Pass 1 — Analysis** | The Proponent | Constructs the strongest case(s) for each position, grounding claims in named traditions |
-| **Pass 2 — Critique** | The Sceptic | Challenges premises, exposes hidden assumptions, raises counterarguments |
-| **Pass 3 — Synthesis** | The Synthesiser | Integrates perspectives, maps genuine disagreements, reaches a justified conclusion |
+Each pass streams progressively via SSE. The Synthesiser cannot paper over what the Sceptic exposed.
 
-Each pass receives: (a) the original query, (b) the argument-graph context retrieved for that query, and (c) the output of prior passes. This prevents the Synthesiser from glossing over genuine tensions that the Critic exposed.
+### Argument graph
 
-See [docs/three-pass-engine.md](docs/three-pass-engine.md) for rationale and example output.
-
-### Argument Graph
-
-Philosophical knowledge is stored not as flat text chunks but as structured **claims** linked by **typed relations** in SurrealDB:
+Knowledge is stored in SurrealDB as typed nodes and edges:
 
 ```
 Claim: "Maximising aggregate utility can justify harming individuals"
-  ← contradicts ← Claim: "Each person's interests must be treated as inviolable"
+  ← contradicts ← Claim: "Each person's rights function as a side-constraint on utility maximisation"
   ← responds_to ← Claim: "Rule utilitarianism avoids agent-specific violations"
   ← part_of     ← Argument: "The Rights Objection to Utilitarianism"
 ```
 
-Typed relations include: `supports`, `contradicts`, `responds_to`, `depends_on`, `part_of`, `exemplifies`.
+Vector search alone would retrieve the most semantically similar claims — often the same position restated. Graph traversal assembles the argumentative structure: thesis + objection + reply, which is what philosophical reasoning requires.
 
-This matters because **vector search alone** would retrieve the most semantically similar claims — often the same position restated. Graph traversal assembles the *argumentative structure*: thesis + objection + reply, which is what philosophical reasoning requires.
-
-See [docs/argument-graph.md](docs/argument-graph.md) for the full schema.
-
-### Argument-Aware Retrieval Pipeline
+### Retrieval pipeline
 
 ```
 Query
   │
-  ├─ Embed query (Voyage AI)
+  ├─ Embed (Vertex AI text-embedding-005)
   ├─ Vector search → top-K semantically similar claims
   ├─ Graph traversal → expand to related claims via typed edges
-  ├─ Deduplicate + resolve inter-claim relations
-  ├─ Fetch enclosing argument structures
-  └─ Return assembled context block (claims + relations + arguments)
+  ├─ Resolve inter-claim relations + fetch enclosing argument structures
+  └─ Inject assembled context block into all three passes
 ```
 
-The assembled context is injected into all three passes. Each pass has a different prompt — the Proponent uses claims to ground positions, the Sceptic looks for contradictions, the Synthesiser tracks which objections were adequately answered.
+### Verification pass
 
-See [docs/architecture.md](docs/architecture.md) for the system diagram.
-
----
-
-## Tech Stack
-
-| Layer | Technology | Why |
-|-------|-----------|-----|
-| Frontend + Backend | SvelteKit 2, Svelte 5, TypeScript | Full-stack with SSE streaming; Svelte 5 runes for reactive state |
-| Database | SurrealDB v2 | Graph + vector + document queries in a single query path |
-| AI Engine | Claude API (claude-sonnet-4-5) | Best reasoning quality for multi-step philosophical argumentation |
-| Validation | Google Gemini 2.5 Flash | Cross-model validation during ingestion pipeline (bias diversification) |
-| Embeddings | Voyage AI | High-quality semantic retrieval tuned for long-form text |
-| Hosting | Google Cloud Run + GCE | Containerised app (Cloud Run) + persistent DB VM (GCE) |
-| CI/CD | GitHub Actions + Workload Identity Federation | Keyless auth to GCP; secret-free pipeline |
+After synthesis, users can optionally trigger a fourth pass that cross-checks key claims against live Google Search results (via Vertex AI Search Grounding). Flagged claims receive one of five confidence tiers: `High / Medium / Low / Interpretive / Unsupported`.
 
 ---
 
-## Current Status
+## Current state
 
-| Phase | Status | Description |
-|-------|--------|-------------|
-| Phase 1 | ✅ Complete | Three-pass engine validated: outperforms single-pass on 8/10 test cases |
-| Phase 2 | ✅ Complete | SvelteKit app deployed with streaming three-pass analysis |
-| Phase 3a | ✅ Complete | Ethics knowledge base (Wave 1): ingestion pipeline, argument graph, retrieval |
-| Phase 3b | ✅ Complete | Production SurrealDB on GCE, ingestion quality validation |
-| Phase 3c | 🔄 In progress | UI — references panel, design system |
-| Phase 4 | 📋 Planned | Web search gap-filling (Pass 2 triggers search when it identifies factual gaps) |
-| Phase 5 | 📋 Planned | Authentication, rate limiting, beta launch (50 users) |
-| Phase 6 | 📋 Planned | Commercial features |
-
----
-
-## Knowledge Base
-
-**Phase 3a (complete):** Ethics corpus, Wave 1
-
-- ~500+ claims extracted and validated
-- ~400+ typed inter-claim relations
-- 8 foundational sources ingested:
-  - Stanford Encyclopedia of Philosophy: Utilitarianism, Deontological Ethics, Virtue Ethics
-  - Mill: *Utilitarianism*; Kant: *Groundwork of the Metaphysics of Morals*
-  - Singer: *Famine, Affluence, and Morality*
-  - Ross: *The Right and the Good*; Aristotle: *Nicomachean Ethics* (excerpts)
-
-**Waves 2–3 (Phase 3b/3c):** 21 additional sources covering consequentialism, rights theory, applied ethics, and meta-ethics. See `data/source-list-3a.json` for the full annotated list.
+| Capability | Status |
+| --- | --- |
+| Three-pass dialectical engine | **Working** — Vertex AI Gemini 2.5 Flash, streaming SSE |
+| Google Search grounding (per-pass + verification) | **Working** — live web sources cited per pass |
+| Ethics knowledge graph | **Working** — ~7,500 claims, 25 sources, deployed in SurrealDB |
+| Argument-aware retrieval | **Working** — vector search + multi-hop graph traversal |
+| Firebase Auth (Google OAuth) | **Working** — mandatory for all query access |
+| Per-user history + cache | **Working** — Firestore, 30-day TTL, cross-device |
+| Rate limiting | **Working** — 20 queries/day per user |
+| Web UI | **Working** — SvelteKit, dark-first design, mobile-responsive |
+| Argument graph visualisation | **Partial** — infrastructure exists; full "Map" tab not yet complete |
+| Domain coverage | **Ethics only** — a `MVP_DOMAIN_FILTER` constrains the live query path to the ethics corpus; Philosophy of Mind expansion is in progress on the `domain-expansion` branch |
+| Formal evaluation | **Not yet done** — Phase 1 results are preliminary (see below) |
+| Public API | **Not built** |
 
 ---
 
-## Project Structure
+## Tech stack
 
-```
-src/
-├── lib/
-│   ├── server/
-│   │   ├── engine.ts          # Three-pass dialectical engine
-│   │   ├── retrieval.ts       # Argument-aware graph retrieval
-│   │   ├── prompts/           # All AI prompt templates (analysis, critique, synthesis)
-│   │   ├── anthropic.ts       # Claude API client + token tracking
-│   │   ├── gemini.ts          # Gemini validation client
-│   │   ├── embeddings.ts      # Voyage AI embedding client
-│   │   └── db.ts              # SurrealDB client (singleton, lazy-init)
-│   ├── components/            # Svelte 5 UI components
-│   ├── stores/                # Svelte 5 rune stores
-│   └── types/                 # TypeScript interfaces
-├── routes/
-│   ├── api/analyse/           # SSE streaming endpoint (POST)
-│   └── admin/                 # Knowledge base monitoring dashboard
-scripts/
-├── ingest.ts                  # 7-pass source ingestion pipeline
-├── fetch-source.ts            # Source fetcher (SEP, papers, books)
-├── setup-schema.ts            # SurrealDB schema setup
-├── verify-db.ts               # Database integrity checks
-└── quality-report.ts          # Ingestion quality reporting
-data/
-├── source-list-3a.json        # Annotated list of Phase 3a sources
-└── sources/                   # Raw source texts (not committed — see data/sources/README.md)
-```
+| Layer | Technology | Notes |
+| --- | --- | --- |
+| Frontend + Backend | SvelteKit 2, Svelte 5, TypeScript | Full-stack with SSE streaming; Svelte 5 runes throughout |
+| Database | SurrealDB v2 | Graph + vector + document in one query path |
+| AI — query runtime | Vertex AI Gemini 2.5 Flash + Google Search Grounding | Three-pass engine; grounding provides per-pass web sources |
+| AI — ingestion pipeline | Anthropic Claude Sonnet (claim + relation extraction); Gemini (cross-validation) | Runs offline, not at query time |
+| Embeddings | Vertex AI text-embedding-005 | Query-time retrieval; ingestion corpus uses Voyage AI (migration planned — see [architecture](docs/architecture.md)) |
+| Auth | Firebase Auth (Google Sign-In) | ID tokens verified server-side |
+| History / Cache | Firestore | Per-user, serverless, pairs with Firebase UIDs |
+| Hosting | Google Cloud Run + GCE | Containerised app + persistent DB VM |
+| CI/CD | GitHub Actions + Workload Identity Federation | Keyless GCP auth |
+| IaC | Pulumi (`infra/`) | `pulumi up --stack production` |
 
 ---
 
-## Quick Start
+## Evaluation
+
+**Phase 1 (preliminary):** 10 philosophical queries, blinded comparison between SOPHIA three-pass and single-pass Gemini on identical queries, scored on a four-dimension rubric (argument structure, counterargument coverage, conclusion justification, philosophical grounding).
+
+Results: SOPHIA 8/10, draw 1/10, loss 1/10. Largest gap in counterargument coverage (SOPHIA avg 4.4 vs. 3.2).
+
+**Critical caveats:** n=10 is not statistically meaningful. The evaluator was the author (confirmed bias). Both systems used the same base model, so the advantage may reflect dialectical structure, graph context, or both — these have not been separated. Formal evaluation planned for a later phase (50+ queries, multiple independent evaluators, inter-rater reliability). See [docs/evaluation-methodology.md](docs/evaluation-methodology.md) for the full rubric, test cases, and limitations.
+
+---
+
+## Quick start
 
 ### Prerequisites
 
 - Node.js 20+, pnpm 9+
-- SurrealDB v2 running locally (or remote connection)
-- API keys: Anthropic, Google AI, Voyage AI (see `.env.example`)
+- SurrealDB v2 (local or remote)
+- GCP project with Vertex AI enabled (for query-time embedding and LLM calls)
+- Anthropic API key (for ingestion pipeline only — not needed to run the app)
+- Firebase project (Auth + Firestore)
+- See `.env.example` for the full list of required variables
 
-### Local Development
+### Run locally
 
 ```bash
-# Install dependencies
 pnpm install
 
-# Configure environment
 cp .env.example .env
-# Edit .env with your API keys
+# Edit .env — minimum required: SURREAL_URL, SURREAL_USER, SURREAL_PASS,
+#   GOOGLE_VERTEX_PROJECT, FIREBASE_PROJECT_ID, and Firebase client keys
 
-# Run SurrealDB locally (separate terminal)
+# Run SurrealDB (separate terminal)
 surreal start --bind 0.0.0.0:8000 --user root --pass your-pass
 
-# Set up database schema (first time only)
+# Create schema (first time only)
 pnpm tsx scripts/setup-schema.ts
 
-# Start development server
 pnpm dev
 # → http://localhost:5173
 ```
 
-### Ingest a Source
+Note: without a populated SurrealDB knowledge graph, the engine will run without graph context — reasoning quality degrades but the system stays functional.
+
+### Ingest the ethics corpus
 
 ```bash
-# Fetch a source text
-pnpm tsx scripts/fetch-source.ts <url> <source_type>
+# Fetch a source
+pnpm tsx scripts/fetch-source.ts --source-list data/source-list-3a.json --wave 1
 
-# Ingest with validation
-pnpm tsx scripts/ingest.ts <source-file> --validate
+# Pre-scan (cost estimate + blocker check)
+pnpm tsx scripts/pre-scan.ts --source-list data/source-list-3a.json --wave 1
+
+# Ingest with Gemini cross-validation
+pnpm tsx scripts/ingest-batch.ts --source-list data/source-list-3a.json --wave 1 --validate
 ```
+
+See [docs/runbooks/domain-expansion-runbook.md](docs/runbooks/domain-expansion-runbook.md) for the full operational guide.
 
 ---
 
-## Research Methodology
+## Project structure
 
-Phase 1 evaluation used a blinded rubric assessing:
-
-1. **Argument structure** — Are premises made explicit? Is the reasoning valid?
-2. **Counterargument acknowledgement** — Are the strongest objections engaged?
-3. **Conclusion justification** — Is the conclusion proportionate to the evidence?
-4. **Philosophical grounding** — Are claims anchored in named traditions?
-
-The three-pass engine was compared against single-pass Claude Sonnet on identical queries. Results: 8/10 test cases rated higher for argument quality; 10/10 for counterargument coverage.
-
-See [docs/evaluation-methodology.md](docs/evaluation-methodology.md) for the full rubric and test cases.
+```text
+src/
+├── lib/
+│   ├── server/
+│   │   ├── engine.ts          # Three-pass dialectical engine (entry: runDialecticalEngine)
+│   │   ├── retrieval.ts       # Argument-aware retrieval (embed → vector search → graph traversal)
+│   │   ├── vertex.ts          # Vertex AI client (Gemini + embeddings + grounding)
+│   │   ├── db.ts              # SurrealDB HTTP client (stateless, retries, typed errors)
+│   │   ├── rateLimit.ts       # Firestore-backed per-user rate limiting
+│   │   └── prompts/           # LLM prompt templates (analysis, critique, synthesis, verification)
+│   ├── components/            # Svelte 5 UI components
+│   ├── stores/                # Svelte 5 rune-based reactive stores
+│   └── types/                 # TypeScript interfaces
+├── routes/
+│   ├── api/analyse/           # SSE streaming endpoint — POST { query }
+│   ├── api/verify/            # SSE verification endpoint — POST { query, synthesis }
+│   ├── api/history/           # Firestore history — GET (list) / DELETE (by doc ID)
+│   └── admin/                 # Admin dashboard (Firebase Auth gated)
+scripts/
+├── ingest.ts                  # 7-stage source ingestion pipeline
+├── ingest-batch.ts            # Batch runner with pipelined concurrency
+├── fetch-source.ts            # Source fetcher (HTML → cleaned plain text)
+├── pre-scan.ts                # Pre-ingestion gate (reachability, cost estimate, blockers)
+├── curate-source.ts           # Automated source curation checks
+├── setup-schema.ts            # SurrealDB schema + indexes (idempotent)
+├── quality-report.ts          # Post-ingestion quality metrics
+└── spot-check.ts              # Sampled accuracy verification
+data/
+├── source-list-3a.json        # Ethics corpus source list (25 sources, annotated)
+├── source-list-pom.json       # Philosophy of Mind source list (in preparation)
+└── sources/                   # Raw source texts (not committed; fetch via fetch-source.ts)
+infra/                         # Pulumi IaC (Cloud Run, GCE, VPC, IAM)
+tests/
+├── unit/                      # Vitest unit tests (engine parsing, rate limiting)
+└── e2e/                       # Playwright E2E tests (requires SOPHIA_TEST_TOKEN)
+```
 
 ---
 
 ## Documentation
 
-- [docs/architecture.md](docs/architecture.md) — System architecture and data flow
-- [docs/three-pass-engine.md](docs/three-pass-engine.md) — Dialectical engine design with example output
-- [docs/argument-graph.md](docs/argument-graph.md) — Knowledge graph schema and SurrealQL examples
-- [docs/evaluation-methodology.md](docs/evaluation-methodology.md) — Evaluation rubric and Phase 1 results
+| Document | Purpose |
+| --- | --- |
+| [docs/architecture.md](docs/architecture.md) | System diagram, components, data flow, deployment, design decisions |
+| [docs/three-pass-engine.md](docs/three-pass-engine.md) | Engine rationale, per-pass contract, example output |
+| [docs/argument-graph.md](docs/argument-graph.md) | SurrealDB schema, relation types, SurrealQL examples |
+| [docs/evaluation-methodology.md](docs/evaluation-methodology.md) | Evaluation rubric, Phase 1 results, limitations, planned formal study |
+| [docs/runbooks/domain-expansion-runbook.md](docs/runbooks/domain-expansion-runbook.md) | Operational guide for adding a new philosophical domain |
+| [ROADMAP.md](ROADMAP.md) | Development phases and priorities |
+| [STATUS.md](STATUS.md) | Current deployment health and feature status |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 ---
 
@@ -220,13 +226,12 @@ See [docs/evaluation-methodology.md](docs/evaluation-methodology.md) for the ful
 
 MIT — see [LICENSE](LICENSE).
 
-All research methodology, evaluation results, argument graph schema, and dialectical prompt architecture are published as open source. The curated knowledge base contents (ingested philosophical texts) are derived from copyrighted sources and are not redistributed; only the schema and pipeline for reproducing it are published.
+The curated knowledge base contents are derived from copyrighted sources and are not redistributed. The schema, ingestion pipeline, retrieval architecture, prompt templates, and evaluation methodology are published as open source.
 
 ---
 
 ## Author
 
-**Adam Boon** — MA Philosophy (The Open University), Senior Product Manager (NHS Englandy)
+**Adam Boon** — MA Philosophy (The Open University), Senior Product Manager (NHS England)
 
 Research interest: whether structured knowledge representation can improve the epistemological rigour of LLM-generated philosophical reasoning.
-
