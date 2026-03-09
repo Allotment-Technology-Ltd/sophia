@@ -52,6 +52,8 @@
 | Feature | State | Blocking item |
 | --- | --- | --- |
 | Philosophy of Mind domain (live in engine) | Graph ingested; engine domain-agnostic; routing/query classification not yet implemented | Phase 3f + engine routing update |
+| Two-speed link pipeline (proposed) | Fast runtime link intake + deferred nightly ingestion design documented; not yet implemented | Phase 4a |
+| Harvard references in Synthesis/Verification (proposed) | Scope and policy documented; prompt/runtime enforcement not yet implemented | Phase 4a |
 | Argument graph visualisation | Infrastructure exists (`GraphCanvas`, `graphStore`); full "Map" tab UI incomplete | Phase 9 |
 | Accessibility | Initial structural fixes applied; full axe-core scan + WCAG 2.2 AA review not done | Phase 4 pre-launch |
 | Analytics | No instrumentation yet | Phase 4 |
@@ -94,6 +96,8 @@ Sources 5 & 8 (ethics) skipped — SEP alternatives included. Source 10 (PoM) sk
 - **3-question limit:** Pragmatic constraint replacing full multi-turn. Will be superseded in Phase 9.
 - **No analytics:** No visibility into query patterns, completion rates, or user behaviour prior to launch.
 - **Constitution dogfood rollout pending:** `/api/analyse` constitution emission is behind `ENABLE_CONSTITUTION_IN_ANALYSE`; enable only with rollout guardrails.
+- **Deferred link ingestion not yet active:** User/grounding links are not yet queued into nightly full ingestion; currently no scheduler-backed promotion path.
+- **Harvard citation policy not yet enforced:** Synthesis/Verification formatting remains model-dependent until proposed policy is implemented.
 - **ARIA deadline:** 24 March 2026 — 15 days from today. Application not yet started.
 
 ---
@@ -104,6 +108,7 @@ Sources 5 & 8 (ethics) skipped — SEP alternatives included. Source 10 (PoM) sk
 2. **Phase 3f — PoM Wave 2** — continue domain-expansion branch ingestion (Descartes, Smart, Fodor, Kim, Parfit, Clark & Chalmers).
 3. **Phase 4 pre-launch** — accessibility audit, privacy policy, analytics instrumentation, meta tags.
 4. **Domain routing** — decide and implement how the engine selects which domain(s) to retrieve from; required before PoM queries are meaningful.
+5. **Phase 4a proposal execution** — implement two-speed link intake + nightly ingestion queue/scheduler + Harvard references for Synthesis/Verification.
 
 ---
 

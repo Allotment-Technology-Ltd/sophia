@@ -14,7 +14,19 @@ declare global {
 }
 
 type AnalyticsEvent =
-  | { name: 'query_submitted'; params: { query_length: number; has_lens: boolean } }
+  | {
+      name: 'query_submitted';
+      params: {
+        query_length: number;
+        has_lens: boolean;
+        lens?: string;
+        depth_mode?: 'quick' | 'standard' | 'deep';
+        model_provider?: 'auto' | 'vertex' | 'anthropic';
+        model_id?: string;
+        domain_mode?: 'auto' | 'manual';
+        domain?: string;
+      };
+    }
   | { name: 'analysis_complete'; params: { duration_ms: number; claims_retrieved: number; detected_domain: string } }
   | { name: 'verification_triggered' }
   | { name: 'cache_hit' }

@@ -1,6 +1,12 @@
 import { generateObject, generateText, streamText } from 'ai';
 import { z } from 'zod';
-import { getExtractionModel, getReasoningModel, trackTokens, getGroundingTool } from './vertex';
+import {
+  getExtractionModel,
+  getReasoningModelRoute,
+  type ReasoningModelRoute,
+  trackTokens,
+  getGroundingTool
+} from './vertex';
 import { getAnalysisSystemPrompt, buildAnalysisUserPrompt } from './prompts/analysis';
 import { getCritiqueSystemPrompt, buildCritiqueUserPrompt } from './prompts/critique';
 import { getSynthesisSystemPrompt, buildSynthesisUserPrompt } from './prompts/synthesis';
@@ -85,7 +91,10 @@ export function extractSophiaMetaBlock<T extends z.ZodTypeAny = typeof SophiaMet
 }
 
 export interface EngineCallbacks {
-  onPassStart(pass: PassType): void;
+  onPassStart(
+    pass: PassType,
+    model?: { provider: 'vertex' | 'anthropic'; modelId: string }
+  ): void;
   onPassChunk(pass: PassType, content: string): void;
   onPassComplete(pass: PassType): void;
   onPassStructured(pass: PassType, sections: PassSection[], wordCount: number): void;
@@ -112,6 +121,19 @@ export interface EngineCallbacks {
       domain_confidence?: 'high' | 'medium' | 'low';
       selected_domain_mode?: 'auto' | 'manual';
       selected_domain?: 'ethics' | 'philosophy_of_mind';
+    },
+    modelCostBreakdown?: {
+      total_estimated_cost_usd: number;
+      by_model: Array<{
+        provider: 'vertex' | 'anthropic';
+        model: string;
+        passes: string[];
+        input_tokens: number;
+        output_tokens: number;
+        input_cost_per_million: number;
+        output_cost_per_million: number;
+        estimated_cost_usd: number;
+      }>;
     }
   ): void;
   onError(error: string): void;
@@ -122,8 +144,100 @@ interface EngineOptions {
   mode?: 'philosophy' | 'agnostic';
   domainMode?: 'auto' | 'manual';
   domain?: 'ethics' | 'philosophy_of_mind';
+  modelProvider?: 'auto' | 'vertex' | 'anthropic';
+  modelId?: string;
   queryRunId?: string;
   depthMode?: 'quick' | 'standard' | 'deep';
+  reuse?: {
+    fromDepth: 'quick' | 'standard';
+    analysis?: string;
+    critique?: string;
+    synthesis?: string;
+  };
+}
+
+function withPassTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return new Promise<T>((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    promise
+      .then((value) => resolve(value))
+      .catch((err) => reject(err))
+      .finally(() => {
+        if (timer) clearTimeout(timer);
+      });
+  });
+}
+
+const DEFAULT_INPUT_COST_PER_MILLION = Number.parseFloat(
+  process.env.MODEL_COST_DEFAULT_INPUT_PER_MILLION ?? '3'
+);
+const DEFAULT_OUTPUT_COST_PER_MILLION = Number.parseFloat(
+  process.env.MODEL_COST_DEFAULT_OUTPUT_PER_MILLION ?? '15'
+);
+let cachedModelCostOverrides:
+  | Record<string, { input_per_million: number; output_per_million: number }>
+  | null = null;
+
+function getModelCostOverrides(): Record<string, { input_per_million: number; output_per_million: number }> {
+  if (cachedModelCostOverrides) return cachedModelCostOverrides;
+  const raw = process.env.MODEL_COST_OVERRIDES_JSON;
+  if (!raw) {
+    cachedModelCostOverrides = {};
+    return cachedModelCostOverrides;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, { input_per_million: number; output_per_million: number }>;
+    cachedModelCostOverrides = parsed;
+    return cachedModelCostOverrides;
+  } catch {
+    console.warn('[ENGINE] MODEL_COST_OVERRIDES_JSON is invalid JSON; ignoring overrides');
+    cachedModelCostOverrides = {};
+    return cachedModelCostOverrides;
+  }
+}
+
+function getModelCostRates(provider: 'vertex' | 'anthropic', modelId: string): {
+  input_per_million: number;
+  output_per_million: number;
+} {
+  const overrides = getModelCostOverrides();
+  const exactKey = `${provider}:${modelId}`;
+  return (
+    overrides[exactKey] ??
+    overrides[modelId] ?? {
+      input_per_million: DEFAULT_INPUT_COST_PER_MILLION,
+      output_per_million: DEFAULT_OUTPUT_COST_PER_MILLION
+    }
+  );
+}
+
+function emitReusedPass(
+  pass: Extract<PassType, 'analysis' | 'critique'>,
+  rawText: string,
+  callbacks: EngineCallbacks,
+  model?: { provider: 'vertex' | 'anthropic'; modelId: string }
+): string {
+  callbacks.onPassStart(pass, model);
+  callbacks.onPassChunk(pass, rawText);
+  const { cleanedText, metaBlock } = extractSophiaMetaBlock(rawText);
+  const phase = pass as AnalysisPhase;
+
+  if (metaBlock) {
+    callbacks.onPassStructured(pass, metaBlock.sections, cleanedText.split(/\s+/).length);
+    const claims: Claim[] = metaBlock.claims.map((c: z.infer<typeof SophiaMetaClaimSchema>) => ({
+      ...c,
+      phase,
+      detail: c.text
+    }));
+    callbacks.onClaims(phase, claims, []);
+  } else {
+    const heading = pass === 'analysis' ? 'Analysis' : 'Critique';
+    callbacks.onPassStructured(pass, [{ id: 'content', heading, content: cleanedText }], cleanedText.split(/\s+/).length);
+  }
+
+  callbacks.onPassComplete(pass);
+  return cleanedText;
 }
 
 async function streamPassWithContinuation(
@@ -131,6 +245,7 @@ async function streamPassWithContinuation(
   systemPrompt: string,
   initialUserPrompt: string,
   callbacks: EngineCallbacks,
+  modelRoute: ReasoningModelRoute,
   maxTokens = 4096,
   maxContinuationRounds = 6
 ): Promise<{ output: string; inputTokens: number; outputTokens: number; sources: GroundingSource[] }> {
@@ -148,13 +263,17 @@ async function streamPassWithContinuation(
     let segmentOutput = '';
 
     const stream = streamText({
-      model: getReasoningModel(),
+      model: modelRoute.model as any,
       maxOutputTokens: maxTokens,
       system: systemPrompt,
       messages,
-      tools: {
-        googleSearch: getGroundingTool() as any
-      },
+      ...(modelRoute.supportsGrounding
+        ? {
+            tools: {
+              googleSearch: getGroundingTool() as any
+            }
+          }
+        : {}),
       onError: ({ error }) => {
         console.error(`[ENGINE] streamText error (${pass} round=${continuationRound}):`, error instanceof Error ? error.stack : String(error));
       }
@@ -241,7 +360,111 @@ export async function runDialecticalEngine(
   const isAgnosticMode = engineMode === 'agnostic';
   const selectedDomainMode = options?.domainMode ?? 'auto';
   const selectedDomain = options?.domain;
+  const modelProvider = options?.modelProvider ?? 'auto';
+  const modelId = options?.modelId;
   const depthMode = options?.depthMode ?? 'standard';
+  const analysisModelRoute = getReasoningModelRoute({
+    depthMode,
+    pass: 'analysis',
+    requestedProvider: modelProvider,
+    requestedModelId: modelId
+  });
+  const critiqueModelRoute = getReasoningModelRoute({
+    depthMode,
+    pass: 'critique',
+    requestedProvider: modelProvider,
+    requestedModelId: modelId
+  });
+  const synthesisModelRoute = getReasoningModelRoute({
+    depthMode,
+    pass: 'synthesis',
+    requestedProvider: modelProvider,
+    requestedModelId: modelId
+  });
+  const allowParallelCritique =
+    analysisModelRoute.provider === 'vertex' && critiqueModelRoute.provider === 'vertex';
+  const modelUsage = new Map<
+    string,
+    {
+      provider: 'vertex' | 'anthropic';
+      model: string;
+      passes: Set<string>;
+      input_tokens: number;
+      output_tokens: number;
+      input_cost_per_million: number;
+      output_cost_per_million: number;
+    }
+  >();
+
+  function recordModelUsage(
+    route: ReasoningModelRoute,
+    pass: 'analysis' | 'critique' | 'synthesis',
+    inputTokens: number,
+    outputTokens: number
+  ): void {
+    if (inputTokens <= 0 && outputTokens <= 0) return;
+    const key = `${route.provider}:${route.modelId}`;
+    const rates = getModelCostRates(route.provider, route.modelId);
+    const existing = modelUsage.get(key);
+    if (existing) {
+      existing.input_tokens += inputTokens;
+      existing.output_tokens += outputTokens;
+      existing.passes.add(pass);
+      return;
+    }
+    modelUsage.set(key, {
+      provider: route.provider,
+      model: route.modelId,
+      passes: new Set([pass]),
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      input_cost_per_million: rates.input_per_million,
+      output_cost_per_million: rates.output_per_million
+    });
+  }
+
+  function buildModelCostBreakdown():
+    | {
+        total_estimated_cost_usd: number;
+        by_model: Array<{
+          provider: 'vertex' | 'anthropic';
+          model: string;
+          passes: string[];
+          input_tokens: number;
+          output_tokens: number;
+          input_cost_per_million: number;
+          output_cost_per_million: number;
+          estimated_cost_usd: number;
+        }>;
+      }
+    | undefined {
+    if (modelUsage.size === 0) return undefined;
+    const byModel = [...modelUsage.values()].map((entry) => {
+      const estimated_cost_usd =
+        (entry.input_tokens * entry.input_cost_per_million +
+          entry.output_tokens * entry.output_cost_per_million) /
+        1_000_000;
+      return {
+        provider: entry.provider,
+        model: entry.model,
+        passes: [...entry.passes].sort(),
+        input_tokens: entry.input_tokens,
+        output_tokens: entry.output_tokens,
+        input_cost_per_million: entry.input_cost_per_million,
+        output_cost_per_million: entry.output_cost_per_million,
+        estimated_cost_usd
+      };
+    }).sort((a, b) => b.estimated_cost_usd - a.estimated_cost_usd);
+    const total_estimated_cost_usd = byModel.reduce((sum, item) => sum + item.estimated_cost_usd, 0);
+    return { total_estimated_cost_usd, by_model: byModel };
+  }
+  const reusedAnalysis = options?.reuse?.analysis?.trim();
+  const reusedCritique = options?.reuse?.critique?.trim();
+  const reusedSynthesis = options?.reuse?.synthesis?.trim();
+  const PASS_TIMEOUT_MS: Record<'vertex' | 'anthropic', Record<'analysis' | 'critique' | 'synthesis', number>> = {
+    vertex: { analysis: 95_000, critique: 95_000, synthesis: 105_000 },
+    anthropic: { analysis: 150_000, critique: 180_000, synthesis: 200_000 }
+  };
 
   // ── Domain classification ──────────────────────────────────────────────
   const domainClassification = isAgnosticMode
@@ -256,7 +479,12 @@ export async function runDialecticalEngine(
     `[ENGINE] Starting — mode=${engineMode} query="${queryPreview}" lens=${options?.lens ?? 'none'} ` +
     `domain=${domainClassification.domain ?? 'unknown'} ` +
     `confidence=${domainClassification.confidence} ` +
-    `retrieval_filter=${retrievalDomain ?? 'none'}`
+    `retrieval_filter=${retrievalDomain ?? 'none'} ` +
+    `model_provider=${modelProvider} ` +
+    `models={analysis:${analysisModelRoute.provider}:${analysisModelRoute.modelId},` +
+    `critique:${critiqueModelRoute.provider}:${critiqueModelRoute.modelId},` +
+    `synthesis:${synthesisModelRoute.provider}:${synthesisModelRoute.modelId}} ` +
+    `parallel_critique=${allowParallelCritique}`
   );
 
   let totalInputTokens = 0;
@@ -362,7 +590,7 @@ export async function runDialecticalEngine(
   let critiqueOutput = '';
   let synthesisOutput = '';
 
-  // Phase 1: Start Analysis
+  // Phase 1: Analysis (or replay from reuse payload)
   let analysisStarted = false;
   let critiqueStarted = false;
   let critiquePromise: Promise<{ output: string; inputTokens: number; outputTokens: number; sources: GroundingSource[] }> | null = null;
@@ -370,9 +598,19 @@ export async function runDialecticalEngine(
 
   const analysisStartTime = Date.now();
 
-  try {
-    callbacks.onPassStart('analysis');
-    console.log('[ENGINE] Pass 1 (analysis) starting');
+  if (reusedAnalysis) {
+    console.log('[ENGINE] Pass 1 (analysis) reused from previous run');
+    analysisOutput = emitReusedPass('analysis', reusedAnalysis, callbacks, {
+      provider: analysisModelRoute.provider,
+      modelId: analysisModelRoute.modelId
+    });
+  } else {
+    try {
+      callbacks.onPassStart('analysis', {
+        provider: analysisModelRoute.provider,
+        modelId: analysisModelRoute.modelId
+      });
+      console.log('[ENGINE] Pass 1 (analysis) starting');
 
     // Create a custom promise for analysis that monitors output length to trigger critique
     analysisPromise = (async () => {
@@ -399,13 +637,17 @@ export async function runDialecticalEngine(
         let segmentOutput = '';
 
         const stream = streamText({
-          model: getReasoningModel(),
+          model: analysisModelRoute.model as any,
           maxOutputTokens: analysisMaxOutputTokens,
           system: analysisSystem,
           messages,
-          tools: {
-            googleSearch: getGroundingTool() as any
-          },
+          ...(analysisModelRoute.supportsGrounding
+            ? {
+                tools: {
+                  googleSearch: getGroundingTool() as any
+                }
+              }
+            : {}),
           onError: ({ error }) => {
             console.error(`[ENGINE] streamText error (analysis round=${continuationRound}):`, error instanceof Error ? error.stack : String(error));
           }
@@ -417,10 +659,13 @@ export async function runDialecticalEngine(
           callbacks.onPassChunk('analysis', delta);
 
           // Trigger critique when analysis reaches threshold (if not already started)
-          if (!critiqueStarted && output.length >= critiqueStartThreshold) {
+          if (depthMode !== 'quick' && allowParallelCritique && !critiqueStarted && output.length >= critiqueStartThreshold) {
             critiqueStarted = true;
             console.log(`[ENGINE] Analysis reached ${critiqueStartThreshold} chars, starting Critique in parallel (round=${continuationRound})`);
-            callbacks.onPassStart('critique');
+            callbacks.onPassStart('critique', {
+              provider: critiqueModelRoute.provider,
+              modelId: critiqueModelRoute.modelId
+            });
             
             critiquePromise = streamPassWithContinuation(
               'critique',
@@ -429,6 +674,7 @@ export async function runDialecticalEngine(
                 ? buildReasoningCritiqueUserPrompt(query, `${output}\n[Analysis in progress...]`)
                 : buildCritiqueUserPrompt(query, `${output}\n[Analysis in progress...]`),
               callbacks,
+              critiqueModelRoute,
               depthMode === 'deep' ? 5200 : 4096,
               depthMode === 'deep' ? 8 : 6
             );
@@ -477,12 +723,17 @@ export async function runDialecticalEngine(
     })();
 
     // Wait for analysis to complete
-    const analysisResult = await analysisPromise;
+    const analysisResult = await withPassTimeout(
+      analysisPromise,
+      PASS_TIMEOUT_MS[analysisModelRoute.provider].analysis,
+      'Analysis pass'
+    );
     analysisOutput = analysisResult.output;
     const analysisInputTokens = analysisResult.inputTokens;
     const analysisOutputTokens = analysisResult.outputTokens;
     totalInputTokens += analysisInputTokens;
     totalOutputTokens += analysisOutputTokens;
+    recordModelUsage(analysisModelRoute, 'analysis', analysisInputTokens, analysisOutputTokens);
     
     const analysisElapsed = Date.now() - analysisStartTime;
     console.log(`[ENGINE] Pass 1 (analysis) done in ${analysisElapsed}ms — in=${analysisInputTokens} out=${analysisOutputTokens} chars=${analysisOutput.length}`);
@@ -514,11 +765,12 @@ export async function runDialecticalEngine(
       callbacks.onPassStructured('analysis', [{ id: 'content', heading: 'Analysis', content: analysisCleanedText }], analysisCleanedText.split(/\s+/).length);
     }
 
-    callbacks.onPassComplete('analysis');
-  } catch (err) {
-    console.error('[ENGINE] Pass 1 (analysis) FAILED:', err instanceof Error ? err.stack : String(err));
-    callbacks.onError(`Analysis pass failed: ${err instanceof Error ? err.message : String(err)}`);
-    return;
+      callbacks.onPassComplete('analysis');
+    } catch (err) {
+      console.error('[ENGINE] Pass 1 (analysis) FAILED:', err instanceof Error ? err.stack : String(err));
+      callbacks.onError(`Analysis pass failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
   }
 
   if (depthMode === 'quick') {
@@ -533,91 +785,122 @@ export async function runDialecticalEngine(
       domain_confidence: domainClassification.domain ? domainClassification.confidence : undefined,
       selected_domain_mode: selectedDomainMode,
       selected_domain: selectedDomainMode === 'manual' ? selectedDomain : undefined
-    });
+    }, buildModelCostBreakdown());
     return;
   }
 
-  // Phase 2: Critique (may already be running in parallel, or starts now if analysis was very short)
-  try {
-    const t2 = Date.now();
-    
-    // If critique hasn't started yet (very short analysis), start it now
-    if (!critiqueStarted) {
-      console.log('[ENGINE] Pass 2 (critique) starting (analysis completed before reaching 2000 chars)');
-      callbacks.onPassStart('critique');
-      
-      critiquePromise = streamPassWithContinuation(
-        'critique',
-        critiqueSystem,
-        isAgnosticMode
-          ? buildReasoningCritiqueUserPrompt(query, analysisOutput)
-          : buildCritiqueUserPrompt(query, analysisOutput),
-        callbacks,
-        depthMode === 'deep' ? 5200 : 4096,
-        depthMode === 'deep' ? 8 : 6
+  // Phase 2: Critique (or replay from reuse payload)
+  if (reusedCritique) {
+    console.log('[ENGINE] Pass 2 (critique) reused from previous run');
+    critiqueOutput = emitReusedPass('critique', reusedCritique, callbacks, {
+      provider: critiqueModelRoute.provider,
+      modelId: critiqueModelRoute.modelId
+    });
+  } else {
+    try {
+      const t2 = Date.now();
+
+      // If critique hasn't started yet (very short analysis), start it now
+      if (!critiqueStarted) {
+        console.log('[ENGINE] Pass 2 (critique) starting (analysis completed before reaching 2000 chars)');
+        callbacks.onPassStart('critique', {
+          provider: critiqueModelRoute.provider,
+          modelId: critiqueModelRoute.modelId
+        });
+
+        critiquePromise = streamPassWithContinuation(
+          'critique',
+          critiqueSystem,
+          isAgnosticMode
+            ? buildReasoningCritiqueUserPrompt(query, analysisOutput)
+            : buildCritiqueUserPrompt(query, analysisOutput),
+          callbacks,
+          critiqueModelRoute,
+          depthMode === 'deep' ? 5200 : 4096,
+          depthMode === 'deep' ? 8 : 6
+        );
+      } else {
+        console.log('[ENGINE] Pass 2 (critique) already streaming in parallel, waiting for completion');
+      }
+
+      // Wait for critique to complete (may have been running in parallel)
+      const critiqueResult = await withPassTimeout(
+        critiquePromise!,
+        PASS_TIMEOUT_MS[critiqueModelRoute.provider].critique,
+        'Critique pass'
       );
-    } else {
-      console.log('[ENGINE] Pass 2 (critique) already streaming in parallel, waiting for completion');
+      critiqueOutput = critiqueResult.output;
+      const critiqueInputTokens = critiqueResult.inputTokens;
+      const critiqueOutputTokens = critiqueResult.outputTokens;
+      totalInputTokens += critiqueInputTokens;
+      totalOutputTokens += critiqueOutputTokens;
+      recordModelUsage(critiqueModelRoute, 'critique', critiqueInputTokens, critiqueOutputTokens);
+      console.log(`[ENGINE] Pass 2 (critique) done in ${Date.now() - t2}ms — in=${critiqueInputTokens} out=${critiqueOutputTokens} chars=${critiqueOutput.length}`);
+
+      // Emit grounding sources for critique
+      if (critiqueResult.sources.length > 0) {
+        console.log(`[ENGINE] Critique grounding: ${critiqueResult.sources.length} sources`);
+        callbacks.onGroundingSources('critique', critiqueResult.sources);
+      }
+
+      // Parse sophia-meta block for structured output and claims
+      const { cleanedText: critiqueCleanedText, metaBlock: critiqueMeta } = extractSophiaMetaBlock(critiqueOutput);
+      critiqueOutput = critiqueCleanedText; // Update output to exclude sophia-meta block
+
+      if (critiqueMeta) {
+        // Emit structured sections
+        callbacks.onPassStructured('critique', critiqueMeta.sections, critiqueCleanedText.split(/\s+/).length);
+
+        // Emit claims
+        const claims: Claim[] = critiqueMeta.claims.map((c: z.infer<typeof SophiaMetaClaimSchema>) => ({
+          ...c,
+          phase: 'critique' as const,
+          detail: c.text // Use the claim text as detail since sophia-meta doesn't include a separate detail field
+        }));
+        callbacks.onClaims('critique', claims, []);
+      } else {
+        // Fallback: emit generic structured output without claims
+        console.warn('[ENGINE] No sophia-meta block found in critique output');
+        callbacks.onPassStructured('critique', [{ id: 'content', heading: 'Critique', content: critiqueCleanedText }], critiqueCleanedText.split(/\s+/).length);
+      }
+
+      callbacks.onPassComplete('critique');
+    } catch (err) {
+      console.error('[ENGINE] Pass 2 (critique) FAILED:', err instanceof Error ? err.stack : String(err));
+      callbacks.onError(`Critique pass failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
     }
-
-    // Wait for critique to complete (may have been running in parallel)
-    const critiqueResult = await critiquePromise!;
-    critiqueOutput = critiqueResult.output;
-    const critiqueInputTokens = critiqueResult.inputTokens;
-    const critiqueOutputTokens = critiqueResult.outputTokens;
-    totalInputTokens += critiqueInputTokens;
-    totalOutputTokens += critiqueOutputTokens;
-    console.log(`[ENGINE] Pass 2 (critique) done in ${Date.now() - t2}ms — in=${critiqueInputTokens} out=${critiqueOutputTokens} chars=${critiqueOutput.length}`);
-
-    // Emit grounding sources for critique
-    if (critiqueResult.sources.length > 0) {
-      console.log(`[ENGINE] Critique grounding: ${critiqueResult.sources.length} sources`);
-      callbacks.onGroundingSources('critique', critiqueResult.sources);
-    }
-
-    // Parse sophia-meta block for structured output and claims
-    const { cleanedText: critiqueCleanedText, metaBlock: critiqueMeta } = extractSophiaMetaBlock(critiqueOutput);
-    critiqueOutput = critiqueCleanedText; // Update output to exclude sophia-meta block
-    
-    if (critiqueMeta) {
-      // Emit structured sections
-      callbacks.onPassStructured('critique', critiqueMeta.sections, critiqueCleanedText.split(/\s+/).length);
-      
-      // Emit claims
-      const claims: Claim[] = critiqueMeta.claims.map((c: z.infer<typeof SophiaMetaClaimSchema>) => ({
-        ...c,
-        phase: 'critique' as const,
-        detail: c.text // Use the claim text as detail since sophia-meta doesn't include a separate detail field
-      }));
-      callbacks.onClaims('critique', claims, []);
-    } else {
-      // Fallback: emit generic structured output without claims
-      console.warn('[ENGINE] No sophia-meta block found in critique output');
-      callbacks.onPassStructured('critique', [{ id: 'content', heading: 'Critique', content: critiqueCleanedText }], critiqueCleanedText.split(/\s+/).length);
-    }
-
-    callbacks.onPassComplete('critique');
-  } catch (err) {
-    console.error('[ENGINE] Pass 2 (critique) FAILED:', err instanceof Error ? err.stack : String(err));
-    callbacks.onError(`Critique pass failed: ${err instanceof Error ? err.message : String(err)}`);
-    return;
   }
 
   // ── PASS 3: Synthesis (Synthesiser) ───────────────────────────────
   try {
     const t3 = Date.now();
-    callbacks.onPassStart('synthesis');
+    callbacks.onPassStart('synthesis', {
+      provider: synthesisModelRoute.provider,
+      modelId: synthesisModelRoute.modelId
+    });
     console.log('[ENGINE] Pass 3 (synthesis) starting');
 
-    const synthesisResult = await streamPassWithContinuation(
+    const synthesisUserPrompt = isAgnosticMode
+      ? buildReasoningSynthesisUserPrompt(query, analysisOutput, critiqueOutput)
+      : buildSynthesisUserPrompt(query, analysisOutput, critiqueOutput);
+    const synthesisPromptWithReuse =
+      depthMode === 'deep' && reusedSynthesis
+        ? `${synthesisUserPrompt}\n\nPREVIOUS SYNTHESIS (for refinement/extension; avoid repeating verbatim):\n${reusedSynthesis}`
+        : synthesisUserPrompt;
+
+    const synthesisResult = await withPassTimeout(
+      streamPassWithContinuation(
       'synthesis',
       synthesisSystem,
-      isAgnosticMode
-        ? buildReasoningSynthesisUserPrompt(query, analysisOutput, critiqueOutput)
-        : buildSynthesisUserPrompt(query, analysisOutput, critiqueOutput),
+      synthesisPromptWithReuse,
       callbacks,
+      synthesisModelRoute,
       depthMode === 'deep' ? 5600 : 4096,
       depthMode === 'deep' ? 8 : 6
+      ),
+      PASS_TIMEOUT_MS[synthesisModelRoute.provider].synthesis,
+      'Synthesis pass'
     );
 
     synthesisOutput = synthesisResult.output;
@@ -625,6 +908,7 @@ export async function runDialecticalEngine(
     const outputTokens = synthesisResult.outputTokens;
     totalInputTokens += inputTokens;
     totalOutputTokens += outputTokens;
+    recordModelUsage(synthesisModelRoute, 'synthesis', inputTokens, outputTokens);
     console.log(`[ENGINE] Pass 3 (synthesis) done in ${Date.now() - t3}ms — in=${inputTokens} out=${outputTokens} chars=${synthesisOutput.length}`);
 
     // Emit grounding sources for synthesis
@@ -680,7 +964,7 @@ export async function runDialecticalEngine(
     domain_confidence: domainClassification.domain ? domainClassification.confidence : undefined,
     selected_domain_mode: selectedDomainMode,
     selected_domain: selectedDomainMode === 'manual' ? selectedDomain : undefined
-  });
+  }, buildModelCostBreakdown());
 }
 
 /**
@@ -690,14 +974,23 @@ export async function runDialecticalEngine(
 export async function runVerificationPass(
   claims: Claim[],
   synthesisText: string,
-  callbacks: EngineCallbacks
+  callbacks: EngineCallbacks,
+  options?: {
+    depthMode?: 'quick' | 'standard' | 'deep';
+    modelProvider?: 'auto' | 'vertex' | 'anthropic';
+  }
 ): Promise<{ output: string; inputTokens: number; outputTokens: number }> {
   let output = '';
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  const verificationModelRoute = getReasoningModelRoute({
+    pass: 'verification',
+    depthMode: options?.depthMode ?? 'standard',
+    requestedProvider: options?.modelProvider ?? 'auto'
+  });
 
   const stream = streamText({
-    model: getReasoningModel(),
+    model: verificationModelRoute.model as any,
     maxOutputTokens: 4096,
     system: VERIFICATION_SYSTEM,
     prompt: buildVerificationUserPrompt(claims, synthesisText),

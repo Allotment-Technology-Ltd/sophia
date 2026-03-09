@@ -7,13 +7,23 @@ export interface AnalyseRequest {
   query: string;
   lens?: string;
   depth?: 'quick' | 'standard' | 'deep';
+  model_provider?: 'auto' | 'vertex' | 'anthropic';
+  model_id?: string;
   domain_mode?: 'auto' | 'manual';
   domain?: 'ethics' | 'philosophy_of_mind';
+  reuse?: {
+    from_depth: 'quick' | 'standard';
+    analysis?: string;
+    critique?: string;
+    synthesis?: string;
+  };
 }
 
 export interface PassStartEvent {
   type: 'pass_start';
   pass: PassType;
+  model_provider?: 'vertex' | 'anthropic';
+  model_id?: string;
 }
 
 export interface PassChunkEvent {
@@ -53,7 +63,23 @@ export interface MetadataEvent {
   domain_confidence?: 'high' | 'medium' | 'low';
   selected_domain_mode?: 'auto' | 'manual';
   selected_domain?: 'ethics' | 'philosophy_of_mind';
+  depth_mode?: 'quick' | 'standard' | 'deep';
+  selected_model_provider?: 'auto' | 'vertex' | 'anthropic';
+  selected_model_id?: string;
   query_run_id?: string;
+  model_cost_breakdown?: {
+    total_estimated_cost_usd: number;
+    by_model: Array<{
+      provider: 'vertex' | 'anthropic';
+      model: string;
+      passes: string[];
+      input_tokens: number;
+      output_tokens: number;
+      input_cost_per_million: number;
+      output_cost_per_million: number;
+      estimated_cost_usd: number;
+    }>;
+  };
 }
 
 export interface ErrorEvent {
@@ -139,6 +165,35 @@ export interface GraphEdge {
   evidence_sources?: string[];
 }
 
+export type GraphRejectionReasonCode =
+  | 'seed_pool_pruned'
+  | 'duplicate_traversal'
+  | 'duplicate_relation'
+  | 'missing_endpoint'
+  | 'confidence_gate';
+
+export interface GraphGhostNode {
+  id: string;
+  label: string;
+  reasonCode: GraphRejectionReasonCode;
+  consideredIn?: 'seed_pool' | 'traversal' | 'relations';
+  sourceTitle?: string;
+  confidence?: number;
+  anchorNodeId?: string;
+  pass_origin?: 'retrieval' | 'analysis' | 'critique' | 'synthesis';
+}
+
+export interface GraphGhostEdge {
+  id: string;
+  from: string;
+  to: string;
+  type: GraphEdge['type'];
+  reasonCode: GraphRejectionReasonCode;
+  relation_confidence?: number;
+  rationale_source?: string;
+  pass_origin?: 'retrieval' | 'analysis' | 'critique' | 'synthesis';
+}
+
 export interface GraphSnapshotMeta {
   seedNodeIds?: string[];
   traversedNodeIds?: string[];
@@ -148,6 +203,19 @@ export interface GraphSnapshotMeta {
   retrievalDegraded?: boolean;
   retrievalDegradedReason?: string;
   retrievalTimestamp?: string;
+  retrievalTrace?: {
+    seedPoolCount: number;
+    selectedSeedCount: number;
+    traversedClaimCount: number;
+    relationCandidateCount: number;
+    relationKeptCount: number;
+    argumentCandidateCount: number;
+    argumentKeptCount: number;
+    rejectedClaimCount?: number;
+    rejectedRelationCount?: number;
+  };
+  rejectedNodes?: GraphGhostNode[];
+  rejectedEdges?: GraphGhostEdge[];
   snapshot_id?: string;
   query_run_id?: string;
   parent_snapshot_id?: string;

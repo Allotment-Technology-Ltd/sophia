@@ -1,5 +1,27 @@
 # SOPHIA Changelog
 
+## [Docs-sync-two-speed-link-plan] - 2026-03-09
+
+### 📚 Documentation synchronization (proposal-only)
+
+- Added canonical proposal doc: `docs/phased-resource-expansion-nightly-ingestion-plan.md`
+- Added operations runbook: `docs/runbooks/nightly-link-ingestion-runbook.md`
+- Synced proposal references across:
+  - `docs/README.md`
+  - `docs/architecture.md`
+  - `docs/three-pass-engine.md`
+  - `docs/prompts-reference.md`
+  - `docs/runbooks.md`
+  - `ROADMAP.md`
+  - `STATUS.md`
+- Proposal constants aligned in docs:
+  - Nightly schedule target: `02:00 UTC`
+  - Queue scope: user + grounding links when user opts in
+  - Ingestion scope: global corpus with tiered allowlist
+  - Harvard scope: Synthesis + Verification only
+
+> Note: This changelog entry reflects documentation updates only. No runtime behavior changes are included in this pass.
+
 ## [Phase 3b-wave1-complete] - 2026-03-02
 
 ### ✅ Risk Resolution: Pragmatic Coverage Strategy

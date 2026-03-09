@@ -1,5 +1,5 @@
 import type { RetrievalResult } from './retrieval';
-import type { GraphNode, GraphEdge, GraphSnapshotMeta } from '$lib/types/api';
+import type { GraphNode, GraphEdge, GraphGhostNode, GraphGhostEdge, GraphSnapshotMeta } from '$lib/types/api';
 
 /**
  * Project retrieval result into graph visualization format.
@@ -12,6 +12,8 @@ export function projectRetrievalToGraph(retrieval: RetrievalResult): {
 } {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
+  const rejectedNodes: GraphGhostNode[] = [];
+  const rejectedEdges: GraphGhostEdge[] = [];
   const sourceIds = new Set<string>();
   const seedClaimIds = new Set(retrieval.seed_claim_ids);
   const traversedNodeIds: string[] = [];
@@ -106,6 +108,34 @@ export function projectRetrievalToGraph(retrieval: RetrievalResult): {
     });
   }
 
+  const ghostNodeIds = new Set<string>();
+  const claimNodeIdSet = new Set(retrieval.claims.map((claim) => `claim:${claim.id}`));
+  const sourceNodeIdSet = new Set(Array.from(sourceIds));
+
+  for (const rejected of retrieval.trace?.rejected_claims ?? []) {
+    const ghostId = `ghost:claim:${rejected.id}`;
+    if (ghostNodeIds.has(ghostId)) continue;
+    ghostNodeIds.add(ghostId);
+
+    const anchorFromSeed = rejected.anchor_claim_id ? `claim:${rejected.anchor_claim_id}` : undefined;
+    const sourceAnchor = rejected.source_title ? `source:${rejected.source_title}` : undefined;
+    const anchorNodeId =
+      (anchorFromSeed && claimNodeIdSet.has(anchorFromSeed) ? anchorFromSeed : undefined) ??
+      (sourceAnchor && sourceNodeIdSet.has(sourceAnchor) ? sourceAnchor : undefined) ??
+      (retrieval.seed_claim_ids[0] ? `claim:${retrieval.seed_claim_ids[0]}` : undefined);
+
+    rejectedNodes.push({
+      id: ghostId,
+      label: rejected.text.slice(0, 64) + (rejected.text.length > 64 ? '...' : ''),
+      reasonCode: rejected.reason_code,
+      consideredIn: rejected.considered_in,
+      sourceTitle: rejected.source_title,
+      confidence: rejected.confidence,
+      anchorNodeId,
+      pass_origin: 'retrieval'
+    });
+  }
+
   // Create edges for claim relationships
   for (const relation of retrieval.relations) {
     const fromClaim = retrieval.claims[relation.from_index];
@@ -131,6 +161,33 @@ export function projectRetrievalToGraph(retrieval: RetrievalResult): {
     }
   }
 
+  for (const [idx, rejected] of (retrieval.trace?.rejected_relations ?? []).entries()) {
+    const fromClaimNode = `claim:${rejected.from_claim_id}`;
+    const toClaimNode = `claim:${rejected.to_claim_id}`;
+    const fromGhostNode = `ghost:claim:${rejected.from_claim_id}`;
+    const toGhostNode = `ghost:claim:${rejected.to_claim_id}`;
+
+    const from =
+      (claimNodeIdSet.has(fromClaimNode) ? fromClaimNode : undefined) ??
+      (ghostNodeIds.has(fromGhostNode) ? fromGhostNode : undefined);
+    const to =
+      (claimNodeIdSet.has(toClaimNode) ? toClaimNode : undefined) ??
+      (ghostNodeIds.has(toGhostNode) ? toGhostNode : undefined);
+
+    if (!from || !to) continue;
+
+    rejectedEdges.push({
+      id: `ghost:edge:${idx}:${rejected.from_claim_id}:${rejected.to_claim_id}:${rejected.relation_type}`,
+      from,
+      to,
+      type: mapRelationType(rejected.relation_type),
+      reasonCode: rejected.reason_code,
+      relation_confidence: rejected.strength === 'strong' ? 0.85 : rejected.strength === 'weak' ? 0.55 : 0.65,
+      rationale_source: rejected.note ? `note:${rejected.note.slice(0, 80)}` : undefined,
+      pass_origin: 'retrieval'
+    });
+  }
+
   const relationTypeCounts: Partial<Record<GraphEdge['type'], number>> = {};
   for (const edge of edges) {
     relationTypeCounts[edge.type] = (relationTypeCounts[edge.type] ?? 0) + 1;
@@ -152,7 +209,22 @@ export function projectRetrievalToGraph(retrieval: RetrievalResult): {
             : 'moderate',
       retrievalDegraded: retrieval.degraded,
       retrievalDegradedReason: retrieval.degraded_reason,
-      retrievalTimestamp: new Date().toISOString()
+      retrievalTimestamp: new Date().toISOString(),
+      retrievalTrace: retrieval.trace
+        ? {
+            seedPoolCount: retrieval.trace.seed_pool_count,
+            selectedSeedCount: retrieval.trace.selected_seed_count,
+            traversedClaimCount: retrieval.trace.traversed_claim_count,
+            relationCandidateCount: retrieval.trace.relation_candidate_count,
+            relationKeptCount: retrieval.trace.relation_kept_count,
+            argumentCandidateCount: retrieval.trace.argument_candidate_count,
+            argumentKeptCount: retrieval.trace.argument_kept_count,
+            rejectedClaimCount: retrieval.trace.rejected_claims?.length ?? 0,
+            rejectedRelationCount: retrieval.trace.rejected_relations?.length ?? 0
+          }
+        : undefined,
+      rejectedNodes,
+      rejectedEdges
     }
   };
 }

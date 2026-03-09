@@ -56,7 +56,7 @@
       <div class="phase-section">
         <p class="phase-eyebrow">{group.label}</p>
         <div class="phase-claims">
-          {#each group.claims as claim, i (claim.id)}
+          {#each group.claims as claim, i (`${group.phase}:${claim.id}:${i}`)}
             <div style="animation-delay: {i * 16}ms">
               <ClaimCard {claim} relations={getRelations(claim.id)} />
             </div>

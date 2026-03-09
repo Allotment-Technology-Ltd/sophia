@@ -13,8 +13,8 @@
 
   /* ── Text ── */
   --color-text:           #E8E6E1;   /* Primary — headings, pass content */
-  --color-muted:          #9E9A93;   /* Secondary — body copy, descriptions */
-  --color-dim:            #4A4845;   /* Tertiary — labels, timestamps, inactive */
+  --color-muted:          #BCB8B1;   /* Secondary — body copy, descriptions */
+  --color-dim:            #807A72;   /* Tertiary — labels, timestamps, inactive */
 
   /* ── Borders ── */
   --color-border:         #2E2C29;   /* All borders and dividers, 1px */
@@ -48,9 +48,9 @@
   --text-d2:    2.25rem;                     /* Section title */
   --text-d3:    1.6rem;                      /* Card title */
   --text-body:  1.125rem;                    /* Pass content — 18px base */
-  --text-ui:    0.75rem;                     /* Buttons, nav links */
+  --text-ui:    0.8rem;                      /* Buttons, nav links */
   --text-label: 0.62rem;                     /* Eyebrows, badges */
-  --text-meta:  0.6rem;                      /* Timestamps, hints */
+  --text-meta:  0.7rem;                      /* Timestamps, hints */
 
   /* Line heights */
   --leading-display: 1.15;

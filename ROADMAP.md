@@ -134,6 +134,29 @@ Planned sources: Descartes (*Meditations* excerpts), Smart (1959), Fodor (1974),
 - Average time-on-page < 30 seconds → UX problem
 - Zero return users in 30 days → product-market fit issue
 
+### Phase 4a — Two-speed link ingestion + citation formalization (proposed)
+
+**Objective:** Expand analysis scope via user-directed links without harming interactive latency, and improve scholarly output discipline.
+
+Key deliverables:
+
+- [ ] Consumer `/api/analyse` request additions: `resource_mode`, `user_links`, `queue_for_nightly_ingest`
+- [ ] Fast runtime path: lightweight link intake only; no full ingestion in request path
+- [ ] Deferred queue for opted-in links: include both user-provided and grounding links from the run
+- [ ] Nightly Cloud Run Job + Cloud Scheduler trigger at `02:00 UTC`
+- [ ] Tiered allowlist policy:
+  - Trusted domains auto-approved
+  - Non-trusted domains routed to manual review
+- [ ] Harvard-style references in Synthesis + Verification outputs (in-text + references section)
+- [ ] Observability: queue backlog, nightly failure rate, ingestion throughput, citation compliance spot-checks
+
+Gating metrics:
+
+- [ ] Runtime latency budget maintained for `/api/analyse`
+- [ ] Nightly failure rate within threshold for 7 consecutive runs
+- [ ] Pending review queue kept under ops SLA target
+- [ ] No contract break for `/api/v1/verify` request schema
+
 ### Phase 5 — Reasoning API foundation (target: 6 weeks after Phase 4)
 
 **Objective:** Extract the core reasoning capabilities into a domain-agnostic API. The same three-pass engine that does philosophical analysis becomes a general-purpose reasoning evaluation service. This is the critical architectural move that opens the enterprise and developer markets.

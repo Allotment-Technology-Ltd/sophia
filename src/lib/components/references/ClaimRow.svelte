@@ -18,7 +18,7 @@
   <p class="claim-text">{claim.text}</p>
   {#if relations && relations.relations.length > 0}
     <div class="relation-tags">
-      {#each relations.relations as rel, i (rel.target)}
+      {#each relations.relations as rel, i (`${rel.type}:${rel.target}:${i}`)}
         <RelationTag type={rel.type} label={rel.label} delay={i * 300} />
       {/each}
     </div>

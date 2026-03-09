@@ -12,6 +12,7 @@
 | [evaluation-methodology.md](evaluation-methodology.md) | Evaluation rubric, Phase 1 results, limitations, planned formal study |
 | [prompts-reference.md](prompts-reference.md) | All LLM prompt templates, organised by pass |
 | [api-development-portal-roadmap.md](api-development-portal-roadmap.md) | Phased API developer portal roadmap (MVP → Gold-Plated) |
+| [phased-resource-expansion-nightly-ingestion-plan.md](phased-resource-expansion-nightly-ingestion-plan.md) | Proposed phased plan: fast runtime link intake + nightly full ingestion + Harvard references |
 
 ## Operations
 
@@ -19,6 +20,7 @@
 | --- | --- |
 | [runbooks/domain-expansion-runbook.md](runbooks/domain-expansion-runbook.md) | End-to-end guide for adding a new philosophical domain |
 | [runbooks/zuplo-phase1-runbook.md](runbooks/zuplo-phase1-runbook.md) | Phase 1 setup for Zuplo gateway + PostHog analytics |
+| [runbooks/nightly-link-ingestion-runbook.md](runbooks/nightly-link-ingestion-runbook.md) | Proposed operations guide for nightly deferred link ingestion |
 
 ## API Contracts
 

@@ -8,13 +8,14 @@
   interface Props {
     contextQuery?: string;
     streamingPass?: string;
+    streamingModel?: string;
     menuDotVisible?: boolean;
     panelOpen?: boolean;
     onMenuToggle?: () => void;
     onNew?: () => void;
   }
 
-  let { contextQuery, streamingPass, menuDotVisible, panelOpen = false, onMenuToggle, onNew }: Props = $props();
+  let { contextQuery, streamingPass, streamingModel, menuDotVisible, panelOpen = false, onMenuToggle, onNew }: Props = $props();
 
   let currentUser = $state(browser ? auth?.currentUser ?? null : null);
   let userMenuOpen = $state(false);
@@ -51,6 +52,9 @@
         <span class="streaming-status" aria-label="Status: {streamingPass}">
           <span class="streaming-dot" aria-hidden="true"></span>
           {streamingPass}
+          {#if streamingModel}
+            <span class="streaming-model">· {streamingModel}</span>
+          {/if}
         </span>
       {/if}
     </div>
@@ -204,6 +208,10 @@
     color: var(--color-sage);
     white-space: nowrap;
     flex-shrink: 0;
+  }
+
+  .streaming-model {
+    color: var(--color-muted);
   }
 
   .streaming-dot {

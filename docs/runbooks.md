@@ -16,6 +16,9 @@
   - `pnpm run monitor:wave -- --once` (or equivalent script configured)
 - Resume ingestion for a wave:
   - `pnpm run ingest:wave1:retry`
+- Proposed nightly deferred link ingestion operations:
+  - See `docs/runbooks/nightly-link-ingestion-runbook.md`
+  - Validate queue and run health daily before business hours
 
 ## Health checks
 - Health endpoint (if deployed): `curl -s --max-time 30 https://usesophia.app/api/health | jq .`

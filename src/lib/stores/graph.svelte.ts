@@ -1,4 +1,4 @@
-import type { GraphNode, GraphEdge, GraphSnapshotMeta } from '$lib/types/api';
+import type { EnrichmentStatusEvent, GraphNode, GraphEdge, GraphSnapshotMeta } from '$lib/types/api';
 import type { AnalysisPhase, Claim, RelationBundle } from '$lib/types/references';
 
 type GraphLifecycle = 'idle' | 'loading' | 'ready' | 'degraded' | 'error';
@@ -14,6 +14,12 @@ const ALL_RELATION_TYPES: GraphEdge['type'][] = [
   'resolves'
 ];
 
+const PHASE_DEPTH_LEVEL: Record<AnalysisPhase, number> = {
+  analysis: 1,
+  critique: 2,
+  synthesis: 3
+};
+
 function createGraphStore() {
   let lifecycle = $state<GraphLifecycle>('idle');
   let error = $state<string | null>(null);
@@ -26,6 +32,7 @@ function createGraphStore() {
 
   let snapshotVersion = $state<number>(1);
   let snapshotMeta = $state<GraphSnapshotMeta | null>(null);
+  let enrichmentStatus = $state<EnrichmentStatusEvent | null>(null);
 
   let selectedNodeId = $state<string | null>(null);
   let highlightedNodeIds = $state<Set<string>>(new Set());
@@ -130,6 +137,7 @@ function createGraphStore() {
     edges = [];
     snapshotMeta = null;
     snapshotVersion = 1;
+    enrichmentStatus = null;
     selectedNodeId = null;
     highlightedNodeIds = new Set();
     relationFilter = new Set(ALL_RELATION_TYPES);
@@ -145,7 +153,12 @@ function createGraphStore() {
         id: claim.id,
         type: 'claim',
         label: claim.text,
-        phase
+        phase,
+        pass_origin: phase,
+        depth_level: PHASE_DEPTH_LEVEL[phase],
+        evidence_strength: claim.confidence,
+        derived_from: claim.backRefIds,
+        conflict_status: phase === 'critique' ? 'contested' : 'none'
       });
       existingNodeIds.add(claim.id);
     }
@@ -161,7 +174,14 @@ function createGraphStore() {
           from: bundle.claimId,
           to: rel.target,
           type: rel.type,
-          phaseOrigin: phase
+          phaseOrigin: phase,
+          pass_origin: phase,
+          depth_level: PHASE_DEPTH_LEVEL[phase],
+          conflict_status: rel.type === 'contradicts'
+            ? 'contested'
+            : rel.type === 'resolves'
+              ? 'resolved'
+              : 'none'
         });
         edgeKeys.add(key);
       }
@@ -184,6 +204,7 @@ function createGraphStore() {
     get relationFilter() { return relationFilter; },
     get snapshotMeta() { return snapshotMeta; },
     get snapshotVersion() { return snapshotVersion; },
+    get enrichmentStatus() { return enrichmentStatus; },
     get lastUpdatedAt() { return lastUpdatedAt; },
     setGraph,
     setLoading,
@@ -192,6 +213,9 @@ function createGraphStore() {
     resetFilters,
     addFromClaims,
     selectNode,
+    setEnrichmentStatus(status: EnrichmentStatusEvent) {
+      enrichmentStatus = status;
+    },
     reset
   };
 }

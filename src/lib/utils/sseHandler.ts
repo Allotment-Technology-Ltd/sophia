@@ -49,6 +49,7 @@ export function handleSSEEvent(event: SSEEvent): boolean {
     }
 
     case 'enrichment_status': {
+      graphStore.setEnrichmentStatus(event);
       if (event.status === 'suppressed' || event.status === 'failed') {
         console.info('[SSE] enrichment_status:', event.status, event.reason ?? '');
       }

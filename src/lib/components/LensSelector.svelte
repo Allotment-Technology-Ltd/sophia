@@ -5,12 +5,15 @@
     description: string;
   }
 
+  type DomainSelection = 'auto' | 'ethics' | 'philosophy_of_mind';
+
   interface Props {
     value?: string;
     disabled?: boolean;
+    domain?: DomainSelection;
   }
 
-  let { value = $bindable(''), disabled = false }: Props = $props();
+  let { value = $bindable(''), disabled = false, domain = 'auto' }: Props = $props();
 
   const options: LensOption[] = [
     { value: '', label: 'None', description: 'General perspective' },
@@ -18,25 +21,59 @@
     { value: 'deontological', label: 'Deontological', description: 'Duties, rights, and constraints' },
     { value: 'virtue_ethics', label: 'Virtue', description: 'Character and flourishing' },
     { value: 'rawlsian', label: 'Rawlsian', description: 'Fairness and justice as fairness' },
-    { value: 'care_ethics', label: 'Care ethics', description: 'Relationships and dependency' }
+    { value: 'care_ethics', label: 'Care ethics', description: 'Relationships and dependency' },
+    { value: 'physicalist', label: 'Physicalist', description: 'Mind as fully physical and brain-based' },
+    { value: 'dualist', label: 'Dualist', description: 'Mental and physical as fundamentally distinct' },
+    { value: 'functionalist', label: 'Functionalist', description: 'Mental states by causal/functional roles' },
+    { value: 'enactivist', label: 'Enactivist', description: 'Mind as embodied, embedded activity' },
+    { value: 'phenomenological', label: 'Phenomenological', description: 'First-person structure of lived experience' }
   ];
 
-  const activeOption = $derived(options.find((option) => option.value === value) ?? options[0]);
+  const allowedByDomain: Record<DomainSelection, string[]> = {
+    auto: [
+      '',
+      'utilitarian',
+      'deontological',
+      'virtue_ethics',
+      'rawlsian',
+      'care_ethics',
+      'physicalist',
+      'dualist',
+      'functionalist',
+      'enactivist',
+      'phenomenological'
+    ],
+    ethics: ['', 'utilitarian', 'deontological', 'virtue_ethics', 'rawlsian', 'care_ethics'],
+    philosophy_of_mind: ['', 'physicalist', 'dualist', 'functionalist', 'enactivist', 'phenomenological']
+  };
+
+  const isDomainAuto = $derived(domain === 'auto');
+  const availableOptions = $derived(
+    options.filter((option) => allowedByDomain[domain].includes(option.value))
+  );
+  const activeOption = $derived(availableOptions.find((option) => option.value === value) ?? availableOptions[0]);
+  const domainHint = $derived(
+    isDomainAuto
+      ? 'Lens is disabled while domain is Auto.'
+      : domain === 'philosophy_of_mind'
+      ? 'Showing Philosophy of Mind lenses.'
+      : activeOption.description
+  );
 </script>
 
 <div class="selector-row" aria-label="Reasoning lens selector">
   <label for="lens-select">Lens</label>
-  <select id="lens-select" bind:value {disabled}>
-    {#each options as option}
+  <select id="lens-select" bind:value disabled={disabled || isDomainAuto}>
+    {#each availableOptions as option}
       <option value={option.value}>{option.label}</option>
     {/each}
   </select>
-  <span class="hint">{activeOption.description}</span>
+  <span class="hint">{domainHint}</span>
 </div>
 
 <style>
   .selector-row {
-    width: min(700px, 100%);
+    width: 100%;
     display: grid;
     grid-template-columns: auto minmax(160px, 220px) 1fr;
     gap: var(--space-2);

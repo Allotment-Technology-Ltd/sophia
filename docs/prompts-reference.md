@@ -244,6 +244,39 @@ ADVERSARY'S CRITIQUE (Pass 2)
 
 ---
 
+### Proposed: External Context Injection Policy (Runtime)
+
+For consumer `/api/analyse` requests that include user-provided links, inject a compact external context block into pass prompts. Keep this runtime intake lightweight and bounded.
+
+Policy snippet:
+
+```
+EXTERNAL CONTEXT POLICY (PROPOSED):
+- If user links are provided, treat them as priority context.
+- Use only lightweight extracted summaries at runtime.
+- Do not run full ingestion in request path.
+- If link extraction fails, proceed with available graph + grounding context.
+- Queue opted-in user + grounding links for nightly full ingestion.
+```
+
+---
+
+### Proposed: Harvard Referencing Policy (Synthesis + Verification)
+
+Apply formal referencing to Synthesis and Verification outputs only (Analysis/Critique unchanged in this phase).
+
+Policy snippet:
+
+```
+HARVARD REFERENCING POLICY (PROPOSED):
+- Use in-text author-year citations for attributed claims: (Surname, Year).
+- End with a section titled exactly: "## References (Harvard)".
+- Format entries consistently and include URL/access date when available.
+- If any attribution lacks a reliable source, mark it explicitly as [Unattributed].
+```
+
+---
+
 ### Live Extraction (UI References Panel)
 
 **Model:** Claude Sonnet (→ Gemini 2.5 Flash in Phase 3c — cheaper, structurally simpler task)

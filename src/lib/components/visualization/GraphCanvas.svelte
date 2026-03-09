@@ -1,11 +1,15 @@
 <script lang="ts">
-	import type { GraphNode, GraphEdge } from '$lib/types/api';
+	import type { GraphNode, GraphEdge, GraphGhostNode, GraphGhostEdge } from '$lib/types/api';
 	import { computeLayout, type LayoutPosition } from '$lib/utils/graphLayout';
+	import { formatTraceTag, getNodeTraceLabel } from '$lib/utils/graphTrace';
 	import NodeDetail from './NodeDetail.svelte';
 
 	interface Props {
 		nodes: GraphNode[];
 		edges: GraphEdge[];
+		ghostNodes?: GraphGhostNode[];
+		ghostEdges?: GraphGhostEdge[];
+		showGhostLayer?: boolean;
 		width?: number;
 		height?: number;
 		isFullscreen?: boolean;
@@ -20,6 +24,9 @@
 	let {
 		nodes = [],
 		edges = [],
+		ghostNodes = [],
+		ghostEdges = [],
+		showGhostLayer = true,
 		width = 800,
 		height = 600,
 		isFullscreen = false,
@@ -35,8 +42,12 @@
 	const MAX_ZOOM = 2.6;
 
 	let highlightedNodeId = $state<string | null>(null);
+	let highlightedGhostNodeId = $state<string | null>(null);
 	let selectedNodeId = $state<string | null>(null);
 	let focusedNodeId = $state<string | null>(null);
+	type EdgeSelection = { edge: GraphEdge | GraphGhostEdge; isGhost: boolean };
+	let hoveredEdge = $state<EdgeSelection | null>(null);
+	let selectedEdge = $state<EdgeSelection | null>(null);
 	let positions = $state<Map<string, LayoutPosition>>(new Map());
 	let zoom = $state(1);
 	let panX = $state(0);
@@ -50,9 +61,53 @@
 	let panBaseY = 0;
 
 	$effect(() => {
-		if (nodes.length > 0) {
-			positions = computeLayout(nodes, edges, width, height);
+		if (nodes.length === 0) {
+			positions = new Map();
+			return;
 		}
+
+		const nextPositions = computeLayout(nodes, edges, width, height);
+		if (showGhostLayer && ghostNodes.length > 0) {
+			const anchored = new Map<string, GraphGhostNode[]>();
+			const unanchored: GraphGhostNode[] = [];
+			for (const ghost of ghostNodes) {
+				if (ghost.anchorNodeId && nextPositions.has(ghost.anchorNodeId)) {
+					if (!anchored.has(ghost.anchorNodeId)) anchored.set(ghost.anchorNodeId, []);
+					anchored.get(ghost.anchorNodeId)?.push(ghost);
+				} else {
+					unanchored.push(ghost);
+				}
+			}
+
+			for (const [anchorId, group] of anchored.entries()) {
+				const anchor = nextPositions.get(anchorId);
+				if (!anchor) continue;
+				group.forEach((ghost, index) => {
+					const angle = ((index % 8) / 8) * Math.PI * 2 - Math.PI / 2;
+					const ring = Math.floor(index / 8);
+					const radius = 40 + ring * 16;
+					nextPositions.set(ghost.id, {
+						x: anchor.x + Math.cos(angle) * radius,
+						y: anchor.y + Math.sin(angle) * radius
+					});
+				});
+			}
+
+			if (unanchored.length > 0) {
+				const centerX = width / 2;
+				const centerY = height / 2;
+				const radius = Math.min(width, height) * 0.42;
+				unanchored.forEach((ghost, index) => {
+					const angle = (index / Math.max(unanchored.length, 1)) * Math.PI * 2 - Math.PI / 2;
+					nextPositions.set(ghost.id, {
+						x: centerX + Math.cos(angle) * radius,
+						y: centerY + Math.sin(angle) * radius
+					});
+				});
+			}
+		}
+
+		positions = nextPositions;
 	});
 
 	const selectedNode = $derived(
@@ -64,6 +119,8 @@
 			? positions.get(selectedNodeId)!
 			: null
 	);
+
+	const activeEdge = $derived(selectedEdge ?? hoveredEdge);
 
 	const detailPosition = $derived.by(() => {
 		if (!selectedPosition) return null;
@@ -77,6 +134,23 @@
 			y: Math.min(Math.max(screenY, panelHeight + margin), height - margin)
 		};
 	});
+
+	const edgeDetailPosition = $derived.by(() => {
+		if (!activeEdge) return null;
+		const fromPos = positions.get(activeEdge.edge.from);
+		const toPos = positions.get(activeEdge.edge.to);
+		if (!fromPos || !toPos) return null;
+		const midX = ((fromPos.x + toPos.x) / 2) * zoom + panX;
+		const midY = ((fromPos.y + toPos.y) / 2) * zoom + panY;
+		return {
+			x: Math.min(Math.max(midX, 160), width - 160),
+			y: Math.min(Math.max(midY, 64), height - 64)
+		};
+	});
+
+	const activeEdgeConfidence = $derived(activeEdge ? getEdgeConfidence(activeEdge.edge) : null);
+	const activeEdgeReasonCode = $derived(activeEdge ? getEdgeReasonCode(activeEdge.edge) : null);
+	const activeEdgeRationale = $derived(activeEdge ? getEdgeRationaleSource(activeEdge.edge) : null);
 
 	const highlightedEdges = $derived(
 		highlightedNodeId
@@ -94,6 +168,13 @@
 		if (positions.size === 0) return;
 		if (hasUserAdjustedView) return;
 		fitToGraph();
+	});
+
+	$effect(() => {
+		if (showGhostLayer) return;
+		if (selectedEdge?.isGhost) selectedEdge = null;
+		if (hoveredEdge?.isGhost) hoveredEdge = null;
+		highlightedGhostNodeId = null;
 	});
 
 	function clamp(value: number, min: number, max: number): number {
@@ -142,15 +223,96 @@
 		) {
 			return true;
 		}
+		if (hoveredEdge?.isGhost === false && hoveredEdge.edge.from === edge.from && hoveredEdge.edge.to === edge.to && hoveredEdge.edge.type === edge.type) {
+			return true;
+		}
 		return highlightedEdges.some((e) => e.from === edge.from && e.to === edge.to);
 	}
 
+	function isGhostEdgeHighlighted(edge: GraphGhostEdge): boolean {
+		if (!showGhostLayer) return false;
+		if (selectedNodeId && (edge.from === selectedNodeId || edge.to === selectedNodeId)) return true;
+		if (highlightedNodeId && (edge.from === highlightedNodeId || edge.to === highlightedNodeId)) return true;
+		if (selectedEdge?.isGhost === true && 'id' in selectedEdge.edge && selectedEdge.edge.id === edge.id) return true;
+		return hoveredEdge?.isGhost === true && 'id' in hoveredEdge.edge && hoveredEdge.edge.id === edge.id;
+	}
+
 	function isEdgeSelected(edge: GraphEdge): boolean {
+		if (
+			selectedEdge?.isGhost === false &&
+			selectedEdge.edge.from === edge.from &&
+			selectedEdge.edge.to === edge.to &&
+			selectedEdge.edge.type === edge.type
+		) {
+			return true;
+		}
 		return selectedEdges.some((e) => e.from === edge.from && e.to === edge.to);
+	}
+
+	function handleEdgeMouseEnter(edge: GraphEdge | GraphGhostEdge, isGhost: boolean): void {
+		hoveredEdge = { edge, isGhost };
+	}
+
+	function handleEdgeMouseLeave(): void {
+		hoveredEdge = null;
+	}
+
+	function handleEdgeClick(edge: GraphEdge | GraphGhostEdge, isGhost: boolean): void {
+		if (
+			selectedEdge &&
+			selectedEdge.isGhost === isGhost &&
+			selectedEdge.edge.from === edge.from &&
+			selectedEdge.edge.to === edge.to &&
+			selectedEdge.edge.type === edge.type &&
+			(('id' in selectedEdge.edge ? selectedEdge.edge.id : '') === ('id' in edge ? edge.id : ''))
+		) {
+			selectedEdge = null;
+			return;
+		}
+		selectedEdge = { edge, isGhost };
+	}
+
+	function handleEdgeKeyDown(event: KeyboardEvent, edge: GraphEdge | GraphGhostEdge, isGhost: boolean): void {
+		if (event.key === 'Enter' || event.key === ' ') {
+			event.preventDefault();
+			handleEdgeClick(edge, isGhost);
+		}
+		if (event.key === 'Escape') {
+			clearSelectedEdge();
+		}
+	}
+
+	function clearSelectedEdge(): void {
+		selectedEdge = null;
+	}
+
+	function getEdgePassOrigin(edge: GraphEdge | GraphGhostEdge): string {
+		return edge.pass_origin ?? ('phaseOrigin' in edge ? edge.phaseOrigin ?? 'retrieval' : 'retrieval');
+	}
+
+	function getEdgeConfidence(edge: GraphEdge | GraphGhostEdge): number | null {
+		if (typeof edge.relation_confidence === 'number') return edge.relation_confidence;
+		if ('evidence_strength' in edge && typeof edge.evidence_strength === 'number') return edge.evidence_strength;
+		if ('weight' in edge && typeof edge.weight === 'number') return edge.weight;
+		return null;
+	}
+
+	function getEdgeRationaleSource(edge: GraphEdge | GraphGhostEdge): string | null {
+		if ('rationale_source' in edge && edge.rationale_source) return edge.rationale_source;
+		if ('evidence_sources' in edge && edge.evidence_sources && edge.evidence_sources.length > 0) {
+			return edge.evidence_sources[0];
+		}
+		if ('relation_rationale' in edge && edge.relation_rationale) return edge.relation_rationale;
+		return null;
+	}
+
+	function getEdgeReasonCode(edge: GraphEdge | GraphGhostEdge): string | null {
+		return 'reasonCode' in edge ? edge.reasonCode : null;
 	}
 
 	function handleNodeClick(nodeId: string) {
 		if (selectedNodeId === nodeId) return;
+		selectedEdge = null;
 		selectedNodeId = nodeId;
 		onNodeSelect?.(nodeId);
 	}
@@ -170,6 +332,7 @@
 		} else if (e.key === 'Escape') {
 			selectedNodeId = null;
 			highlightedNodeId = null;
+			selectedEdge = null;
 		}
 	}
 
@@ -274,8 +437,19 @@
 
 	function handlePointerDown(event: PointerEvent): void {
 		const target = event.target as HTMLElement;
-		if (target.closest('.graph-node') || target.closest('.node-detail') || target.closest('.graph-controls')) return;
+		if (
+			target.closest('.graph-node') ||
+			target.closest('.graph-edge') ||
+			target.closest('.ghost-edge') ||
+			target.closest('.ghost-node') ||
+			target.closest('.node-detail') ||
+			target.closest('.edge-detail') ||
+			target.closest('.graph-controls')
+		) {
+			return;
+		}
 		if (event.button !== 0) return;
+		selectedEdge = null;
 		isPanning = true;
 		panStartX = event.clientX;
 		panStartY = event.clientY;
@@ -324,6 +498,7 @@
 			if (event.key === 'Escape') {
 				selectedNodeId = null;
 				highlightedNodeId = null;
+				selectedEdge = null;
 			}
 		};
 		window.addEventListener('keydown', onWindowKeyDown);
@@ -378,6 +553,38 @@
 			style:transform={"translate(" + panX + "px, " + panY + "px) scale(" + zoom + ")"}
 			style:transform-origin="0 0"
 		>
+			{#if showGhostLayer && ghostEdges.length > 0}
+				<g class="ghost-edges-group" aria-label="Rejected traversal edges">
+					{#each ghostEdges as edge, i}
+						{#if positions.has(edge.from) && positions.has(edge.to)}
+							{@const fromPos = positions.get(edge.from)!}
+							{@const toPos = positions.get(edge.to)!}
+							{@const isHighlighted = isGhostEdgeHighlighted(edge)}
+							<line
+								x1={fromPos.x}
+								y1={fromPos.y}
+								x2={toPos.x}
+								y2={toPos.y}
+								class="ghost-edge"
+								class:highlighted={isHighlighted}
+								stroke="var(--color-dim)"
+								stroke-width={isHighlighted ? 1.8 : 1.1}
+								opacity={isHighlighted ? 0.52 : 0.22}
+								stroke-dasharray="6 5"
+								aria-label="{edge.type} rejected relation ({edge.reasonCode})"
+								role="button"
+								tabindex="0"
+								onmouseenter={() => handleEdgeMouseEnter(edge, true)}
+								onmouseleave={handleEdgeMouseLeave}
+								onclick={() => handleEdgeClick(edge, true)}
+								onkeydown={(event) => handleEdgeKeyDown(event, edge, true)}
+								style:animation-delay="{i * 18}ms"
+							/>
+						{/if}
+					{/each}
+				</g>
+			{/if}
+
 			<g class="edges-group" aria-label="Graph edges">
 				{#each edges as edge, i}
 					{#if positions.has(edge.from) && positions.has(edge.to)}
@@ -397,11 +604,68 @@
 							stroke-width={isSelected ? 2 : 1}
 							opacity={isHighlighted || isSelected ? 0.8 : 0.3}
 							aria-label="{edge.type} relation"
+							role="button"
+							tabindex="0"
+							onmouseenter={() => handleEdgeMouseEnter(edge, false)}
+							onmouseleave={handleEdgeMouseLeave}
+							onclick={() => handleEdgeClick(edge, false)}
+							onkeydown={(event) => handleEdgeKeyDown(event, edge, false)}
 							style:animation-delay="{i * 20}ms"
 						/>
 					{/if}
 				{/each}
 			</g>
+
+			{#if showGhostLayer && ghostNodes.length > 0}
+				<g class="ghost-nodes-group" aria-label="Rejected traversal nodes">
+					{#each ghostNodes as ghost, i}
+						{#if positions.has(ghost.id)}
+							{@const pos = positions.get(ghost.id)!}
+							{@const isHighlighted = highlightedGhostNodeId === ghost.id}
+							<g
+								class="ghost-node"
+								transform="translate({pos.x}, {pos.y})"
+								role="presentation"
+								onmouseenter={() => highlightedGhostNodeId = ghost.id}
+								onmouseleave={() => highlightedGhostNodeId = null}
+								style:animation-delay="{i * 25}ms"
+							>
+								<circle
+									r="8"
+									fill="var(--color-bg)"
+									stroke="var(--color-dim)"
+									stroke-width={isHighlighted ? 1.6 : 1.2}
+									opacity={isHighlighted ? 0.66 : 0.4}
+								/>
+								{#if isHighlighted}
+									<text
+										y="18"
+										class="ghost-node-label"
+										text-anchor="middle"
+										font-family="var(--font-ui)"
+										font-size="9"
+										fill="var(--color-dim)"
+										pointer-events="none"
+									>
+										{getShortLabel(ghost.label)}
+									</text>
+									<text
+										y="30"
+										class="ghost-node-label"
+										text-anchor="middle"
+										font-family="var(--font-ui)"
+										font-size="8"
+										fill="var(--color-dim)"
+										pointer-events="none"
+									>
+										{formatTraceTag(ghost.reasonCode)}
+									</text>
+								{/if}
+							</g>
+						{/if}
+					{/each}
+				</g>
+			{/if}
 
 			<g class="nodes-group" aria-label="Graph nodes">
 				{#each nodes as node, i}
@@ -483,6 +747,19 @@
 							>
 								{getShortLabel(node.label)}
 							</text>
+							{#if shouldRenderNodeLabel(node.id) && getNodeTraceLabel(node)}
+								<text
+									y={radius + 31}
+									class="node-trace-label"
+									text-anchor="middle"
+									font-family="var(--font-ui)"
+									font-size="9"
+									fill="var(--color-dim)"
+									pointer-events="none"
+								>
+									{getNodeTraceLabel(node)}
+								</text>
+							{/if}
 						</g>
 					{/if}
 				{/each}
@@ -500,6 +777,36 @@
 			onClose={handleCloseDetail}
 			onJumpToReferences={handleJumpToReferences}
 		/>
+	{/if}
+
+	{#if activeEdge && edgeDetailPosition}
+		<div
+			class="edge-detail"
+			style:left="{edgeDetailPosition.x}px"
+			style:top="{edgeDetailPosition.y}px"
+		>
+			<p class="edge-detail-title">
+				{activeEdge.edge.type}
+				{#if activeEdge.isGhost}
+					<span class="edge-detail-badge">rejected</span>
+				{/if}
+			</p>
+			<div class="edge-chip-row">
+				<span class="edge-chip">pass {formatTraceTag(getEdgePassOrigin(activeEdge.edge))}</span>
+				{#if activeEdgeConfidence !== null}
+					<span class="edge-chip">confidence {(activeEdgeConfidence * 100).toFixed(0)}%</span>
+				{/if}
+				{#if activeEdgeReasonCode}
+					<span class="edge-chip is-reason">{formatTraceTag(activeEdgeReasonCode)}</span>
+				{/if}
+			</div>
+			{#if activeEdgeRationale}
+				<p class="edge-detail-line">source: {activeEdgeRationale}</p>
+			{/if}
+			{#if selectedEdge}
+				<button type="button" class="edge-detail-close" onclick={clearSelectedEdge}>Close</button>
+			{/if}
+		</div>
 	{/if}
 </div>
 
@@ -571,6 +878,27 @@
 		border-color: var(--color-sage-border);
 	}
 
+	.graph-edge,
+	.ghost-edge {
+		cursor: pointer;
+		transition: opacity 120ms ease, stroke-width 120ms ease;
+	}
+
+	.ghost-edge {
+		stroke-linecap: round;
+	}
+
+	.ghost-node {
+		cursor: default;
+	}
+
+	.ghost-node-label {
+		paint-order: stroke;
+		stroke: rgba(7, 8, 10, 0.95);
+		stroke-width: 2px;
+		text-transform: lowercase;
+	}
+
 	.node-label {
 		opacity: 0;
 		transition: opacity 120ms ease;
@@ -586,12 +914,102 @@
 		opacity: 0.95;
 	}
 
+	.node-trace-label {
+		opacity: 0.92;
+		user-select: none;
+		paint-order: stroke;
+		stroke: rgba(7, 8, 10, 0.96);
+		stroke-width: 2px;
+		letter-spacing: 0.02em;
+		text-transform: lowercase;
+	}
+
 	.detail-backdrop {
 		position: absolute;
 		inset: 0;
 		background: transparent;
 		z-index: 90;
 		user-select: none;
+	}
+
+	.edge-detail {
+		position: absolute;
+		transform: translate(-50%, -110%);
+		z-index: 92;
+		border: 1px solid var(--color-border);
+		background: color-mix(in srgb, var(--color-surface) 96%, transparent);
+		border-radius: var(--radius-sm);
+		padding: 8px 10px;
+		min-width: 210px;
+		max-width: min(320px, 42vw);
+		box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.edge-detail-title {
+		margin: 0;
+		font-family: var(--font-ui);
+		font-size: var(--text-ui);
+		color: var(--color-text);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.edge-detail-badge {
+		border: 1px solid var(--color-border);
+		border-radius: 999px;
+		padding: 1px 6px;
+		font-size: 0.62rem;
+		color: var(--color-muted);
+	}
+
+	.edge-chip-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+
+	.edge-chip {
+		border: 1px solid var(--color-border);
+		border-radius: 999px;
+		padding: 2px 8px;
+		font-family: var(--font-ui);
+		font-size: 0.66rem;
+		color: var(--color-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+
+	.edge-chip.is-reason {
+		border-color: var(--color-copper-border);
+		color: var(--color-copper);
+	}
+
+	.edge-detail-line {
+		margin: 0;
+		font-family: var(--font-ui);
+		font-size: 0.74rem;
+		color: var(--color-muted);
+		line-height: 1.35;
+	}
+
+	.edge-detail-close {
+		align-self: flex-start;
+		border: 1px solid var(--color-border);
+		background: transparent;
+		color: var(--color-text);
+		border-radius: var(--radius-sm);
+		padding: 3px 8px;
+		font-family: var(--font-ui);
+		font-size: 0.66rem;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		cursor: pointer;
 	}
 
 	.sr-only {

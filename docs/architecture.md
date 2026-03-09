@@ -9,6 +9,8 @@
 
 SOPHIA is a SvelteKit full-stack application backed by a SurrealDB argument graph and deployed on GCP. The core is a **three-pass dialectical engine** that runs three sequential LLM calls (Analysis → Critique → Synthesis) against a typed philosophical knowledge graph (~10,900 claims across ethics and philosophy of mind, 34 sources). Output streams progressively to the browser via Server-Sent Events. All users are authenticated via Firebase Auth; query history and server-side cache are stored in Firestore.
 
+**Proposed extension:** introduce a two-speed external source pipeline for user-provided links: lightweight runtime intake during `/api/analyse`, then full ingestion via a nightly deferred job.
+
 ---
 
 ## System diagram
@@ -28,6 +30,7 @@ SvelteKit App  ──  Cloud Run (europe-west2, 0–3 instances, 512Mi)
     │       1. Check Firestore cache — if hit, replay stored SSE events
     │       2. Embed query: Vertex AI text-embedding-005 (768-dim)
     │       3. Retrieve context: SurrealDB vector search + graph traversal
+    │       3b. (Proposed) Lightweight user-link intake for immediate context
     │       4. Run three-pass engine (streaming SSE to client)
     │              Pass 1 Analysis  ─── Vertex AI Gemini 2.5 Flash
     │              Pass 2 Critique  ─── (starts after Pass 1 ~30% complete)
@@ -35,6 +38,7 @@ SvelteKit App  ──  Cloud Run (europe-west2, 0–3 instances, 512Mi)
     │              Each pass: Google Search Grounding → real URLs per pass
     │              Each pass: inline sophia-meta block → structured claims
     │       5. Write result to Firestore cache + user history
+    │       6. (Proposed) If opted in, enqueue user + grounding links for nightly full ingestion
     │
     ├─► /api/verify  (POST { query, synthesis })
     │       Optional fourth pass — cross-checks key claims against live search
@@ -43,6 +47,10 @@ SvelteKit App  ──  Cloud Run (europe-west2, 0–3 instances, 512Mi)
     │
     ├─► /api/history  (GET → list 50 most recent | DELETE { id })
     │       Firestore users/{uid}/queries — scoped to authenticated uid
+    │
+    ├─► (Proposed) Nightly deferred ingestion
+    │       Cloud Scheduler (02:00 UTC) ─► Cloud Run Job (link ingestion worker)
+    │       Reads approved queue rows, runs full ingestion pipeline, updates SurrealDB graph
     │
     ├─► SurrealDB  (GCE VM sophia-db, europe-west2-b, VPC-connected)
     │       Philosophical knowledge graph
@@ -84,6 +92,7 @@ SvelteKit App  ──  Cloud Run (europe-west2, 0–3 instances, 512Mi)
 | `src/lib/server/graphProjection.ts` | Converts `RetrievalResult` to graph nodes/edges for the `graph_snapshot` SSE event. |
 | `src/lib/server/prompts/` | LLM prompt templates: `analysis.ts`, `critique.ts`, `synthesis.ts`, `verification.ts`. |
 | `src/routes/api/analyse/+server.ts` | SSE endpoint. Orchestrates cache check → retrieval → engine → Firestore write. |
+| `(Proposed) link ingestion worker` | Nightly queue processor: fetches approved queued links and runs full ingestion pipeline out of band. |
 
 ### SSE event contract
 
@@ -102,6 +111,12 @@ All streaming endpoints (`/api/analyse`, `/api/verify`) emit this event set:
 
 // PassType = 'analysis' | 'critique' | 'synthesis' | 'verification'
 ```
+
+**Proposed additive metadata fields (`/api/analyse`):**
+- `resource_mode` (`standard` | `expanded`)
+- `user_links_count` (number)
+- `runtime_links_processed` (number)
+- `nightly_queue_enqueued` (number)
 
 ### Reactive stores (Svelte 5 runes)
 
@@ -173,6 +188,21 @@ Serverless, free-tier sufficient for MVP. Per-user paths (`users/{uid}/...`) pai
 
 **Why no domain filter in the engine?**
 The `MVP_DOMAIN_FILTER` was removed in Phase 3d once Philosophy of Mind Wave 1 ingestion completed. The engine now calls `retrieveContext()` without a domain constraint, returning the most semantically relevant claims across all domains. A query-aware domain classifier or explicit domain parameter will be added once PoM Wave 2 is complete and the retrieval signal is strong enough to warrant routing.
+
+## Proposed Two-Speed External Source Pipeline
+
+**Runtime (fast path):**
+- User-provided links are processed with lightweight extraction only.
+- Analysis flow remains responsive; failures degrade gracefully to core retrieval.
+- Request contract remains additive (`resource_mode`, `user_links`, `queue_for_nightly_ingest`).
+
+**Deferred (nightly full path):**
+- If user opts in, user + grounding links are queued for overnight ingestion.
+- Cloud Scheduler triggers nightly Cloud Run Job at `02:00 UTC`.
+- Queue uses tiered allowlist:
+  - Trusted domains auto-approved.
+  - Non-trusted domains routed to review.
+- Worker runs full ingestion pipeline and updates graph tables asynchronously.
 
 ---
 

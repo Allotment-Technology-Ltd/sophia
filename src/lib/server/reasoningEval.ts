@@ -30,8 +30,17 @@ function computeOverallScore(scores: z.infer<typeof ReasoningScoreSchema>[]): nu
   return Number(weighted.toFixed(4));
 }
 
+function extractJson(text: string): string {
+  // Strip markdown fences if present: ```json ... ``` or ``` ... ```
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) return fenced[1].trim();
+  // Find first [ or { and take from there
+  const start = text.search(/[\[{]/);
+  return start >= 0 ? text.slice(start) : text;
+}
+
 function parseScores(text: string): z.infer<typeof ReasoningScoreSchema>[] {
-  const parsed = JSON.parse(text);
+  const parsed = JSON.parse(extractJson(text));
   return ReasoningScoresArraySchema.parse(parsed);
 }
 
