@@ -1,6 +1,6 @@
 # Architecture
 
-**Last updated:** 2026-03-09
+**Last updated:** 2026-03-10
 **Version:** 0.2.0 (Phase 3c deployed; Phase 3d in progress)
 
 ---
@@ -206,6 +206,19 @@ The `MVP_DOMAIN_FILTER` was removed in Phase 3d once Philosophy of Mind Wave 1 i
 
 ---
 
+## Proposed BYOK credential path (planned, additive)
+
+BYOK (Bring Your Own Key) is a subsequent engineering stream (after Vertex ingestion migration and near-term grant applications) and is not yet implemented in runtime code paths. Planned architecture:
+
+- **User credential vault:** per-user provider credential records under Firestore user scope, with ciphertext stored via Cloud KMS envelope encryption.
+- **Runtime key resolution:** model client creation resolves credentials per request/user/provider rather than relying only on process-level provider env keys.
+- **Provider routing:** existing provider routing extends to user-contextual availability and model capability checks (initially Vertex + Anthropic, then OpenAI, then plugin-based expansion).
+- **Signed gateway tenant identity:** Zuplo-forwarded API requests include signed tenant identity headers so backend can resolve the correct BYOK owner context without relying on a single upstream backend key identity.
+
+This path is designed to keep `/api/v1/verify` request/response contracts backward compatible while adding BYOK capabilities through additive APIs and metadata.
+
+---
+
 ## Known technical constraints
 
 | Constraint | Impact | Resolution |
@@ -226,4 +239,5 @@ The `MVP_DOMAIN_FILTER` was removed in Phase 3d once Philosophy of Mind Wave 1 i
 | [docs/argument-graph.md](argument-graph.md) | SurrealDB schema reference — tables, relation types, SurrealQL examples |
 | [docs/three-pass-engine.md](three-pass-engine.md) | Engine design, per-pass contract, example output |
 | [docs/evaluation-methodology.md](evaluation-methodology.md) | Evaluation rubric, Phase 1 results, limitations |
+| [docs/byok-rollout-plan.md](byok-rollout-plan.md) | Canonical BYOK rollout phases and deferred monetization plan |
 | [docs/runbooks/domain-expansion-runbook.md](runbooks/domain-expansion-runbook.md) | Operational guide for adding a new philosophical domain |

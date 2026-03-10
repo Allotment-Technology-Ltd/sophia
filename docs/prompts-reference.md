@@ -261,18 +261,19 @@ EXTERNAL CONTEXT POLICY (PROPOSED):
 
 ---
 
-### Proposed: Harvard Referencing Policy (Synthesis + Verification)
+### Harvard Referencing Policy (Synthesis + Verification)
 
 Apply formal referencing to Synthesis and Verification outputs only (Analysis/Critique unchanged in this phase).
 
 Policy snippet:
 
 ```
-HARVARD REFERENCING POLICY (PROPOSED):
+HARVARD REFERENCING POLICY:
 - Use in-text author-year citations for attributed claims: (Surname, Year).
 - End with a section titled exactly: "## References (Harvard)".
 - Format entries consistently and include URL/access date when available.
 - If any attribution lacks a reliable source, mark it explicitly as [Unattributed].
+- Runtime guardrail: if the section is missing, append a normalized "## References (Harvard)" block.
 ```
 
 ---

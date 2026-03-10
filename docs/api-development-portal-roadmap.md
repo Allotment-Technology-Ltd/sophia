@@ -86,6 +86,38 @@ The phases remain `MVP`, `MVP+1`, `MVP+2`, and `Gold-Plated`, but implementation
 - Add advanced API products as needed (e.g. batch verification), fronted through Zuplo policy/governance layer.
 - Keep versioning discipline explicit (`v1` stability, `preview` channel rules) and enforce via gateway routing policies.
 
+## BYOK enablement backlog (pre-monetization)
+
+BYOK (Bring Your Own Key) is a subsequent engineering stream for the platform after Vertex ingestion migration and near-term grant application work. Monetization packaging is a later phase and depends on BYOK stability.
+
+### Phase 1 — BYOK foundation (Vertex + Anthropic)
+
+- Add planned additive BYOK endpoints:
+  - `GET /api/byok/providers`
+  - `PUT /api/byok/providers/:provider`
+  - `POST /api/byok/providers/:provider/validate`
+  - `DELETE /api/byok/providers/:provider`
+- Add secure credential vault with encryption at rest and strict secret-redaction policy.
+- Add runtime credential resolution per user/provider for `/api/v1/verify` and internal model-calling paths.
+- Preserve backward compatibility of existing `/api/v1/verify` request/response schema.
+
+### Phase 1b — OpenAI expansion
+
+- Add OpenAI credential support and validation flows.
+- Extend `/api/models` to user-contextual provider/model availability once BYOK is active.
+- Keep provider error handling normalized across Vertex/Anthropic/OpenAI.
+
+### Phase 1c — Additional providers (plugin expansion)
+
+- Introduce provider plugin architecture for adding new providers without schema redesign.
+- Start with Voyage and xAI/Grok as first additional provider targets.
+- Add provider conformance tests and onboarding checklist.
+
+### Phase 2 — Monetization (deferred)
+
+- Introduce plan packaging, metering, and billing only after Phase 1/1b/1c operational stability.
+- Keep monetization work gated on reliable usage attribution and low BYOK incident rates.
+
 ## Cross-Phase Standards
 
 - OpenAPI-first contract management for `/api/v1/verify`.

@@ -11,6 +11,9 @@ export interface AnalyseRequest {
   model_id?: string;
   domain_mode?: 'auto' | 'manual';
   domain?: 'ethics' | 'philosophy_of_mind';
+  resource_mode?: 'standard' | 'expanded';
+  user_links?: string[];
+  queue_for_nightly_ingest?: boolean;
   reuse?: {
     from_depth: 'quick' | 'standard';
     analysis?: string;
@@ -66,6 +69,10 @@ export interface MetadataEvent {
   depth_mode?: 'quick' | 'standard' | 'deep';
   selected_model_provider?: 'auto' | 'vertex' | 'anthropic';
   selected_model_id?: string;
+  resource_mode?: 'standard' | 'expanded';
+  user_links_count?: number;
+  runtime_links_processed?: number;
+  nightly_queue_enqueued?: number;
   query_run_id?: string;
   model_cost_breakdown?: {
     total_estimated_cost_usd: number;

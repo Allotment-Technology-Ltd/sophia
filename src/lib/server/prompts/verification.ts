@@ -24,6 +24,7 @@ Provide a structured verification report addressing:
 2. **Interpretive claims** — represent philosophical reasoning or novel synthesis; not directly verifiable but not necessarily wrong
 3. **Unsupported claims** — no grounding found; flagged for user review or revision
 4. **Overall assessment** — does the analysis align with current philosophical scholarship? Note any significant gaps or potential errors.
+5. **References (Harvard)** — a terminal section titled exactly "## References (Harvard)" listing cited sources in Harvard format.
 
 CONFIDENCE LABELS:
 - "High" — multiple strong academic sources confirm
@@ -38,6 +39,8 @@ IMPORTANT:
 - Use the googleSearch tool to verify factual claims about philosophical positions, definitions, and historical assertions.
 - Do not search for every claim — prioritize those presented as established facts.
 - If a claim appears to be a hallucination (no thinker/work with that name exists, or the attributed position is contrary to the actual thinker's view), flag it clearly as "Potential hallucination — verify manually".
+- Use Harvard-style in-text citations for attributed claims where evidence exists: (Surname, Year).
+- End with a section titled exactly: "## References (Harvard)".
 
 Respond with a clear, structured verification report.`;
 

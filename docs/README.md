@@ -19,6 +19,7 @@
 | Document | Purpose |
 | --- | --- |
 | [runbooks/domain-expansion-runbook.md](runbooks/domain-expansion-runbook.md) | End-to-end guide for adding a new philosophical domain |
+| [runbooks/vertex-ingestion-cutover-wave2.md](runbooks/vertex-ingestion-cutover-wave2.md) | Operational runbook for Vertex ingestion cutover validation using PoM Wave 2 cost comparison vs PoM Wave 1 |
 | [runbooks/zuplo-phase1-runbook.md](runbooks/zuplo-phase1-runbook.md) | Phase 1 setup for Zuplo gateway + PostHog analytics |
 | [runbooks/nightly-link-ingestion-runbook.md](runbooks/nightly-link-ingestion-runbook.md) | Proposed operations guide for nightly deferred link ingestion |
 
@@ -32,6 +33,7 @@
 
 | Document | Purpose |
 | --- | --- |
+| [byok-rollout-plan.md](byok-rollout-plan.md) | Canonical BYOK (Bring Your Own Key) rollout plan: Phase 1, Phase 1b, Phase 1c, and deferred Phase 2 monetization |
 | [argument-map-gold-standard-plan.md](argument-map-gold-standard-plan.md) | Gold-standard delivery plan for the Phase 9 argument map experience |
 
 ## Archive

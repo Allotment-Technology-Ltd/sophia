@@ -12,4 +12,14 @@ config:
   sophia:ingestMemory: 4Gi
   sophia:ingestCpu: "2"
   sophia:ingestTimeoutSeconds: "10800"
+  sophia:ingestImageTag: 1f1ca9e-20260310-071500-amd64
+  sophia:nightlyIngestMemory: 4Gi
+  sophia:nightlyIngestCpu: "2"
+  sophia:nightlyIngestTimeoutSeconds: "7200"
+  sophia:nightlyIngestBatchSize: "20"
+  sophia:nightlyIngestMaxRetries: "3"
+  sophia:nightlyIngestRetryBaseMs: "1000"
+  sophia:nightlyIngestValidate: "false"
+  sophia:nightlyIngestSchedule: "0 2 * * *"
+  sophia:nightlyIngestPaused: "false"
   sophia:appImageTag: c742bcc1b41a74dbe56e94d54154e93cc422feec

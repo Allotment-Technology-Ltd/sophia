@@ -1,7 +1,7 @@
 # STATUS
 
 **Project:** SOPHIA
-**Last updated:** 2026-03-09
+**Last updated:** 2026-03-10
 **Current version:** 0.3.0 (`domain-expansion` branch)
 **Production revision:** `sophia-00077-256` (Cloud Run, europe-west2) — pending redeploy with Phase 3d/3e/D changes
 
@@ -98,17 +98,19 @@ Sources 5 & 8 (ethics) skipped — SEP alternatives included. Source 10 (PoM) sk
 - **Constitution dogfood rollout pending:** `/api/analyse` constitution emission is behind `ENABLE_CONSTITUTION_IN_ANALYSE`; enable only with rollout guardrails.
 - **Deferred link ingestion not yet active:** User/grounding links are not yet queued into nightly full ingestion; currently no scheduler-backed promotion path.
 - **Harvard citation policy not yet enforced:** Synthesis/Verification formatting remains model-dependent until proposed policy is implemented.
-- **ARIA deadline:** 24 March 2026 — 15 days from today. Application not yet started.
+- **No BYOK provider credential path yet:** Runtime model calls still depend on platform-managed keys; users cannot yet supply and manage their own provider credentials (Vertex/Anthropic/OpenAI/etc).
 
 ---
 
 ## Immediate priorities (current sprint)
 
-1. **ARIA grant application** (deadline 24 Mar) — highest-leverage action; no engineering required. Position: "Structured reasoning evaluation for trustworthy AI systems."
-2. **Phase 3f — PoM Wave 2** — continue domain-expansion branch ingestion (Descartes, Smart, Fodor, Kim, Parfit, Clark & Chalmers).
-3. **Phase 4 pre-launch** — accessibility audit, privacy policy, analytics instrumentation, meta tags.
-4. **Domain routing** — decide and implement how the engine selects which domain(s) to retrieve from; required before PoM queries are meaningful.
-5. **Phase 4a proposal execution** — implement two-speed link intake + nightly ingestion queue/scheduler + Harvard references for Synthesis/Verification.
+1. **Track A — Vertex ingestion migration + PoM Wave 2 cost validation** — execute Wave 2 under Vertex-default ingestion and compare average `cost_usd` per completed source against PoM Wave 1 baseline.
+2. **Track B — Grant funding applications (near-term batch)** — business-critical non-dilutive funding stream. Position: "Structured reasoning evaluation for trustworthy AI systems."
+3. **Track C — BYOK rollout (subsequent engineering stream)** — deliver in sequence: Phase 1 (Vertex + Anthropic) -> Phase 1b (OpenAI) -> Phase 1c (additional providers/plugins); monetization deferred to Phase 2.
+4. **Phase 3f — PoM Wave 2** — continue domain-expansion branch ingestion (Descartes, Smart, Fodor, Kim, Parfit, Clark & Chalmers).
+5. **Phase 4 pre-launch** — accessibility audit, privacy policy, analytics instrumentation, meta tags.
+6. **Domain routing** — decide and implement how the engine selects which domain(s) to retrieve from; required before PoM queries are meaningful.
+7. **Phase 4a proposal execution** — implement two-speed link intake + nightly ingestion queue/scheduler + Harvard references for Synthesis/Verification.
 
 ---
 

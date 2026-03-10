@@ -1,6 +1,6 @@
 # ROADMAP
 
-**Last updated:** 2026-03-09
+**Last updated:** 2026-03-10
 **Current version:** 0.2.0 — Phase 3e complete, Phase 3f in progress
 **Related:** [STATUS.md](STATUS.md) · [CHANGELOG.md](CHANGELOG.md) · [docs/architecture.md](docs/architecture.md)
 
@@ -12,7 +12,7 @@ SOPHIA is repositioning from a philosophical reasoning engine into a **reasoning
 
 Philosophy is the wedge. The philosophical engine demonstrates the methodology and builds the knowledge base. The reasoning quality API — Phase 5 — generalises that methodology to any domain: legal documents, policy briefs, regulatory submissions, AI-generated answers.
 
-This repositioning opens three revenue paths in parallel: consumer subscriptions (Phase 7), a developer API (Phase 5+), and enterprise pilots in legal/compliance/AI governance (Phase 8).
+This repositioning opens three revenue paths in parallel: consumer subscriptions (Phase 7), a developer API (Phase 5+), and enterprise pilots in legal/compliance/AI governance (Phase 8). In the near term, top priorities are Vertex ingestion migration (validated through PoM Wave 2 cost tracking) and grant funding applications. BYOK follows as the subsequent engineering stream.
 
 ---
 
@@ -65,6 +65,18 @@ SurrealDB on GCE (europe-west2); 8 foundational ethics sources ingested (~500 cl
 
 ## In progress
 
+### Vertex ingestion migration + PoM Wave 2 cost validation
+
+**Priority:** Top (equal with grant funding applications)  
+**Operational runbook:** `docs/runbooks/vertex-ingestion-cutover-wave2.md`
+
+Objectives:
+
+- [ ] Execute PoM Wave 2 as the first Vertex-default ingestion run
+- [ ] Measure average `cost_usd` per completed ingestion for Wave 2
+- [ ] Compare against PoM Wave 1 average ingestion cost baseline
+- [ ] Publish cost delta (`USD` and `%`) and decide whether to continue Vertex as default
+
 ### Phase 3f — Philosophy of Mind, Wave 2
 
 **Branch:** `domain-expansion`
@@ -85,7 +97,7 @@ Planned sources: Descartes (*Meditations* excerpts), Smart (1959), Fodor (1974),
 
 ### Phase 4 — Launch and validate (target: 4 weeks)
 
-**Objective:** Get the existing philosophical engine in front of real users and submit the ARIA grant application. This phase is about validation and non-dilutive funding.
+**Objective:** Get the existing philosophical engine in front of real users and submit near-term grant funding applications. This phase is about validation and non-dilutive funding.
 
 **Pre-launch hardening:**
 
@@ -96,9 +108,9 @@ Planned sources: Descartes (*Meditations* excerpts), Smart (1959), Fodor (1974),
 - [ ] Analytics instrumentation (see below)
 - [ ] Re-attempt sources 5 & 8 ingestion or confirm substitutes adequate
 
-**ARIA grant application — deadline 24 March 2026:**
+**Grant funding applications (near-term batch):**
 
-- [ ] Draft ARIA Scaling Trust Phase 1 application
+- [ ] Draft and submit the highest-fit near-term grant applications
 - Position: "Structured reasoning evaluation for trustworthy AI systems"
 - Budget target: £100K–300K for 12–18 months
 - Emphasise: open-source epistemic constitution, reasoning quality metrics, philosophical knowledge graph as a demonstration domain
@@ -114,7 +126,7 @@ Planned sources: Descartes (*Meditations* excerpts), Smart (1959), Fodor (1974),
 
 | Application | Deadline | Amount | Fit |
 | --- | --- | --- | --- |
-| ARIA Scaling Trust | 24 Mar 2026 | £100K–300K | ★★★★★ |
+| Priority near-term grant (to be selected) | Late Mar 2026 target | £100K–300K | ★★★★★ |
 | Long-Term Future Fund (LTFF) | Rolling | $20K–200K | ★★★★ |
 | Emergent Ventures | Rolling | $1K–50K | ★★★★ |
 | Manifund | Immediate | Variable | ★★★★ |
@@ -156,6 +168,65 @@ Gating metrics:
 - [ ] Nightly failure rate within threshold for 7 consecutive runs
 - [ ] Pending review queue kept under ops SLA target
 - [ ] No contract break for `/api/v1/verify` request schema
+
+### BYOK rollout (subsequent engineering stream)
+
+**Objective:** Shift model spend to user-supplied provider credentials while preserving existing API contracts and operational safety. Monetization is deferred until BYOK is stable.
+
+#### Phase 1 — BYOK foundation (Vertex + Anthropic)
+
+Key deliverables:
+
+- [ ] Planned additive BYOK APIs:
+  - `GET /api/byok/providers`
+  - `PUT /api/byok/providers/:provider`
+  - `POST /api/byok/providers/:provider/validate`
+  - `DELETE /api/byok/providers/:provider`
+- [ ] Encrypted per-user BYOK credential vault (Firestore + Cloud KMS envelope encryption)
+- [ ] Runtime key resolution for `/api/analyse` and `/api/v1/verify`
+- [ ] UI support for add/validate/rotate/revoke provider keys
+- [ ] Signed gateway tenant identity verification for Zuplo-forwarded API traffic
+- [ ] Redaction and audit-safe logging on BYOK paths
+
+Gating metrics:
+
+- [ ] `/api/v1/verify` request/response contract remains backward compatible
+- [ ] No provider-key leakage in logs or API responses
+- [ ] Stable BYOK success rate for Vertex + Anthropic in consumer and developer flows
+
+#### Phase 1b — OpenAI expansion
+
+Key deliverables:
+
+- [ ] Add OpenAI provider support to BYOK credential schema and validation flows
+- [ ] Add OpenAI model routing support with user-contextual availability in `/api/models`
+- [ ] Provider-specific error normalization for OpenAI auth/rate-limit/model errors
+
+Gating metrics:
+
+- [ ] No regressions for Phase 1 providers
+- [ ] `/api/models` reflects user credential state accurately for OpenAI
+
+#### Phase 1c — Additional providers and model plugins
+
+Key deliverables:
+
+- [ ] Introduce provider plugin contract for auth config, validation, model catalog, capabilities
+- [ ] First additional providers: Voyage and xAI/Grok
+- [ ] Provider onboarding checklist and conformance tests
+
+Gating metrics:
+
+- [ ] At least two additional providers integrated via plugin contract
+- [ ] New provider onboarding requires no schema redesign
+
+#### Phase 2 — Monetization (deferred)
+
+Key deliverables (only after Phase 1/1b/1c stability):
+
+- [ ] Subscription plans and account billing UX
+- [ ] Usage metering and invoicing workflows
+- [ ] Plan and entitlement gating
 
 ### Phase 5 — Reasoning API foundation (target: 6 weeks after Phase 4)
 
@@ -378,7 +449,7 @@ Driven by market signal rather than a fixed sequence. Key items:
 | Domains live | Ethics + PoM | Ethics (retrieval); PoM (ingested, engine routing TBD) |
 | Formal evaluation | Phase 9 | Not started |
 | Paying users | 20 (Phase 7) | 0 (pre-launch) |
-| ARIA application | 24 Mar 2026 | Not submitted |
+| Grant applications (near-term batch) | First submission target: late Mar 2026 | Not submitted |
 
 ---
 
