@@ -115,27 +115,15 @@
   const selectedNodeId = $derived(graphStore.selectedNodeId);
   const selectedNode = $derived(graphStore.rawNodes.find((node) => node.id === selectedNodeId) ?? null);
   const comparisonBaseline = $derived(comparisonStore.baseline);
-  const baselineClaimNodeIds = $derived.by(() => {
+  const baselineClaimFingerprints = $derived.by(() => {
     const baseline = comparisonBaseline;
     if (!baseline) return new Set<string>();
-    const ids = new Set<string>();
-    for (const pass of baseline.claimsByPass) {
-      for (const claim of pass.claims) ids.add(claim.id);
-    }
-    return ids;
+    return new Set(baseline.claimFingerprints);
   });
-  const baselineRelationKeys = $derived.by(() => {
+  const baselineRelationFingerprints = $derived.by(() => {
     const baseline = comparisonBaseline;
     if (!baseline) return new Set<string>();
-    const keys = new Set<string>();
-    for (const pass of baseline.relationsByPass) {
-      for (const bundle of pass.relations) {
-        for (const relation of bundle.relations) {
-          keys.add(buildRelationKey(bundle.claimId, relation.target, relation.type));
-        }
-      }
-    }
-    return keys;
+    return new Set(baseline.relationFingerprints);
   });
   const comparisonDelta = $derived.by(() => {
     const baseline = comparisonBaseline;
@@ -144,25 +132,27 @@
     const currentClaimIds = new Set(
       graphStore.rawNodes
         .filter((node) => node.type === 'claim')
-        .map((node) => node.id)
+        .map((node) => claimFingerprint(node.label))
+        .filter((fingerprint) => fingerprint.length > 0)
     );
     const currentRelationKeys = new Set(
       graphStore.rawEdges
         .filter((edge) => edge.type !== 'contains')
-        .map((edge) => buildRelationKey(edge.from, edge.to, edge.type))
+        .map((edge) => relationFingerprint(edge))
+        .filter((fingerprint) => fingerprint.length > 0)
     );
 
     let newClaims = 0;
     let sharedClaims = 0;
     for (const claimId of currentClaimIds) {
-      if (baselineClaimNodeIds.has(claimId)) sharedClaims += 1;
+      if (baselineClaimFingerprints.has(claimId)) sharedClaims += 1;
       else newClaims += 1;
     }
 
     let newRelations = 0;
     let sharedRelations = 0;
     for (const relationKey of currentRelationKeys) {
-      if (baselineRelationKeys.has(relationKey)) sharedRelations += 1;
+      if (baselineRelationFingerprints.has(relationKey)) sharedRelations += 1;
       else newRelations += 1;
     }
 
@@ -347,16 +337,38 @@
     return node.type === 'claim';
   }
 
-  function buildRelationKey(from: string, to: string, type: GraphEdge['type']): string {
-    return `${from}|${to}|${type}`;
+  function normalizeFingerprint(value: string): string {
+    return value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function clip(value: string, max = 96): string {
+    const trimmed = value.trim();
+    return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
+  }
+
+  function claimFingerprint(label: string): string {
+    return normalizeFingerprint(clip(label));
+  }
+
+  function relationFingerprint(edge: GraphEdge): string {
+    const fromLabel = getNodeLabel(edge.from);
+    const toLabel = getNodeLabel(edge.to);
+    if (!fromLabel || !toLabel) return '';
+    return normalizeFingerprint(`${clip(fromLabel)}|${edge.type}|${clip(toLabel)}`);
   }
 
   function isClaimInBaseline(nodeId: string): boolean {
-    return baselineClaimNodeIds.has(nodeId);
+    const node = graphStore.rawNodes.find((candidate) => candidate.id === nodeId);
+    if (!node || node.type !== 'claim') return false;
+    return baselineClaimFingerprints.has(claimFingerprint(node.label));
   }
 
   function isRelationInBaseline(edge: GraphEdge): boolean {
-    return baselineRelationKeys.has(buildRelationKey(edge.from, edge.to, edge.type));
+    return baselineRelationFingerprints.has(relationFingerprint(edge));
   }
 
   function parseCsvSet<T extends string>(param: string | null, allowed: T[]): Set<T> {

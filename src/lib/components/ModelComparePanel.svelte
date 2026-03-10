@@ -108,6 +108,23 @@
     return renderMarkdown(text.replace(/```sophia-meta[\s\S]*?```/g, '').trim());
   }
 
+  function formatDeltaSentence(value: string): string {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+
+    // When compare output includes serialized JSON blobs, surface the claim text instead.
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      const textMatch = trimmed.match(/"text"\s*:\s*"([^"]+)"/i);
+      const sourceMatch = trimmed.match(/"source"\s*:\s*"([^"]+)"/i);
+      if (textMatch?.[1]) {
+        const sourceSuffix = sourceMatch?.[1] ? ` (${sourceMatch[1]})` : '';
+        return `${textMatch[1]}${sourceSuffix}`;
+      }
+    }
+
+    return trimmed.length > 320 ? `${trimmed.slice(0, 320)}...` : trimmed;
+  }
+
   function formatSignedDelta(value: number): string {
     if (value === 0) return '0';
     return value > 0 ? `+${value}` : `${value}`;
@@ -162,7 +179,7 @@
           {#if passDiff.uniqueToGemini.length}
             <ul>
               {#each passDiff.uniqueToGemini as sentence}
-                <li>{sentence}</li>
+                <li>{formatDeltaSentence(sentence)}</li>
               {/each}
             </ul>
           {:else}
@@ -174,7 +191,7 @@
           {#if passDiff.uniqueToClaude.length}
             <ul>
               {#each passDiff.uniqueToClaude as sentence}
-                <li>{sentence}</li>
+                <li>{formatDeltaSentence(sentence)}</li>
               {/each}
             </ul>
           {:else}
@@ -296,6 +313,7 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--color-muted);
+    overflow-wrap: anywhere;
   }
 
   .delta-card ul {
@@ -310,6 +328,9 @@
     font-size: 0.72rem;
     color: var(--color-dim);
     line-height: 1.4;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    hyphens: auto;
   }
 
   .side-by-side {
@@ -343,6 +364,8 @@
     font-family: var(--font-display);
     font-size: 0.9rem;
     line-height: 1.65;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .model-content :global(p) {
