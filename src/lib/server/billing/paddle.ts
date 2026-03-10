@@ -1,8 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { normalizeCurrency, type BillingTier, type CurrencyCode } from './types';
+import { resolvePaddleRuntime, type PaddleRuntime } from './runtime';
 
 type CheckoutKind = 'subscription' | 'topup_small' | 'topup_large';
-type PaddleRuntime = 'sandbox' | 'production';
 
 interface PaddleApiResponse<T> {
   data?: T;
@@ -48,27 +48,31 @@ function isLocalhostAppUrl(appUrl: string): boolean {
   }
 }
 
-function isProductionNodeRuntime(): boolean {
-  return (process.env.NODE_ENV ?? '').trim().toLowerCase() === 'production';
-}
-
-function resolvePaddleRuntime(): PaddleRuntime {
-  const explicit = (process.env.PADDLE_RUNTIME ?? '').trim().toLowerCase();
-  if (explicit === 'sandbox') return 'sandbox';
-  if (explicit === 'production') return 'production';
-  return isProductionNodeRuntime() ? 'production' : 'sandbox';
-}
-
 function runtimeEnvCandidates(base: string, runtime: PaddleRuntime): string[] {
   if (runtime === 'sandbox') return [`${base}_SANDBOX`, base];
   return [`${base}_PRODUCTION`, base];
+}
+
+function assertRuntimeCompatibleValue(base: string, runtime: PaddleRuntime, value: string): void {
+  if (base !== 'PADDLE_API_KEY') return;
+  const trimmed = value.trim();
+  if (!trimmed) return;
+  if (runtime === 'production' && trimmed.startsWith('pdl_snd_')) {
+    throw new Error('PADDLE_API_KEY appears to be a sandbox key while runtime is production');
+  }
+  if (runtime === 'sandbox' && trimmed.startsWith('pdl_live_')) {
+    throw new Error('PADDLE_API_KEY appears to be a production key while runtime is sandbox');
+  }
 }
 
 function requireRuntimeEnv(base: string): string {
   const runtime = resolvePaddleRuntime();
   for (const key of runtimeEnvCandidates(base, runtime)) {
     const value = process.env[key]?.trim();
-    if (value) return value;
+    if (value) {
+      assertRuntimeCompatibleValue(base, runtime, value);
+      return value;
+    }
   }
   throw new Error(
     `${runtimeEnvCandidates(base, runtime).join(' or ')} is not configured for ${runtime} runtime`
