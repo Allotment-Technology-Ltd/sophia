@@ -7,6 +7,7 @@
     completedPasses?: string[];
     depthMode?: 'quick' | 'standard' | 'deep';
     completionReady?: boolean;
+    onReveal?: () => void;
     passLabel?: string;
     depthLabel?: string;
     modelLabel?: string;
@@ -19,6 +20,7 @@
     completedPasses = [],
     depthMode = 'standard',
     completionReady = false,
+    onReveal,
     passLabel = 'Analysis',
     depthLabel = 'Standard',
     modelLabel = 'Auto',
@@ -28,12 +30,13 @@
 
 <div class="loading-screen" aria-live="polite" aria-label="Analysis in progress">
   <DialecticalTriangle
-    mode="loading"
+    mode={completionReady ? 'complete' : 'loading'}
     {currentPass}
     {completedPasses}
     {depthMode}
     {completionReady}
     size={240}
+    {onReveal}
   />
 
   <p class="status-text">{statusText}</p>

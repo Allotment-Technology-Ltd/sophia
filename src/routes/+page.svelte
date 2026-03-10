@@ -71,10 +71,8 @@
 
   const SUGGESTION_SLOT_COUNT = 1;
   const ROTATE_INTERVAL_MS = 8000;
-  const FINAL_DRAW_SETTLE_MS = 850;
   let suggestionTick = $state(0);
   let baseExamplePool = $state<string[]>([]);
-  let completionAnimationSettled = $state(false);
 
   const LOADING_STATUS: Record<string, string> = {
     analysis: 'Mapping the philosophical landscape…',
@@ -183,14 +181,8 @@
   // Loading screen covers all three analysis passes; verification runs in the
   // background while results remain visible (currentPass === 'verification').
   let isLoadingState = $derived(
-    (
-      conversation.isLoading &&
-      conversation.currentPass !== 'verification'
-    ) || (
-      !revealed &&
-      completionReadyForDepth &&
-      !completionAnimationSettled
-    )
+    (conversation.isLoading && conversation.currentPass !== 'verification') ||
+    (!revealed && completionReadyForDepth)
   );
 
   let availablePasses = $derived.by(() => {
@@ -205,6 +197,9 @@
   });
 
   let loadingStatusText = $derived.by(() => {
+    if (completionReadyForDepth && !revealed) {
+      return 'Click to reveal';
+    }
     if (!conversation.currentPass) return 'Thinking…';
     const base = LOADING_STATUS[conversation.currentPass] ?? 'Thinking…';
     const provider = conversation.passModels[conversation.currentPass]?.provider ?? conversation.loadingModelProvider;
@@ -235,6 +230,7 @@
   });
 
   let loadingWorkingLines = $derived.by(() => {
+    if (completionReadyForDepth && !revealed) return [] as string[];
     const pass = conversation.currentPass;
     if (!pass) return [] as string[];
     return (conversation.passWorkings[pass] ?? []).slice(-1);
@@ -275,19 +271,41 @@
     lastAssistantMsg?.metadata?.selected_model_id ?? selectedModel.modelId
   );
 
+  const resolvedCurrentModelProvider = $derived.by(() => {
+    const provider = currentQueryModelProvider;
+    if (provider === 'vertex' || provider === 'anthropic') return provider;
+    const byModel = lastAssistantMsg?.metadata?.model_cost_breakdown?.by_model ?? [];
+    if (byModel.length === 1) return byModel[0].provider;
+    if (byModel.length > 1) {
+      return [...byModel]
+        .sort((a, b) => (b.estimated_cost_usd ?? 0) - (a.estimated_cost_usd ?? 0))[0]
+        ?.provider ?? 'vertex';
+    }
+    return selectedModel.provider === 'anthropic' ? 'anthropic' : 'vertex';
+  });
+
+  const resolvedCurrentModelId = $derived.by(() => {
+    if (currentQueryModelId) return currentQueryModelId;
+    const byModel = lastAssistantMsg?.metadata?.model_cost_breakdown?.by_model ?? [];
+    if (byModel.length === 0) return selectedModel.modelId;
+    const matchingProvider = byModel.find((entry) => entry.provider === resolvedCurrentModelProvider);
+    if (matchingProvider) return matchingProvider.model;
+    return byModel[0].model;
+  });
+
   const alternateModelOptions = $derived.by(() => {
     const all = modelOptions;
     if (all.length === 0) return [] as ModelOption[];
     return all.filter(
       (option) =>
-        option.provider !== currentQueryModelProvider ||
-        option.id !== currentQueryModelId
+        option.provider !== resolvedCurrentModelProvider
     );
   });
 
   const compareOption = $derived.by(() => {
-    const crossProvider = alternateModelOptions.find((option) => option.provider !== currentQueryModelProvider);
-    if (crossProvider) return crossProvider;
+    const targetProvider = resolvedCurrentModelProvider === 'anthropic' ? 'vertex' : 'anthropic';
+    const oppositeProviderOption = alternateModelOptions.find((option) => option.provider === targetProvider);
+    if (oppositeProviderOption) return oppositeProviderOption;
     if (alternateModelOptions.length === 0) return null;
     return alternateModelOptions[0];
   });
@@ -508,22 +526,6 @@
   });
 
   $effect(() => {
-    if (!completionReadyForDepth) {
-      completionAnimationSettled = false;
-      return;
-    }
-
-    if (completionAnimationSettled) {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      completionAnimationSettled = true;
-    }, FINAL_DRAW_SETTLE_MS);
-    return () => clearTimeout(timer);
-  });
-
-  $effect(() => {
     if (
       conversation.currentPass &&
       ['analysis', 'critique', 'synthesis', 'verification'].includes(conversation.currentPass)
@@ -556,7 +558,7 @@
 
   let pageTitle = $derived.by(() => {
     const lastUser = conversation.messages.findLast(m => m.role === 'user')?.content;
-    if (isLoadingState) return 'Analysing… — SOPHIA';
+    if (isLoadingState && !completionReadyForDepth) return 'Analysing… — SOPHIA';
     if (isResultsState && !revealed) return 'Analysis complete — SOPHIA';
     if (lastUser) {
       const truncated = lastUser.length > 60 ? lastUser.slice(0, 60) + '…' : lastUser;
@@ -852,31 +854,12 @@
             statusText={loadingStatusText}
             {completedPasses}
             depthMode={selectedDepth}
-            completionReady={completionAnimationSettled}
+            completionReady={completionReadyForDepth && !revealed}
+            onReveal={() => { revealed = true; }}
             passLabel={loadingPassLabel}
             depthLabel={loadingDepthLabel}
             modelLabel={loadingModelLabel}
             workingLines={loadingWorkingLines}
-          />
-        </div>
-      {/if}
-
-      <!-- ═══════════════════════════════════════════════════════════════
-           STATE 2b: COMPLETE — click triangle to reveal results
-           ═══════════════════════════════════════════════════════════════ -->
-      {#if isResultsState && completionAnimationSettled && !revealed}
-        <div
-          class="complete-screen"
-          in:fade={{ duration: 500 }}
-          out:fade={{ duration: 300 }}
-        >
-          <DialecticalTriangle
-            mode="complete"
-            completedPasses={completedPasses}
-            depthMode={currentDepthMode}
-            completionReady={true}
-            size={240}
-            onReveal={() => { revealed = true; }}
           />
         </div>
       {/if}
@@ -1196,15 +1179,6 @@
   .sophia-symbol {
     margin-bottom: var(--space-4);
     line-height: 1;
-  }
-
-  /* ── STATE 2b: Complete screen ──────────────────────────────────────── */
-  .complete-screen {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: calc(100vh - var(--nav-height));
   }
 
   .query-heading {

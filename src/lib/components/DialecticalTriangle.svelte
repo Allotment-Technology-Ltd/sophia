@@ -345,7 +345,7 @@
   </svg>
 
   {#if mode === 'complete'}
-    <p class="reveal-hint" aria-hidden="true">click to reveal ↓</p>
+    <p class="reveal-hint" aria-hidden="true">click to reveal →</p>
   {/if}
 </div>
 
