@@ -918,7 +918,7 @@
       <!-- ═══════════════════════════════════════════════════════════════
            STATE 3: RESULTS — two-column layout
            ═══════════════════════════════════════════════════════════════ -->
-      {#if isResultsState && revealed && lastAssistantMsg && lastAssistantMsg.passes}
+      {#if isResultsState && (revealed || !completionReadyForDepth) && lastAssistantMsg && lastAssistantMsg.passes}
         {@const passes = lastAssistantMsg.passes}
 
         <div class="results-layout" in:fly={{ y: 24, duration: 500, delay: 100, easing: quintOut }}>
