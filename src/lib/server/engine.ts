@@ -499,16 +499,19 @@ export async function runDialecticalEngine(
   let argumentsRetrieved = 0;
   let retrievalDegraded = false;
   let retrievalDegradedReason: string | undefined;
+  const retrievalTopK = depthMode === 'deep' ? 10 : depthMode === 'quick' ? 3 : 5;
 
   try {
     const t0 = Date.now();
-    const retrievalResult = await retrieveContext(query, { domain: retrievalDomain });
+    const retrievalResult = await retrieveContext(query, { domain: retrievalDomain, topK: retrievalTopK });
     contextBlock = buildContextBlock(retrievalResult);
     claimsRetrieved = retrievalResult.claims.length;
     argumentsRetrieved = retrievalResult.arguments.length;
     retrievalDegraded = retrievalResult.degraded;
     retrievalDegradedReason = retrievalResult.degraded_reason;
-    console.log(`[ENGINE] Retrieval done in ${Date.now() - t0}ms — claims=${claimsRetrieved} arguments=${argumentsRetrieved}`);
+    console.log(
+      `[ENGINE] Retrieval done in ${Date.now() - t0}ms — topK=${retrievalTopK} claims=${claimsRetrieved} arguments=${argumentsRetrieved}`
+    );
     if (retrievalDegraded) {
       console.warn('[ENGINE] Retrieval degraded mode active', { reason: retrievalDegradedReason });
     }
