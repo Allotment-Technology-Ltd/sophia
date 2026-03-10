@@ -4,7 +4,7 @@ import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib
 import type { ReasoningEvaluation } from '$lib/types/verification';
 import { handleSSEEvent } from '$lib/utils/sseHandler';
 import { referencesStore } from '$lib/stores/references.svelte';
-import { historyStore } from '$lib/stores/history.svelte';
+import { historyStore, type CachedQueryResult } from '$lib/stores/history.svelte';
 import { graphStore } from '$lib/stores/graph.svelte';
 import { getIdToken } from '$lib/firebase';
 import { trackEvent } from '$lib/utils/analytics';
@@ -458,12 +458,19 @@ function createConversationStore() {
 
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
+          if (value) {
+            buffer += decoder.decode(value, { stream: !done });
+          }
+          if (done) {
+            buffer += decoder.decode();
+          }
 
           const parts = buffer.split('\n\n');
-          buffer = parts.pop() || '';
+          if (done) {
+            buffer = '';
+          } else {
+            buffer = parts.pop() || '';
+          }
 
           for (const part of parts) {
             const line = part.trim();
@@ -714,6 +721,8 @@ function createConversationStore() {
                 break;
             }
           }
+
+          if (done) break;
         }
 
         if (!gotMetadata && (currentPasses.analysis || currentPasses.critique || currentPasses.synthesis)) {
@@ -775,6 +784,8 @@ function createConversationStore() {
             modelId,
             depthMode
           });
+        } else if (!gotMetadata && !error) {
+          error = 'Analysis stream ended before a final result was received. Please retry.';
         }
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
@@ -829,12 +840,19 @@ function createConversationStore() {
 
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
+          if (value) {
+            buffer += decoder.decode(value, { stream: !done });
+          }
+          if (done) {
+            buffer += decoder.decode();
+          }
 
           const parts = buffer.split('\n\n');
-          buffer = parts.pop() || '';
+          if (done) {
+            buffer = '';
+          } else {
+            buffer = parts.pop() || '';
+          }
 
           for (const part of parts) {
             const line = part.trim();
@@ -882,6 +900,8 @@ function createConversationStore() {
                 break;
             }
           }
+
+          if (done) break;
         }
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
@@ -911,6 +931,12 @@ function createConversationStore() {
       isLoading = false;
       applyCachedResult(query, cached, { appendUserMessage: false });
       return true;
+    },
+
+    showCachedResult(query: string, cached: CachedQueryResult, options?: { appendUserMessage?: boolean }): void {
+      error = null;
+      isLoading = false;
+      applyCachedResult(query, cached, { appendUserMessage: options?.appendUserMessage ?? false });
     },
 
     clear(): void {

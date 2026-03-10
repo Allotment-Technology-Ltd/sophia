@@ -27,6 +27,12 @@ interface CacheLookupOptions {
   queueForNightlyIngest?: boolean;
 }
 
+interface CacheSearchOptions {
+  depthMode?: 'quick' | 'standard' | 'deep';
+  modelProvider?: 'auto' | 'vertex' | 'anthropic';
+  modelId?: string;
+}
+
 export interface CachedQueryResult {
   query: string;
   lens?: string;
@@ -214,6 +220,38 @@ function createHistoryStore() {
     getCachedResult(query: string, options?: CacheLookupOptions): CachedQueryResult | null {
       const key = buildCacheKey(query, options);
       return cache[key] ?? null;
+    },
+
+    findCachedResult(query: string, options?: CacheSearchOptions): CachedQueryResult | null {
+      const normalized = normalizeQuery(query);
+      const candidates = Object.values(cache)
+        .filter((entry) => normalizeQuery(entry.query) === normalized)
+        .sort((a, b) => new Date(b.cachedAt).getTime() - new Date(a.cachedAt).getTime());
+      if (candidates.length === 0) return null;
+
+      let narrowed = candidates;
+
+      if (options?.depthMode) {
+        const byDepth = narrowed.filter((entry) => (entry.metadata.depth_mode ?? 'standard') === options.depthMode);
+        if (byDepth.length > 0) narrowed = byDepth;
+      }
+
+      if (options?.modelProvider) {
+        const byProvider = narrowed.filter(
+          (entry) => (entry.metadata.selected_model_provider ?? 'auto') === options.modelProvider
+        );
+        if (byProvider.length > 0) narrowed = byProvider;
+      }
+
+      if (options?.modelId?.trim()) {
+        const expectedModelId = options.modelId.trim().toLowerCase();
+        const byModel = narrowed.filter(
+          (entry) => (entry.metadata.selected_model_id ?? '').trim().toLowerCase() === expectedModelId
+        );
+        if (byModel.length > 0) narrowed = byModel;
+      }
+
+      return narrowed[0] ?? null;
     },
 
     /**
