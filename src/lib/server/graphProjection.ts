@@ -235,8 +235,11 @@ function mapRelationType(dbType: string): GraphEdge['type'] {
     'contradicts': 'contradicts',
     'responds_to': 'responds-to',
     'depends_on': 'depends-on',
-    'refines': 'supports',
-    'exemplifies': 'supports'
+    'refines': 'qualifies',
+    'exemplifies': 'supports',
+    'qualifies': 'qualifies',
+    'assumes': 'assumes',
+    'resolves': 'resolves'
   };
   return mapping[dbType] || 'supports';
 }
