@@ -53,14 +53,18 @@ export function resolvePaddleRuntime(options?: ResolveRuntimeOptions): PaddleRun
   if (explicit === 'sandbox') return 'sandbox';
   if (explicit === 'production') return 'production';
 
-  // Always keep local/dev traffic on sandbox unless explicitly overridden.
   const requestUrl = options?.requestUrl;
-  if (looksLikeLocalUrl(requestUrl)) {
-    if (!isProductionNodeRuntime() && !isProductionDeployEnv()) return 'sandbox';
+  if (requestUrl) {
+    if (looksLikeLocalUrl(requestUrl)) return 'sandbox';
+    if (isNonProductionDeployEnv()) return 'sandbox';
+    // Non-local request URL + no explicit non-production marker => production.
+    return 'production';
   }
 
   if (isNonProductionDeployEnv()) return 'sandbox';
   if (isProductionNodeRuntime()) return 'production';
   if (isProductionDeployEnv()) return 'production';
+  if (!looksLikeLocalUrl(process.env.PUBLIC_APP_URL)) return 'production';
+  if (!looksLikeLocalUrl(process.env.PUBLIC_BASE_URL)) return 'production';
   return 'sandbox';
 }
