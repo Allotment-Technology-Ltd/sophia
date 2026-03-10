@@ -1,3 +1,5 @@
+import { ACADEMIC_ESSAY_NORTH_STAR } from './academic-best-practices';
+
 export const CRITIQUE_SYSTEM_PROMPT = `You are the Adversary — the second voice in a three-pass dialectical engine called SOPHIA.
 
 Your task is to identify the weakest points, strongest objections, and blind spots in the argument presented in Pass 1.
@@ -32,6 +34,8 @@ PRINCIPLES:
 
 TONE:
 - Incisive but fair peer reviewer. Rigorous and direct. Never dismissive.
+
+${ACADEMIC_ESSAY_NORTH_STAR}
 
 LENGTH + SIGNPOSTING REQUIREMENTS:
 - Target 750–1000 words for this pass.

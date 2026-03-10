@@ -7,7 +7,7 @@
  *
  * Flags:
  *   --wave N                Only ingest sources from wave N (1, 2, or 3)
- *   --validate              Run Gemini cross-validation on all sources
+ *   --validate              Optional: run Gemini cross-validation (default is off)
  *   --dry-run               Show what would be ingested without actually doing it
  *   --status                Print current ingestion progress and exit (no ingestion)
  *   --retry                 Retry sources that previously failed
@@ -20,7 +20,7 @@
  *
  * Pipeline mode (default):
  *   Phase A (stages 1-4, extraction + embeddings) runs in parallel — up to PHASE_A_CONCURRENCY.
- *   Phase B (stage 5 Gemini + stage 6 Store) runs async — up to GEMINI_CONCURRENCY in parallel.
+ *   Phase B (stage 5 optional Gemini + stage 6 Store) runs async — up to GEMINI_CONCURRENCY in parallel.
  *   When each Phase A finishes, Phase B starts in the background.
  *   Set PHASE_A_CONCURRENCY env var to control parallel extraction workers (default: 4).
  *   Set GEMINI_CONCURRENCY env var to control parallel Gemini processes (default: 2).

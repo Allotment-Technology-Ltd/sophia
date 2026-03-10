@@ -11,6 +11,7 @@
 | [three-pass-engine.md](three-pass-engine.md) | Engine rationale, per-pass contract, example output |
 | [evaluation-methodology.md](evaluation-methodology.md) | Evaluation rubric, Phase 1 results, limitations, planned formal study |
 | [prompts-reference.md](prompts-reference.md) | All LLM prompt templates, organised by pass |
+| [references/essay-writing-basics-summary.md](references/essay-writing-basics-summary.md) | North-star academic writing rubric distilled from *The Basics of Essay Writing* and applied to all three passes |
 | [api-development-portal-roadmap.md](api-development-portal-roadmap.md) | Phased API developer portal roadmap (MVP → Gold-Plated) |
 | [phased-resource-expansion-nightly-ingestion-plan.md](phased-resource-expansion-nightly-ingestion-plan.md) | Proposed phased plan: fast runtime link intake + nightly full ingestion + Harvard references |
 

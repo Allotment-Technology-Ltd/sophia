@@ -355,7 +355,7 @@ function createConversationStore() {
       const normalizedUserLinks = (options?.userLinks ?? [])
         .map((link) => link.trim())
         .filter((link) => link.length > 0);
-      const queueForNightlyIngest = options?.queueForNightlyIngest ?? false;
+      const queueForNightlyIngest = normalizedUserLinks.length > 0 || options?.queueForNightlyIngest === true;
       loadingModelProvider = modelProvider;
       loadingModelId = modelId ?? null;
       trackEvent('query_submitted', {

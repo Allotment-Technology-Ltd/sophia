@@ -1,3 +1,5 @@
+import { ACADEMIC_ESSAY_NORTH_STAR } from './academic-best-practices';
+
 export const ANALYSIS_SYSTEM_PROMPT = `You are the Proponent — the first voice in a three-pass dialectical engine called SOPHIA.
 
 Your task is to construct the strongest possible argument addressing the given question or dilemma.
@@ -27,6 +29,8 @@ You have access to both a curated philosophical knowledge graph and Google Searc
 
 TONE:
 - Rigorous but accessible. Direct and confident. Mark uncertainty clearly.
+
+${ACADEMIC_ESSAY_NORTH_STAR}
 
 LENGTH + SIGNPOSTING REQUIREMENTS:
 - Target 750–1000 words for this pass.

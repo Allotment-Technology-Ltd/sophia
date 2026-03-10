@@ -30,34 +30,111 @@ export function GROUPING_USER(claimsJson: string, relationsJson: string): string
 }
 
 // Zod schema for arguments
+const ARGUMENT_ROLE_VALUES = [
+	'conclusion',
+	'key_premise',
+	'supporting_premise',
+	'assumption',
+	'objection',
+	'response'
+] as const;
+
+const DOMAIN_VALUES = [
+	'ethics',
+	'epistemology',
+	'metaphysics',
+	'philosophy_of_mind',
+	'political_philosophy',
+	'logic',
+	'aesthetics',
+	'philosophy_of_science',
+	'philosophy_of_language',
+	'applied_ethics',
+	'philosophy_of_ai'
+] as const;
+
+function normalizeLabel(value: unknown): string | unknown {
+	if (typeof value !== 'string') return value;
+	return value.toLowerCase().trim().replace(/[\s-]+/g, '_');
+}
+
+function coercePositiveInt(value: unknown): unknown {
+	const numberValue = Number(value);
+	if (!Number.isFinite(numberValue)) return value;
+	return Math.max(1, Math.trunc(numberValue));
+}
+
+function normalizeArgumentRole(value: unknown): unknown {
+	const normalized = normalizeLabel(value);
+	if (typeof normalized !== 'string') return normalized;
+	const roleMap: Record<string, (typeof ARGUMENT_ROLE_VALUES)[number]> = {
+		conclusion: 'conclusion',
+		thesis: 'conclusion',
+		main_claim: 'conclusion',
+		key_premise: 'key_premise',
+		keypremise: 'key_premise',
+		premise: 'key_premise',
+		supporting_premise: 'supporting_premise',
+		supportingpremise: 'supporting_premise',
+		assumption: 'assumption',
+		objection: 'objection',
+		counterargument: 'objection',
+		counter_argument: 'objection',
+		response: 'response',
+		reply: 'response',
+		rebuttal: 'response'
+	};
+	if (roleMap[normalized]) return roleMap[normalized];
+	if (normalized.includes('conclusion') || normalized.includes('thesis')) return 'conclusion';
+	if (normalized.includes('supporting') && normalized.includes('premise')) return 'supporting_premise';
+	if (normalized.includes('premise')) return 'key_premise';
+	if (normalized.includes('assumption')) return 'assumption';
+	if (
+		normalized.includes('objection') ||
+		normalized.includes('counter') ||
+		normalized.includes('critique')
+	)
+		return 'objection';
+	if (
+		normalized.includes('response') ||
+		normalized.includes('reply') ||
+		normalized.includes('rebut') ||
+		normalized.includes('defense') ||
+		normalized.includes('defence')
+	)
+		return 'response';
+	return normalized;
+}
+
+function normalizeDomain(value: unknown): unknown {
+	const normalized = normalizeLabel(value);
+	if (typeof normalized !== 'string') return normalized;
+	const domainMap: Record<string, (typeof DOMAIN_VALUES)[number]> = {
+		ethics: 'ethics',
+		epistemology: 'epistemology',
+		metaphysics: 'metaphysics',
+		philosophy_of_mind: 'philosophy_of_mind',
+		mind: 'philosophy_of_mind',
+		political_philosophy: 'political_philosophy',
+		logic: 'logic',
+		aesthetics: 'aesthetics',
+		philosophy_of_science: 'philosophy_of_science',
+		philosophy_of_language: 'philosophy_of_language',
+		applied_ethics: 'applied_ethics',
+		philosophy_of_ai: 'philosophy_of_ai'
+	};
+	return domainMap[normalized] ?? normalized;
+}
+
 export const ArgumentClaimSchema = z.object({
-	position_in_source: z.number().int().positive(),
-	role: z.enum([
-		'conclusion',
-		'key_premise',
-		'supporting_premise',
-		'assumption',
-		'objection',
-		'response'
-	])
+	position_in_source: z.preprocess(coercePositiveInt, z.number().int().positive()),
+	role: z.preprocess(normalizeArgumentRole, z.enum(ARGUMENT_ROLE_VALUES))
 });
 
 export const ArgumentSchema = z.object({
 	name: z.string().describe('Standard or descriptive name of the argument'),
 	tradition: z.string().nullable().optional().describe('Philosophical school/tradition'),
-	domain: z.enum([
-		'ethics',
-		'epistemology',
-		'metaphysics',
-		'philosophy_of_mind',
-		'political_philosophy',
-		'logic',
-		'aesthetics',
-		'philosophy_of_science',
-		'philosophy_of_language',
-		'applied_ethics',
-		'philosophy_of_ai'
-	]),
+	domain: z.preprocess(normalizeDomain, z.enum(DOMAIN_VALUES)),
 	summary: z.string().describe('1-2 sentence description of what the argument establishes'),
 	claims: z.array(ArgumentClaimSchema).describe('Claims with roles in this argument')
 });
