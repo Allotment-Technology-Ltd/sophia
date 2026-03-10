@@ -79,7 +79,7 @@ function inferSourceType(urlString: string): 'sep_entry' | 'iep_entry' | 'book' 
   const pathname = url.pathname.toLowerCase();
   if (host === 'plato.stanford.edu' || host.endsWith('.plato.stanford.edu')) return 'sep_entry';
   if (host === 'iep.utm.edu' || host.endsWith('.iep.utm.edu')) return 'iep_entry';
-  if (host.includes('gutenberg.org')) return 'book';
+  if (host === 'gutenberg.org' || host.endsWith('.gutenberg.org')) return 'book';
   if (pathname.endsWith('.pdf') || host === 'arxiv.org' || host.endsWith('.arxiv.org')) return 'paper';
   return 'institutional';
 }
