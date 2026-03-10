@@ -1,30 +1,29 @@
 import type { PageServerLoad } from './$types';
 import { env as publicEnv } from '$env/dynamic/public';
+import { resolvePaddleRuntime, type PaddleRuntime } from '$lib/server/billing/runtime';
 
-type PaddleRuntime = 'sandbox' | 'production';
-
-function resolveRuntime(): PaddleRuntime {
-  const explicit = (process.env.PADDLE_RUNTIME ?? '').trim().toLowerCase();
-  if (explicit === 'sandbox') return 'sandbox';
-  if (explicit === 'production') return 'production';
-  return (process.env.NODE_ENV ?? '').trim().toLowerCase() === 'production'
-    ? 'production'
-    : 'sandbox';
+function isClientTokenCompatible(runtime: PaddleRuntime, token: string): boolean {
+  const value = token.trim();
+  if (!value) return false;
+  if (runtime === 'production' && value.startsWith('test_')) return false;
+  if (runtime === 'sandbox' && value.startsWith('live_')) return false;
+  return true;
 }
 
 function resolveClientToken(runtime: PaddleRuntime): string | null {
-  if (runtime === 'sandbox') {
-    return (
-      publicEnv.PUBLIC_PADDLE_CLIENT_TOKEN_SANDBOX?.trim() ||
-      publicEnv.PUBLIC_PADDLE_CLIENT_TOKEN?.trim() ||
-      null
-    );
+  const runtimeCandidate =
+    runtime === 'sandbox'
+      ? publicEnv.PUBLIC_PADDLE_CLIENT_TOKEN_SANDBOX?.trim()
+      : publicEnv.PUBLIC_PADDLE_CLIENT_TOKEN_PRODUCTION?.trim();
+  if (runtimeCandidate && isClientTokenCompatible(runtime, runtimeCandidate)) {
+    return runtimeCandidate;
   }
-  return (
-    publicEnv.PUBLIC_PADDLE_CLIENT_TOKEN_PRODUCTION?.trim() ||
-    publicEnv.PUBLIC_PADDLE_CLIENT_TOKEN?.trim() ||
-    null
-  );
+
+  const generic = publicEnv.PUBLIC_PADDLE_CLIENT_TOKEN?.trim();
+  if (generic && isClientTokenCompatible(runtime, generic)) {
+    return generic;
+  }
+  return null;
 }
 
 function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean {
@@ -47,8 +46,8 @@ function resolveCheckoutVariant(): 'one-page' | 'multi-page' | null {
   return null;
 }
 
-export const load: PageServerLoad = async ({ locals }) => {
-  const runtime = resolveRuntime();
+export const load: PageServerLoad = async ({ locals, url }) => {
+  const runtime = resolvePaddleRuntime({ requestUrl: url.toString() });
   return {
     paddleRuntime: runtime,
     paddleClientToken: resolveClientToken(runtime),
