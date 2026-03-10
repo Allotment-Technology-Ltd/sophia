@@ -162,6 +162,46 @@ async function setupSchema() {
 		`);
 		console.log('[SETUP] ✓ Index: query_cache_hash');
 
+		// 12. LINK_INGESTION_QUEUE TABLE (deferred nightly ingestion)
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS link_ingestion_queue SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS canonical_url ON link_ingestion_queue TYPE string;
+			DEFINE FIELD IF NOT EXISTS canonical_url_hash ON link_ingestion_queue TYPE string;
+			DEFINE FIELD IF NOT EXISTS hostname ON link_ingestion_queue TYPE string;
+			DEFINE FIELD IF NOT EXISTS status ON link_ingestion_queue TYPE string
+				DEFAULT 'queued'
+				ASSERT $value IN ['queued', 'pending_review', 'approved', 'ingesting', 'ingested', 'failed', 'rejected'];
+			DEFINE FIELD IF NOT EXISTS source_kinds ON link_ingestion_queue TYPE array<string>;
+			DEFINE FIELD IF NOT EXISTS query_run_ids ON link_ingestion_queue TYPE array<string>;
+			DEFINE FIELD IF NOT EXISTS latest_query_run_id ON link_ingestion_queue TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS submitted_by_uid ON link_ingestion_queue TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS submitted_by_uids ON link_ingestion_queue TYPE array<string>;
+			DEFINE FIELD IF NOT EXISTS title_hint ON link_ingestion_queue TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS pass_hints ON link_ingestion_queue TYPE array<string>;
+			DEFINE FIELD IF NOT EXISTS user_submission_count ON link_ingestion_queue TYPE int DEFAULT 0;
+			DEFINE FIELD IF NOT EXISTS grounding_submission_count ON link_ingestion_queue TYPE int DEFAULT 0;
+			DEFINE FIELD IF NOT EXISTS total_submission_count ON link_ingestion_queue TYPE int DEFAULT 0;
+			DEFINE FIELD IF NOT EXISTS attempt_count ON link_ingestion_queue TYPE int DEFAULT 0;
+			DEFINE FIELD IF NOT EXISTS last_error ON link_ingestion_queue TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS created_at ON link_ingestion_queue TYPE datetime VALUE time::now();
+			DEFINE FIELD IF NOT EXISTS queued_at ON link_ingestion_queue TYPE datetime VALUE time::now();
+			DEFINE FIELD IF NOT EXISTS approved_at ON link_ingestion_queue TYPE option<datetime>;
+			DEFINE FIELD IF NOT EXISTS ingested_at ON link_ingestion_queue TYPE option<datetime>;
+			DEFINE FIELD IF NOT EXISTS last_submitted_at ON link_ingestion_queue TYPE datetime VALUE time::now();
+			DEFINE FIELD IF NOT EXISTS updated_at ON link_ingestion_queue TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Table: link_ingestion_queue');
+
+		await db.query(`
+			DEFINE INDEX IF NOT EXISTS link_ingestion_queue_canonical_hash
+			ON link_ingestion_queue FIELDS canonical_url_hash UNIQUE;
+			DEFINE INDEX IF NOT EXISTS link_ingestion_queue_status
+			ON link_ingestion_queue FIELDS status;
+			DEFINE INDEX IF NOT EXISTS link_ingestion_queue_last_submitted_at
+			ON link_ingestion_queue FIELDS last_submitted_at;
+		`);
+		console.log('[SETUP] ✓ Indexes: link_ingestion_queue (canonical_hash, status, last_submitted_at)');
+
 		// Verify schema by querying table counts
 		console.log('\n[SETUP] Verifying schema...');
 
@@ -176,7 +216,8 @@ async function setupSchema() {
 			'refines',
 			'exemplifies',
 			'part_of',
-			'query_cache'
+			'query_cache',
+			'link_ingestion_queue'
 		];
 
 		for (const table of tables) {

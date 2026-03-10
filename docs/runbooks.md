@@ -16,9 +16,12 @@
   - `pnpm run monitor:wave -- --once` (or equivalent script configured)
 - Resume ingestion for a wave:
   - `pnpm run ingest:wave1:retry`
-- Proposed nightly deferred link ingestion operations:
+- Run nightly deferred link ingestion worker locally:
+  - `pnpm run ingest:nightly`
+- Cloud Run nightly deferred link ingestion operations:
+  - `gcloud run jobs execute sophia-nightly-link-ingest --region europe-west2`
+  - `gcloud scheduler jobs describe sophia-nightly-link-ingest-0200 --location=europe-west2`
   - See `docs/runbooks/nightly-link-ingestion-runbook.md`
-  - Validate queue and run health daily before business hours
 
 ## Health checks
 - Health endpoint (if deployed): `curl -s --max-time 30 https://usesophia.app/api/health | jq .`

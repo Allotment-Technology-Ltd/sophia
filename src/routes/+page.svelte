@@ -60,6 +60,9 @@
     }
   ];
   let selectedDepth = $state<'quick' | 'standard' | 'deep'>('standard');
+  let selectedResourceMode = $state<'standard' | 'expanded'>('standard');
+  let userLinksInput = $state('');
+  let queueForNightlyIngest = $state(false);
   let selectedDomain = $state<'auto' | 'ethics' | 'philosophy_of_mind'>('auto');
   const domainSelectorEnabled =
     (import.meta.env.PUBLIC_ENABLE_DOMAIN_OVERRIDE_UI ?? 'true').toLowerCase() === 'true';
@@ -323,7 +326,8 @@
           modelProvider: 'vertex',
           modelId: modelOptions.find((option) => option.provider === 'vertex')?.id,
           domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
-          domain: selectedDomain === 'auto' ? undefined : selectedDomain
+          domain: selectedDomain === 'auto' ? undefined : selectedDomain,
+          ...buildRuntimeResourceOptions()
         })
   );
 
@@ -336,7 +340,8 @@
           modelProvider: 'anthropic',
           modelId: modelOptions.find((option) => option.provider === 'anthropic')?.id,
           domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
-          domain: selectedDomain === 'auto' ? undefined : selectedDomain
+          domain: selectedDomain === 'auto' ? undefined : selectedDomain,
+          ...buildRuntimeResourceOptions()
         })
   );
 
@@ -351,7 +356,8 @@
       modelProvider: option.provider,
       modelId: option.id,
       domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
-      domain: selectedDomain === 'auto' ? undefined : selectedDomain
+      domain: selectedDomain === 'auto' ? undefined : selectedDomain,
+      ...buildRuntimeResourceOptions()
     });
   }
 
@@ -387,6 +393,23 @@
     return `${(ms / 1000).toFixed(1)}s`;
   }
 
+  function buildRuntimeResourceOptions(): {
+    resourceMode: 'standard' | 'expanded';
+    userLinks: string[];
+    queueForNightlyIngest: boolean;
+  } {
+    const userLinks = userLinksInput
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    return {
+      resourceMode: selectedResourceMode,
+      userLinks,
+      queueForNightlyIngest
+    };
+  }
+
   // ── Handlers ──────────────────────────────────────────────────────────────
   async function handleSubmit(): Promise<void> {
     if (!queryInput.trim() || conversation.isLoading) return;
@@ -399,7 +422,8 @@
       modelProvider: selectedModel.provider,
       modelId: selectedModel.modelId,
       domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
-      domain: selectedDomain === 'auto' ? undefined : selectedDomain
+      domain: selectedDomain === 'auto' ? undefined : selectedDomain,
+      ...buildRuntimeResourceOptions()
     });
   }
 
@@ -437,7 +461,8 @@
       modelProvider: selectedModel.provider,
       modelId: selectedModel.modelId,
       domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
-      domain: selectedDomain === 'auto' ? undefined : selectedDomain
+      domain: selectedDomain === 'auto' ? undefined : selectedDomain,
+      ...buildRuntimeResourceOptions()
     });
   }
 
@@ -454,6 +479,7 @@
       modelId: modelOption.id,
       domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
       domain: selectedDomain === 'auto' ? undefined : selectedDomain,
+      ...buildRuntimeResourceOptions(),
       bypassQuestionLimit: true
     });
   }
@@ -470,7 +496,8 @@
       modelProvider: modelOption.provider,
       modelId: modelOption.id,
       domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
-      domain: selectedDomain === 'auto' ? undefined : selectedDomain
+      domain: selectedDomain === 'auto' ? undefined : selectedDomain,
+      ...buildRuntimeResourceOptions()
     });
     if (switched) {
       revealed = true;
@@ -508,6 +535,7 @@
       modelId: selectedModel.modelId,
       domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
       domain: selectedDomain === 'auto' ? undefined : selectedDomain,
+      ...buildRuntimeResourceOptions(),
       bypassQuestionLimit: true,
       reuse
     });
@@ -805,6 +833,29 @@
 
               <DepthSelector bind:value={selectedDepth} disabled={conversation.isLoading} />
 
+              <div class="resource-frame">
+                <div class="frame-title">External Resources (Phase 1)</div>
+                <div class="resource-row">
+                  <label for="resource-mode">Mode</label>
+                  <select id="resource-mode" bind:value={selectedResourceMode}>
+                    <option value="standard">Standard runtime intake</option>
+                    <option value="expanded">Expanded runtime intake</option>
+                  </select>
+                </div>
+                <label class="resource-label" for="user-links">User links (one URL per line, max 5)</label>
+                <textarea
+                  id="user-links"
+                  bind:value={userLinksInput}
+                  class="links-input"
+                  rows="4"
+                  placeholder="https://example.com/source-1"
+                ></textarea>
+                <label class="resource-toggle">
+                  <input type="checkbox" bind:checked={queueForNightlyIngest} />
+                  <span>Queue these links for nightly ingestion</span>
+                </label>
+              </div>
+
               <QuestionInput
                 bind:value={queryInput}
                 onSubmit={handleSubmit}
@@ -1072,7 +1123,8 @@
                         modelProvider: selectedModel.provider,
                         modelId: selectedModel.modelId,
                         domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
-                        domain: selectedDomain === 'auto' ? undefined : selectedDomain
+                        domain: selectedDomain === 'auto' ? undefined : selectedDomain,
+                        ...buildRuntimeResourceOptions()
                       });
                     }}
                   />
@@ -1084,7 +1136,8 @@
                       modelProvider: selectedModel.provider,
                       modelId: selectedModel.modelId,
                       domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
-                      domain: selectedDomain === 'auto' ? undefined : selectedDomain
+                      domain: selectedDomain === 'auto' ? undefined : selectedDomain,
+                      ...buildRuntimeResourceOptions()
                     })}
                   disabled={conversation.isLoading}
                 />
@@ -1258,6 +1311,63 @@
     display: flex;
     justify-content: center;
     margin-top: var(--space-2);
+  }
+
+  .resource-frame {
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    padding: 0.8rem;
+    display: grid;
+    gap: 0.65rem;
+    background: color-mix(in oklab, var(--color-bg-elev) 92%, var(--color-bg) 8%);
+  }
+
+  .resource-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .resource-row label {
+    font-size: 0.88rem;
+    color: var(--color-text-muted);
+    min-width: 52px;
+  }
+
+  .resource-row select {
+    flex: 1;
+    background: var(--color-bg-soft);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.9rem;
+  }
+
+  .resource-label {
+    font-size: 0.83rem;
+    color: var(--color-text-muted);
+  }
+
+  .links-input {
+    width: 100%;
+    resize: vertical;
+    min-height: 88px;
+    background: var(--color-bg-soft);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 0.55rem 0.65rem;
+    font-size: 0.9rem;
+    line-height: 1.35;
+  }
+
+  .resource-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
   }
 
   .suggested-questions {

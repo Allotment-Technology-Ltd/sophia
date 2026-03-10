@@ -8,12 +8,14 @@ import { adminDb } from '$lib/server/firebase-admin';
 import { runVerificationPipeline } from '$lib/server/verification/pipeline';
 import { runDepthEnrichment } from '$lib/server/enrichment/pipeline';
 import { recordSnapshotLineage } from '$lib/server/enrichment/store';
+import { extractFromSource } from '$lib/server/enrichment/sourceExtractor';
 import type { AnalysisPhase, Claim, RelationBundle } from '$lib/types/references';
 import type { GraphEdge, GraphNode, GraphSnapshotMeta } from '$lib/types/api';
 import type { ExtractedClaim, ExtractedRelation, ReasoningEvaluation } from '$lib/types/verification';
 import { evaluateReasoning } from '$lib/server/reasoningEval';
 import { evaluateConstitutionWithTelemetry } from '$lib/server/constitution/evaluator';
 import { getAvailableReasoningModels } from '$lib/server/vertex';
+import { isIP } from 'node:net';
 
 // Store only replay-relevant events — excludes high-volume pass_chunk events
 const REPLAY_EVENT_TYPES = new Set([
@@ -24,6 +26,42 @@ const REPLAY_EVENT_TYPES = new Set([
 ]);
 
 const FIRESTORE_CACHE_TTL_DAYS = 30;
+const MAX_USER_LINKS = 5;
+
+type ResourceMode = 'standard' | 'expanded';
+type QueueSourceKind = 'user' | 'grounding';
+type QueueStatus = 'queued' | 'pending_review' | 'approved' | 'ingesting' | 'ingested' | 'failed' | 'rejected';
+
+const DEFAULT_TRUSTED_INGESTION_DOMAINS = [
+  'plato.stanford.edu',
+  'iep.utm.edu',
+  'arxiv.org',
+  'philpapers.org',
+  'stanford.edu',
+  'ox.ac.uk',
+  'cam.ac.uk'
+];
+
+type QueueCandidateRollup = {
+  canonicalUrl: string;
+  canonicalUrlHash: string;
+  titleHint?: string;
+  passHints: Set<string>;
+  sourceKinds: Set<QueueSourceKind>;
+  userSubmissionCount: number;
+  groundingSubmissionCount: number;
+};
+
+type LinkQueueRow = {
+  status?: QueueStatus;
+  source_kinds?: string[];
+  query_run_ids?: string[];
+  submitted_by_uids?: string[];
+  pass_hints?: string[];
+  user_submission_count?: number;
+  grounding_submission_count?: number;
+  total_submission_count?: number;
+};
 
 async function loadFirestoreCache(uid: string, queryHash: string): Promise<SSEEvent[] | null> {
   try {
@@ -88,13 +126,363 @@ function buildQueryHash(
   modelProvider: 'auto' | 'vertex' | 'anthropic' = 'auto',
   modelId: string | undefined = undefined,
   domainMode: 'auto' | 'manual' = 'auto',
-  domain?: 'ethics' | 'philosophy_of_mind'
+  domain?: 'ethics' | 'philosophy_of_mind',
+  resourceMode: ResourceMode = 'standard',
+  userLinks: string[] = [],
+  queueForNightlyIngest = false
 ): string {
   const normalized = query.trim().toLowerCase();
   const lensKey = (lens || '').trim().toLowerCase();
   const domainKey = domainMode === 'manual' ? (domain ?? 'unknown') : 'auto';
   const modelKey = modelId?.trim().toLowerCase() || 'auto';
-  return createHash('sha256').update(`${normalized}::${lensKey}::${depthMode}::${modelProvider}::${modelKey}::${domainMode}::${domainKey}`).digest('hex');
+  const linksKey = userLinks.join('|');
+  const queueKey = queueForNightlyIngest ? 'queue:yes' : 'queue:no';
+  return createHash('sha256').update(
+    `${normalized}::${lensKey}::${depthMode}::${modelProvider}::${modelKey}::${domainMode}::${domainKey}::${resourceMode}::${linksKey}::${queueKey}`
+  ).digest('hex');
+}
+
+function isDisallowedHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  if (!normalized) return true;
+  if (
+    normalized === 'localhost' ||
+    normalized.endsWith('.local') ||
+    normalized.endsWith('.internal') ||
+    normalized.endsWith('.home.arpa')
+  ) {
+    return true;
+  }
+
+  if (!isIP(normalized)) return false;
+
+  if (normalized === '::1') return true;
+  if (normalized.startsWith('fe80:') || normalized.startsWith('fc') || normalized.startsWith('fd')) {
+    return true;
+  }
+
+  const octets = normalized.split('.').map((part) => Number.parseInt(part, 10));
+  if (octets.length !== 4 || octets.some((n) => Number.isNaN(n))) return true;
+  const [a, b] = octets;
+  if (a === 10 || a === 127 || a === 0) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  return false;
+}
+
+function canonicalizeQueueUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+  if (isDisallowedHost(parsed.hostname)) return null;
+  parsed.hash = '';
+  if (parsed.pathname.length > 1) {
+    parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+  }
+  return parsed.toString();
+}
+
+function getTrustedIngestionDomains(): string[] {
+  const configured = (process.env.INGESTION_TRUSTED_DOMAINS ?? '')
+    .split(',')
+    .map((domain) => domain.trim().toLowerCase())
+    .filter(Boolean);
+  return configured.length > 0 ? configured : DEFAULT_TRUSTED_INGESTION_DOMAINS;
+}
+
+function isTrustedIngestionHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  if (!normalized) return false;
+  return getTrustedIngestionDomains().some(
+    (trusted) => normalized === trusted || normalized.endsWith(`.${trusted}`)
+  );
+}
+
+function selectQueueStatusForUrl(canonicalUrl: string): QueueStatus {
+  try {
+    const hostname = new URL(canonicalUrl).hostname;
+    return isTrustedIngestionHost(hostname) ? 'approved' : 'pending_review';
+  } catch {
+    return 'pending_review';
+  }
+}
+
+function normalizeAndValidateUserLinks(input: unknown): { links: string[]; error?: string } {
+  if (input === undefined) return { links: [] };
+  if (!Array.isArray(input)) {
+    return { links: [], error: 'user_links must be an array of URLs' };
+  }
+  if (input.length > MAX_USER_LINKS) {
+    return { links: [], error: `user_links must contain at most ${MAX_USER_LINKS} URLs` };
+  }
+
+  const deduped = new Set<string>();
+  for (const raw of input) {
+    if (typeof raw !== 'string') {
+      return { links: [], error: 'user_links entries must be strings' };
+    }
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      return { links: [], error: `Invalid URL in user_links: ${trimmed}` };
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return { links: [], error: `Unsupported URL protocol in user_links: ${trimmed}` };
+    }
+    if (isDisallowedHost(parsed.hostname)) {
+      return { links: [], error: `Blocked private/local URL in user_links: ${trimmed}` };
+    }
+    parsed.hash = '';
+    if (parsed.pathname.length > 1) {
+      parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+    }
+    deduped.add(parsed.toString());
+  }
+
+  return { links: [...deduped] };
+}
+
+function buildQueueCandidateRollup(
+  userLinks: string[],
+  groundingSources: Array<{ url: string; title?: string; pass: string }>
+): Map<string, QueueCandidateRollup> {
+  const byCanonicalUrl = new Map<string, QueueCandidateRollup>();
+
+  const upsert = (
+    url: string,
+    sourceKind: QueueSourceKind,
+    titleHint?: string,
+    passHint?: string
+  ): void => {
+    const canonicalUrl = canonicalizeQueueUrl(url);
+    if (!canonicalUrl) return;
+    const existing = byCanonicalUrl.get(canonicalUrl);
+    if (existing) {
+      existing.sourceKinds.add(sourceKind);
+      if (sourceKind === 'user') existing.userSubmissionCount += 1;
+      if (sourceKind === 'grounding') existing.groundingSubmissionCount += 1;
+      if (!existing.titleHint && titleHint?.trim()) existing.titleHint = titleHint.trim();
+      if (passHint?.trim()) existing.passHints.add(passHint.trim());
+      return;
+    }
+    byCanonicalUrl.set(canonicalUrl, {
+      canonicalUrl,
+      canonicalUrlHash: createHash('sha256').update(canonicalUrl).digest('hex'),
+      titleHint: titleHint?.trim() || undefined,
+      passHints: new Set(passHint?.trim() ? [passHint.trim()] : []),
+      sourceKinds: new Set([sourceKind]),
+      userSubmissionCount: sourceKind === 'user' ? 1 : 0,
+      groundingSubmissionCount: sourceKind === 'grounding' ? 1 : 0
+    });
+  };
+
+  for (const url of userLinks) {
+    upsert(url, 'user');
+  }
+  for (const source of groundingSources) {
+    upsert(source.url, 'grounding', source.title, source.pass);
+  }
+
+  return byCanonicalUrl;
+}
+
+function mergeUnique(existing: string[] | undefined, next: string[]): string[] {
+  return [...new Set([...(existing ?? []), ...next])];
+}
+
+function resolveUpdatedQueueStatus(
+  existingStatus: QueueStatus | undefined,
+  requestedStatus: QueueStatus
+): QueueStatus {
+  if (!existingStatus) return requestedStatus;
+  if (existingStatus === 'queued') return requestedStatus;
+  if (existingStatus === 'failed' && requestedStatus === 'approved') return 'approved';
+  return existingStatus;
+}
+
+async function upsertQueueCandidate(
+  candidate: QueueCandidateRollup,
+  uid: string | null,
+  queryRunId: string
+): Promise<void> {
+  const requestedStatus = selectQueueStatusForUrl(candidate.canonicalUrl);
+  const selectExisting = async (): Promise<LinkQueueRow | null> => {
+    const rows = await dbQuery<LinkQueueRow[]>(
+      `SELECT status, source_kinds, query_run_ids, submitted_by_uids, pass_hints, user_submission_count, grounding_submission_count, total_submission_count
+       FROM link_ingestion_queue
+       WHERE canonical_url_hash = $canonical_url_hash
+       LIMIT 1`,
+      { canonical_url_hash: candidate.canonicalUrlHash }
+    );
+    return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+  };
+
+  const updateExisting = async (existing: LinkQueueRow): Promise<void> => {
+    const nextUserCount = (existing.user_submission_count ?? 0) + candidate.userSubmissionCount;
+    const nextGroundingCount =
+      (existing.grounding_submission_count ?? 0) + candidate.groundingSubmissionCount;
+    const nextTotal = (existing.total_submission_count ?? 0) + candidate.userSubmissionCount + candidate.groundingSubmissionCount;
+    const nextStatus = resolveUpdatedQueueStatus(existing.status, requestedStatus);
+
+    await dbQuery(
+      `UPDATE link_ingestion_queue
+       SET
+         source_kinds = $source_kinds,
+         query_run_ids = $query_run_ids,
+         submitted_by_uids = $submitted_by_uids,
+         pass_hints = $pass_hints,
+         latest_query_run_id = $latest_query_run_id,
+         submitted_by_uid = $submitted_by_uid,
+         user_submission_count = $user_submission_count,
+         grounding_submission_count = $grounding_submission_count,
+         total_submission_count = $total_submission_count,
+         status = $status,
+         last_submitted_at = time::now(),
+         updated_at = time::now(),
+         approved_at = if $status = 'approved' then time::now() else approved_at end
+       WHERE canonical_url_hash = $canonical_url_hash`,
+      {
+        canonical_url_hash: candidate.canonicalUrlHash,
+        source_kinds: mergeUnique(existing.source_kinds, [...candidate.sourceKinds]),
+        query_run_ids: mergeUnique(existing.query_run_ids, [queryRunId]),
+        submitted_by_uids: uid ? mergeUnique(existing.submitted_by_uids, [uid]) : (existing.submitted_by_uids ?? []),
+        pass_hints: mergeUnique(existing.pass_hints, [...candidate.passHints]),
+        latest_query_run_id: queryRunId,
+        submitted_by_uid: uid,
+        user_submission_count: nextUserCount,
+        grounding_submission_count: nextGroundingCount,
+        total_submission_count: nextTotal,
+        status: nextStatus
+      }
+    );
+  };
+
+  const existing = await selectExisting();
+  if (existing) {
+    await updateExisting(existing);
+    return;
+  }
+
+  try {
+    await dbQuery(
+      `CREATE link_ingestion_queue CONTENT {
+        canonical_url: $canonical_url,
+        canonical_url_hash: $canonical_url_hash,
+        hostname: $hostname,
+        status: $status,
+        source_kinds: $source_kinds,
+        query_run_ids: $query_run_ids,
+        latest_query_run_id: $latest_query_run_id,
+        submitted_by_uid: $submitted_by_uid,
+        submitted_by_uids: $submitted_by_uids,
+        title_hint: $title_hint,
+        pass_hints: $pass_hints,
+        user_submission_count: $user_submission_count,
+        grounding_submission_count: $grounding_submission_count,
+        total_submission_count: $total_submission_count,
+        attempt_count: 0,
+        last_error: NONE,
+        created_at: time::now(),
+        queued_at: time::now(),
+        last_submitted_at: time::now(),
+        updated_at: time::now(),
+        approved_at: if $status = 'approved' then time::now() else NONE end
+      }`,
+      {
+        canonical_url: candidate.canonicalUrl,
+        canonical_url_hash: candidate.canonicalUrlHash,
+        hostname: new URL(candidate.canonicalUrl).hostname,
+        status: requestedStatus,
+        source_kinds: [...candidate.sourceKinds],
+        query_run_ids: [queryRunId],
+        latest_query_run_id: queryRunId,
+        submitted_by_uid: uid,
+        submitted_by_uids: uid ? [uid] : [],
+        title_hint: candidate.titleHint ?? null,
+        pass_hints: [...candidate.passHints],
+        user_submission_count: candidate.userSubmissionCount,
+        grounding_submission_count: candidate.groundingSubmissionCount,
+        total_submission_count: candidate.userSubmissionCount + candidate.groundingSubmissionCount
+      }
+    );
+  } catch {
+    // A concurrent insert can race against this create; fallback to merge-update.
+    const concurrentExisting = await selectExisting();
+    if (!concurrentExisting) throw new Error('queue upsert failed: record not visible after create conflict');
+    await updateExisting(concurrentExisting);
+  }
+}
+
+async function enqueueDeferredLinkIngestion(params: {
+  uid: string | null;
+  queryRunId: string;
+  userLinks: string[];
+  groundingSources: Array<{ url: string; title?: string; pass: string }>;
+}): Promise<number> {
+  const candidates = buildQueueCandidateRollup(params.userLinks, params.groundingSources);
+  if (candidates.size === 0) return 0;
+
+  let successfulUpserts = 0;
+  for (const candidate of candidates.values()) {
+    try {
+      await upsertQueueCandidate(candidate, params.uid, params.queryRunId);
+      successfulUpserts += 1;
+    } catch (err) {
+      console.warn('[QUEUE] Failed to enqueue link candidate', {
+        url: candidate.canonicalUrl,
+        hash: candidate.canonicalUrlHash.slice(0, 12),
+        err: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
+  return successfulUpserts;
+}
+
+async function buildRuntimeExternalContext(
+  links: string[],
+  mode: ResourceMode
+): Promise<{ block: string; processedCount: number }> {
+  if (links.length === 0) return { block: '', processedCount: 0 };
+
+  const maxSyncLinks = mode === 'expanded' ? 3 : 2;
+  const candidates = links.slice(0, maxSyncLinks);
+  const budget =
+    mode === 'expanded'
+      ? { maxBytes: 350_000, maxLatencyMs: 2_500 }
+      : { maxBytes: 180_000, maxLatencyMs: 1_200 };
+
+  const extracted = await Promise.all(
+    candidates.map(async (link) => {
+      const mimeType = link.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'text/html';
+      const result = await extractFromSource({
+        url: link,
+        mimeType,
+        budget
+      });
+      if (!result.text) return null;
+      const excerpt = result.text.slice(0, 700).replace(/\s+/g, ' ').trim();
+      if (!excerpt) return null;
+      return `- ${link}\n  Excerpt: ${excerpt}`;
+    })
+  );
+
+  const items = extracted.filter((entry): entry is string => Boolean(entry));
+  if (items.length === 0) return { block: '', processedCount: 0 };
+  return {
+    processedCount: items.length,
+    block: `USER-PROVIDED RESEARCH LINKS (RUNTIME CONTEXT)\nUse these links as high-priority context.\n${items.join('\n')}`
+  };
 }
 
 type QueryCacheRow = {
@@ -183,6 +571,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     model_id?: string;
     domain_mode?: 'auto' | 'manual';
     domain?: 'ethics' | 'philosophy_of_mind';
+    resource_mode?: ResourceMode;
+    user_links?: string[];
+    queue_for_nightly_ingest?: boolean;
     reuse?: {
       from_depth?: 'quick' | 'standard';
       analysis?: string;
@@ -202,6 +593,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const modelId = body.model_id?.trim() || undefined;
   const domainMode = body.domain_mode ?? 'auto';
   const domain = body.domain;
+  const requestedResourceMode = body.resource_mode ?? 'standard';
+  const queueForNightlyIngest = body.queue_for_nightly_ingest ?? false;
   const reuse = body.reuse;
   const domainOverrideEnabled =
     process.env.ENABLE_DOMAIN_OVERRIDE_UI?.toLowerCase() !== 'false';
@@ -220,6 +613,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (!query || typeof query !== 'string' || !query.trim()) {
     return json({ error: 'Query is required and must be a non-empty string' }, { status: 400 });
   }
+  if (requestedResourceMode !== 'standard' && requestedResourceMode !== 'expanded') {
+    return json({ error: 'resource_mode must be one of standard|expanded' }, { status: 400 });
+  }
+  if (typeof queueForNightlyIngest !== 'boolean') {
+    return json({ error: 'queue_for_nightly_ingest must be a boolean' }, { status: 400 });
+  }
+  const normalizedUserLinksResult = normalizeAndValidateUserLinks(body.user_links);
+  if (normalizedUserLinksResult.error) {
+    return json({ error: normalizedUserLinksResult.error }, { status: 400 });
+  }
+  const normalizedUserLinks = normalizedUserLinksResult.links;
+  const resourceMode: ResourceMode = normalizedUserLinks.length > 0 ? 'expanded' : requestedResourceMode;
 
   if (!['quick', 'standard', 'deep'].includes(depthMode)) {
     return json({ error: 'depth must be one of quick|standard|deep' }, { status: 400 });
@@ -272,7 +677,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         synthesis: reuse.synthesis
       }
     : undefined;
-  const queryHash = buildQueryHash(queryText, lens, depthMode, modelProvider, modelId, domainMode, domain);
+  const queryHash = buildQueryHash(
+    queryText,
+    lens,
+    depthMode,
+    modelProvider,
+    modelId,
+    domainMode,
+    domain,
+    resourceMode,
+    normalizedUserLinks,
+    queueForNightlyIngest
+  );
   const constitutionInAnalyseEnabled =
     process.env.ENABLE_CONSTITUTION_IN_ANALYSE?.toLowerCase() === 'true';
 
@@ -385,6 +801,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             retrieval_degraded?: boolean;
           }
         | undefined;
+      const nightlyIngestionEnabled =
+        process.env.ENABLE_NIGHTLY_LINK_INGESTION?.toLowerCase() !== 'false';
+      let queuePreviewCount = 0;
+      const { block: externalContextBlock, processedCount: runtimeLinksProcessed } =
+        await buildRuntimeExternalContext(normalizedUserLinks, resourceMode);
 
       const sendEventWithCapture = (event: SSEEvent): void => {
         replayEvents.push(event);
@@ -392,7 +813,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       };
 
       try {
-        await runDialecticalEngine(queryText, {
+        const runtimeQueryText = externalContextBlock
+          ? `${queryText}\n\n${externalContextBlock}`
+          : queryText;
+        await runDialecticalEngine(runtimeQueryText, {
           onPassStart(pass, model) {
             sendEventWithCapture({
               type: 'pass_start',
@@ -462,6 +886,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
                   retrieval_degraded: retrieval.retrieval_degraded
                 }
               : undefined;
+            if (queueForNightlyIngest && nightlyIngestionEnabled) {
+              queuePreviewCount = buildQueueCandidateRollup(
+                normalizedUserLinks,
+                groundingSources
+              ).size;
+            } else {
+              queuePreviewCount = 0;
+            }
             sendEventWithCapture({
               type: 'metadata',
               total_input_tokens: totalInputTokens,
@@ -485,6 +917,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
                     model_cost_breakdown: modelCostBreakdown
                   }
                 : {}),
+              resource_mode: resourceMode,
+              user_links_count: normalizedUserLinks.length,
+              runtime_links_processed: runtimeLinksProcessed,
+              nightly_queue_enqueued: queuePreviewCount,
               depth_mode: depthMode,
               selected_model_provider: modelProvider,
               selected_model_id: modelId,
@@ -654,6 +1090,22 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         const hasMetadataEvent = replayEvents.some((event) => event.type === 'metadata');
 
         if (!hasErrorEvent && hasMetadataEvent) {
+          if (queueForNightlyIngest && nightlyIngestionEnabled) {
+            const enqueued = await enqueueDeferredLinkIngestion({
+              uid,
+              queryRunId,
+              userLinks: normalizedUserLinks,
+              groundingSources
+            });
+            if (enqueued !== queuePreviewCount) {
+              console.log('[QUEUE] enqueue count mismatch', {
+                preview: queuePreviewCount,
+                committed: enqueued,
+                queryRunId
+              });
+            }
+          }
+
           // A4: Save to Firestore (per-user)
           if (uid) {
             await saveFirestoreCache(uid, queryHash, queryText, lens, depthMode, modelProvider, modelId, domainMode, domain, replayEvents);

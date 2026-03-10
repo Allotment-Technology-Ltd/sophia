@@ -22,6 +22,9 @@ interface CacheLookupOptions {
   modelId?: string;
   domainMode?: 'auto' | 'manual';
   domain?: 'ethics' | 'philosophy_of_mind';
+  resourceMode?: 'standard' | 'expanded';
+  userLinks?: string[];
+  queueForNightlyIngest?: boolean;
 }
 
 export interface CachedQueryResult {
@@ -41,6 +44,10 @@ export interface CachedQueryResult {
     depth_mode?: 'quick' | 'standard' | 'deep';
     selected_model_provider?: 'auto' | 'vertex' | 'anthropic';
     selected_model_id?: string;
+    resource_mode?: 'standard' | 'expanded';
+    user_links_count?: number;
+    runtime_links_processed?: number;
+    nightly_queue_enqueued?: number;
     query_run_id?: string;
     model_cost_breakdown?: {
       total_estimated_cost_usd: number;
@@ -134,7 +141,11 @@ function buildCacheKey(query: string, options?: CacheLookupOptions): string {
   const modelId = options.modelId?.trim().toLowerCase() ?? 'auto';
   const domainMode = options.domainMode ?? 'auto';
   const domain = normalizeDomain(domainMode, options.domain);
-  return `${normalizeQuery(query)}::${normalizeLens(options.lens)}::${depth}::${modelProvider}::${modelId}::${domainMode}::${domain}`;
+  const resourceMode = options.resourceMode ?? 'standard';
+  const links = (options.userLinks ?? []).map((link) => link.trim()).filter(Boolean).sort();
+  const linksKey = links.join('|') || 'none';
+  const queueKey = options.queueForNightlyIngest ? 'queue:yes' : 'queue:no';
+  return `${normalizeQuery(query)}::${normalizeLens(options.lens)}::${depth}::${modelProvider}::${modelId}::${domainMode}::${domain}::${resourceMode}::${linksKey}::${queueKey}`;
 }
 
 function createHistoryStore() {

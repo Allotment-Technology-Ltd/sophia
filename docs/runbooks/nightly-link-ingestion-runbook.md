@@ -1,7 +1,7 @@
-# Nightly Link Ingestion Runbook (Proposed)
+# Nightly Link Ingestion Runbook
 
-**Status:** Proposed
-**Last updated:** 2026-03-09
+**Status:** Implemented (Phase 3)
+**Last updated:** 2026-03-10
 **Schedule target:** Daily at 02:00 UTC
 
 ## Purpose
@@ -12,7 +12,25 @@ Operate the deferred ingestion pipeline that processes opted-in user and groundi
 - Allowlist policy is configured:
   - Trusted domains auto-approved.
   - Non-trusted domains routed to manual review.
-- Nightly Cloud Run Job and Cloud Scheduler are provisioned.
+- Nightly Cloud Run Job and Cloud Scheduler are provisioned:
+  - Job: `sophia-nightly-link-ingest`
+  - Scheduler: `sophia-nightly-link-ingest-0200`
+
+## Scheduler & Job Commands
+```bash
+# Trigger nightly ingestion immediately
+gcloud run jobs execute sophia-nightly-link-ingest --region europe-west2
+
+# List recent nightly executions
+gcloud run jobs executions list --job=sophia-nightly-link-ingest --region europe-west2 --limit=20
+
+# Describe scheduler state
+gcloud scheduler jobs describe sophia-nightly-link-ingest-0200 --location=europe-west2
+
+# Pause / resume scheduler
+gcloud scheduler jobs pause sophia-nightly-link-ingest-0200 --location=europe-west2
+gcloud scheduler jobs resume sophia-nightly-link-ingest-0200 --location=europe-west2
+```
 
 ## Daily Operator Checks
 1. Confirm scheduler last run status and next scheduled run.
@@ -42,6 +60,10 @@ UPDATE link_ingestion_queue SET status = 'rejected', last_error = 'domain_not_al
 ## Manual Rerun
 - Execute nightly job on demand after major queue buildup or policy updates.
 - Re-run only approved items; do not bypass review gate.
+- Runtime command:
+```bash
+gcloud run jobs execute sophia-nightly-link-ingest --region europe-west2
+```
 
 ## Failure Recovery
 1. If job fails globally, inspect Cloud Run Job logs.
@@ -54,7 +76,7 @@ WHERE status = 'failed' AND attempt_count < 3;
 ```
 4. Keep hard-failed items in `failed` for manual triage.
 
-## Retry Policy (Proposed)
+## Retry Policy
 - Per-item max retries: 3.
 - Exponential backoff between attempts.
 - After max retries: status remains `failed` until manual action.
@@ -84,10 +106,8 @@ WHERE status = 'failed' AND attempt_count < 3;
 3. Preserve queue state for replay.
 4. Open incident summary with root cause and remediation plan.
 
-## Documentation Sync
-When this pipeline is implemented, update:
-- `docs/architecture.md`
-- `ROADMAP.md`
-- `STATUS.md`
-- `docs/prompts-reference.md`
-- `CHANGELOG.md`
+## Worker Configuration (Cloud Run env)
+- `NIGHTLY_INGEST_BATCH_SIZE` (default `20`)
+- `NIGHTLY_INGEST_MAX_RETRIES` (default `3`)
+- `NIGHTLY_INGEST_RETRY_BASE_MS` (default `1000`)
+- `NIGHTLY_INGEST_VALIDATE` (default `false`)

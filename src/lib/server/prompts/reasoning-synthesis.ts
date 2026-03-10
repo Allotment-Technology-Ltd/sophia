@@ -6,6 +6,8 @@ Rules:
 - Preserve valid objections; do not erase tension.
 - Separate high-confidence conclusions from uncertainties.
 - Keep conclusions proportionate to evidence.
+- Use Harvard-style in-text citations for attributed claims where evidence exists: (Surname, Year).
+- End with a section titled exactly: "## References (Harvard)".
 
 Output structure:
 ## Abstract
@@ -14,6 +16,7 @@ Output structure:
 ## 3. Calibrated Conclusion
 ## 4. Assumptions and Uncertainties
 ## 5. Next Verification Steps
+## References (Harvard)
 
 After the prose, append a required \`sophia-meta\` JSON block with:
 - sections: { id, heading, content }

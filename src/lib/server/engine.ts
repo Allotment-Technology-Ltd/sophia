@@ -23,6 +23,7 @@ import {
   getReasoningSynthesisSystemPrompt
 } from './prompts/reasoning-synthesis';
 import { VERIFICATION_SYSTEM, buildVerificationUserPrompt } from './prompts/verification';
+import { ensureHarvardReferencesSection } from './citations/harvard';
 import { retrieveContext, buildContextBlock } from './retrieval';
 import { classifyQueryDomain, getRetrievalDomain } from './domainClassifier';
 import type { PassType } from '$lib/types/passes';
@@ -920,11 +921,16 @@ export async function runDialecticalEngine(
     // Parse sophia-meta block for structured output and claims
     const { cleanedText: synthesisCleanedText, metaBlock: synthesisMeta } = extractSophiaMetaBlock(synthesisOutput);
     synthesisOutput = synthesisCleanedText; // Update output to exclude sophia-meta block
+    const synthesisHarvard = ensureHarvardReferencesSection(synthesisOutput, 'synthesis');
+    synthesisOutput = synthesisHarvard.text;
+    if (synthesisHarvard.appendedText) {
+      callbacks.onPassChunk('synthesis', synthesisHarvard.appendedText);
+    }
     
     let synthesisAllClaims: Claim[] = [];
     if (synthesisMeta) {
       // Emit structured sections
-      callbacks.onPassStructured('synthesis', synthesisMeta.sections, synthesisCleanedText.split(/\s+/).length);
+      callbacks.onPassStructured('synthesis', synthesisMeta.sections, synthesisOutput.split(/\s+/).length);
       
       // Emit claims
       synthesisAllClaims = synthesisMeta.claims.map((c: z.infer<typeof SophiaMetaClaimSchema>) => ({
@@ -936,7 +942,7 @@ export async function runDialecticalEngine(
     } else {
       // Fallback: emit generic structured output without claims
       console.warn('[ENGINE] No sophia-meta block found in synthesis output');
-      callbacks.onPassStructured('synthesis', [{ id: 'content', heading: 'Synthesis', content: synthesisCleanedText }], synthesisCleanedText.split(/\s+/).length);
+      callbacks.onPassStructured('synthesis', [{ id: 'content', heading: 'Synthesis', content: synthesisOutput }], synthesisOutput.split(/\s+/).length);
     }
 
     callbacks.onPassComplete('synthesis');
@@ -1010,6 +1016,11 @@ export async function runVerificationPass(
   totalInputTokens += inputTokens;
   totalOutputTokens += outputTokens;
   trackTokens(inputTokens, outputTokens);
+  const verificationHarvard = ensureHarvardReferencesSection(output, 'verification');
+  output = verificationHarvard.text;
+  if (verificationHarvard.appendedText) {
+    callbacks.onPassChunk('verification', verificationHarvard.appendedText);
+  }
 
   return { output, inputTokens: totalInputTokens, outputTokens: totalOutputTokens };
 }

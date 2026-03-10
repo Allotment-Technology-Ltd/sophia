@@ -26,6 +26,10 @@ export interface Message {
     selected_model_provider?: 'auto' | 'vertex' | 'anthropic';
     selected_model_id?: string;
     query_run_id?: string;
+    resource_mode?: 'standard' | 'expanded';
+    user_links_count?: number;
+    runtime_links_processed?: number;
+    nightly_queue_enqueued?: number;
     model_cost_breakdown?: {
       total_estimated_cost_usd: number;
       by_model: Array<{
@@ -311,6 +315,9 @@ function createConversationStore() {
         modelId?: string;
         domainMode?: 'auto' | 'manual';
         domain?: 'ethics' | 'philosophy_of_mind';
+        resourceMode?: 'standard' | 'expanded';
+        userLinks?: string[];
+        queueForNightlyIngest?: boolean;
         bypassQuestionLimit?: boolean;
         silentCacheLoad?: boolean;
         reuse?: {
@@ -344,6 +351,11 @@ function createConversationStore() {
       const domain = options?.domain;
       const modelProvider = options?.modelProvider ?? 'auto';
       const modelId = options?.modelId?.trim() || undefined;
+      const resourceMode = options?.resourceMode ?? 'standard';
+      const normalizedUserLinks = (options?.userLinks ?? [])
+        .map((link) => link.trim())
+        .filter((link) => link.length > 0);
+      const queueForNightlyIngest = options?.queueForNightlyIngest ?? false;
       loadingModelProvider = modelProvider;
       loadingModelId = modelId ?? null;
       trackEvent('query_submitted', {
@@ -363,7 +375,10 @@ function createConversationStore() {
         modelProvider,
         modelId,
         domainMode,
-        domain
+        domain,
+        resourceMode,
+        userLinks: normalizedUserLinks,
+        queueForNightlyIngest
       });
       if (cached) {
         trackEvent('cache_hit');
@@ -405,6 +420,9 @@ function createConversationStore() {
             model_provider: modelProvider,
             model_id: modelId,
             domain_mode: domainMode,
+            resource_mode: resourceMode,
+            user_links: normalizedUserLinks,
+            queue_for_nightly_ingest: queueForNightlyIngest,
             ...(domainMode === 'manual' && domain ? { domain } : {}),
             ...(options?.reuse
               ? {
@@ -602,6 +620,10 @@ function createConversationStore() {
                     selected_model_provider: event.selected_model_provider,
                     selected_model_id: event.selected_model_id,
                     query_run_id: event.query_run_id,
+                    resource_mode: event.resource_mode,
+                    user_links_count: event.user_links_count,
+                    runtime_links_processed: event.runtime_links_processed,
+                    nightly_queue_enqueued: event.nightly_queue_enqueued,
                     model_cost_breakdown: event.model_cost_breakdown
                   },
                   reasoningQuality: reasoningQuality ?? undefined,
@@ -626,6 +648,10 @@ function createConversationStore() {
                     selected_model_provider: event.selected_model_provider,
                     selected_model_id: event.selected_model_id,
                     query_run_id: event.query_run_id,
+                    resource_mode: event.resource_mode,
+                    user_links_count: event.user_links_count,
+                    runtime_links_processed: event.runtime_links_processed,
+                    nightly_queue_enqueued: event.nightly_queue_enqueued,
                     model_cost_breakdown: event.model_cost_breakdown
                   },
                   reasoningQuality: reasoningQuality ?? undefined,
@@ -639,7 +665,10 @@ function createConversationStore() {
                   modelProvider,
                   modelId,
                   domainMode,
-                  domain
+                  domain,
+                  resourceMode,
+                  userLinks: normalizedUserLinks,
+                  queueForNightlyIngest
                 });
 
                 historyStore.addEntry(query, {
@@ -727,7 +756,10 @@ function createConversationStore() {
             modelProvider,
             modelId,
             domainMode,
-            domain
+            domain,
+            resourceMode,
+            userLinks: normalizedUserLinks,
+            queueForNightlyIngest
           });
 
           historyStore.addEntry(query, {
@@ -868,6 +900,9 @@ function createConversationStore() {
         modelId?: string;
         domainMode?: 'auto' | 'manual';
         domain?: 'ethics' | 'philosophy_of_mind';
+        resourceMode?: 'standard' | 'expanded';
+        userLinks?: string[];
+        queueForNightlyIngest?: boolean;
       }
     ): boolean {
       const cached = historyStore.getCachedResult(query, options);

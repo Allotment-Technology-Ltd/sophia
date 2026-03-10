@@ -88,6 +88,8 @@ After synthesis, users can optionally trigger a fourth pass that cross-checks ke
 | Formal evaluation | **Not yet done** — Phase 1 results are preliminary (see below) |
 | Public API | **Not built** |
 
+**Upcoming:** Vertex ingestion migration is now a top engineering priority and will be validated via Philosophy of Mind Wave 2 cost tracking. Grant funding applications run in parallel at equal priority; BYOK is sequenced after these tracks. See [docs/runbooks/vertex-ingestion-cutover-wave2.md](docs/runbooks/vertex-ingestion-cutover-wave2.md) and [docs/byok-rollout-plan.md](docs/byok-rollout-plan.md).
+
 ---
 
 ## Tech stack
@@ -234,6 +236,7 @@ tests/
 | [docs/three-pass-engine.md](docs/three-pass-engine.md) | Engine rationale, per-pass contract, example output |
 | [docs/argument-graph.md](docs/argument-graph.md) | SurrealDB schema, relation types, SurrealQL examples |
 | [docs/evaluation-methodology.md](docs/evaluation-methodology.md) | Evaluation rubric, Phase 1 results, limitations, planned formal study |
+| [docs/byok-rollout-plan.md](docs/byok-rollout-plan.md) | Canonical BYOK rollout plan (Phase 1, Phase 1b, Phase 1c, deferred Phase 2 monetization) |
 | [docs/runbooks/domain-expansion-runbook.md](docs/runbooks/domain-expansion-runbook.md) | Operational guide for adding a new philosophical domain |
 | [docs/api-development-portal-roadmap.md](docs/api-development-portal-roadmap.md) | API developer portal roadmap (MVP → Gold-Plated) |
 | [docs/runbooks/zuplo-phase1-runbook.md](docs/runbooks/zuplo-phase1-runbook.md) | Zuplo + PostHog Phase 1 implementation runbook |

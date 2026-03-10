@@ -18,6 +18,16 @@ const appCpu = config.require("appCpu");
 const ingestMemory = config.require("ingestMemory");
 const ingestCpu = config.require("ingestCpu");
 const ingestTimeoutSeconds = config.require("ingestTimeoutSeconds");
+const ingestImageTag = config.get("ingestImageTag") ?? "v2-live";
+const nightlyIngestMemory = config.get("nightlyIngestMemory") ?? ingestMemory;
+const nightlyIngestCpu = config.get("nightlyIngestCpu") ?? ingestCpu;
+const nightlyIngestTimeoutSeconds = parseInt(config.get("nightlyIngestTimeoutSeconds") ?? "7200", 10);
+const nightlyIngestBatchSize = parseInt(config.get("nightlyIngestBatchSize") ?? "20", 10);
+const nightlyIngestMaxRetries = parseInt(config.get("nightlyIngestMaxRetries") ?? "3", 10);
+const nightlyIngestRetryBaseMs = parseInt(config.get("nightlyIngestRetryBaseMs") ?? "1000", 10);
+const nightlyIngestValidate = (config.get("nightlyIngestValidate") ?? "false").toLowerCase() === "true";
+const nightlyIngestSchedule = config.get("nightlyIngestSchedule") ?? "0 2 * * *";
+const nightlyIngestPaused = (config.get("nightlyIngestPaused") ?? "false").toLowerCase() === "true";
 
 // ─── Service accounts ─────────────────────────────────────────────────────────
 
@@ -218,7 +228,7 @@ new gcp.cloudrunv2.ServiceIamMember("sophia-app-public", {
 
 // ─── Cloud Run Job — Ingestion ────────────────────────────────────────────────
 
-const ingestImage = pulumi.interpolate`${region}-docker.pkg.dev/${projectId}/sophia/sophia-ingest:v2-live`;
+const ingestImage = pulumi.interpolate`${region}-docker.pkg.dev/${projectId}/sophia/sophia-ingest:${ingestImageTag}`;
 
 const ingestJob = new gcp.cloudrunv2.Job("sophia-ingest", {
   name: "sophia-ingest",
@@ -274,6 +284,122 @@ const ingestJob = new gcp.cloudrunv2.Job("sophia-ingest", {
 }, {
   dependsOn: [vpcConnector, registry],
 });
+
+// ─── Cloud Run Job — Nightly Link Ingestion (Phase 3) ─────────────────────────
+
+const nightlyIngestJob = new gcp.cloudrunv2.Job("sophia-nightly-link-ingest", {
+  name: "sophia-nightly-link-ingest",
+  location: region,
+  project: projectId,
+  template: {
+    template: {
+      serviceAccount: ingestSa.email,
+      maxRetries: 0,
+      timeout: `${nightlyIngestTimeoutSeconds}s`,
+      vpcAccess: {
+        connector: vpcConnector.id,
+        egress: "PRIVATE_RANGES_ONLY",
+      },
+      containers: [{
+        image: ingestImage,
+        commands: ["pnpm"],
+        args: ["exec", "tsx", "scripts/ingest-nightly-links.ts"],
+        resources: {
+          limits: {
+            memory: nightlyIngestMemory,
+            cpu: nightlyIngestCpu,
+          },
+        },
+        envs: [
+          { name: "SURREAL_URL",       value: `http://${dbInternalIp}:8000/rpc` },
+          { name: "SURREAL_USER",      value: "root" },
+          { name: "SURREAL_NAMESPACE", value: "sophia" },
+          { name: "SURREAL_DATABASE",  value: "sophia" },
+          { name: "GCP_PROJECT_ID",    value: projectId },
+          { name: "GOOGLE_VERTEX_PROJECT", value: projectId },
+          { name: "GCP_LOCATION",      value: region },
+          { name: "GOOGLE_VERTEX_LOCATION", value: "us-central1" },
+          { name: "NIGHTLY_INGEST_BATCH_SIZE", value: String(nightlyIngestBatchSize) },
+          { name: "NIGHTLY_INGEST_MAX_RETRIES", value: String(nightlyIngestMaxRetries) },
+          { name: "NIGHTLY_INGEST_RETRY_BASE_MS", value: String(nightlyIngestRetryBaseMs) },
+          { name: "NIGHTLY_INGEST_VALIDATE", value: nightlyIngestValidate ? "true" : "false" },
+          {
+            name: "ANTHROPIC_API_KEY",
+            valueSource: { secretKeyRef: { secret: "anthropic-api-key", version: "latest" } },
+          },
+          {
+            name: "SURREAL_PASS",
+            valueSource: { secretKeyRef: { secret: "surreal-db-pass", version: "latest" } },
+          },
+          {
+            name: "VOYAGE_API_KEY",
+            valueSource: { secretKeyRef: { secret: "voyage-api-key", version: "latest" } },
+          },
+          {
+            name: "GOOGLE_AI_API_KEY",
+            valueSource: { secretKeyRef: { secret: "google-ai-api-key", version: "latest" } },
+          },
+        ],
+      }],
+    },
+  },
+}, {
+  dependsOn: [vpcConnector, registry],
+});
+
+// Scheduler trigger account (least-privilege to invoke only nightly job)
+const nightlySchedulerSa = new gcp.serviceaccount.Account("nightly-scheduler-sa", {
+  accountId: "sophia-nightly-scheduler",
+  displayName: "Sophia Nightly Scheduler",
+  description: "Invokes nightly link ingestion Cloud Run Job at 02:00 UTC",
+  project: projectId,
+});
+
+const projectInfo = gcp.organizations.getProjectOutput({ projectId });
+const cloudSchedulerServiceAgent = pulumi.interpolate`serviceAccount:service-${projectInfo.number}@gcp-sa-cloudscheduler.iam.gserviceaccount.com`;
+
+new gcp.serviceaccount.IAMMember("nightly-scheduler-token-creator", {
+  serviceAccountId: nightlySchedulerSa.name,
+  role: "roles/iam.serviceAccountTokenCreator",
+  member: cloudSchedulerServiceAgent,
+});
+
+const nightlyIngestJobInvoker = new gcp.cloudrunv2.JobIamMember("nightly-ingest-job-invoker", {
+  project: projectId,
+  location: region,
+  name: nightlyIngestJob.name,
+  role: "roles/run.invoker",
+  member: pulumi.interpolate`serviceAccount:${nightlySchedulerSa.email}`,
+});
+
+const nightlySchedulerJob = new gcp.cloudscheduler.Job("nightly-link-ingestion-scheduler", {
+  name: "sophia-nightly-link-ingest-0200",
+  description: "Executes nightly deferred link ingestion job at 02:00 UTC",
+  project: projectId,
+  region: region,
+  schedule: nightlyIngestSchedule,
+  timeZone: "Etc/UTC",
+  paused: nightlyIngestPaused,
+  attemptDeadline: "600s",
+  retryConfig: {
+    retryCount: 1,
+    minBackoffDuration: "30s",
+    maxBackoffDuration: "300s",
+    maxDoublings: 2,
+  },
+  httpTarget: {
+    httpMethod: "POST",
+    uri: pulumi.interpolate`https://run.googleapis.com/v2/projects/${projectId}/locations/${region}/jobs/${nightlyIngestJob.name}:run`,
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: Buffer.from("{}").toString("base64"),
+    oauthToken: {
+      serviceAccountEmail: nightlySchedulerSa.email,
+      scope: "https://www.googleapis.com/auth/cloud-platform",
+    },
+  },
+}, { dependsOn: [nightlyIngestJobInvoker] });
 
 // ─── Load Balancer & Domain Mapping ──────────────────────────────────────────────────────────────────
 
@@ -370,8 +496,11 @@ export const appServiceName = appService.name;
 export const appServiceRegion = appService.location;
 export const appImagePath = pulumi.interpolate`${region}-docker.pkg.dev/${projectId}/sophia/app`;
 export const ingestImagePath = pulumi.interpolate`${region}-docker.pkg.dev/${projectId}/sophia/sophia-ingest`;
+export const nightlyIngestJobName = nightlyIngestJob.name;
+export const nightlySchedulerJobName = nightlySchedulerJob.name;
 export const vpcConnectorId = vpcConnector.id;
 export const registryLocation = registry.location;
 export const appServiceAccountEmail = appSa.email;
 export const ingestServiceAccountEmail = ingestSa.email;
+export const nightlySchedulerServiceAccountEmail = nightlySchedulerSa.email;
 export const staticIpAddress = lbIp.address;

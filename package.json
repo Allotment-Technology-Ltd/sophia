@@ -17,6 +17,7 @@
     "monitor:wave:watch": "tsx --env-file=.env scripts/monitor-wave.ts --interval-sec 120",
     "ingest:wave1:retry": "tsx --env-file=.env scripts/ingest-batch.ts --wave 1 --retry --fail-fast --pre-scan",
     "ingest:unknown:resume": "tsx --env-file=.env scripts/ingest.ts data/sources/unknown-title.txt --stop-after-embedding",
+    "ingest:nightly": "tsx --env-file=.env scripts/ingest-nightly-links.ts",
     "health": "curl -s --max-time 30 https://usesophia.app/api/health | jq .",
     "infra:preview": "cd infra && pulumi preview --stack production",
     "infra:up": "cd infra && pulumi up --stack production",
