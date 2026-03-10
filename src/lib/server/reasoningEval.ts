@@ -1,6 +1,7 @@
 import { generateText } from 'ai';
 import { z } from 'zod';
 import { getReasoningModel, trackTokens } from './vertex';
+import type { ProviderApiKeys } from './byok/types';
 import {
   ReasoningScoreSchema,
   type ExtractedClaim,
@@ -47,7 +48,8 @@ function parseScores(text: string): z.infer<typeof ReasoningScoreSchema>[] {
 export async function evaluateReasoning(
   claims: ExtractedClaim[],
   relations: ExtractedRelation[],
-  request: VerificationRequest
+  request: VerificationRequest,
+  options?: { providerApiKeys?: ProviderApiKeys }
 ): Promise<ReasoningEvaluation> {
   const originalText = [request.question, request.answer, request.text].filter(Boolean).join('\n\n');
   const prompt = buildReasoningEvalUserPrompt(claims, relations, originalText);
@@ -56,7 +58,7 @@ export async function evaluateReasoning(
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const result = await generateText({
-      model: getReasoningModel(),
+      model: getReasoningModel({ providerApiKeys: options?.providerApiKeys }),
       system: REASONING_EVAL_SYSTEM_PROMPT,
       prompt: attempt === 0 ? prompt : `${prompt}\n\nReturn ONLY valid JSON.`,
       maxOutputTokens: 1200

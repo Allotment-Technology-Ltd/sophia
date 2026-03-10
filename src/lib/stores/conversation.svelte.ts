@@ -1,5 +1,5 @@
 import type { PassType } from '$lib/types/passes';
-import type { SSEEvent } from '$lib/types/api';
+import type { GraphEdge, GraphNode, GraphSnapshotMeta, SSEEvent } from '$lib/types/api';
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
 import type { ReasoningEvaluation } from '$lib/types/verification';
 import { handleSSEEvent } from '$lib/utils/sseHandler';
@@ -8,6 +8,7 @@ import { historyStore, type CachedQueryResult } from '$lib/stores/history.svelte
 import { graphStore } from '$lib/stores/graph.svelte';
 import { getIdToken } from '$lib/firebase';
 import { trackEvent } from '$lib/utils/analytics';
+import type { ByokProvider, ModelProvider, ReasoningProvider } from '$lib/types/providers';
 
 export interface Message {
   id: string;
@@ -23,17 +24,37 @@ export interface Message {
     retrieval_degraded?: boolean;
     retrieval_degraded_reason?: string;
     depth_mode?: 'quick' | 'standard' | 'deep';
-    selected_model_provider?: 'auto' | 'vertex' | 'anthropic';
+    selected_model_provider?: ModelProvider;
     selected_model_id?: string;
     query_run_id?: string;
     resource_mode?: 'standard' | 'expanded';
     user_links_count?: number;
     runtime_links_processed?: number;
     nightly_queue_enqueued?: number;
+    billing_tier?: 'free' | 'pro' | 'premium';
+    billing_status?: 'active' | 'trialing' | 'past_due' | 'canceled' | 'inactive';
+    billing_currency?: 'GBP' | 'USD';
+    entitlement_month_key?: string;
+    ingestion_public_used?: number;
+    ingestion_public_remaining?: number;
+    ingestion_private_used?: number;
+    ingestion_private_remaining?: number;
+    ingestion_selected_count?: number;
+    byok_wallet_currency?: 'GBP' | 'USD';
+    byok_wallet_available_cents?: number;
+    byok_fee_estimated_cents?: number;
+    byok_fee_charged_cents?: number;
+    byok_fee_charge_status?:
+      | 'not_applicable'
+      | 'pending'
+      | 'shadow'
+      | 'charged'
+      | 'skipped'
+      | 'insufficient';
     model_cost_breakdown?: {
       total_estimated_cost_usd: number;
       by_model: Array<{
-        provider: 'vertex' | 'anthropic';
+        provider: ReasoningProvider;
         model: string;
         passes: string[];
         input_tokens: number;
@@ -66,11 +87,25 @@ interface CachedPassRelations {
   relations: RelationBundle[];
 }
 
-type ModelProvider = 'auto' | 'vertex' | 'anthropic';
+interface CachedGraphSnapshot {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  meta?: GraphSnapshotMeta;
+  version?: number;
+}
+
+type CredentialMode = 'auto' | 'platform' | 'byok';
 
 type PassModelInfo = {
-  provider: 'vertex' | 'anthropic';
+  provider: ReasoningProvider;
   modelId: string;
+};
+
+type LinkPreference = {
+  url: string;
+  ingest_selected: boolean;
+  ingest_visibility: 'public_shared' | 'private_user_only';
+  acknowledge_public_share?: boolean;
 };
 
 const PASS_WORKING_SEEDS: Record<'analysis' | 'critique' | 'synthesis', string[]> = {
@@ -129,6 +164,25 @@ function buildPassFallbackGraph(
       { from: 'claim:pass-critique', to: 'claim:pass-synthesis', type: 'responds-to', phaseOrigin: 'synthesis' },
       { from: 'claim:pass-analysis', to: 'claim:pass-synthesis', type: 'supports', phaseOrigin: 'synthesis' }
     ]
+  };
+}
+
+function looksLikeStructuredPassPayload(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('```json') && trimmed.includes('"sections"')) return true;
+  if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && trimmed.includes('"sections"')) return true;
+  if (trimmed.includes('"wordCount"') && trimmed.includes('"heading"')) return true;
+  return false;
+}
+
+function snapshotGraphState(): CachedGraphSnapshot | undefined {
+  if (graphStore.rawNodes.length === 0 && graphStore.rawEdges.length === 0) return undefined;
+  return {
+    nodes: graphStore.rawNodes,
+    edges: graphStore.rawEdges,
+    meta: graphStore.snapshotMeta ?? undefined,
+    version: graphStore.snapshotVersion
   };
 }
 
@@ -209,6 +263,7 @@ function createConversationStore() {
       sources: SourceReference[];
       claimsByPass: CachedPassClaims[];
       relationsByPass: CachedPassRelations[];
+      graphSnapshot?: CachedGraphSnapshot;
     },
     options?: { appendUserMessage?: boolean }
   ): void {
@@ -232,17 +287,39 @@ function createConversationStore() {
     passWorkingLastAt = {};
     passWorkingLastSig = {};
 
+    const hasCachedGraphSnapshot =
+      Array.isArray(cached.graphSnapshot?.nodes) &&
+      Array.isArray(cached.graphSnapshot?.edges) &&
+      ((cached.graphSnapshot?.nodes?.length ?? 0) > 0 || (cached.graphSnapshot?.edges?.length ?? 0) > 0);
+
     for (const { pass, claims } of cached.claimsByPass as CachedPassClaims[]) {
       referencesStore.addClaims(pass, claims, []);
-      graphStore.addFromClaims(pass, claims, []);
+      if (!hasCachedGraphSnapshot) {
+        graphStore.addFromClaims(pass, claims, []);
+      }
     }
 
     for (const { pass, relations } of cached.relationsByPass as CachedPassRelations[]) {
       referencesStore.addClaims(pass, [], relations);
-      graphStore.addFromClaims(pass, [], relations);
+      if (!hasCachedGraphSnapshot) {
+        graphStore.addFromClaims(pass, [], relations);
+      }
     }
 
-    if (graphStore.rawNodes.length === 0 && (cached.passes.analysis || cached.passes.critique || cached.passes.synthesis)) {
+    if (hasCachedGraphSnapshot) {
+      graphStore.setGraph(
+        cached.graphSnapshot?.nodes ?? [],
+        cached.graphSnapshot?.edges ?? [],
+        cached.graphSnapshot?.meta,
+        cached.graphSnapshot?.version ?? 1
+      );
+    }
+
+    if (
+      !hasCachedGraphSnapshot &&
+      graphStore.rawNodes.length === 0 &&
+      (cached.passes.analysis || cached.passes.critique || cached.passes.synthesis)
+    ) {
       const fallback = buildPassFallbackGraph({
         analysis: cached.passes.analysis ?? '',
         critique: cached.passes.critique ?? '',
@@ -311,12 +388,16 @@ function createConversationStore() {
       lens?: string,
       options?: {
         depthMode?: 'quick' | 'standard' | 'deep';
+        queryKind?: 'new' | 'follow_up' | 'rerun';
+        credentialMode?: CredentialMode;
+        byokProvider?: ByokProvider;
         modelProvider?: ModelProvider;
         modelId?: string;
         domainMode?: 'auto' | 'manual';
         domain?: 'ethics' | 'philosophy_of_mind';
         resourceMode?: 'standard' | 'expanded';
         userLinks?: string[];
+        linkPreferences?: LinkPreference[];
         queueForNightlyIngest?: boolean;
         bypassQuestionLimit?: boolean;
         silentCacheLoad?: boolean;
@@ -329,6 +410,9 @@ function createConversationStore() {
       }
     ): Promise<void> {
       const depthMode = options?.depthMode ?? 'standard';
+      const queryKind = options?.queryKind ?? 'new';
+      const credentialMode = options?.credentialMode ?? 'auto';
+      const byokProvider = options?.byokProvider;
       const activeLimit = getActiveQuestionLimit(depthMode);
       // Enforce question limit (only for live queries, not cache hits)
       if (!options?.bypassQuestionLimit && questionCount >= activeLimit) return;
@@ -355,6 +439,17 @@ function createConversationStore() {
       const normalizedUserLinks = (options?.userLinks ?? [])
         .map((link) => link.trim())
         .filter((link) => link.length > 0);
+      const normalizedLinkPreferences: LinkPreference[] = (options?.linkPreferences ?? [])
+        .map((pref): LinkPreference => ({
+          url: pref.url.trim(),
+          ingest_selected: pref.ingest_selected === true,
+          ingest_visibility:
+            pref.ingest_visibility === 'private_user_only'
+              ? 'private_user_only'
+              : 'public_shared',
+          acknowledge_public_share: pref.acknowledge_public_share === true
+        }))
+        .filter((pref) => pref.url.length > 0);
       const queueForNightlyIngest = normalizedUserLinks.length > 0 || options?.queueForNightlyIngest === true;
       loadingModelProvider = modelProvider;
       loadingModelId = modelId ?? null;
@@ -363,6 +458,9 @@ function createConversationStore() {
         has_lens: !!lens,
         lens: lens || undefined,
         depth_mode: depthMode,
+        query_kind: queryKind,
+        credential_mode: credentialMode,
+        byok_provider: byokProvider,
         model_provider: modelProvider,
         model_id: modelId,
         domain_mode: domainMode,
@@ -378,6 +476,7 @@ function createConversationStore() {
         domain,
         resourceMode,
         userLinks: normalizedUserLinks,
+        linkPreferences: normalizedLinkPreferences,
         queueForNightlyIngest
       });
       if (cached) {
@@ -417,11 +516,15 @@ function createConversationStore() {
             query,
             lens,
             depth: depthMode,
+            query_kind: queryKind,
+            credential_mode: credentialMode,
+            byok_provider: byokProvider,
             model_provider: modelProvider,
             model_id: modelId,
             domain_mode: domainMode,
             resource_mode: resourceMode,
             user_links: normalizedUserLinks,
+            link_preferences: normalizedLinkPreferences,
             queue_for_nightly_ingest: queueForNightlyIngest,
             ...(domainMode === 'manual' && domain ? { domain } : {}),
             ...(options?.reuse
@@ -452,6 +555,7 @@ function createConversationStore() {
         let streamedSources: SourceReference[] = [];
         let streamedClaimsByPass: CachedPassClaims[] = [];
         let streamedRelationsByPass: CachedPassRelations[] = [];
+        let latestGraphSnapshot: CachedGraphSnapshot | undefined;
         let gotMetadata = false;
         let reasoningQuality: ReasoningEvaluation | null = null;
         const constitutionDeltas: Message['constitutionDeltas'] = [];
@@ -510,6 +614,15 @@ function createConversationStore() {
               streamedRelationsByPass = [...streamedRelationsByPass, { pass: event.pass, relations: event.relations }];
             }
 
+            if (event.type === 'graph_snapshot') {
+              latestGraphSnapshot = {
+                nodes: event.nodes,
+                edges: event.edges,
+                meta: event.meta,
+                version: event.version
+              };
+            }
+
             if (handleSSEEvent(event)) continue;
 
             switch (event.type) {
@@ -547,6 +660,11 @@ function createConversationStore() {
                 break;
 
               case 'pass_chunk':
+                if (looksLikeStructuredPassPayload(event.content)) {
+                  // Some provider/tool chains can leak structured payload JSON into pass chunks.
+                  // Ignore those fragments and keep the prose stream canonical.
+                  break;
+                }
                 currentPasses = {
                   ...currentPasses,
                   [event.pass]: currentPasses[event.pass] + event.content
@@ -569,6 +687,9 @@ function createConversationStore() {
 
               case 'pass_complete':
                 completedPasses = new Set([...completedPasses, event.pass]);
+                if (depthMode === 'quick' && event.pass === 'analysis') {
+                  currentPass = null;
+                }
                 break;
 
               case 'pass_structured':
@@ -604,6 +725,8 @@ function createConversationStore() {
 
               case 'metadata':
                 gotMetadata = true;
+                currentPass = null;
+                isLoading = false;
                 trackEvent('analysis_complete', {
                   duration_ms: event.duration_ms,
                   claims_retrieved: event.claims_retrieved ?? 0,
@@ -631,6 +754,20 @@ function createConversationStore() {
                     user_links_count: event.user_links_count,
                     runtime_links_processed: event.runtime_links_processed,
                     nightly_queue_enqueued: event.nightly_queue_enqueued,
+                    billing_tier: event.billing_tier,
+                    billing_status: event.billing_status,
+                    billing_currency: event.billing_currency,
+                    entitlement_month_key: event.entitlement_month_key,
+                    ingestion_public_used: event.ingestion_public_used,
+                    ingestion_public_remaining: event.ingestion_public_remaining,
+                    ingestion_private_used: event.ingestion_private_used,
+                    ingestion_private_remaining: event.ingestion_private_remaining,
+                    ingestion_selected_count: event.ingestion_selected_count,
+                    byok_wallet_currency: event.byok_wallet_currency,
+                    byok_wallet_available_cents: event.byok_wallet_available_cents,
+                    byok_fee_estimated_cents: event.byok_fee_estimated_cents,
+                    byok_fee_charged_cents: event.byok_fee_charged_cents,
+                    byok_fee_charge_status: event.byok_fee_charge_status,
                     model_cost_breakdown: event.model_cost_breakdown
                   },
                   reasoningQuality: reasoningQuality ?? undefined,
@@ -659,13 +796,28 @@ function createConversationStore() {
                     user_links_count: event.user_links_count,
                     runtime_links_processed: event.runtime_links_processed,
                     nightly_queue_enqueued: event.nightly_queue_enqueued,
+                    billing_tier: event.billing_tier,
+                    billing_status: event.billing_status,
+                    billing_currency: event.billing_currency,
+                    entitlement_month_key: event.entitlement_month_key,
+                    ingestion_public_used: event.ingestion_public_used,
+                    ingestion_public_remaining: event.ingestion_public_remaining,
+                    ingestion_private_used: event.ingestion_private_used,
+                    ingestion_private_remaining: event.ingestion_private_remaining,
+                    ingestion_selected_count: event.ingestion_selected_count,
+                    byok_wallet_currency: event.byok_wallet_currency,
+                    byok_wallet_available_cents: event.byok_wallet_available_cents,
+                    byok_fee_estimated_cents: event.byok_fee_estimated_cents,
+                    byok_fee_charged_cents: event.byok_fee_charged_cents,
+                    byok_fee_charge_status: event.byok_fee_charge_status,
                     model_cost_breakdown: event.model_cost_breakdown
                   },
                   reasoningQuality: reasoningQuality ?? undefined,
                   constitutionDeltas: constitutionDeltas.length > 0 ? constitutionDeltas : undefined,
                   sources: streamedSources,
                   claimsByPass: streamedClaimsByPass,
-                  relationsByPass: streamedRelationsByPass
+                  relationsByPass: streamedRelationsByPass,
+                  graphSnapshot: latestGraphSnapshot ?? snapshotGraphState()
                 }, {
                   lens,
                   depthMode,
@@ -675,6 +827,7 @@ function createConversationStore() {
                   domain,
                   resourceMode,
                   userLinks: normalizedUserLinks,
+                  linkPreferences: normalizedLinkPreferences,
                   queueForNightlyIngest
                 });
 
@@ -758,7 +911,8 @@ function createConversationStore() {
             constitutionDeltas: constitutionDeltas.length > 0 ? constitutionDeltas : undefined,
             sources: streamedSources,
             claimsByPass: streamedClaimsByPass,
-            relationsByPass: streamedRelationsByPass
+            relationsByPass: streamedRelationsByPass,
+            graphSnapshot: latestGraphSnapshot ?? snapshotGraphState()
           }, {
             lens,
             depthMode,
@@ -768,6 +922,7 @@ function createConversationStore() {
             domain,
             resourceMode,
             userLinks: normalizedUserLinks,
+            linkPreferences: normalizedLinkPreferences,
             queueForNightlyIngest
           });
 
@@ -888,9 +1043,37 @@ function createConversationStore() {
                     const updatedPasses = prev.passes
                       ? { ...prev.passes, verification: currentPasses.verification }
                       : { analysis: '', critique: '', synthesis: '', verification: currentPasses.verification };
+                    const updatedAssistant = {
+                      ...prev,
+                      passes: updatedPasses
+                    };
                     messages = messages.map((m, i) =>
-                      i === lastIdx ? { ...m, passes: updatedPasses } : m
+                      i === lastIdx ? updatedAssistant : m
                     );
+
+                    const lastQuery = messages.findLast((m) => m.role === 'user')?.content;
+                    const metadata = updatedAssistant.metadata;
+                    if (lastQuery && metadata) {
+                      const existingCached = historyStore.findCachedResult(lastQuery, {
+                        depthMode: metadata.depth_mode,
+                        modelProvider: metadata.selected_model_provider,
+                        modelId: metadata.selected_model_id
+                      });
+                      historyStore.saveCachedResult(lastQuery, {
+                        lens: existingCached?.lens,
+                        domain_mode: existingCached?.domain_mode,
+                        domain: existingCached?.domain,
+                        passes: updatedPasses,
+                        metadata,
+                        reasoningQuality: updatedAssistant.reasoningQuality ?? existingCached?.reasoningQuality,
+                        constitutionDeltas:
+                          updatedAssistant.constitutionDeltas ?? existingCached?.constitutionDeltas,
+                        sources: existingCached?.sources ?? referencesStore.sources,
+                        claimsByPass: existingCached?.claimsByPass ?? [],
+                        relationsByPass: existingCached?.relationsByPass ?? [],
+                        graphSnapshot: existingCached?.graphSnapshot ?? snapshotGraphState()
+                      });
+                    }
                   }
                 }
                 break;
@@ -922,6 +1105,7 @@ function createConversationStore() {
         domain?: 'ethics' | 'philosophy_of_mind';
         resourceMode?: 'standard' | 'expanded';
         userLinks?: string[];
+        linkPreferences?: LinkPreference[];
         queueForNightlyIngest?: boolean;
       }
     ): boolean {

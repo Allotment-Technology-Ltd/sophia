@@ -4,6 +4,11 @@
   import { auth, onAuthChange, getIdToken } from '$lib/firebase';
   import { env as publicEnv } from '$env/dynamic/public';
   import { onMount } from 'svelte';
+  import {
+    BYOK_PROVIDER_ORDER,
+    PROVIDER_UI_META,
+    type ByokProvider
+  } from '$lib/types/providers';
 
   type PlaygroundMode = 'json' | 'sse';
 
@@ -33,6 +38,30 @@
     keys: ApiKeyItem[];
   }
 
+  interface ByokProviderStatus {
+    provider: ByokProvider;
+    configured: boolean;
+    status: 'not_configured' | 'pending_validation' | 'active' | 'invalid' | 'revoked';
+    fingerprint_last8: string | null;
+    validated_at: string | null;
+    updated_at: string | null;
+    last_error: string | null;
+  }
+
+  const BYOK_PROVIDER_LABELS: Record<ByokProvider, string> = Object.fromEntries(
+    BYOK_PROVIDER_ORDER.map((provider) => [provider, PROVIDER_UI_META[provider].label])
+  ) as Record<ByokProvider, string>;
+  const BYOK_PROVIDER_HINTS: Record<ByokProvider, string> = Object.fromEntries(
+    BYOK_PROVIDER_ORDER.map((provider) => [provider, PROVIDER_UI_META[provider].hint])
+  ) as Record<ByokProvider, string>;
+  const BYOK_PROVIDER_PLACEHOLDERS: Record<ByokProvider, string> = Object.fromEntries(
+    BYOK_PROVIDER_ORDER.map((provider) => [provider, PROVIDER_UI_META[provider].placeholder])
+  ) as Record<ByokProvider, string>;
+
+  function emptyProviderMap<T>(value: T): Record<ByokProvider, T> {
+    return Object.fromEntries(BYOK_PROVIDER_ORDER.map((provider) => [provider, value])) as Record<ByokProvider, T>;
+  }
+
   interface ProblemDetail {
     type?: string;
     title?: string;
@@ -51,6 +80,11 @@
 
   let newKeyName = $state('My integration');
   let newKeyQuota = $state(100);
+  let byokProviders = $state<ByokProviderStatus[]>([]);
+  let byokInputs = $state<Record<ByokProvider, string>>(emptyProviderMap(''));
+  let byokSaving = $state<Record<ByokProvider, boolean>>(emptyProviderMap(false));
+  let byokError = $state('');
+  let byokMessage = $state('');
 
   let playgroundMode = $state<PlaygroundMode>('json');
   let playgroundApiKey = $state('');
@@ -131,17 +165,62 @@
     usage = body as UsageResponse;
   }
 
+  function defaultByokStatus(provider: ByokProvider): ByokProviderStatus {
+    return {
+      provider,
+      configured: false,
+      status: 'not_configured',
+      fingerprint_last8: null,
+      validated_at: null,
+      updated_at: null,
+      last_error: null
+    };
+  }
+
+  function getByokStatus(provider: ByokProvider): ByokProviderStatus {
+    return byokProviders.find((item) => item.provider === provider) ?? defaultByokStatus(provider);
+  }
+
+  function getByokStatusLabel(status: ByokProviderStatus['status']): string {
+    if (status === 'active') return 'Active';
+    if (status === 'pending_validation') return 'Pending validation';
+    if (status === 'invalid') return 'Invalid key';
+    if (status === 'revoked') return 'Revoked';
+    return 'Not configured';
+  }
+
+  async function loadByokProviders(): Promise<void> {
+    const response = await fetchWithFirebase('/api/byok/providers', { method: 'GET' });
+    const body = await parseResponseOrThrow(response);
+    const providers = Array.isArray(body.providers) ? body.providers as ByokProviderStatus[] : [];
+    byokProviders = BYOK_PROVIDER_ORDER.map((provider) => {
+      return providers.find((item) => item.provider === provider) ?? defaultByokStatus(provider);
+    });
+  }
+
+  function setByokSaving(provider: ByokProvider, saving: boolean): void {
+    byokSaving = {
+      ...byokSaving,
+      [provider]: saving
+    };
+  }
+
   async function refreshAccountData(): Promise<void> {
     if (!isSignedIn) {
       keys = [];
       usage = null;
+      byokProviders = [];
+      byokError = '';
+      byokMessage = '';
       return;
     }
 
     loadingAccountData = true;
     accountError = '';
+    byokError = '';
+    byokMessage = '';
     try {
-      await Promise.all([loadKeys(), loadUsage()]);
+      await Promise.all([loadKeys(), loadUsage(), loadByokProviders()]);
     } catch (error) {
       accountError = formatProblem(error);
     } finally {
@@ -167,7 +246,7 @@
 
       const body = await parseResponseOrThrow(response);
       newlyCreatedKey = body.api_key ?? '';
-      await Promise.all([loadKeys(), loadUsage()]);
+      await Promise.all([loadKeys(), loadUsage(), loadByokProviders()]);
     } catch (error) {
       accountError = formatProblem(error);
     }
@@ -185,9 +264,87 @@
       });
 
       await parseResponseOrThrow(response);
-      await Promise.all([loadKeys(), loadUsage()]);
+      await Promise.all([loadKeys(), loadUsage(), loadByokProviders()]);
     } catch (error) {
       accountError = formatProblem(error);
+    }
+  }
+
+  async function saveByokKey(provider: ByokProvider): Promise<void> {
+    byokError = '';
+    byokMessage = '';
+    const apiKey = byokInputs[provider].trim();
+    if (!apiKey) {
+      byokError = `Enter a ${BYOK_PROVIDER_LABELS[provider]} API key before saving.`;
+      return;
+    }
+
+    setByokSaving(provider, true);
+    try {
+      const response = await fetchWithFirebase(`/api/byok/providers/${provider}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ api_key: apiKey })
+      });
+      const body = await parseResponseOrThrow(response);
+      byokInputs = {
+        ...byokInputs,
+        [provider]: ''
+      };
+      await loadByokProviders();
+      const ok = body?.validation?.ok === true;
+      byokMessage = ok
+        ? `${BYOK_PROVIDER_LABELS[provider]} key saved and validated.`
+        : `${BYOK_PROVIDER_LABELS[provider]} key saved but validation failed.`;
+    } catch (error) {
+      byokError = formatProblem(error);
+    } finally {
+      setByokSaving(provider, false);
+    }
+  }
+
+  async function validateByokKey(provider: ByokProvider): Promise<void> {
+    byokError = '';
+    byokMessage = '';
+    setByokSaving(provider, true);
+    try {
+      const response = await fetchWithFirebase(`/api/byok/providers/${provider}/validate`, {
+        method: 'POST'
+      });
+      const body = await parseResponseOrThrow(response);
+      await loadByokProviders();
+      const ok = body?.validation?.ok === true;
+      byokMessage = ok
+        ? `${BYOK_PROVIDER_LABELS[provider]} credential is valid.`
+        : `${BYOK_PROVIDER_LABELS[provider]} validation failed.`;
+    } catch (error) {
+      byokError = formatProblem(error);
+    } finally {
+      setByokSaving(provider, false);
+    }
+  }
+
+  async function revokeByokKey(provider: ByokProvider): Promise<void> {
+    byokError = '';
+    byokMessage = '';
+    setByokSaving(provider, true);
+    try {
+      const response = await fetchWithFirebase(`/api/byok/providers/${provider}`, {
+        method: 'DELETE'
+      });
+      await parseResponseOrThrow(response);
+      byokInputs = {
+        ...byokInputs,
+        [provider]: ''
+      };
+      await loadByokProviders();
+      byokMessage = `${BYOK_PROVIDER_LABELS[provider]} credential revoked.`;
+    } catch (error) {
+      byokError = formatProblem(error);
+    } finally {
+      setByokSaving(provider, false);
     }
   }
 
@@ -342,6 +499,100 @@
             Sign in
           </button>
         </div>
+      {/if}
+    </section>
+
+    <section class="mb-8 rounded border border-sophia-dark-border bg-sophia-dark-surface p-6">
+      <h2 class="font-serif text-2xl">Bring Your Own Key (BYOK)</h2>
+      <p class="mt-3 max-w-3xl font-mono text-sm text-sophia-dark-muted">
+        Configure your own model provider credentials to run reasoning calls against your provider budget.
+      </p>
+
+      {#if !isSignedIn}
+        <p class="mt-4 rounded border border-sophia-dark-border bg-sophia-dark-bg p-3 font-mono text-sm text-sophia-dark-muted">
+          Sign in to manage BYOK credentials.
+        </p>
+      {:else if loadingAccountData && byokProviders.length === 0}
+        <p class="mt-4 font-mono text-sm text-sophia-dark-muted">Loading BYOK providers...</p>
+      {:else}
+        <div class="mt-5 grid gap-4">
+          {#each BYOK_PROVIDER_ORDER as provider}
+            {@const status = getByokStatus(provider)}
+            <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p class="font-mono text-sm text-sophia-dark-text">{BYOK_PROVIDER_LABELS[provider]}</p>
+                  <p class="mt-1 font-mono text-xs text-sophia-dark-muted">{BYOK_PROVIDER_HINTS[provider]}</p>
+                </div>
+                <div class="text-right font-mono text-xs">
+                  <p class="text-sophia-dark-muted">Status</p>
+                  <p class={status.status === 'active' ? 'text-sophia-dark-sage' : status.status === 'invalid' ? 'text-sophia-dark-copper' : 'text-sophia-dark-muted'}>
+                    {getByokStatusLabel(status.status)}
+                  </p>
+                </div>
+              </div>
+
+              <div class="mt-3 grid gap-2 font-mono text-xs text-sophia-dark-muted sm:grid-cols-3">
+                <p>Fingerprint: {status.fingerprint_last8 ? `...${status.fingerprint_last8}` : '—'}</p>
+                <p>Validated: {formatDate(status.validated_at)}</p>
+                <p>Updated: {formatDate(status.updated_at)}</p>
+              </div>
+              {#if status.last_error}
+                <p class="mt-2 rounded border border-sophia-dark-copper/50 bg-sophia-dark-copper/10 p-2 font-mono text-xs text-sophia-dark-copper">
+                  Last validation error: {status.last_error}
+                </p>
+              {/if}
+
+              <div class="mt-4 grid gap-2 sm:grid-cols-[1fr_auto_auto_auto]">
+                <input
+                  class="rounded border border-sophia-dark-border bg-sophia-dark-surface px-3 py-2 font-mono text-sm"
+                  type="password"
+                  placeholder={BYOK_PROVIDER_PLACEHOLDERS[provider]}
+                  value={byokInputs[provider]}
+                  oninput={(event) => {
+                    byokInputs = {
+                      ...byokInputs,
+                      [provider]: (event.currentTarget as HTMLInputElement).value
+                    };
+                  }}
+                  disabled={byokSaving[provider]}
+                />
+                <button
+                  class="rounded border border-sophia-dark-sage px-3 py-2 font-mono text-xs text-sophia-dark-sage hover:bg-sophia-dark-sage/10 disabled:opacity-60"
+                  onclick={() => saveByokKey(provider)}
+                  disabled={byokSaving[provider]}
+                >
+                  {byokSaving[provider] ? 'Saving...' : 'Save key'}
+                </button>
+                <button
+                  class="rounded border border-sophia-dark-blue px-3 py-2 font-mono text-xs text-sophia-dark-blue hover:bg-sophia-dark-blue/10 disabled:opacity-60"
+                  onclick={() => validateByokKey(provider)}
+                  disabled={byokSaving[provider] || !status.configured}
+                >
+                  Validate
+                </button>
+                <button
+                  class="rounded border border-sophia-dark-copper px-3 py-2 font-mono text-xs text-sophia-dark-copper hover:bg-sophia-dark-copper/10 disabled:opacity-60"
+                  onclick={() => revokeByokKey(provider)}
+                  disabled={byokSaving[provider] || !status.configured}
+                >
+                  Revoke
+                </button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      {#if byokMessage}
+        <p class="mt-4 rounded border border-sophia-dark-blue/50 bg-sophia-dark-blue/10 p-3 font-mono text-xs text-sophia-dark-blue">
+          {byokMessage}
+        </p>
+      {/if}
+      {#if byokError}
+        <p class="mt-4 rounded border border-sophia-dark-copper/50 bg-sophia-dark-copper/10 p-3 font-mono text-xs text-sophia-dark-copper">
+          {byokError}
+        </p>
       {/if}
     </section>
 

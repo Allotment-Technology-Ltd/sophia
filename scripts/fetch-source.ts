@@ -350,14 +350,16 @@ async function main() {
 		console.log(`[SAVE] Cleaned text: ${textPath}`);
 
 		// Save metadata
-		const metadata = {
-			title,
-			author,
-			source_type: sourceType,
-			url,
-			fetched_at: new Date().toISOString(),
-			word_count: wordCount,
-			char_count: charCount,
+			const metadata = {
+				title,
+				author,
+				source_type: sourceType,
+				url,
+				visibility_scope: 'public_shared',
+				deletion_state: 'active',
+				fetched_at: new Date().toISOString(),
+				word_count: wordCount,
+				char_count: charCount,
 			estimated_tokens: estimatedTokens
 		};
 

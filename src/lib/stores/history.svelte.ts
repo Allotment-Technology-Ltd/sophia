@@ -1,6 +1,8 @@
 import type { HistoryEntry } from '$lib/components/panel/HistoryTab.svelte';
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
 import type { ReasoningEvaluation } from '$lib/types/verification';
+import type { ModelProvider, ReasoningProvider } from '$lib/types/providers';
+import type { GraphEdge, GraphNode, GraphSnapshotMeta } from '$lib/types/api';
 import { getIdToken } from '$lib/firebase';
 
 const MAX_CACHE_ENTRIES = 10;
@@ -18,18 +20,24 @@ interface CachedPassRelations {
 interface CacheLookupOptions {
   lens?: string;
   depthMode?: 'quick' | 'standard' | 'deep';
-  modelProvider?: 'auto' | 'vertex' | 'anthropic';
+  modelProvider?: ModelProvider;
   modelId?: string;
   domainMode?: 'auto' | 'manual';
   domain?: 'ethics' | 'philosophy_of_mind';
   resourceMode?: 'standard' | 'expanded';
   userLinks?: string[];
+  linkPreferences?: Array<{
+    url: string;
+    ingest_selected: boolean;
+    ingest_visibility: 'public_shared' | 'private_user_only';
+    acknowledge_public_share?: boolean;
+  }>;
   queueForNightlyIngest?: boolean;
 }
 
 interface CacheSearchOptions {
   depthMode?: 'quick' | 'standard' | 'deep';
-  modelProvider?: 'auto' | 'vertex' | 'anthropic';
+  modelProvider?: ModelProvider;
   modelId?: string;
 }
 
@@ -48,17 +56,37 @@ export interface CachedQueryResult {
     retrieval_degraded?: boolean;
     retrieval_degraded_reason?: string;
     depth_mode?: 'quick' | 'standard' | 'deep';
-    selected_model_provider?: 'auto' | 'vertex' | 'anthropic';
+    selected_model_provider?: ModelProvider;
     selected_model_id?: string;
     resource_mode?: 'standard' | 'expanded';
     user_links_count?: number;
     runtime_links_processed?: number;
     nightly_queue_enqueued?: number;
+    billing_tier?: 'free' | 'pro' | 'premium';
+    billing_status?: 'active' | 'trialing' | 'past_due' | 'canceled' | 'inactive';
+    billing_currency?: 'GBP' | 'USD';
+    entitlement_month_key?: string;
+    ingestion_public_used?: number;
+    ingestion_public_remaining?: number;
+    ingestion_private_used?: number;
+    ingestion_private_remaining?: number;
+    ingestion_selected_count?: number;
+    byok_wallet_currency?: 'GBP' | 'USD';
+    byok_wallet_available_cents?: number;
+    byok_fee_estimated_cents?: number;
+    byok_fee_charged_cents?: number;
+    byok_fee_charge_status?:
+      | 'not_applicable'
+      | 'pending'
+      | 'shadow'
+      | 'charged'
+      | 'skipped'
+      | 'insufficient';
     query_run_id?: string;
     model_cost_breakdown?: {
       total_estimated_cost_usd: number;
       by_model: Array<{
-        provider: 'vertex' | 'anthropic';
+        provider: ReasoningProvider;
         model: string;
         passes: string[];
         input_tokens: number;
@@ -80,6 +108,12 @@ export interface CachedQueryResult {
   sources: SourceReference[];
   claimsByPass: CachedPassClaims[];
   relationsByPass: CachedPassRelations[];
+  graphSnapshot?: {
+    nodes: GraphNode[];
+    edges: GraphEdge[];
+    meta?: GraphSnapshotMeta;
+    version?: number;
+  };
   cachedAt: string;
 }
 
@@ -150,8 +184,18 @@ function buildCacheKey(query: string, options?: CacheLookupOptions): string {
   const resourceMode = options.resourceMode ?? 'standard';
   const links = (options.userLinks ?? []).map((link) => link.trim()).filter(Boolean).sort();
   const linksKey = links.join('|') || 'none';
+  const preferenceKey = (options.linkPreferences ?? [])
+    .map((pref) => ({
+      url: pref.url.trim(),
+      ingest_selected: pref.ingest_selected === true ? '1' : '0',
+      ingest_visibility:
+        pref.ingest_visibility === 'private_user_only' ? 'private_user_only' : 'public_shared'
+    }))
+    .sort((a, b) => a.url.localeCompare(b.url))
+    .map((pref) => `${pref.url}|${pref.ingest_selected}|${pref.ingest_visibility}`)
+    .join('::') || 'prefs:none';
   const queueKey = options.queueForNightlyIngest ? 'queue:yes' : 'queue:no';
-  return `${normalizeQuery(query)}::${normalizeLens(options.lens)}::${depth}::${modelProvider}::${modelId}::${domainMode}::${domain}::${resourceMode}::${linksKey}::${queueKey}`;
+  return `${normalizeQuery(query)}::${normalizeLens(options.lens)}::${depth}::${modelProvider}::${modelId}::${domainMode}::${domain}::${resourceMode}::${linksKey}::${preferenceKey}::${queueKey}`;
 }
 
 function createHistoryStore() {
@@ -191,7 +235,7 @@ function createHistoryStore() {
       question: string,
       options?: {
         passCount?: number;
-        modelProvider?: 'auto' | 'vertex' | 'anthropic';
+        modelProvider?: ModelProvider;
         modelId?: string;
         depthMode?: 'quick' | 'standard' | 'deep';
       }
@@ -278,7 +322,7 @@ function createHistoryStore() {
             question: string;
             timestamp: string;
             passCount: number;
-            modelProvider?: 'auto' | 'vertex' | 'anthropic';
+            modelProvider?: ModelProvider;
             modelId?: string;
             depthMode?: 'quick' | 'standard' | 'deep';
           }) => ({
@@ -291,6 +335,11 @@ function createHistoryStore() {
             depthMode: e.depthMode
           })
         );
+        // Never clobber a non-empty local history with an empty sync result.
+        // This avoids perceived data loss during transient backend failures.
+        if (serverItems.length === 0 && items.length > 0) {
+          return;
+        }
 
         items = serverItems;
         const key = historyStorageKey();

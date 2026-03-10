@@ -1,5 +1,4 @@
 import { adminAuth } from '$lib/server/firebase-admin';
-import { checkRateLimit, DAILY_QUERY_LIMIT } from '$lib/server/rateLimit';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
 import type { Handle } from '@sveltejs/kit';
 
@@ -10,7 +9,8 @@ export const handle: Handle = async ({ event, resolve }) => {
   const isProtectedApi =
     event.url.pathname.startsWith('/api/') &&
     !event.url.pathname.startsWith('/api/health') &&
-    !event.url.pathname.startsWith('/api/v1/verify');
+    !event.url.pathname.startsWith('/api/v1/verify') &&
+    !event.url.pathname.startsWith('/api/billing/webhook');
 
   if (isProtectedApi) {
     const requestId = resolveRequestId(event.request);
@@ -33,7 +33,11 @@ export const handle: Handle = async ({ event, resolve }) => {
         displayName: decoded.name ?? null,
         photoURL: decoded.picture ?? null
       };
-    } catch {
+    } catch (err) {
+      console.warn(
+        '[AUTH] verifyIdToken failed:',
+        err instanceof Error ? err.message : String(err)
+      );
       return problemJson({
         status: 401,
         title: 'Authentication failed',
@@ -42,30 +46,6 @@ export const handle: Handle = async ({ event, resolve }) => {
       });
     }
 
-    // Rate limit only applies to the analyse endpoint (the expensive AI call).
-    if (event.url.pathname === '/api/analyse' && event.locals.user) {
-      try {
-        const { allowed, remaining } = await checkRateLimit(event.locals.user.uid);
-        if (!allowed) {
-          return problemJson({
-            status: 429,
-            title: 'Rate limit exceeded',
-            detail: 'Daily query limit reached. Try again tomorrow.',
-            requestId,
-            headers: {
-              'X-RateLimit-Limit': String(DAILY_QUERY_LIMIT),
-              'X-RateLimit-Remaining': '0',
-              'Retry-After': '86400'
-            }
-          });
-        }
-        // Attach remaining count so route handlers can surface it if needed
-        event.locals.rateLimitRemaining = remaining;
-      } catch (err) {
-        // Rate limit check failure is non-fatal — log and allow the request through
-        console.error('[RATE_LIMIT] Check failed:', err instanceof Error ? err.message : String(err));
-      }
-    }
   }
 
   return resolve(event);

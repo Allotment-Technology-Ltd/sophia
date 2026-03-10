@@ -32,6 +32,8 @@ docs/design/MASTER-IMPLEMENTATION-GUIDE.md
 .env
 .env.local
 .env*.local
+.env.paddle.generated
+.env.paddle.generated.*
 
 # .env.example is intentionally tracked (contains placeholder values only)
 

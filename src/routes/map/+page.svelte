@@ -5,7 +5,7 @@
   function backToWorkspace(): void {
     if (typeof window === 'undefined') return;
     const url = new URL(window.location.href);
-    url.pathname = '/';
+    url.pathname = '/app';
     url.searchParams.set('panelTab', 'map');
     void goto(url.toString(), { replaceState: false, noScroll: true, keepFocus: true, invalidateAll: false });
   }
@@ -13,7 +13,7 @@
   function openReferences(nodeId: string): void {
     if (typeof window === 'undefined') return;
     const url = new URL(window.location.href);
-    url.pathname = '/';
+    url.pathname = '/app';
     url.searchParams.set('panelTab', 'references');
     if (nodeId) {
       url.searchParams.set('mapNode', nodeId);

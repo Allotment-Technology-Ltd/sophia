@@ -2,17 +2,24 @@ import type { PassType } from './passes';
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from './references';
 import type { ConstitutionalCheck } from './constitution';
 import type { ReasoningEvaluation } from './verification';
+import type { ModelProvider, ReasoningProvider } from './providers';
 
 export interface AnalyseRequest {
   query: string;
   lens?: string;
   depth?: 'quick' | 'standard' | 'deep';
-  model_provider?: 'auto' | 'vertex' | 'anthropic';
+  model_provider?: ModelProvider;
   model_id?: string;
   domain_mode?: 'auto' | 'manual';
   domain?: 'ethics' | 'philosophy_of_mind';
   resource_mode?: 'standard' | 'expanded';
   user_links?: string[];
+  link_preferences?: Array<{
+    url: string;
+    ingest_selected: boolean;
+    ingest_visibility: 'public_shared' | 'private_user_only';
+    acknowledge_public_share?: boolean;
+  }>;
   queue_for_nightly_ingest?: boolean;
   reuse?: {
     from_depth: 'quick' | 'standard';
@@ -25,7 +32,7 @@ export interface AnalyseRequest {
 export interface PassStartEvent {
   type: 'pass_start';
   pass: PassType;
-  model_provider?: 'vertex' | 'anthropic';
+  model_provider?: ReasoningProvider;
   model_id?: string;
 }
 
@@ -67,17 +74,37 @@ export interface MetadataEvent {
   selected_domain_mode?: 'auto' | 'manual';
   selected_domain?: 'ethics' | 'philosophy_of_mind';
   depth_mode?: 'quick' | 'standard' | 'deep';
-  selected_model_provider?: 'auto' | 'vertex' | 'anthropic';
+  selected_model_provider?: ModelProvider;
   selected_model_id?: string;
   resource_mode?: 'standard' | 'expanded';
   user_links_count?: number;
   runtime_links_processed?: number;
   nightly_queue_enqueued?: number;
+  billing_tier?: 'free' | 'pro' | 'premium';
+  billing_status?: 'active' | 'trialing' | 'past_due' | 'canceled' | 'inactive';
+  billing_currency?: 'GBP' | 'USD';
+  entitlement_month_key?: string;
+  ingestion_public_used?: number;
+  ingestion_public_remaining?: number;
+  ingestion_private_used?: number;
+  ingestion_private_remaining?: number;
+  ingestion_selected_count?: number;
+  byok_wallet_currency?: 'GBP' | 'USD';
+  byok_wallet_available_cents?: number;
+  byok_fee_estimated_cents?: number;
+  byok_fee_charged_cents?: number;
+  byok_fee_charge_status?:
+    | 'not_applicable'
+    | 'pending'
+    | 'shadow'
+    | 'charged'
+    | 'skipped'
+    | 'insufficient';
   query_run_id?: string;
   model_cost_breakdown?: {
     total_estimated_cost_usd: number;
     by_model: Array<{
-      provider: 'vertex' | 'anthropic';
+      provider: ReasoningProvider;
       model: string;
       passes: string[];
       input_tokens: number;

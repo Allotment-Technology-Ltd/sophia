@@ -1,10 +1,12 @@
 <script lang="ts">
+  import { getModelProviderLabel, type ModelProvider } from '$lib/types/providers';
+
   export interface HistoryEntry {
     id: string;
     question: string;
     timestamp: Date;
     passCount: number; // 1–3 passes completed
-    modelProvider?: 'auto' | 'vertex' | 'anthropic';
+    modelProvider?: ModelProvider;
     modelId?: string;
     depthMode?: 'quick' | 'standard' | 'deep';
   }
@@ -69,7 +71,7 @@
                 <span class="item-meta-row">
                   {#if entry.modelProvider}
                     <span class="model-chip">
-                      {entry.modelProvider === 'anthropic' ? 'Claude' : entry.modelProvider === 'vertex' ? 'Gemini' : 'Auto'}
+                      {entry.modelProvider === 'auto' ? 'Auto' : getModelProviderLabel(entry.modelProvider)}
                       {#if entry.modelId}
                         <span class="model-id">{entry.modelId}</span>
                       {/if}

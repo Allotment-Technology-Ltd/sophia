@@ -1,3 +1,5 @@
+import type { ByokProvider, ModelProvider } from '$lib/types/providers';
+
 /**
  * SOPHIA — Analytics helpers
  *
@@ -21,7 +23,10 @@ type AnalyticsEvent =
         has_lens: boolean;
         lens?: string;
         depth_mode?: 'quick' | 'standard' | 'deep';
-        model_provider?: 'auto' | 'vertex' | 'anthropic';
+        query_kind?: 'new' | 'follow_up' | 'rerun';
+        credential_mode?: 'auto' | 'platform' | 'byok';
+        byok_provider?: ByokProvider;
+        model_provider?: ModelProvider;
         model_id?: string;
         domain_mode?: 'auto' | 'manual';
         domain?: string;

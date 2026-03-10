@@ -4,6 +4,7 @@ import { evaluateReasoning } from '$lib/server/reasoningEval';
 import { evaluateConstitutionWithTelemetry } from '$lib/server/constitution/evaluator';
 import type { PassType } from '$lib/types/passes';
 import type { VerificationRequest, VerificationResult } from '$lib/types/verification';
+import type { ProviderApiKeys } from '$lib/server/byok/types';
 
 export interface VerificationPipelineCallbacks {
   onPassStart?(pass: PassType): void;
@@ -41,6 +42,7 @@ export interface VerificationPipelineCallbacks {
 export interface VerificationPipelineOptions {
   includePassOutputs?: boolean;
   callbacks?: VerificationPipelineCallbacks;
+  providerApiKeys?: ProviderApiKeys;
 }
 
 export interface VerificationPipelineResult {
@@ -112,24 +114,33 @@ export async function runVerificationPipeline(
       onError(error) {
         throw new Error(error);
       }
+    }, {
+      providerApiKeys: options.providerApiKeys
     });
   }
 
-  const extraction = await extractClaims(request);
+  const extraction = await extractClaims(request, {
+    providerApiKeys: options.providerApiKeys
+  });
   callbacks?.onExtractionComplete?.({
     claims: extraction.claims,
     relations: extraction.relations,
     metadata: extraction.metadata
   });
 
-  const reasoningQuality = await evaluateReasoning(extraction.claims, extraction.relations, request);
+  const reasoningQuality = await evaluateReasoning(extraction.claims, extraction.relations, request, {
+    providerApiKeys: options.providerApiKeys
+  });
   callbacks?.onReasoningScores?.(reasoningQuality);
 
   const constitutionStartedAt = Date.now();
   const constitutionResult = await evaluateConstitutionWithTelemetry(
     extraction.claims,
     extraction.relations,
-    inputText
+    inputText,
+    {
+      providerApiKeys: options.providerApiKeys
+    }
   );
   const constitutionDurationMs = Date.now() - constitutionStartedAt;
   callbacks?.onConstitutionCheck?.(constitutionResult.check);

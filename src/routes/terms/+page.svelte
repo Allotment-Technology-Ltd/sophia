@@ -1,164 +1,200 @@
+<script lang="ts">
+  import {
+    LEGAL_CHANGELOG_PATH,
+    LEGAL_EFFECTIVE_DATE,
+    LEGAL_VERSION
+  } from '$lib/constants/legal';
+</script>
+
 <svelte:head>
-  <title>Terms of Service — SOPHIA</title>
-  <meta name="description" content="Terms of service for SOPHIA, the philosophical reasoning engine by Allotment Technology Ltd." />
+  <title>Terms of Service - SOPHIA</title>
+  <meta
+    name="description"
+    content="Terms of service for SOPHIA, including subscription, top-up, BYOK handling fees, and source contribution rules."
+  />
 </svelte:head>
 
 <div class="legal-page">
   <header class="legal-header">
     <a href="/" class="back-link">← Back to SOPHIA</a>
     <h1>Terms of Service</h1>
-    <p class="meta">Allotment Technology Ltd · Last updated: 9 March 2026</p>
+    <p class="meta">
+      Allotment Technology Ltd · Version {LEGAL_VERSION} · Effective {LEGAL_EFFECTIVE_DATE}
+    </p>
+    <p class="meta">
+      <a href={LEGAL_CHANGELOG_PATH}>View legal changelog</a>
+    </p>
   </header>
 
   <div class="legal-body">
-
     <section>
-      <h2>1. Agreement</h2>
+      <h2>1. Agreement and Eligibility</h2>
       <p>
-        By creating an account or using SOPHIA, you agree to these Terms of Service. If you do not
-        agree, do not use the service.
+        By using SOPHIA, you agree to these Terms. If you do not agree, do not use the service.
+        You must be at least 18 years old.
       </p>
       <p>
-        SOPHIA is operated by <strong>Allotment Technology Ltd</strong>, a company registered in
-        England and Wales. Contact: <a href="mailto:admin@usesophia.app">admin@usesophia.app</a>.
+        Operator: <strong>Allotment Technology Ltd</strong>. Contact:
+        <a href="mailto:admin@usesophia.app">admin@usesophia.app</a>
       </p>
     </section>
 
     <section>
-      <h2>2. Description of service</h2>
+      <h2>2. Service Overview</h2>
       <p>
-        SOPHIA is a structured philosophical reasoning engine. It uses a dialectical three-pass
-        architecture — Analysis, Critique, and Synthesis — backed by a curated philosophical
-        knowledge graph to produce reasoned responses to philosophical questions.
-      </p>
-      <p>
-        SOPHIA is a research prototype. Outputs are intended to support philosophical inquiry and
-        should not be treated as professional advice (legal, medical, financial, or otherwise).
+        SOPHIA is a consumer AI reasoning product for philosophical analysis. Outputs are for
+        research and learning purposes and are not professional advice.
       </p>
     </section>
 
     <section>
-      <h2>3. Eligibility</h2>
+      <h2>3. Subscription Plans and Entitlements</h2>
       <p>
-        You must be at least 18 years old to use SOPHIA. By signing in, you confirm you meet this
-        requirement. We reserve the right to terminate accounts where this requirement is not met.
-      </p>
-    </section>
-
-    <section>
-      <h2>4. Your account</h2>
-      <p>
-        You sign in using Google via Firebase Authentication. You are responsible for maintaining
-        the security of your Google account. We are not liable for any loss or damage arising from
-        unauthorised access to your account.
-      </p>
-    </section>
-
-    <section>
-      <h2>5. Acceptable use</h2>
-      <p>You agree not to use SOPHIA to:</p>
-      <ul>
-        <li>Generate, distribute, or promote content that is illegal, harmful, or abusive</li>
-        <li>Attempt to extract, replicate, or reverse-engineer the knowledge graph, prompts, or
-          system architecture through automated means</li>
-        <li>Circumvent rate limits, access controls, or authentication mechanisms</li>
-        <li>Use the service in any way that violates applicable laws or regulations</li>
-        <li>Submit queries that are designed to elicit harmful outputs or to manipulate the reasoning
-          engine in bad faith</li>
-      </ul>
-      <p>
-        We reserve the right to suspend or terminate access for any violation of these terms.
-      </p>
-    </section>
-
-    <section>
-      <h2>6. Rate limits</h2>
-      <p>
-        Free access is subject to a limit of 20 analyses per user per day. We reserve the right to
-        adjust this limit at any time with reasonable notice.
-      </p>
-    </section>
-
-    <section>
-      <h2>7. Intellectual property</h2>
-      <p>
-        The SOPHIA application, including its source code, prompt architecture, reasoning engine,
-        and design system, is published under the MIT licence. The curated philosophical knowledge
-        base is derived from copyrighted sources and is not redistributed.
-      </p>
-      <p>
-        Queries you submit are your own content. By submitting a query, you grant Allotment
-        Technology Ltd a limited, non-exclusive licence to process and store that query for the
-        purpose of providing the service, including caching and history features.
-      </p>
-    </section>
-
-    <section>
-      <h2>8. Disclaimers</h2>
-      <p>
-        SOPHIA is provided "as is" without warranty of any kind. We do not warrant that:
+        SOPHIA offers Free, Pro, and Premium plans. Plan features and limits may change with notice.
       </p>
       <ul>
-        <li>The service will be uninterrupted, error-free, or available at all times</li>
-        <li>Outputs will be accurate, complete, or suitable for any particular purpose</li>
-        <li>The knowledge graph is free from errors, omissions, or bias</li>
+        <li><strong>Free</strong>: limited usage and ingestion entitlements.</li>
+        <li><strong>Pro</strong>: increased limits and access to paid features.</li>
+        <li><strong>Premium</strong>: further increased limits and premium capabilities.</li>
       </ul>
       <p>
-        Outputs generated by SOPHIA are the product of language models and a structured knowledge
-        graph. They reflect the positions of the sources ingested, the design of the prompts, and
-        the limitations of current AI systems. They should be read critically, not as authoritative
-        philosophical verdicts.
+        Entitlements may depend on billing status and may reset monthly.
       </p>
     </section>
 
     <section>
-      <h2>9. Limitation of liability</h2>
+      <h2>4. Billing, Auto-Renewal, and Price Changes</h2>
       <p>
-        To the fullest extent permitted by law, Allotment Technology Ltd shall not be liable for any
-        indirect, incidental, special, consequential, or punitive damages arising from your use of
-        SOPHIA, including but not limited to loss of data, loss of profits, or decisions made in
-        reliance on SOPHIA outputs.
+        Payments are processed by Paddle as Merchant of Record. Subscriptions auto-renew unless
+        canceled through your billing portal before renewal.
       </p>
       <p>
-        Our total liability to you for any claim arising from these terms or your use of the service
-        shall not exceed the amount you have paid to us in the 12 months preceding the claim (or
-        £50 if you have paid nothing).
+        We may change prices prospectively. Where required by law, we provide advance notice before
+        changes take effect.
       </p>
-    </section>
-
-    <section>
-      <h2>10. Termination</h2>
       <p>
-        You may stop using SOPHIA at any time. We may suspend or terminate your access at any time
-        if you violate these terms, or for operational reasons, with or without notice.
+        You are responsible for keeping payment details current.
       </p>
     </section>
 
     <section>
-      <h2>11. Changes to these terms</h2>
+      <h2>5. Top-Ups, BYOK Wallet, and Handling Fees</h2>
       <p>
-        We may update these terms as the service evolves. We will notify you of material changes via
-        the email address associated with your account. Continued use of SOPHIA after the effective
-        date of a change constitutes acceptance of the updated terms.
+        BYOK wallet top-ups are prepaid credit for handling-fee charges. On eligible non-cached BYOK
+        runs, SOPHIA may charge a handling fee derived from estimated run cost.
+      </p>
+      <p>
+        Wallet and billing ledger entries are tracked with idempotent event keys for auditability.
       </p>
     </section>
 
     <section>
-      <h2>12. Governing law</h2>
+      <h2 id="refund-policy">6. Refund Policy</h2>
       <p>
-        These terms are governed by the laws of England and Wales. Any disputes shall be subject to
-        the exclusive jurisdiction of the courts of England and Wales.
+        Payments are non-refundable except where refund rights are required by applicable law.
       </p>
     </section>
 
     <section>
-      <h2>13. Contact</h2>
+      <h2>7. Source Ingestion, Ownership, and Contribution License</h2>
+      <p>
+        You may choose ingestion visibility for submitted sources:
+      </p>
+      <ul>
+        <li><code>private_user_only</code>: source remains available only to your account.</li>
+        <li><code>public_shared</code>: source may be added to SOPHIA's shared service knowledge base.</li>
+      </ul>
+      <p>
+        For <code>public_shared</code> submissions, you grant Allotment Technology Ltd a perpetual,
+        worldwide, non-exclusive, royalty-free license to host, process, transform, and use the
+        contribution to operate and improve SOPHIA.
+      </p>
+      <p>
+        Private sources may be deleted by the owning user through supported controls. Public shared
+        sources and shared derivatives are not user-deletable once contributed.
+      </p>
+      <p>
+        You represent that you have rights to submit and share any source you ingest.
+      </p>
+    </section>
+
+    <section>
+      <h2>8. Acceptable Use and Abuse Controls</h2>
+      <p>You must not:</p>
+      <ul>
+        <li>Use SOPHIA for illegal, abusive, or harmful purposes.</li>
+        <li>Circumvent limits, billing controls, or authentication.</li>
+        <li>Automate abusive scraping, key misuse, or fraudulent top-up behavior.</li>
+        <li>Upload content you are not authorized to process or share.</li>
+      </ul>
+      <p>
+        We may rate-limit, suspend, or terminate accounts for abuse, fraud, or policy violations.
+      </p>
+    </section>
+
+    <section>
+      <h2>9. Intellectual Property</h2>
+      <p>
+        SOPHIA software and service design are protected by applicable IP law. These Terms do not
+        transfer ownership of SOPHIA IP to you.
+      </p>
+      <p>
+        You retain rights in your private submissions subject to the licenses needed to operate the
+        service.
+      </p>
+    </section>
+
+    <section>
+      <h2>10. Disclaimers</h2>
+      <p>
+        SOPHIA is provided "as is" and "as available" without warranties of uninterrupted operation,
+        accuracy, or fitness for a particular purpose.
+      </p>
+    </section>
+
+    <section>
+      <h2>11. Limitation of Liability</h2>
+      <p>
+        To the maximum extent permitted by law, Allotment Technology Ltd is not liable for indirect,
+        incidental, special, consequential, or punitive damages.
+      </p>
+      <p>
+        Aggregate liability for any claim is limited to amounts paid by you in the previous 12 months
+        (or GBP 50 if you have paid nothing), except where such limits are not permitted by law.
+      </p>
+    </section>
+
+    <section>
+      <h2>12. Suspension and Termination</h2>
+      <p>
+        You may stop using SOPHIA at any time. We may suspend or terminate access for violations,
+        abuse, fraud, legal risk, or operational reasons.
+      </p>
+    </section>
+
+    <section>
+      <h2>13. Changes to Terms</h2>
+      <p>
+        We may update these Terms. Material changes are reflected by a new legal version, effective
+        date, and changelog entry.
+      </p>
+    </section>
+
+    <section>
+      <h2>14. Governing Law</h2>
+      <p>
+        These Terms are governed by the laws of England and Wales, without prejudice to mandatory
+        consumer protections in your place of residence where applicable.
+      </p>
+    </section>
+
+    <section>
+      <h2>15. Contact</h2>
       <p>
         Allotment Technology Ltd<br />
         <a href="mailto:admin@usesophia.app">admin@usesophia.app</a>
       </p>
     </section>
-
   </div>
 </div>
 
@@ -198,7 +234,7 @@
   .meta {
     color: var(--color-muted);
     font-size: 0.875rem;
-    margin: 0;
+    margin: 0 0 0.35rem;
   }
 
   .legal-body section {

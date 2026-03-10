@@ -15,6 +15,38 @@ import type { ExtractedClaim, ExtractedRelation, ReasoningEvaluation } from '$li
 import { evaluateReasoning } from '$lib/server/reasoningEval';
 import { evaluateConstitutionWithTelemetry } from '$lib/server/constitution/evaluator';
 import { getAvailableReasoningModels } from '$lib/server/vertex';
+import { loadByokProviderApiKeys } from '$lib/server/byok/store';
+import type { ByokProvider, ProviderApiKeys } from '$lib/server/byok/types';
+import {
+  REASONING_PROVIDER_ORDER,
+  getModelProviderLabel,
+  isReasoningProvider,
+  parseByokProvider as parseSharedByokProvider,
+  parseReasoningProvider,
+  type ModelProvider
+} from '$lib/types/providers';
+import { consumePlatformBudget, type QueryKind } from '$lib/server/rateLimit';
+import {
+  consumeIngestionEntitlements,
+  getEntitlementSummary
+} from '$lib/server/billing/entitlements';
+import {
+  assertByokWalletBalance,
+  ensureWallet,
+  computeByokFeeCents,
+  debitByokHandlingFee
+} from '$lib/server/billing/wallet';
+import {
+  TIER_INGESTION_RULES,
+  type EntitlementSummary,
+  type IngestVisibilityScope
+} from '$lib/server/billing/types';
+import {
+  BILLING_FEATURE_ENABLED,
+  BYOK_WALLET_CHARGING_ENABLED,
+  BYOK_WALLET_SHADOW_MODE,
+  INGEST_VISIBILITY_MODE_ENABLED
+} from '$lib/server/billing/flags';
 import { isIP } from 'node:net';
 
 // Store only replay-relevant events — excludes high-volume pass_chunk events
@@ -32,6 +64,8 @@ type ResourceMode = 'standard' | 'expanded';
 type QueueSourceKind = 'user' | 'grounding';
 type QueueStatus = 'queued' | 'pending_review' | 'approved' | 'ingesting' | 'ingested' | 'failed' | 'rejected';
 
+type CredentialMode = 'auto' | 'platform' | 'byok';
+
 const DEFAULT_TRUSTED_INGESTION_DOMAINS = [
   'plato.stanford.edu',
   'iep.utm.edu',
@@ -45,6 +79,7 @@ const DEFAULT_TRUSTED_INGESTION_DOMAINS = [
 type QueueCandidateRollup = {
   canonicalUrl: string;
   canonicalUrlHash: string;
+  visibilityScope: IngestVisibilityScope;
   titleHint?: string;
   passHints: Set<string>;
   sourceKinds: Set<QueueSourceKind>;
@@ -52,8 +87,19 @@ type QueueCandidateRollup = {
   groundingSubmissionCount: number;
 };
 
+type LinkIngestionPreference = {
+  url: string;
+  ingest_selected: boolean;
+  ingest_visibility: IngestVisibilityScope;
+  acknowledge_public_share?: boolean;
+};
+
 type LinkQueueRow = {
   status?: QueueStatus;
+  visibility_scope?: IngestVisibilityScope;
+  owner_uid?: string | null;
+  contributor_uid?: string | null;
+  deletion_state?: string | null;
   source_kinds?: string[];
   query_run_ids?: string[];
   submitted_by_uids?: string[];
@@ -90,7 +136,7 @@ async function saveFirestoreCache(
   queryText: string,
   lens: string | undefined,
   depthMode: 'quick' | 'standard' | 'deep',
-  modelProvider: 'auto' | 'vertex' | 'anthropic',
+  modelProvider: ModelProvider,
   modelId: string | undefined,
   domainMode: 'auto' | 'manual',
   domain: 'ethics' | 'philosophy_of_mind' | undefined,
@@ -123,12 +169,13 @@ function buildQueryHash(
   query: string,
   lens?: string,
   depthMode: 'quick' | 'standard' | 'deep' = 'standard',
-  modelProvider: 'auto' | 'vertex' | 'anthropic' = 'auto',
+  modelProvider: ModelProvider = 'auto',
   modelId: string | undefined = undefined,
   domainMode: 'auto' | 'manual' = 'auto',
   domain?: 'ethics' | 'philosophy_of_mind',
   resourceMode: ResourceMode = 'standard',
   userLinks: string[] = [],
+  ingestionPreferencesKey = 'ingest:none',
   queueForNightlyIngest = false
 ): string {
   const normalized = query.trim().toLowerCase();
@@ -136,9 +183,10 @@ function buildQueryHash(
   const domainKey = domainMode === 'manual' ? (domain ?? 'unknown') : 'auto';
   const modelKey = modelId?.trim().toLowerCase() || 'auto';
   const linksKey = userLinks.join('|');
+  const ingestKey = ingestionPreferencesKey || 'ingest:none';
   const queueKey = queueForNightlyIngest ? 'queue:yes' : 'queue:no';
   return createHash('sha256').update(
-    `${normalized}::${lensKey}::${depthMode}::${modelProvider}::${modelKey}::${domainMode}::${domainKey}::${resourceMode}::${linksKey}::${queueKey}`
+    `${normalized}::${lensKey}::${depthMode}::${modelProvider}::${modelKey}::${domainMode}::${domainKey}::${resourceMode}::${linksKey}::${ingestKey}::${queueKey}`
   ).digest('hex');
 }
 
@@ -252,21 +300,171 @@ function normalizeAndValidateUserLinks(input: unknown): { links: string[]; error
   return { links: [...deduped] };
 }
 
+function parseIngestVisibility(value: unknown): IngestVisibilityScope {
+  if (typeof value !== 'string') return 'public_shared';
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'private_user_only' ? 'private_user_only' : 'public_shared';
+}
+
+function normalizeAndValidateLinkPreferences(
+  input: unknown,
+  validatedLinks: string[]
+): { preferences: LinkIngestionPreference[]; error?: string } {
+  if (input === undefined) return { preferences: [] };
+  if (!Array.isArray(input)) {
+    return { preferences: [], error: 'link_preferences must be an array' };
+  }
+
+  const allowedLinks = new Set(validatedLinks);
+  const mergedByUrl = new Map<string, LinkIngestionPreference>();
+
+  for (const item of input) {
+    if (!item || typeof item !== 'object') {
+      return { preferences: [], error: 'link_preferences entries must be objects' };
+    }
+    const candidate = item as Record<string, unknown>;
+    if (typeof candidate.url !== 'string' || !candidate.url.trim()) {
+      return { preferences: [], error: 'link_preferences.url must be a non-empty string' };
+    }
+    const canonicalUrl = canonicalizeQueueUrl(candidate.url.trim());
+    if (!canonicalUrl || !allowedLinks.has(canonicalUrl)) {
+      return {
+        preferences: [],
+        error: 'link_preferences URLs must match normalized user_links values for this request'
+      };
+    }
+
+    const pref: LinkIngestionPreference = {
+      url: canonicalUrl,
+      ingest_selected: candidate.ingest_selected === true,
+      ingest_visibility: parseIngestVisibility(candidate.ingest_visibility),
+      acknowledge_public_share: candidate.acknowledge_public_share === true
+    };
+    if (
+      pref.ingest_selected &&
+      pref.ingest_visibility === 'public_shared' &&
+      pref.acknowledge_public_share !== true
+    ) {
+      return {
+        preferences: [],
+        error:
+          'Public source ingestion requires acknowledge_public_share=true for each selected link.'
+      };
+    }
+    mergedByUrl.set(canonicalUrl, pref);
+  }
+
+  return { preferences: [...mergedByUrl.values()] };
+}
+
+function buildEffectiveLinkPreferences(
+  validatedLinks: string[],
+  explicitPreferences: LinkIngestionPreference[],
+  visibilityModeEnabled: boolean
+): LinkIngestionPreference[] {
+  if (!visibilityModeEnabled) {
+    return validatedLinks.map((url) => ({
+      url,
+      ingest_selected: true,
+      ingest_visibility: 'public_shared',
+      acknowledge_public_share: true
+    }));
+  }
+
+  const explicitByUrl = new Map(explicitPreferences.map((pref) => [pref.url, pref]));
+  return validatedLinks.map((url) => {
+    const explicit = explicitByUrl.get(url);
+    if (explicit) return explicit;
+    return {
+      url,
+      ingest_selected: false,
+      ingest_visibility: 'public_shared',
+      acknowledge_public_share: false
+    };
+  });
+}
+
+function serializeIngestionPreferences(preferences: LinkIngestionPreference[]): string {
+  if (preferences.length === 0) return 'ingest:none';
+  const sorted = [...preferences]
+    .sort((a, b) => a.url.localeCompare(b.url))
+    .map((pref) => `${pref.url}|${pref.ingest_selected ? '1' : '0'}|${pref.ingest_visibility}`);
+  return sorted.join('::');
+}
+
+function evaluateIngestionSelection(
+  summary: EntitlementSummary,
+  visibilities: IngestVisibilityScope[]
+): { allowed: boolean; reason?: string } {
+  const rules = TIER_INGESTION_RULES[summary.tier];
+  let publicUsed = summary.publicUsed;
+  let privateUsed = summary.privateUsed;
+
+  for (const visibility of visibilities) {
+    if (visibility === 'private_user_only') {
+      if (rules.privateMax === 0) {
+        return { allowed: false, reason: 'private_not_allowed' };
+      }
+      if (privateUsed >= rules.privateMax) {
+        return { allowed: false, reason: 'private_limit_reached' };
+      }
+      if (publicUsed > rules.publicMaxWhenPrivateUsed) {
+        return { allowed: false, reason: 'combo_limit_reached' };
+      }
+      privateUsed += 1;
+      continue;
+    }
+
+    const publicMax = privateUsed > 0 ? rules.publicMaxWhenPrivateUsed : rules.publicMax;
+    if (publicUsed >= publicMax) {
+      return { allowed: false, reason: 'public_limit_reached' };
+    }
+    publicUsed += 1;
+  }
+
+  return { allowed: true };
+}
+
+function formatIngestionLimitError(reason: string | undefined): string {
+  if (reason === 'private_not_allowed') {
+    return 'Private source ingestion is not available on your current plan.';
+  }
+  if (reason === 'private_limit_reached') {
+    return 'Private source ingestion limit reached for this month.';
+  }
+  if (reason === 'combo_limit_reached') {
+    return 'Public/private ingestion combination limit reached for this month.';
+  }
+  if (reason === 'public_limit_reached') {
+    return 'Public source ingestion limit reached for this month.';
+  }
+  if (reason === 'billing_inactive') {
+    return 'Your paid subscription is inactive. Please update billing to use paid ingestion limits.';
+  }
+  return 'Ingestion quota exceeded for this billing period.';
+}
+
 function buildQueueCandidateRollup(
-  userLinks: string[],
-  groundingSources: Array<{ url: string; title?: string; pass: string }>
+  links: Array<{ url: string; visibilityScope: IngestVisibilityScope }>,
+  uid: string | null
 ): Map<string, QueueCandidateRollup> {
   const byCanonicalUrl = new Map<string, QueueCandidateRollup>();
 
   const upsert = (
     url: string,
     sourceKind: QueueSourceKind,
+    visibilityScope: IngestVisibilityScope,
     titleHint?: string,
     passHint?: string
   ): void => {
     const canonicalUrl = canonicalizeQueueUrl(url);
     if (!canonicalUrl) return;
-    const existing = byCanonicalUrl.get(canonicalUrl);
+    const hashKey =
+      visibilityScope === 'private_user_only'
+        ? `private_user_only::${uid ?? 'anonymous'}::${canonicalUrl}`
+        : `public_shared::${canonicalUrl}`;
+    const canonicalUrlHash = createHash('sha256').update(hashKey).digest('hex');
+    const existing = byCanonicalUrl.get(canonicalUrlHash);
     if (existing) {
       existing.sourceKinds.add(sourceKind);
       if (sourceKind === 'user') existing.userSubmissionCount += 1;
@@ -275,9 +473,10 @@ function buildQueueCandidateRollup(
       if (passHint?.trim()) existing.passHints.add(passHint.trim());
       return;
     }
-    byCanonicalUrl.set(canonicalUrl, {
+    byCanonicalUrl.set(canonicalUrlHash, {
       canonicalUrl,
-      canonicalUrlHash: createHash('sha256').update(canonicalUrl).digest('hex'),
+      canonicalUrlHash,
+      visibilityScope,
       titleHint: titleHint?.trim() || undefined,
       passHints: new Set(passHint?.trim() ? [passHint.trim()] : []),
       sourceKinds: new Set([sourceKind]),
@@ -286,11 +485,8 @@ function buildQueueCandidateRollup(
     });
   };
 
-  for (const url of userLinks) {
-    upsert(url, 'user');
-  }
-  for (const source of groundingSources) {
-    upsert(source.url, 'grounding', source.title, source.pass);
+  for (const link of links) {
+    upsert(link.url, 'user', link.visibilityScope);
   }
 
   return byCanonicalUrl;
@@ -316,9 +512,11 @@ async function upsertQueueCandidate(
   queryRunId: string
 ): Promise<void> {
   const requestedStatus = selectQueueStatusForUrl(candidate.canonicalUrl);
+  const ownerUid = candidate.visibilityScope === 'private_user_only' ? uid : null;
+  const contributorUid = candidate.visibilityScope === 'public_shared' ? uid : null;
   const selectExisting = async (): Promise<LinkQueueRow | null> => {
     const rows = await dbQuery<LinkQueueRow[]>(
-      `SELECT status, source_kinds, query_run_ids, submitted_by_uids, pass_hints, user_submission_count, grounding_submission_count, total_submission_count
+      `SELECT status, visibility_scope, owner_uid, contributor_uid, deletion_state, source_kinds, query_run_ids, submitted_by_uids, pass_hints, user_submission_count, grounding_submission_count, total_submission_count
        FROM link_ingestion_queue
        WHERE canonical_url_hash = $canonical_url_hash
        LIMIT 1`,
@@ -337,6 +535,10 @@ async function upsertQueueCandidate(
     await dbQuery(
       `UPDATE link_ingestion_queue
        SET
+         visibility_scope = if visibility_scope = NONE then $visibility_scope else visibility_scope end,
+         owner_uid = if $owner_uid = NONE then owner_uid else $owner_uid end,
+         contributor_uid = if $contributor_uid = NONE then contributor_uid else $contributor_uid end,
+         deletion_state = 'active',
          source_kinds = $source_kinds,
          query_run_ids = $query_run_ids,
          submitted_by_uids = $submitted_by_uids,
@@ -353,6 +555,9 @@ async function upsertQueueCandidate(
        WHERE canonical_url_hash = $canonical_url_hash`,
       {
         canonical_url_hash: candidate.canonicalUrlHash,
+        visibility_scope: candidate.visibilityScope,
+        owner_uid: ownerUid,
+        contributor_uid: contributorUid,
         source_kinds: mergeUnique(existing.source_kinds, [...candidate.sourceKinds]),
         query_run_ids: mergeUnique(existing.query_run_ids, [queryRunId]),
         submitted_by_uids: uid ? mergeUnique(existing.submitted_by_uids, [uid]) : (existing.submitted_by_uids ?? []),
@@ -379,6 +584,10 @@ async function upsertQueueCandidate(
         canonical_url: $canonical_url,
         canonical_url_hash: $canonical_url_hash,
         hostname: $hostname,
+        visibility_scope: $visibility_scope,
+        owner_uid: $owner_uid,
+        contributor_uid: $contributor_uid,
+        deletion_state: 'active',
         status: $status,
         source_kinds: $source_kinds,
         query_run_ids: $query_run_ids,
@@ -402,6 +611,9 @@ async function upsertQueueCandidate(
         canonical_url: candidate.canonicalUrl,
         canonical_url_hash: candidate.canonicalUrlHash,
         hostname: new URL(candidate.canonicalUrl).hostname,
+        visibility_scope: candidate.visibilityScope,
+        owner_uid: ownerUid,
+        contributor_uid: contributorUid,
         status: requestedStatus,
         source_kinds: [...candidate.sourceKinds],
         query_run_ids: [queryRunId],
@@ -426,10 +638,9 @@ async function upsertQueueCandidate(
 async function enqueueDeferredLinkIngestion(params: {
   uid: string | null;
   queryRunId: string;
-  userLinks: string[];
-  groundingSources: Array<{ url: string; title?: string; pass: string }>;
+  links: Array<{ url: string; visibilityScope: IngestVisibilityScope }>;
 }): Promise<number> {
-  const candidates = buildQueueCandidateRollup(params.userLinks, params.groundingSources);
+  const candidates = buildQueueCandidateRollup(params.links, params.uid);
   if (candidates.size === 0) return 0;
 
   let successfulUpserts = 0;
@@ -490,7 +701,7 @@ type QueryCacheRow = {
   query_text: string;
   lens?: string;
   depth_mode?: 'quick' | 'standard' | 'deep';
-  model_provider?: 'auto' | 'vertex' | 'anthropic';
+  model_provider?: ModelProvider;
   model_id?: string;
   domain_mode?: 'auto' | 'manual';
   domain?: 'ethics' | 'philosophy_of_mind';
@@ -559,20 +770,74 @@ function mapRelationsToExtracted(bundles: RelationBundle[]): ExtractedRelation[]
   return relations;
 }
 
+function parseCredentialMode(value: unknown): CredentialMode {
+  if (typeof value !== 'string') return 'auto';
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'platform' || normalized === 'byok') return normalized;
+  return 'auto';
+}
+
+function parseByokProvider(value: unknown): ByokProvider | undefined {
+  if (typeof value !== 'string') return undefined;
+  return parseSharedByokProvider(value);
+}
+
+function parseModelProvider(value: unknown): ModelProvider | undefined {
+  if (typeof value !== 'string') return 'auto';
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'auto') return 'auto';
+  return parseReasoningProvider(normalized);
+}
+
+function parseQueryKind(value: unknown): QueryKind {
+  if (typeof value !== 'string') return 'new';
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'follow_up') return 'follow_up';
+  if (normalized === 'rerun') return 'rerun';
+  return 'new';
+}
+
+function selectEffectiveProviderApiKeys(
+  allByokKeys: ProviderApiKeys,
+  mode: CredentialMode,
+  byokProvider?: ByokProvider
+): ProviderApiKeys {
+  if (mode === 'platform') return {};
+  if (mode === 'byok' && byokProvider) {
+    const key = allByokKeys[byokProvider];
+    return key ? { [byokProvider]: key } : {};
+  }
+  return allByokKeys;
+}
+
 export const POST: RequestHandler = async ({ request, locals }) => {
   // A2/A3: uid is guaranteed non-null here — hooks.server.ts already verified the Bearer token
   const uid = locals.user?.uid ?? null;
+  let providerApiKeys: ProviderApiKeys = {};
+  if (uid) {
+    try {
+      providerApiKeys = await loadByokProviderApiKeys(uid);
+    } catch (err) {
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn('[BYOK] Failed to load provider keys for analyse route:', err instanceof Error ? err.message : String(err));
+      }
+    }
+  }
 
   let body: {
     query?: string;
     lens?: string;
     depth?: 'quick' | 'standard' | 'deep';
-    model_provider?: 'auto' | 'vertex' | 'anthropic';
+    query_kind?: 'new' | 'follow_up' | 'rerun';
+    credential_mode?: CredentialMode;
+    byok_provider?: ByokProvider;
+    model_provider?: ModelProvider;
     model_id?: string;
     domain_mode?: 'auto' | 'manual';
     domain?: 'ethics' | 'philosophy_of_mind';
     resource_mode?: ResourceMode;
     user_links?: string[];
+    link_preferences?: LinkIngestionPreference[];
     queue_for_nightly_ingest?: boolean;
     reuse?: {
       from_depth?: 'quick' | 'standard';
@@ -589,13 +854,22 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   const { query, lens } = body;
   const depthMode = body.depth ?? 'standard';
-  const modelProvider = body.model_provider ?? 'auto';
+  const queryKind = parseQueryKind(body.query_kind);
+  const credentialMode = parseCredentialMode(body.credential_mode);
+  const byokProvider = parseByokProvider(body.byok_provider);
+  const parsedModelProvider = parseModelProvider(body.model_provider);
+  if (!parsedModelProvider) {
+    return json({ error: `model_provider must be one of auto|${REASONING_PROVIDER_ORDER.join('|')}` }, { status: 400 });
+  }
+  const modelProvider = parsedModelProvider;
   const modelId = body.model_id?.trim() || undefined;
   const domainMode = body.domain_mode ?? 'auto';
   const domain = body.domain;
   const requestedResourceMode = body.resource_mode ?? 'standard';
   const requestedNightlyQueue = body.queue_for_nightly_ingest;
   const reuse = body.reuse;
+  const effectiveProviderApiKeys = selectEffectiveProviderApiKeys(providerApiKeys, credentialMode, byokProvider);
+  const usingByok = Object.keys(effectiveProviderApiKeys).some((provider) => isReasoningProvider(provider));
   const domainOverrideEnabled =
     process.env.ENABLE_DOMAIN_OVERRIDE_UI?.toLowerCase() !== 'false';
 
@@ -624,27 +898,87 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ error: normalizedUserLinksResult.error }, { status: 400 });
   }
   const normalizedUserLinks = normalizedUserLinksResult.links;
-  const queueForNightlyIngest = normalizedUserLinks.length > 0 || requestedNightlyQueue === true;
+  const linkPreferencesResult = normalizeAndValidateLinkPreferences(
+    body.link_preferences,
+    normalizedUserLinks
+  );
+  if (linkPreferencesResult.error) {
+    return json({ error: linkPreferencesResult.error }, { status: 400 });
+  }
+  const effectiveLinkPreferences = buildEffectiveLinkPreferences(
+    normalizedUserLinks,
+    linkPreferencesResult.preferences,
+    INGEST_VISIBILITY_MODE_ENABLED
+  );
+  const selectedIngestionLinks = effectiveLinkPreferences
+    .filter((pref) => pref.ingest_selected)
+    .map((pref) => ({
+      url: pref.url,
+      visibilityScope: pref.ingest_visibility
+    }));
+  const queueForNightlyIngest = INGEST_VISIBILITY_MODE_ENABLED
+    ? selectedIngestionLinks.length > 0
+    : normalizedUserLinks.length > 0 || requestedNightlyQueue === true;
+  const ingestionPreferenceKey = serializeIngestionPreferences(effectiveLinkPreferences);
   const resourceMode: ResourceMode = normalizedUserLinks.length > 0 ? 'expanded' : requestedResourceMode;
 
   if (!['quick', 'standard', 'deep'].includes(depthMode)) {
     return json({ error: 'depth must be one of quick|standard|deep' }, { status: 400 });
   }
-  if (!['auto', 'vertex', 'anthropic'].includes(modelProvider)) {
-    return json({ error: 'model_provider must be one of auto|vertex|anthropic' }, { status: 400 });
+  if (credentialMode === 'byok' && byokProvider && !isReasoningProvider(byokProvider)) {
+    return json({ error: `${byokProvider} keys are not used for reasoning model runs yet.` }, { status: 400 });
   }
-  if (modelId && modelProvider === 'auto') {
-    return json({ error: 'model_provider must be vertex|anthropic when model_id is provided' }, { status: 400 });
+  if (credentialMode === 'byok' && !usingByok) {
+    return json({ error: 'BYOK credential mode selected, but no active BYOK key is configured for the selected provider.' }, { status: 400 });
   }
-  if (modelId) {
-    const available = getAvailableReasoningModels();
-    const exists = available.some((option) => option.id === modelId && option.provider === modelProvider);
-    if (!exists) {
-      return json({ error: `model_id ${modelId} is not available for provider ${modelProvider}` }, { status: 400 });
+  if (depthMode === 'deep' && !usingByok) {
+    return json({ error: 'Deep searches require an active BYOK key. Select your key from Settings and run again.' }, { status: 403 });
+  }
+  if (credentialMode === 'platform' && modelProvider !== 'auto' && modelProvider !== 'vertex') {
+    const providerLabel = getModelProviderLabel(modelProvider);
+    return json(
+      { error: `${providerLabel} models are BYOK only. Select your ${providerLabel} key to run this model.` },
+      { status: 400 }
+    );
+  }
+  if (credentialMode === 'byok' && byokProvider && modelProvider !== 'auto' && modelProvider !== byokProvider) {
+    return json(
+      { error: `Selected BYOK provider is ${byokProvider}, so model_provider must be ${byokProvider} or auto.` },
+      { status: 400 }
+    );
+  }
+  if (credentialMode === 'byok' && modelProvider !== 'auto') {
+    const hasRequestedProviderKey = !!effectiveProviderApiKeys[modelProvider];
+    if (!hasRequestedProviderKey) {
+      return json(
+        { error: `No active BYOK key is configured for provider ${modelProvider}.` },
+        { status: 400 }
+      );
     }
   }
-  if (modelProvider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
-    return json({ error: 'Anthropic provider requested but ANTHROPIC_API_KEY is not configured' }, { status: 400 });
+  const effectiveModelProvider: ModelProvider =
+    modelProvider === 'auto' && credentialMode === 'byok' && byokProvider && isReasoningProvider(byokProvider)
+      ? byokProvider
+      : modelProvider;
+
+  if (modelId && modelProvider === 'auto') {
+    return json({ error: `model_provider must be one of ${REASONING_PROVIDER_ORDER.join('|')} when model_id is provided` }, { status: 400 });
+  }
+  if (effectiveModelProvider !== 'auto') {
+    const available = getAvailableReasoningModels({
+      providerApiKeys: effectiveProviderApiKeys,
+      includePlatformProviders: credentialMode !== 'byok',
+      allowedProviders: [effectiveModelProvider]
+    });
+    if (available.length === 0) {
+      return json({ error: `No active key is configured for provider ${effectiveModelProvider}.` }, { status: 400 });
+    }
+    if (modelId) {
+      const exists = available.some((option) => option.id === modelId && option.provider === effectiveModelProvider);
+      if (!exists) {
+        return json({ error: `model_id ${modelId} is not available for provider ${effectiveModelProvider}` }, { status: 400 });
+      }
+    }
   }
 
   if (reuse) {
@@ -682,16 +1016,64 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     queryText,
     lens,
     depthMode,
-    modelProvider,
+    effectiveModelProvider,
     modelId,
     domainMode,
     domain,
     resourceMode,
     normalizedUserLinks,
+    ingestionPreferenceKey,
     queueForNightlyIngest
   );
   const constitutionInAnalyseEnabled =
     process.env.ENABLE_CONSTITUTION_IN_ANALYSE?.toLowerCase() === 'true';
+  const billingEnabled = BILLING_FEATURE_ENABLED;
+  const byokChargingEnabled = billingEnabled && BYOK_WALLET_CHARGING_ENABLED && usingByok;
+  const byokShadowMode = byokChargingEnabled && BYOK_WALLET_SHADOW_MODE;
+
+  if (
+    selectedIngestionLinks.some((link) => link.visibilityScope === 'private_user_only') &&
+    !uid
+  ) {
+    return json(
+      { error: 'Authentication is required for private source ingestion.' },
+      { status: 401 }
+    );
+  }
+
+  let entitlementSummarySnapshot: EntitlementSummary | null = null;
+  let walletSnapshot: Awaited<ReturnType<typeof ensureWallet>> | null = null;
+
+  if (uid && billingEnabled) {
+    try {
+      [entitlementSummarySnapshot, walletSnapshot] = await Promise.all([
+        getEntitlementSummary(uid),
+        ensureWallet(uid)
+      ]);
+    } catch (err) {
+      console.warn(
+        '[BILLING] Failed to load billing snapshots for analyse:',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+
+  if (uid && selectedIngestionLinks.length > 0 && entitlementSummarySnapshot) {
+    const preview = evaluateIngestionSelection(
+      entitlementSummarySnapshot,
+      selectedIngestionLinks.map((link) => link.visibilityScope)
+    );
+    if (!preview.allowed) {
+      return json(
+        {
+          error: formatIngestionLimitError(preview.reason),
+          reason: preview.reason,
+          entitlements: entitlementSummarySnapshot
+        },
+        { status: 429 }
+      );
+    }
+  }
 
   let cachedEvents: SSEEvent[] | null = null;
   let cacheHit = false;
@@ -751,6 +1133,59 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
   } // end if (!cachedEvents)
 
+  if (!cachedEvents && uid && byokChargingEnabled && !byokShadowMode) {
+    const walletCheck = await assertByokWalletBalance(uid);
+    if (!walletCheck.ok) {
+      return json(
+        {
+          error:
+            'Insufficient BYOK wallet balance for handling fees. Please top up your wallet to continue.',
+          required_cents: walletCheck.requiredCents,
+          available_cents: walletCheck.availableCents
+        },
+        { status: 402 }
+      );
+    }
+    walletSnapshot = {
+      availableCents: walletCheck.availableCents,
+      currency: walletSnapshot?.currency ?? 'GBP'
+    };
+  }
+
+  if (process.env.NODE_ENV !== 'test' && !cachedEvents && uid && !usingByok) {
+    const budget = await consumePlatformBudget(uid, {
+      depthMode,
+      queryKind
+    });
+    if (!budget.allowed) {
+      if (budget.reason === 'deep_requires_byok') {
+        return json({ error: 'Deep searches require an active BYOK key.' }, { status: 403 });
+      }
+      if (budget.reason === 'standard_limit_reached') {
+        return json(
+          {
+            error: 'Daily standard-search limit reached (3). Add BYOK for additional standard/deep runs.'
+          },
+          { status: 429 }
+        );
+      }
+      if (budget.reason === 'follow_up_limit_reached') {
+        return json(
+          {
+            error: 'Follow-up limit reached for your current standard runs. Start a new standard run or add BYOK.'
+          },
+          { status: 429 }
+        );
+      }
+      return json(
+        {
+          error: 'Daily platform token budget reached. Add BYOK to continue running queries today.'
+        },
+        { status: 429 }
+      );
+    }
+  }
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -805,6 +1240,27 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       const nightlyIngestionEnabled =
         process.env.ENABLE_NIGHTLY_LINK_INGESTION?.toLowerCase() !== 'false';
       let queuePreviewCount = 0;
+      let latestQueueCommitCount = 0;
+      let latestModelCostBreakdown:
+        | {
+            total_estimated_cost_usd: number;
+          }
+        | undefined;
+      let byokEstimatedFeeCents = 0;
+      let byokChargedFeeCents = 0;
+      let byokFeeChargeStatus:
+        | 'not_applicable'
+        | 'pending'
+        | 'shadow'
+        | 'charged'
+        | 'skipped'
+        | 'insufficient' = usingByok
+        ? byokChargingEnabled
+          ? byokShadowMode
+            ? 'shadow'
+            : 'pending'
+          : 'skipped'
+        : 'not_applicable';
       const { block: externalContextBlock, processedCount: runtimeLinksProcessed } =
         await buildRuntimeExternalContext(normalizedUserLinks, resourceMode);
 
@@ -887,10 +1343,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
                   retrieval_degraded: retrieval.retrieval_degraded
                 }
               : undefined;
+            latestModelCostBreakdown = modelCostBreakdown
+              ? {
+                  total_estimated_cost_usd: modelCostBreakdown.total_estimated_cost_usd
+                }
+              : undefined;
+            byokEstimatedFeeCents = computeByokFeeCents(
+              latestModelCostBreakdown?.total_estimated_cost_usd ?? 0
+            );
             if (queueForNightlyIngest && nightlyIngestionEnabled) {
               queuePreviewCount = buildQueueCandidateRollup(
-                normalizedUserLinks,
-                groundingSources
+                selectedIngestionLinks,
+                uid
               ).size;
             } else {
               queuePreviewCount = 0;
@@ -922,8 +1386,30 @@ export const POST: RequestHandler = async ({ request, locals }) => {
               user_links_count: normalizedUserLinks.length,
               runtime_links_processed: runtimeLinksProcessed,
               nightly_queue_enqueued: queuePreviewCount,
+              ...(entitlementSummarySnapshot
+                ? {
+                    billing_tier: entitlementSummarySnapshot.tier,
+                    billing_status: entitlementSummarySnapshot.status,
+                    billing_currency: entitlementSummarySnapshot.currency,
+                    entitlement_month_key: entitlementSummarySnapshot.monthKey,
+                    ingestion_public_used: entitlementSummarySnapshot.publicUsed,
+                    ingestion_public_remaining: entitlementSummarySnapshot.publicRemaining,
+                    ingestion_private_used: entitlementSummarySnapshot.privateUsed,
+                    ingestion_private_remaining: entitlementSummarySnapshot.privateRemaining,
+                    ingestion_selected_count: selectedIngestionLinks.length
+                  }
+                : {}),
+              ...(walletSnapshot
+                ? {
+                    byok_wallet_currency: walletSnapshot.currency,
+                    byok_wallet_available_cents: walletSnapshot.availableCents
+                  }
+                : {}),
+              byok_fee_estimated_cents: byokEstimatedFeeCents,
+              byok_fee_charged_cents: byokChargedFeeCents,
+              byok_fee_charge_status: byokFeeChargeStatus,
               depth_mode: depthMode,
-              selected_model_provider: modelProvider,
+              selected_model_provider: effectiveModelProvider,
               selected_model_id: modelId,
               query_run_id: queryRunId
             });
@@ -934,12 +1420,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         }, {
           lens,
           depthMode,
-          modelProvider,
+          modelProvider: effectiveModelProvider,
           modelId,
           domainMode,
           domain,
+          viewerUid: uid,
           queryRunId,
-          reuse: normalizedReuse
+          reuse: normalizedReuse,
+          providerApiKeys: effectiveProviderApiKeys
         });
 
         const claimsAll = (['analysis', 'critique', 'synthesis'] as const)
@@ -960,7 +1448,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             const reasoningQuality: ReasoningEvaluation = await evaluateReasoning(
               extractedClaims,
               extractedRelations,
-              { text: queryText }
+              {
+                text: queryText
+              },
+              { providerApiKeys: effectiveProviderApiKeys }
             );
             sendEventWithCapture({
               type: 'reasoning_quality',
@@ -994,7 +1485,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
               const constitution = await evaluateConstitutionWithTelemetry(
                 cumulativeClaims,
                 cumulativeRelations,
-                queryText
+                queryText,
+                { providerApiKeys: effectiveProviderApiKeys }
               );
               const currentViolationIds = new Set(
                 constitution.check.violated.map((rule) => rule.rule_id)
@@ -1068,7 +1560,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
               text: queryText
             },
             {
-              includePassOutputs: false
+              includePassOutputs: false,
+              providerApiKeys: effectiveProviderApiKeys
             }
           );
 
@@ -1089,27 +1582,113 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         // Persist cache only for successful runs (metadata present, no error event)
         const hasErrorEvent = replayEvents.some((event) => event.type === 'error');
         const hasMetadataEvent = replayEvents.some((event) => event.type === 'metadata');
+        const metadataEvent = replayEvents.find((event) => event.type === 'metadata') as
+          | Record<string, unknown>
+          | undefined;
+
+        const patchMetadataEvent = (patch: Record<string, unknown>): void => {
+          if (!metadataEvent) return;
+          Object.assign(metadataEvent, patch);
+        };
 
         if (!hasErrorEvent && hasMetadataEvent) {
-          if (queueForNightlyIngest && nightlyIngestionEnabled) {
-            const enqueued = await enqueueDeferredLinkIngestion({
+          if (queueForNightlyIngest && nightlyIngestionEnabled && uid && selectedIngestionLinks.length > 0) {
+            const entitlementConsume = await consumeIngestionEntitlements(
               uid,
-              queryRunId,
-              userLinks: normalizedUserLinks,
-              groundingSources
-            });
-            if (enqueued !== queuePreviewCount) {
-              console.log('[QUEUE] enqueue count mismatch', {
-                preview: queuePreviewCount,
-                committed: enqueued,
+              selectedIngestionLinks.map((link) => link.visibilityScope)
+            );
+            if (entitlementConsume.allowed) {
+              entitlementSummarySnapshot = entitlementConsume.summary;
+              latestQueueCommitCount = await enqueueDeferredLinkIngestion({
+                uid,
+                queryRunId,
+                links: selectedIngestionLinks
+              });
+            } else {
+              latestQueueCommitCount = 0;
+              console.warn('[QUEUE] entitlement check failed at queue commit', {
+                reason: entitlementConsume.reason,
                 queryRunId
               });
             }
+          } else {
+            latestQueueCommitCount = 0;
           }
+
+          if (latestQueueCommitCount !== queuePreviewCount) {
+            console.log('[QUEUE] enqueue count mismatch', {
+              preview: queuePreviewCount,
+              committed: latestQueueCommitCount,
+              queryRunId
+            });
+          }
+
+          patchMetadataEvent({
+            nightly_queue_enqueued: latestQueueCommitCount,
+            ...(entitlementSummarySnapshot
+              ? {
+                  billing_tier: entitlementSummarySnapshot.tier,
+                  billing_status: entitlementSummarySnapshot.status,
+                  billing_currency: entitlementSummarySnapshot.currency,
+                  entitlement_month_key: entitlementSummarySnapshot.monthKey,
+                  ingestion_public_used: entitlementSummarySnapshot.publicUsed,
+                  ingestion_public_remaining: entitlementSummarySnapshot.publicRemaining,
+                  ingestion_private_used: entitlementSummarySnapshot.privateUsed,
+                  ingestion_private_remaining: entitlementSummarySnapshot.privateRemaining,
+                  ingestion_selected_count: selectedIngestionLinks.length
+                }
+              : {})
+          });
+
+          const estimatedRunCostUsd = latestModelCostBreakdown?.total_estimated_cost_usd ?? 0;
+          byokEstimatedFeeCents = computeByokFeeCents(estimatedRunCostUsd);
+
+          if (uid && byokChargingEnabled) {
+            if (byokEstimatedFeeCents <= 0) {
+              byokFeeChargeStatus = 'skipped';
+              byokChargedFeeCents = 0;
+            } else if (byokShadowMode) {
+              byokFeeChargeStatus = 'shadow';
+              byokChargedFeeCents = 0;
+            } else {
+              const byokCharge = await debitByokHandlingFee({
+                uid,
+                queryRunId,
+                estimatedRunCostUsd,
+                currency: walletSnapshot?.currency
+              });
+              byokChargedFeeCents = byokCharge.charged ? byokCharge.amountCents : 0;
+              byokFeeChargeStatus = byokCharge.insufficient
+                ? 'insufficient'
+                : byokCharge.charged
+                  ? 'charged'
+                  : 'skipped';
+              walletSnapshot = {
+                availableCents: byokCharge.availableCents,
+                currency: walletSnapshot?.currency ?? 'GBP'
+              };
+            }
+          } else if (usingByok) {
+            byokFeeChargeStatus = byokChargingEnabled ? 'pending' : 'skipped';
+          } else {
+            byokFeeChargeStatus = 'not_applicable';
+          }
+
+          patchMetadataEvent({
+            byok_fee_estimated_cents: byokEstimatedFeeCents,
+            byok_fee_charged_cents: byokChargedFeeCents,
+            byok_fee_charge_status: byokFeeChargeStatus,
+            ...(walletSnapshot
+              ? {
+                  byok_wallet_currency: walletSnapshot.currency,
+                  byok_wallet_available_cents: walletSnapshot.availableCents
+                }
+              : {})
+          });
 
           // A4: Save to Firestore (per-user)
           if (uid) {
-            await saveFirestoreCache(uid, queryHash, queryText, lens, depthMode, modelProvider, modelId, domainMode, domain, replayEvents);
+            await saveFirestoreCache(uid, queryHash, queryText, lens, depthMode, effectiveModelProvider, modelId, domainMode, domain, replayEvents);
           }
 
           // Also save to SurrealDB shared cache (best-effort)
@@ -1134,7 +1713,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
                 query_text: queryText,
                 lens: lens ?? null,
                 depth_mode: depthMode,
-                model_provider: modelProvider,
+                model_provider: effectiveModelProvider,
                 model_id: modelId ?? null,
                 domain_mode: domainMode,
                 domain: domain ?? null,

@@ -7,6 +7,7 @@ import {
   trackTokens,
   getGroundingTool
 } from './vertex';
+import type { ProviderApiKeys } from './byok/types';
 import { getAnalysisSystemPrompt, buildAnalysisUserPrompt } from './prompts/analysis';
 import { getCritiqueSystemPrompt, buildCritiqueUserPrompt } from './prompts/critique';
 import { getSynthesisSystemPrompt, buildSynthesisUserPrompt } from './prompts/synthesis';
@@ -35,6 +36,7 @@ import type {
   GraphSnapshotMeta,
   GroundingSource
 } from '$lib/types/api';
+import type { ModelProvider, ReasoningProvider } from '$lib/types/providers';
 import { projectRetrievalToGraph } from './graphProjection';
 
 
@@ -94,7 +96,7 @@ export function extractSophiaMetaBlock<T extends z.ZodTypeAny = typeof SophiaMet
 export interface EngineCallbacks {
   onPassStart(
     pass: PassType,
-    model?: { provider: 'vertex' | 'anthropic'; modelId: string }
+    model?: { provider: ReasoningProvider; modelId: string }
   ): void;
   onPassChunk(pass: PassType, content: string): void;
   onPassComplete(pass: PassType): void;
@@ -126,7 +128,7 @@ export interface EngineCallbacks {
     modelCostBreakdown?: {
       total_estimated_cost_usd: number;
       by_model: Array<{
-        provider: 'vertex' | 'anthropic';
+        provider: ReasoningProvider;
         model: string;
         passes: string[];
         input_tokens: number;
@@ -145,7 +147,8 @@ interface EngineOptions {
   mode?: 'philosophy' | 'agnostic';
   domainMode?: 'auto' | 'manual';
   domain?: 'ethics' | 'philosophy_of_mind';
-  modelProvider?: 'auto' | 'vertex' | 'anthropic';
+  viewerUid?: string | null;
+  modelProvider?: ModelProvider;
   modelId?: string;
   queryRunId?: string;
   depthMode?: 'quick' | 'standard' | 'deep';
@@ -155,6 +158,7 @@ interface EngineOptions {
     critique?: string;
     synthesis?: string;
   };
+  providerApiKeys?: ProviderApiKeys;
 }
 
 function withPassTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -198,7 +202,7 @@ function getModelCostOverrides(): Record<string, { input_per_million: number; ou
   }
 }
 
-function getModelCostRates(provider: 'vertex' | 'anthropic', modelId: string): {
+function getModelCostRates(provider: ReasoningProvider, modelId: string): {
   input_per_million: number;
   output_per_million: number;
 } {
@@ -217,7 +221,7 @@ function emitReusedPass(
   pass: Extract<PassType, 'analysis' | 'critique'>,
   rawText: string,
   callbacks: EngineCallbacks,
-  model?: { provider: 'vertex' | 'anthropic'; modelId: string }
+  model?: { provider: ReasoningProvider; modelId: string }
 ): string {
   callbacks.onPassStart(pass, model);
   callbacks.onPassChunk(pass, rawText);
@@ -368,26 +372,29 @@ export async function runDialecticalEngine(
     depthMode,
     pass: 'analysis',
     requestedProvider: modelProvider,
-    requestedModelId: modelId
+    requestedModelId: modelId,
+    providerApiKeys: options?.providerApiKeys
   });
   const critiqueModelRoute = getReasoningModelRoute({
     depthMode,
     pass: 'critique',
     requestedProvider: modelProvider,
-    requestedModelId: modelId
+    requestedModelId: modelId,
+    providerApiKeys: options?.providerApiKeys
   });
   const synthesisModelRoute = getReasoningModelRoute({
     depthMode,
     pass: 'synthesis',
     requestedProvider: modelProvider,
-    requestedModelId: modelId
+    requestedModelId: modelId,
+    providerApiKeys: options?.providerApiKeys
   });
   const allowParallelCritique =
     analysisModelRoute.provider === 'vertex' && critiqueModelRoute.provider === 'vertex';
   const modelUsage = new Map<
     string,
     {
-      provider: 'vertex' | 'anthropic';
+      provider: ReasoningProvider;
       model: string;
       passes: Set<string>;
       input_tokens: number;
@@ -428,7 +435,7 @@ export async function runDialecticalEngine(
     | {
         total_estimated_cost_usd: number;
         by_model: Array<{
-          provider: 'vertex' | 'anthropic';
+          provider: ReasoningProvider;
           model: string;
           passes: string[];
           input_tokens: number;
@@ -462,9 +469,17 @@ export async function runDialecticalEngine(
   const reusedAnalysis = options?.reuse?.analysis?.trim();
   const reusedCritique = options?.reuse?.critique?.trim();
   const reusedSynthesis = options?.reuse?.synthesis?.trim();
-  const PASS_TIMEOUT_MS: Record<'vertex' | 'anthropic', Record<'analysis' | 'critique' | 'synthesis', number>> = {
+  const PASS_TIMEOUT_MS: Record<ReasoningProvider, Record<'analysis' | 'critique' | 'synthesis', number>> = {
     vertex: { analysis: 95_000, critique: 95_000, synthesis: 105_000 },
-    anthropic: { analysis: 150_000, critique: 180_000, synthesis: 200_000 }
+    anthropic: { analysis: 150_000, critique: 180_000, synthesis: 200_000 },
+    openai: { analysis: 140_000, critique: 165_000, synthesis: 185_000 },
+    xai: { analysis: 140_000, critique: 165_000, synthesis: 185_000 },
+    groq: { analysis: 95_000, critique: 110_000, synthesis: 130_000 },
+    mistral: { analysis: 140_000, critique: 165_000, synthesis: 185_000 },
+    deepseek: { analysis: 140_000, critique: 165_000, synthesis: 185_000 },
+    together: { analysis: 140_000, critique: 165_000, synthesis: 185_000 },
+    openrouter: { analysis: 150_000, critique: 180_000, synthesis: 200_000 },
+    perplexity: { analysis: 120_000, critique: 150_000, synthesis: 170_000 }
   };
 
   // ── Domain classification ──────────────────────────────────────────────
@@ -485,6 +500,9 @@ export async function runDialecticalEngine(
     `models={analysis:${analysisModelRoute.provider}:${analysisModelRoute.modelId},` +
     `critique:${critiqueModelRoute.provider}:${critiqueModelRoute.modelId},` +
     `synthesis:${synthesisModelRoute.provider}:${synthesisModelRoute.modelId}} ` +
+    `credential_source={analysis:${analysisModelRoute.credentialSource},` +
+    `critique:${critiqueModelRoute.credentialSource},` +
+    `synthesis:${synthesisModelRoute.credentialSource}} ` +
     `parallel_critique=${allowParallelCritique}`
   );
 
@@ -509,7 +527,8 @@ export async function runDialecticalEngine(
       domain: retrievalDomain,
       topK: retrievalTopK,
       maxHops: retrievalMaxHops,
-      maxClaims: retrievalMaxClaims
+      maxClaims: retrievalMaxClaims,
+      viewerUid: options?.viewerUid ?? null
     });
     contextBlock = buildContextBlock(retrievalResult);
     claimsRetrieved = retrievalResult.claims.length;
@@ -993,7 +1012,8 @@ export async function runVerificationPass(
   callbacks: EngineCallbacks,
   options?: {
     depthMode?: 'quick' | 'standard' | 'deep';
-    modelProvider?: 'auto' | 'vertex' | 'anthropic';
+    modelProvider?: ModelProvider;
+    providerApiKeys?: ProviderApiKeys;
   }
 ): Promise<{ output: string; inputTokens: number; outputTokens: number }> {
   let output = '';
@@ -1002,7 +1022,8 @@ export async function runVerificationPass(
   const verificationModelRoute = getReasoningModelRoute({
     pass: 'verification',
     depthMode: options?.depthMode ?? 'standard',
-    requestedProvider: options?.modelProvider ?? 'auto'
+    requestedProvider: options?.modelProvider ?? 'auto',
+    providerApiKeys: options?.providerApiKeys
   });
 
   const stream = streamText({

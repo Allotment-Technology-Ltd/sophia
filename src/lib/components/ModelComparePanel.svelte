@@ -1,12 +1,13 @@
 <script lang="ts">
   import { renderMarkdown } from '$lib/utils/markdown';
   import { buildModelDiffResult, type PassId } from '$lib/utils/modelDiff';
+  import type { ModelProvider } from '$lib/types/providers';
 
   type ComparisonMetadata = {
     claims_retrieved?: number;
     arguments_retrieved?: number;
     depth_mode?: 'quick' | 'standard' | 'deep';
-    selected_model_provider?: 'auto' | 'vertex' | 'anthropic';
+    selected_model_provider?: ModelProvider;
     selected_model_id?: string;
     user_links_count?: number;
     runtime_links_processed?: number;

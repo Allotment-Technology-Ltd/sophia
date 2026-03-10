@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { auth, signOutUser, onAuthChange } from '$lib/firebase';
-  import { panelStore } from '$lib/stores/panel.svelte';
+  import { auth, signOutUser, onAuthChange, getIdToken } from '$lib/firebase';
   import { goto } from '$app/navigation';
   import { browser } from '$app/environment';
+  import { onMount } from 'svelte';
   import DialecticalTriangle from '$lib/components/DialecticalTriangle.svelte';
 
   interface Props {
@@ -18,17 +18,62 @@
   let { contextQuery, streamingPass, streamingModel, menuDotVisible, panelOpen = false, onMenuToggle, onNew }: Props = $props();
 
   let currentUser = $state(browser ? auth?.currentUser ?? null : null);
+  let billingTier = $state<'free' | 'pro' | 'premium' | null>(null);
   let userMenuOpen = $state(false);
 
-  if (browser) {
-    onAuthChange((user) => { currentUser = user; });
+  async function refreshBillingTier(): Promise<void> {
+    if (!browser || !currentUser) {
+      billingTier = null;
+      return;
+    }
+    try {
+      const token = await getIdToken();
+      if (!token) {
+        billingTier = null;
+        return;
+      }
+      const response = await fetch('/api/billing/entitlements', {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) {
+        billingTier = null;
+        return;
+      }
+      const body = (await response.json()) as { profile?: { tier?: 'free' | 'pro' | 'premium' } };
+      const tier = body?.profile?.tier;
+      billingTier = tier === 'pro' || tier === 'premium' || tier === 'free' ? tier : 'free';
+    } catch {
+      billingTier = null;
+    }
   }
+
+  if (browser) {
+    onAuthChange((user) => {
+      currentUser = user;
+      void refreshBillingTier();
+    });
+    void refreshBillingTier();
+  }
+
+  onMount(() => {
+    if (!browser) return;
+    const refresh = () => {
+      void refreshBillingTier();
+    };
+    window.addEventListener('focus', refresh);
+    window.addEventListener('billing:updated', refresh as EventListener);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('billing:updated', refresh as EventListener);
+    };
+  });
 
   async function handleSignOut() {
     try {
       await signOutUser();
       userMenuOpen = false;
-      await goto('/auth');
+      await goto('/');
     } catch (error) {
       console.error('Sign out error:', error);
     }
@@ -39,7 +84,7 @@
 
 <nav class="top-bar" aria-label="Main navigation">
   <!-- Left: wordmark -->
-  <a href="/" class="wordmark" aria-label="SOPHIA home">
+  <a href="/app" class="wordmark" aria-label="SOPHIA app home">
     <DialecticalTriangle mode="logo" size={22} />
     <span class="wordmark-text">SOPHIA</span>
   </a>
@@ -66,13 +111,11 @@
       + New
     </button>
 
-    <button
-      class="nav-link"
-      onclick={() => panelStore.toggle()}
-      aria-label="Open history"
-    >
-      History
-    </button>
+    {#if currentUser}
+      <span class="plan-badge" aria-label="Current subscription tier">
+        {(billingTier ?? 'free').toUpperCase()}
+      </span>
+    {/if}
 
     <!-- User profile dropdown -->
     {#if currentUser}
@@ -250,21 +293,16 @@
     color: var(--color-text);
   }
 
-  /* History text link */
-  .nav-link {
+  .plan-badge {
     font-family: var(--font-ui);
     font-size: 0.69rem;
-    letter-spacing: 0.05em;
-    color: var(--color-muted);
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: var(--space-1) var(--space-2);
-    transition: color var(--transition-fast);
-  }
-
-  .nav-link:hover {
-    color: var(--color-text);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-sage);
+    border: 1px solid var(--color-sage-border);
+    border-radius: 999px;
+    padding: 4px 10px;
+    background: color-mix(in srgb, var(--color-sage) 10%, transparent);
   }
 
   /* Panel toggle */

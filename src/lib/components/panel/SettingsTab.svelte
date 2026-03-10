@@ -1,17 +1,474 @@
 <script lang="ts">
-  import { auth, signOutUser, onAuthChange } from '$lib/firebase';
+  import { auth, signOutUser, onAuthChange, getIdToken } from '$lib/firebase';
   import { goto } from '$app/navigation';
   import { browser } from '$app/environment';
+  import {
+    BYOK_PROVIDER_ORDER,
+    PROVIDER_UI_META,
+    type ByokProvider
+  } from '$lib/types/providers';
+
+  interface ByokProviderStatus {
+    provider: ByokProvider;
+    configured: boolean;
+    status: 'not_configured' | 'pending_validation' | 'active' | 'invalid' | 'revoked';
+    fingerprint_last8: string | null;
+    validated_at: string | null;
+    updated_at: string | null;
+    last_error: string | null;
+  }
+
+  interface BillingEntitlements {
+    tier: 'free' | 'pro' | 'premium';
+    status: 'active' | 'trialing' | 'past_due' | 'canceled' | 'inactive';
+    currency: 'GBP' | 'USD';
+    monthKey: string;
+    publicUsed: number;
+    privateUsed: number;
+    publicRemaining: number;
+    privateRemaining: number;
+    effectivePublicMax: number;
+    privateMax: number;
+    byokFeeChargedCents: number;
+  }
+
+  interface BillingProfile {
+    tier: 'free' | 'pro' | 'premium';
+    status: 'active' | 'trialing' | 'past_due' | 'canceled' | 'inactive';
+    currency: 'GBP' | 'USD';
+    paddle_customer_id?: string | null;
+    paddle_subscription_id?: string | null;
+    period_end_at?: string | null;
+  }
+
+  interface BillingWallet {
+    availableCents: number;
+    currency: 'GBP' | 'USD';
+  }
+
+  interface CheckoutPresentation {
+    mode: 'redirect' | 'overlay' | 'inline';
+    locale: string | null;
+    theme: 'light' | 'dark' | null;
+  }
+
+  interface PrivateSource {
+    id: string;
+    title?: string;
+    url?: string;
+    source_type?: string;
+    status?: string;
+    claim_count?: number;
+    updated_at?: string;
+  }
+
+  const BYOK_PROVIDER_LABELS: Record<ByokProvider, string> = Object.fromEntries(
+    BYOK_PROVIDER_ORDER.map((provider) => [provider, PROVIDER_UI_META[provider].label])
+  ) as Record<ByokProvider, string>;
+  const BYOK_PROVIDER_PLACEHOLDERS: Record<ByokProvider, string> = Object.fromEntries(
+    BYOK_PROVIDER_ORDER.map((provider) => [provider, PROVIDER_UI_META[provider].placeholder])
+  ) as Record<ByokProvider, string>;
+
+  function emptyProviderMap<T>(value: T): Record<ByokProvider, T> {
+    return Object.fromEntries(BYOK_PROVIDER_ORDER.map((provider) => [provider, value])) as Record<ByokProvider, T>;
+  }
 
   let currentUser = $state(browser ? auth?.currentUser : null);
+  let byokProviders = $state<ByokProviderStatus[]>([]);
+  let byokInputs = $state<Record<ByokProvider, string>>(emptyProviderMap(''));
+  let byokLoading = $state(false);
+  let byokSaving = $state<Record<ByokProvider, boolean>>(emptyProviderMap(false));
+  let byokError = $state('');
+  let byokMessage = $state('');
+  let billingLoading = $state(false);
+  let billingBusyAction = $state('');
+  let billingError = $state('');
+  let billingMessage = $state('');
+  let billingProfile = $state<BillingProfile | null>(null);
+  let billingEntitlements = $state<BillingEntitlements | null>(null);
+  let billingWallet = $state<BillingWallet | null>(null);
+  let billingCheckoutPresentation = $state<CheckoutPresentation | null>(null);
+  let billingSyncing = $state(false);
+  let hasBillingCustomer = $derived(Boolean(billingProfile?.paddle_customer_id?.trim()));
+  let currentTier = $derived((billingProfile?.tier ?? 'free') as 'free' | 'pro' | 'premium');
+  let isPaidTier = $derived(currentTier !== 'free');
+  let privateSources = $state<PrivateSource[]>([]);
+  let sourcesLoading = $state(false);
+  let deletingSourceId = $state('');
+  let sourcesError = $state('');
+  let sourcesMessage = $state('');
+  type SettingsSubTab = 'general' | 'byok' | 'sources' | 'payments';
+  let activeSettingsTab = $state<SettingsSubTab>('general');
+
+  function defaultByokStatus(provider: ByokProvider): ByokProviderStatus {
+    return {
+      provider,
+      configured: false,
+      status: 'not_configured',
+      fingerprint_last8: null,
+      validated_at: null,
+      updated_at: null,
+      last_error: null
+    };
+  }
+
+  function byokStatus(provider: ByokProvider): ByokProviderStatus {
+    return byokProviders.find((item) => item.provider === provider) ?? defaultByokStatus(provider);
+  }
+
+  function statusLabel(status: ByokProviderStatus['status']): string {
+    if (status === 'active') return 'Active';
+    if (status === 'pending_validation') return 'Pending validation';
+    if (status === 'invalid') return 'Invalid';
+    if (status === 'revoked') return 'Revoked';
+    return 'Not configured';
+  }
+
+  function formatDate(iso: string | null | undefined): string {
+    if (!iso) return 'Never';
+    return new Date(iso).toLocaleString();
+  }
+
+  async function fetchWithFirebase(path: string, init: RequestInit = {}): Promise<Response> {
+    const token = await getIdToken();
+    if (!token) {
+      throw new Error('Sign in required.');
+    }
+    const headers = new Headers(init.headers);
+    headers.set('Authorization', `Bearer ${token}`);
+    return fetch(path, {
+      ...init,
+      headers
+    });
+  }
+
+  async function parseResponseOrThrow(response: Response): Promise<any> {
+    const text = await response.text();
+    let body: any = {};
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = { raw: text };
+      }
+    }
+    if (!response.ok) {
+      const detail = body?.detail || body?.error || body?.raw || response.statusText || 'Request failed';
+      throw new Error(String(detail));
+    }
+    return body;
+  }
+
+  function setProviderSaving(provider: ByokProvider, value: boolean): void {
+    byokSaving = {
+      ...byokSaving,
+      [provider]: value
+    };
+  }
+
+  async function refreshByokProviders(): Promise<void> {
+    if (!currentUser) {
+      byokProviders = [];
+      byokError = '';
+      byokMessage = '';
+      return;
+    }
+    byokLoading = true;
+    byokError = '';
+    try {
+      const response = await fetchWithFirebase('/api/byok/providers', { method: 'GET' });
+      const body = await parseResponseOrThrow(response);
+      const incoming = Array.isArray(body.providers) ? body.providers as ByokProviderStatus[] : [];
+      byokProviders = BYOK_PROVIDER_ORDER.map((provider) => {
+        return incoming.find((item) => item.provider === provider) ?? defaultByokStatus(provider);
+      });
+    } catch (err) {
+      byokError = err instanceof Error ? err.message : String(err);
+    } finally {
+      byokLoading = false;
+    }
+  }
+
+  function formatMoneyFromCents(cents: number, currency: 'GBP' | 'USD'): string {
+    const value = Math.max(0, cents) / 100;
+    return new Intl.NumberFormat('en-GB', {
+      style: 'currency',
+      currency
+    }).format(value);
+  }
+
+  async function syncBillingFromProvider(silent = true): Promise<void> {
+    try {
+      const syncResponse = await fetchWithFirebase('/api/billing/sync', { method: 'POST' });
+      await parseResponseOrThrow(syncResponse);
+    } catch (err) {
+      if (!silent) {
+        throw err;
+      }
+    }
+  }
+
+  async function refreshBillingState(withProviderSync = false, silentSyncError = true): Promise<void> {
+    if (!currentUser) {
+      billingProfile = null;
+      billingEntitlements = null;
+      billingWallet = null;
+      billingCheckoutPresentation = null;
+      billingError = '';
+      billingMessage = '';
+      return;
+    }
+    billingLoading = true;
+    billingError = '';
+    try {
+      if (withProviderSync) {
+        await syncBillingFromProvider(silentSyncError);
+      }
+      const response = await fetchWithFirebase('/api/billing/entitlements', { method: 'GET' });
+      const body = await parseResponseOrThrow(response);
+      billingProfile = (body.profile ?? null) as BillingProfile | null;
+      billingEntitlements = (body.entitlements ?? null) as BillingEntitlements | null;
+      const walletRaw = (body.wallet ?? null) as
+        | {
+            available_cents?: number;
+            currency?: 'GBP' | 'USD';
+          }
+        | null;
+      billingWallet = walletRaw
+        ? {
+            availableCents: Number.isFinite(walletRaw.available_cents)
+              ? Number(walletRaw.available_cents)
+              : 0,
+            currency: walletRaw.currency === 'USD' ? 'USD' : 'GBP'
+          }
+        : null;
+      const checkoutPresentationRaw = (body.checkout_presentation ?? null) as
+        | {
+            mode?: 'redirect' | 'overlay' | 'inline';
+            locale?: string | null;
+            theme?: 'light' | 'dark' | null;
+          }
+        | null;
+      billingCheckoutPresentation = checkoutPresentationRaw
+        ? {
+            mode:
+              checkoutPresentationRaw.mode === 'inline' || checkoutPresentationRaw.mode === 'overlay'
+                ? checkoutPresentationRaw.mode
+                : 'redirect',
+            locale:
+              typeof checkoutPresentationRaw.locale === 'string' && checkoutPresentationRaw.locale.trim()
+                ? checkoutPresentationRaw.locale.trim()
+                : null,
+            theme:
+              checkoutPresentationRaw.theme === 'dark' || checkoutPresentationRaw.theme === 'light'
+                ? checkoutPresentationRaw.theme
+                : null
+          }
+        : null;
+      if (browser) {
+        window.dispatchEvent(new Event('billing:updated'));
+      }
+    } catch (err) {
+      billingError = err instanceof Error ? err.message : String(err);
+    } finally {
+      billingLoading = false;
+    }
+  }
+
+
+  async function beginSubscriptionCheckout(tier: 'pro' | 'premium'): Promise<void> {
+    billingError = '';
+    billingMessage = '';
+    if (!browser) return;
+    const destination = new URL('/pricing', window.location.origin);
+    destination.searchParams.set('sophia_kind', 'subscription');
+    destination.searchParams.set('sophia_plan', tier);
+    await goto(destination.toString());
+  }
+
+  async function beginTopup(pack: 'small' | 'large'): Promise<void> {
+    billingError = '';
+    billingMessage = '';
+    if (!browser) return;
+    const destination = new URL('/pricing', window.location.origin);
+    destination.searchParams.set('sophia_kind', 'topup');
+    destination.searchParams.set('sophia_pack', pack);
+    await goto(destination.toString());
+  }
+
+  async function openBillingPortal(): Promise<void> {
+    billingError = '';
+    billingMessage = '';
+    billingBusyAction = 'portal';
+    try {
+      const response = await fetchWithFirebase('/api/billing/portal', { method: 'POST' });
+      const body = await parseResponseOrThrow(response);
+      if (!body.portal_url || typeof body.portal_url !== 'string') {
+        throw new Error('Missing portal URL from billing response.');
+      }
+      if (browser) {
+        const popup = window.open(body.portal_url, '_blank', 'noopener,noreferrer');
+        if (!popup) {
+          window.location.href = body.portal_url;
+        }
+      }
+    } catch (err) {
+      billingError = err instanceof Error ? err.message : String(err);
+    } finally {
+      billingBusyAction = '';
+    }
+  }
+
+  async function refreshBillingStateManual(): Promise<void> {
+    billingSyncing = true;
+    billingError = '';
+    billingMessage = '';
+    try {
+      await refreshBillingState(true, false);
+      billingMessage = 'Billing status refreshed.';
+    } catch (err) {
+      billingError = err instanceof Error ? err.message : String(err);
+    } finally {
+      billingSyncing = false;
+    }
+  }
+
+  async function refreshPrivateSources(): Promise<void> {
+    if (!currentUser) {
+      privateSources = [];
+      sourcesError = '';
+      sourcesMessage = '';
+      return;
+    }
+    sourcesLoading = true;
+    sourcesError = '';
+    try {
+      const response = await fetchWithFirebase('/api/sources/private', { method: 'GET' });
+      const body = await parseResponseOrThrow(response);
+      const rows = Array.isArray(body.sources) ? (body.sources as unknown[]) : [];
+      privateSources = rows.filter(
+        (row: unknown): row is PrivateSource =>
+          !!row && typeof row === 'object' && typeof (row as { id?: unknown }).id === 'string'
+      );
+    } catch (err) {
+      sourcesError = err instanceof Error ? err.message : String(err);
+    } finally {
+      sourcesLoading = false;
+    }
+  }
+
+  async function deletePrivateSource(sourceId: string): Promise<void> {
+    sourcesError = '';
+    sourcesMessage = '';
+    deletingSourceId = sourceId;
+    try {
+      const response = await fetchWithFirebase(`/api/sources/private/${encodeURIComponent(sourceId)}`, {
+        method: 'DELETE'
+      });
+      await parseResponseOrThrow(response);
+      sourcesMessage = 'Private source deleted.';
+      await refreshPrivateSources();
+    } catch (err) {
+      sourcesError = err instanceof Error ? err.message : String(err);
+    } finally {
+      deletingSourceId = '';
+    }
+  }
+
+  async function saveByokKey(provider: ByokProvider): Promise<void> {
+    byokError = '';
+    byokMessage = '';
+    const apiKey = byokInputs[provider]?.trim();
+    if (!apiKey) {
+      byokError = `Enter a ${BYOK_PROVIDER_LABELS[provider]} key first.`;
+      return;
+    }
+    setProviderSaving(provider, true);
+    try {
+      const response = await fetchWithFirebase(`/api/byok/providers/${provider}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          api_key: apiKey
+        })
+      });
+      const body = await parseResponseOrThrow(response);
+      const ok = body?.validation?.ok === true;
+      byokInputs = {
+        ...byokInputs,
+        [provider]: ''
+      };
+      await refreshByokProviders();
+      byokMessage = ok
+        ? `${BYOK_PROVIDER_LABELS[provider]} key saved and validated.`
+        : `${BYOK_PROVIDER_LABELS[provider]} key saved but validation failed.`;
+    } catch (err) {
+      byokError = err instanceof Error ? err.message : String(err);
+    } finally {
+      setProviderSaving(provider, false);
+    }
+  }
+
+  async function validateByokKey(provider: ByokProvider): Promise<void> {
+    byokError = '';
+    byokMessage = '';
+    setProviderSaving(provider, true);
+    try {
+      const response = await fetchWithFirebase(`/api/byok/providers/${provider}/validate`, {
+        method: 'POST'
+      });
+      const body = await parseResponseOrThrow(response);
+      const ok = body?.validation?.ok === true;
+      await refreshByokProviders();
+      byokMessage = ok
+        ? `${BYOK_PROVIDER_LABELS[provider]} key validated.`
+        : `${BYOK_PROVIDER_LABELS[provider]} validation failed.`;
+    } catch (err) {
+      byokError = err instanceof Error ? err.message : String(err);
+    } finally {
+      setProviderSaving(provider, false);
+    }
+  }
+
+  async function revokeByokKey(provider: ByokProvider): Promise<void> {
+    byokError = '';
+    byokMessage = '';
+    setProviderSaving(provider, true);
+    try {
+      const response = await fetchWithFirebase(`/api/byok/providers/${provider}`, {
+        method: 'DELETE'
+      });
+      await parseResponseOrThrow(response);
+      await refreshByokProviders();
+      byokInputs = {
+        ...byokInputs,
+        [provider]: ''
+      };
+      byokMessage = `${BYOK_PROVIDER_LABELS[provider]} key revoked.`;
+    } catch (err) {
+      byokError = err instanceof Error ? err.message : String(err);
+    } finally {
+      setProviderSaving(provider, false);
+    }
+  }
 
   if (browser) {
-    onAuthChange((user) => { currentUser = user; });
+    onAuthChange((user) => {
+      currentUser = user;
+      void refreshByokProviders();
+      void refreshBillingState(true, true);
+      void refreshPrivateSources();
+    });
+    void refreshByokProviders();
+    void refreshBillingState(true, true);
+    void refreshPrivateSources();
   }
 
   async function handleSignOut() {
     await signOutUser();
-    goto('/auth');
+    goto('/');
   }
 
   // Reduce Motion reads system preference and adds a CSS class to <html>
@@ -44,58 +501,361 @@
 </script>
 
 <div class="settings-tab">
-  <p class="settings-section-label">Appearance</p>
-
-  <div class="setting-row">
-    <div class="setting-info">
-      <span class="setting-name">Reduce Motion</span>
-      <span class="setting-desc">Suppress animations and transitions</span>
-    </div>
+  <div class="settings-subtabs" role="tablist" aria-label="Settings sections">
     <button
-      class="toggle"
-      class:is-on={prefersReducedMotion}
-      role="switch"
-      aria-checked={prefersReducedMotion}
-      aria-label="Reduce motion"
-      onclick={() => prefersReducedMotion = !prefersReducedMotion}
+      class="settings-subtab"
+      class:is-active={activeSettingsTab === 'general'}
+      role="tab"
+      aria-selected={activeSettingsTab === 'general'}
+      onclick={() => (activeSettingsTab = 'general')}
     >
-      <span class="toggle-knob" aria-hidden="true"></span>
+      General
     </button>
-  </div>
-
-  <p class="settings-section-label">Experimental</p>
-
-  <div class="setting-row">
-    <div class="setting-info">
-      <span class="setting-name">Presence Mode</span>
-      <span class="setting-desc">Placeholder — not yet active</span>
-    </div>
     <button
-      class="toggle"
-      class:is-on={presenceMode}
-      role="switch"
-      aria-checked={presenceMode}
-      aria-label="Presence mode"
-      onclick={() => presenceMode = !presenceMode}
+      class="settings-subtab"
+      class:is-active={activeSettingsTab === 'byok'}
+      role="tab"
+      aria-selected={activeSettingsTab === 'byok'}
+      onclick={() => (activeSettingsTab = 'byok')}
     >
-      <span class="toggle-knob" aria-hidden="true"></span>
+      BYOK
+    </button>
+    <button
+      class="settings-subtab"
+      class:is-active={activeSettingsTab === 'payments'}
+      role="tab"
+      aria-selected={activeSettingsTab === 'payments'}
+      onclick={() => (activeSettingsTab = 'payments')}
+    >
+      Payments
+    </button>
+    <button
+      class="settings-subtab"
+      class:is-active={activeSettingsTab === 'sources'}
+      role="tab"
+      aria-selected={activeSettingsTab === 'sources'}
+      onclick={() => (activeSettingsTab = 'sources')}
+    >
+      Sources
     </button>
   </div>
 
-  <p class="settings-section-label">Account</p>
+  {#if activeSettingsTab === 'general'}
+    <p class="settings-section-label">Appearance</p>
 
-  <div class="setting-row">
-    <div class="setting-info">
-      <span class="setting-name">{currentUser?.displayName ?? currentUser?.email ?? 'Signed in'}</span>
-      <span class="setting-desc">{currentUser?.email ?? ''}</span>
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-name">Reduce Motion</span>
+        <span class="setting-desc">Suppress animations and transitions</span>
+      </div>
+      <button
+        class="toggle"
+        class:is-on={prefersReducedMotion}
+        role="switch"
+        aria-checked={prefersReducedMotion}
+        aria-label="Reduce motion"
+        onclick={() => (prefersReducedMotion = !prefersReducedMotion)}
+      >
+        <span class="toggle-knob" aria-hidden="true"></span>
+      </button>
     </div>
-  </div>
 
-  <div class="setting-row">
-    <button class="sign-out-btn" onclick={handleSignOut}>
-      Sign out
-    </button>
-  </div>
+    <p class="settings-section-label">Experimental</p>
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-name">Presence Mode</span>
+        <span class="setting-desc">Placeholder — not yet active</span>
+      </div>
+      <button
+        class="toggle"
+        class:is-on={presenceMode}
+        role="switch"
+        aria-checked={presenceMode}
+        aria-label="Presence mode"
+        onclick={() => (presenceMode = !presenceMode)}
+      >
+        <span class="toggle-knob" aria-hidden="true"></span>
+      </button>
+    </div>
+
+    <p class="settings-section-label">Account</p>
+
+    {#if currentUser}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">{currentUser.displayName ?? currentUser.email ?? 'Signed in'}</span>
+          <span class="setting-desc">{currentUser.email ?? ''}</span>
+        </div>
+      </div>
+      <div class="setting-row">
+        <button class="sign-out-btn" onclick={handleSignOut}>
+          Sign out
+        </button>
+      </div>
+    {:else}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Not signed in</span>
+          <span class="setting-desc">Sign in to manage account, BYOK, and payments.</span>
+        </div>
+      </div>
+    {/if}
+  {:else if activeSettingsTab === 'byok'}
+    <p class="settings-section-label">BYOK (Bring Your Own Key)</p>
+
+    {#if !currentUser}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Sign in required</span>
+          <span class="setting-desc">Sign in to configure model provider keys.</span>
+        </div>
+      </div>
+    {:else if byokLoading && byokProviders.length === 0}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Loading provider status...</span>
+        </div>
+      </div>
+    {:else}
+      {#each BYOK_PROVIDER_ORDER as provider}
+        {@const status = byokStatus(provider)}
+        <div class="byok-card">
+          <div class="byok-head">
+            <div class="setting-info">
+              <span class="setting-name">{BYOK_PROVIDER_LABELS[provider]}</span>
+              <span class="setting-desc">Status: {statusLabel(status.status)}</span>
+              <span class="setting-desc">{PROVIDER_UI_META[provider].hint}</span>
+            </div>
+            {#if status.configured && status.fingerprint_last8}
+              <span class="byok-fingerprint">...{status.fingerprint_last8}</span>
+            {/if}
+          </div>
+
+          <div class="byok-meta">
+            <span>Validated: {formatDate(status.validated_at)}</span>
+            <span>Updated: {formatDate(status.updated_at)}</span>
+          </div>
+
+          {#if status.last_error}
+            <p class="byok-inline-error">Last error: {status.last_error}</p>
+          {/if}
+
+          <div class="byok-controls">
+            <input
+              class="byok-input"
+              type="password"
+              placeholder={BYOK_PROVIDER_PLACEHOLDERS[provider]}
+              value={byokInputs[provider]}
+              oninput={(event) => {
+                byokInputs = {
+                  ...byokInputs,
+                  [provider]: (event.currentTarget as HTMLInputElement).value
+                };
+              }}
+              disabled={byokSaving[provider]}
+            />
+            <div class="byok-actions">
+              <button
+                class="byok-btn"
+                onclick={() => saveByokKey(provider)}
+                disabled={byokSaving[provider]}
+              >
+                {byokSaving[provider] ? 'Saving...' : 'Save'}
+              </button>
+              <button
+                class="byok-btn secondary"
+                onclick={() => validateByokKey(provider)}
+                disabled={byokSaving[provider] || !status.configured}
+              >
+                Validate
+              </button>
+              <button
+                class="byok-btn danger"
+                onclick={() => revokeByokKey(provider)}
+                disabled={byokSaving[provider] || !status.configured}
+              >
+                Revoke
+              </button>
+            </div>
+          </div>
+        </div>
+      {/each}
+    {/if}
+
+    {#if byokMessage}
+      <p class="byok-message success">{byokMessage}</p>
+    {/if}
+    {#if byokError}
+      <p class="byok-message error">{byokError}</p>
+    {/if}
+  {:else if activeSettingsTab === 'payments'}
+    <p class="settings-section-label">Payments</p>
+
+    {#if !currentUser}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Sign in required</span>
+          <span class="setting-desc">Sign in to manage subscriptions and BYOK wallet top-ups.</span>
+        </div>
+      </div>
+    {:else if billingLoading && !billingProfile}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Loading billing status...</span>
+        </div>
+      </div>
+    {:else}
+      <div class="billing-card">
+        <div class="setting-info">
+          <span class="setting-name">
+            Plan: {billingProfile?.tier ?? 'free'} ({billingProfile?.status ?? 'inactive'})
+          </span>
+          <span class="setting-desc">
+            Wallet: {formatMoneyFromCents(billingWallet?.availableCents ?? 0, billingWallet?.currency ?? (billingProfile?.currency ?? 'GBP'))}
+          </span>
+          <span class="setting-desc billing-purpose">
+            Wallet funds BYOK handling fees and private source ingestion.
+          </span>
+          {#if billingEntitlements}
+            <span class="setting-desc">
+              Ingestion remaining this month: public {billingEntitlements.publicRemaining}, private {billingEntitlements.privateRemaining}
+            </span>
+          {/if}
+        </div>
+
+        <div class="billing-actions">
+          <p class="billing-actions-note">
+            Top up wallet for BYOK and private-ingestion charges.
+          </p>
+          {#if !isPaidTier}
+            <button
+              class="byok-btn"
+              onclick={() => beginSubscriptionCheckout('pro')}
+              disabled={billingBusyAction !== '' || currentTier === 'pro'}
+            >
+              {billingBusyAction === 'checkout:pro' ? 'Opening...' : 'Upgrade to Pro'}
+            </button>
+            <button
+              class="byok-btn"
+              onclick={() => beginSubscriptionCheckout('premium')}
+              disabled={billingBusyAction !== '' || currentTier === 'premium'}
+            >
+              {billingBusyAction === 'checkout:premium' ? 'Opening...' : 'Upgrade to Premium'}
+            </button>
+          {/if}
+          <button
+            class="byok-btn secondary"
+            onclick={() => beginTopup('small')}
+            disabled={billingBusyAction !== ''}
+          >
+            {billingBusyAction === 'topup:small' ? 'Opening...' : 'Top up wallet (small)'}
+          </button>
+          <button
+            class="byok-btn secondary"
+            onclick={() => beginTopup('large')}
+            disabled={billingBusyAction !== ''}
+          >
+            {billingBusyAction === 'topup:large' ? 'Opening...' : 'Top up wallet (large)'}
+          </button>
+          <button
+            class="byok-btn secondary"
+            onclick={openBillingPortal}
+            disabled={billingBusyAction !== '' || !hasBillingCustomer}
+            title={!hasBillingCustomer ? 'Subscription management becomes available once billing customer mapping completes.' : undefined}
+          >
+            {billingBusyAction === 'portal'
+              ? 'Opening...'
+              : isPaidTier
+                ? 'Manage subscription (change plan)'
+                : 'Manage subscription'}
+          </button>
+          <button
+            class="byok-btn secondary"
+            onclick={refreshBillingStateManual}
+            disabled={billingBusyAction !== '' || billingSyncing}
+          >
+            {billingSyncing ? 'Refreshing...' : 'Refresh billing status'}
+          </button>
+        </div>
+        {#if isPaidTier && !hasBillingCustomer}
+          <p class="billing-warning">
+            Your plan appears paid, but customer mapping is missing. Use “Refresh billing status” and check webhook delivery.
+          </p>
+        {/if}
+      </div>
+    {/if}
+
+    {#if billingMessage}
+      <p class="byok-message success">{billingMessage}</p>
+    {/if}
+    {#if billingError}
+      <p class="byok-message error">{billingError}</p>
+    {/if}
+  {:else}
+    <p class="settings-section-label">Private Sources</p>
+
+    {#if !currentUser}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Sign in required</span>
+          <span class="setting-desc">Sign in to manage your private ingested sources.</span>
+        </div>
+      </div>
+    {:else}
+      <div class="sources-card">
+        <div class="sources-head">
+          <div class="setting-info">
+            <span class="setting-name">Your private knowledge sources</span>
+            <span class="setting-desc">Only you can query these sources. Deleting removes source-linked graph data.</span>
+          </div>
+          <button
+            class="byok-btn secondary"
+            onclick={refreshPrivateSources}
+            disabled={sourcesLoading || deletingSourceId !== ''}
+          >
+            {sourcesLoading ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
+
+        {#if sourcesLoading && privateSources.length === 0}
+          <p class="setting-desc">Loading sources...</p>
+        {:else if privateSources.length === 0}
+          <p class="setting-desc">No private sources found.</p>
+        {:else}
+          <div class="sources-list">
+            {#each privateSources as source (source.id)}
+              <div class="source-row">
+                <div class="source-meta">
+                  <span class="setting-name">{source.title || source.url || source.id}</span>
+                  <span class="setting-desc">
+                    {source.source_type || 'source'} · claims {source.claim_count ?? 0} · status {source.status || 'active'}
+                  </span>
+                  {#if source.url}
+                    <a class="source-link" href={source.url} target="_blank" rel="noopener noreferrer">{source.url}</a>
+                  {/if}
+                </div>
+                <button
+                  class="byok-btn danger"
+                  onclick={() => deletePrivateSource(source.id)}
+                  disabled={deletingSourceId !== '' || sourcesLoading}
+                >
+                  {deletingSourceId === source.id ? 'Deleting...' : 'Delete'}
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      {#if sourcesMessage}
+        <p class="byok-message success">{sourcesMessage}</p>
+      {/if}
+      {#if sourcesError}
+        <p class="byok-message error">{sourcesError}</p>
+      {/if}
+    {/if}
+  {/if}
 </div>
 
 <style>
@@ -104,6 +864,37 @@
     display: flex;
     flex-direction: column;
     gap: 0;
+  }
+
+  .settings-subtabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+    margin-bottom: var(--space-3);
+  }
+
+  .settings-subtab {
+    font-family: var(--font-ui);
+    font-size: 0.62rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    padding: 7px 8px;
+    cursor: pointer;
+    transition: color var(--transition-base), border-color var(--transition-base), background var(--transition-base);
+  }
+
+  .settings-subtab:hover {
+    color: var(--color-text);
+  }
+
+  .settings-subtab.is-active {
+    color: var(--color-text);
+    border-color: var(--color-sage-border);
+    background: color-mix(in srgb, var(--color-sage) 10%, transparent);
   }
 
   .settings-section-label {
@@ -131,6 +922,224 @@
 
   .setting-row:last-child {
     border-bottom: none;
+  }
+
+  .byok-card {
+    display: grid;
+    gap: 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: 10px;
+    margin: 0 0 12px;
+    background: var(--color-surface);
+  }
+
+  .billing-card {
+    display: grid;
+    gap: 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: 12px;
+    margin: 0 0 12px;
+    background: var(--color-surface);
+  }
+
+  .billing-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .billing-actions-note {
+    width: 100%;
+    margin: 2px 0 4px;
+    font-size: 0.72rem;
+    color: var(--color-dim);
+    line-height: 1.35;
+  }
+
+  .billing-purpose {
+    color: var(--color-text-muted);
+    line-height: 1.4;
+  }
+
+  .sources-card {
+    display: grid;
+    gap: 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: 12px;
+    margin: 0 0 12px;
+    background: var(--color-surface);
+  }
+
+  .sources-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 10px;
+    border-bottom: 1px solid var(--color-border);
+    padding-bottom: 8px;
+  }
+
+  .sources-list {
+    display: grid;
+    gap: 8px;
+  }
+
+  .source-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: 10px;
+    background: color-mix(in srgb, var(--color-surface) 80%, transparent);
+  }
+
+  .source-meta {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .source-link {
+    font-size: 0.66rem;
+    color: var(--color-blue);
+    text-decoration: none;
+    overflow-wrap: anywhere;
+  }
+
+  .source-link:hover {
+    text-decoration: underline;
+  }
+
+  @media (max-width: 860px) {
+    .settings-subtabs {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .source-row {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .sources-head {
+      flex-direction: column;
+      align-items: stretch;
+    }
+  }
+
+  .billing-warning {
+    margin: 0;
+    padding: 8px 10px;
+    border: 1px solid rgba(215, 124, 84, 0.5);
+    border-radius: 4px;
+    color: #f0c0aa;
+    background: rgba(215, 124, 84, 0.12);
+    font-size: 0.72rem;
+    line-height: 1.35;
+  }
+
+  .byok-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .byok-fingerprint {
+    font-family: var(--font-ui);
+    font-size: 0.66rem;
+    color: var(--color-dim);
+    letter-spacing: 0.06em;
+  }
+
+  .byok-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-family: var(--font-ui);
+    font-size: 0.62rem;
+    color: var(--color-dim);
+    letter-spacing: 0.03em;
+  }
+
+  .byok-inline-error {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: 0.64rem;
+    color: var(--color-warning, #e07070);
+    word-break: break-word;
+  }
+
+  .byok-controls {
+    display: grid;
+    gap: 8px;
+  }
+
+  .byok-input {
+    width: 100%;
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    padding: 7px 9px;
+    background: var(--color-surface-raised);
+    color: var(--color-text);
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+  }
+
+  .byok-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .byok-btn {
+    font-family: var(--font-ui);
+    font-size: 0.62rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    border: 1px solid var(--color-sage-border);
+    color: var(--color-sage);
+    background: transparent;
+    border-radius: 3px;
+    padding: 5px 8px;
+    cursor: pointer;
+  }
+
+  .byok-btn.secondary {
+    border-color: var(--color-blue-border, var(--color-border));
+    color: var(--color-blue);
+  }
+
+  .byok-btn.danger {
+    border-color: var(--color-warning, #e07070);
+    color: var(--color-warning, #e07070);
+  }
+
+  .byok-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .byok-message {
+    margin: 0 0 10px;
+    font-family: var(--font-ui);
+    font-size: 0.66rem;
+    line-height: 1.35;
+    border-radius: 3px;
+    padding: 7px 8px;
+    border: 1px solid var(--color-border);
+  }
+
+  .byok-message.success {
+    color: var(--color-blue);
+    background: color-mix(in srgb, var(--color-blue) 10%, transparent);
+  }
+
+  .byok-message.error {
+    color: var(--color-warning, #e07070);
+    background: color-mix(in srgb, var(--color-warning, #e07070) 10%, transparent);
   }
 
   .setting-info {
@@ -208,6 +1217,10 @@
   }
 
   :global(html.reduce-motion) .toggle-knob {
+    transition: none !important;
+  }
+
+  :global(html.reduce-motion) .settings-subtab {
     transition: none !important;
   }
 </style>

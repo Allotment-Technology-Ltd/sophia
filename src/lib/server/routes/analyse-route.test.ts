@@ -1,5 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const {
+  mockConsumeIngestionEntitlements,
+  mockGetEntitlementSummary,
+  mockEnsureWallet,
+  mockAssertByokWalletBalance,
+  mockComputeByokFeeCents,
+  mockDebitByokHandlingFee
+} = vi.hoisted(() => ({
+  mockConsumeIngestionEntitlements: vi.fn(),
+  mockGetEntitlementSummary: vi.fn(),
+  mockEnsureWallet: vi.fn(),
+  mockAssertByokWalletBalance: vi.fn(),
+  mockComputeByokFeeCents: vi.fn(),
+  mockDebitByokHandlingFee: vi.fn()
+}));
+
 vi.mock('$lib/server/engine', () => ({
   runDialecticalEngine: vi.fn(async (_query, callbacks) => {
     callbacks.onPassStart('analysis');
@@ -79,6 +95,25 @@ vi.mock('$lib/server/db', () => ({
   query: vi.fn(async () => [])
 }));
 
+vi.mock('$lib/server/billing/flags', () => ({
+  BILLING_FEATURE_ENABLED: true,
+  BYOK_WALLET_CHARGING_ENABLED: false,
+  BYOK_WALLET_SHADOW_MODE: true,
+  INGEST_VISIBILITY_MODE_ENABLED: true
+}));
+
+vi.mock('$lib/server/billing/entitlements', () => ({
+  consumeIngestionEntitlements: mockConsumeIngestionEntitlements,
+  getEntitlementSummary: mockGetEntitlementSummary
+}));
+
+vi.mock('$lib/server/billing/wallet', () => ({
+  ensureWallet: mockEnsureWallet,
+  assertByokWalletBalance: mockAssertByokWalletBalance,
+  computeByokFeeCents: mockComputeByokFeeCents,
+  debitByokHandlingFee: mockDebitByokHandlingFee
+}));
+
 vi.mock('$lib/server/firebase-admin', () => ({
   adminDb: {
     collection: vi.fn(() => ({
@@ -131,6 +166,54 @@ describe('/api/analyse constitution flag', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(dbQuery).mockImplementation(async () => []);
+    mockGetEntitlementSummary.mockResolvedValue({
+      tier: 'free',
+      status: 'active',
+      currency: 'GBP',
+      monthKey: '2026-03',
+      publicUsed: 0,
+      privateUsed: 0,
+      publicRemaining: 2,
+      privateRemaining: 0,
+      effectivePublicMax: 2,
+      privateMax: 0,
+      byokFeeChargedCents: 0
+    });
+    mockConsumeIngestionEntitlements.mockResolvedValue({
+      allowed: true,
+      summary: {
+        tier: 'free',
+        status: 'active',
+        currency: 'GBP',
+        monthKey: '2026-03',
+        publicUsed: 1,
+        privateUsed: 0,
+        publicRemaining: 1,
+        privateRemaining: 0,
+        effectivePublicMax: 2,
+        privateMax: 0,
+        byokFeeChargedCents: 0
+      }
+    });
+    mockEnsureWallet.mockResolvedValue({
+      availableCents: 1000,
+      currency: 'GBP'
+    });
+    mockAssertByokWalletBalance.mockResolvedValue({
+      ok: true,
+      requiredCents: 1,
+      availableCents: 1000
+    });
+    mockComputeByokFeeCents.mockImplementation((costUsd: number) =>
+      Math.round(Math.max(costUsd, 0) * 10)
+    );
+    mockDebitByokHandlingFee.mockResolvedValue({
+      charged: false,
+      duplicate: false,
+      insufficient: false,
+      amountCents: 0,
+      availableCents: 1000
+    });
     delete process.env.ENABLE_CONSTITUTION_IN_ANALYSE;
     delete process.env.ENABLE_DEPTH_ENRICHMENT;
     delete process.env.ENABLE_NIGHTLY_LINK_INGESTION;
@@ -247,7 +330,31 @@ describe('/api/analyse constitution flag', () => {
     expect(payload.error).toContain('Blocked private/local URL');
   });
 
-  it('emits phase-1 resource metadata when user links are supplied', async () => {
+  it('rejects selected public ingestion links that are missing public-share acknowledgement', async () => {
+    const request = new Request('http://localhost/api/analyse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: 'test query',
+        user_links: ['https://example.com/a'],
+        link_preferences: [
+          {
+            url: 'https://example.com/a',
+            ingest_selected: true,
+            ingest_visibility: 'public_shared',
+            acknowledge_public_share: false
+          }
+        ]
+      })
+    });
+
+    const response = await POST({ request, locals: { user: { uid: 'user:123' } } as any } as never);
+    expect(response.status).toBe(400);
+    const payload = await response.json();
+    expect(payload.error).toContain('acknowledge_public_share=true');
+  });
+
+  it('emits resource metadata when user links are supplied but no ingestion links are selected', async () => {
     const request = new Request('http://localhost/api/analyse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -267,16 +374,24 @@ describe('/api/analyse constitution flag', () => {
     expect(metadataEvent.resource_mode).toBe('expanded');
     expect(metadataEvent.user_links_count).toBe(1);
     expect(metadataEvent.runtime_links_processed).toBe(1);
-    expect(metadataEvent.nightly_queue_enqueued).toBe(2);
+    expect(metadataEvent.nightly_queue_enqueued).toBe(0);
   });
 
-  it('queues user + grounding links when queue opt-in is enabled', async () => {
+  it('queues selected ingestion links when opt-in is enabled', async () => {
     const request = new Request('http://localhost/api/analyse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         query: 'test query',
         user_links: ['https://example.com/a'],
+        link_preferences: [
+          {
+            url: 'https://example.com/a',
+            ingest_selected: true,
+            ingest_visibility: 'public_shared',
+            acknowledge_public_share: true
+          }
+        ],
         queue_for_nightly_ingest: true
       })
     });
@@ -302,6 +417,14 @@ describe('/api/analyse constitution flag', () => {
       body: JSON.stringify({
         query: 'test query',
         user_links: ['https://example.com/a'],
+        link_preferences: [
+          {
+            url: 'https://example.com/a',
+            ingest_selected: true,
+            ingest_visibility: 'public_shared',
+            acknowledge_public_share: true
+          }
+        ],
         queue_for_nightly_ingest: true
       })
     });

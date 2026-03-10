@@ -1,8 +1,13 @@
 import { runDialecticalEngine, type EngineCallbacks } from './engine';
+import type { ProviderApiKeys } from './byok/types';
 
 export async function runDomainAgnosticReasoning(
   inputText: string,
-  callbacks: EngineCallbacks
+  callbacks: EngineCallbacks,
+  options?: { providerApiKeys?: ProviderApiKeys }
 ): Promise<void> {
-  await runDialecticalEngine(inputText, callbacks, { mode: 'agnostic' });
+  await runDialecticalEngine(inputText, callbacks, {
+    mode: 'agnostic',
+    providerApiKeys: options?.providerApiKeys
+  });
 }

@@ -727,6 +727,10 @@ interface SourceMeta {
 	year?: number;
 	source_type: string;
 	url: string;
+	visibility_scope?: 'public_shared' | 'private_user_only';
+	owner_uid?: string;
+	contributor_uid?: string;
+	deletion_state?: 'active' | 'deleted';
 	fetched_at: string;
 	word_count: number;
 	char_count: number;
@@ -1587,18 +1591,40 @@ async function main() {
 			// DB connection already established at startup — reuse it
 			console.log('  [OK] Using existing SurrealDB connection');
 
-			// 6a. Remove any existing source data for this URL (idempotent re-run safety)
-			console.log('  Checking for existing source data...');
-			const RELATION_TABLES_ALL = [
-				'supports', 'contradicts', 'depends_on', 'responds_to', 'refines', 'exemplifies'
-			];
-			const existingSources = await db.query<[{ id: string }[]]>(
-				'SELECT id FROM source WHERE url = $url LIMIT 1',
-				{ url: sourceMeta.url }
-			);
-			const existingSourceId = Array.isArray(existingSources) && existingSources.length > 0
-				? Array.isArray(existingSources[0]) ? existingSources[0][0]?.id : (existingSources[0] as any)?.id
-				: null;
+				// 6a. Remove any existing source data for this URL (idempotent re-run safety)
+				console.log('  Checking for existing source data...');
+				const visibilityScope =
+					sourceMeta.visibility_scope === 'private_user_only' ? 'private_user_only' : 'public_shared';
+				const ownerUid = visibilityScope === 'private_user_only' ? sourceMeta.owner_uid ?? null : null;
+				const contributorUid = visibilityScope === 'public_shared' ? sourceMeta.contributor_uid ?? null : null;
+				const RELATION_TABLES_ALL = [
+					'supports', 'contradicts', 'depends_on', 'responds_to', 'refines', 'exemplifies'
+				];
+				const existingSources =
+					visibilityScope === 'private_user_only'
+						? await db.query<[{ id: string }[]]>(
+							`SELECT id
+							 FROM source
+							 WHERE url = $url
+							   AND visibility_scope = 'private_user_only'
+							   AND owner_uid = $owner_uid
+							 LIMIT 1`,
+							{
+								url: sourceMeta.url,
+								owner_uid: ownerUid
+							}
+						  )
+						: await db.query<[{ id: string }[]]>(
+							`SELECT id
+							 FROM source
+							 WHERE url = $url
+							   AND visibility_scope = 'public_shared'
+							 LIMIT 1`,
+							{ url: sourceMeta.url }
+						  );
+				const existingSourceId = Array.isArray(existingSources) && existingSources.length > 0
+					? Array.isArray(existingSources[0]) ? existingSources[0][0]?.id : (existingSources[0] as any)?.id
+					: null;
 			if (existingSourceId) {
 				console.log(`  [CLEANUP] Removing existing source (${existingSourceId}) and its claims/arguments...`);
 				// Remove relation edges among claims of this source
@@ -1620,26 +1646,34 @@ async function main() {
 			// 6b. Create source record
 			console.log('  Creating source record...');
 			const sourceRecord = await db.query<[{ id: string }[]]>(
-				`CREATE source CONTENT {
-					title: $title,
-					author: $author,
-					year: $year,
-					source_type: $source_type,
-					url: $url,
-					ingested_at: time::now(),
-					claim_count: $claim_count,
-					status: $status
-				}`,
-				{
-					title: sourceMeta.title,
-					author: sourceMeta.author,
-					year: sourceMeta.year ?? undefined,
-					source_type: sourceMeta.source_type,
-					url: sourceMeta.url,
-					claim_count: allClaims.length,
-					status: shouldValidate ? 'validated' : 'ingested'
-				}
-			);
+					`CREATE source CONTENT {
+						title: $title,
+						author: $author,
+						year: $year,
+						source_type: $source_type,
+						url: $url,
+						visibility_scope: $visibility_scope,
+						owner_uid: $owner_uid,
+						contributor_uid: $contributor_uid,
+						deletion_state: $deletion_state,
+						ingested_at: time::now(),
+						claim_count: $claim_count,
+						status: $status
+					}`,
+					{
+						title: sourceMeta.title,
+						author: sourceMeta.author,
+						year: sourceMeta.year ?? undefined,
+						source_type: sourceMeta.source_type,
+						url: sourceMeta.url,
+						visibility_scope: visibilityScope,
+						owner_uid: ownerUid,
+						contributor_uid: contributorUid,
+						deletion_state: sourceMeta.deletion_state ?? 'active',
+						claim_count: allClaims.length,
+						status: shouldValidate ? 'validated' : 'ingested'
+					}
+				);
 
 			const sourceId =
 				Array.isArray(sourceRecord) && sourceRecord.length > 0
