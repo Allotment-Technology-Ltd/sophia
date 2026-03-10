@@ -144,9 +144,16 @@
 
   async function parseResponseOrThrow(response: Response): Promise<any> {
     const text = await response.text();
-    const body = text ? JSON.parse(text) : {};
+    let body: any = {};
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = { raw: text };
+      }
+    }
     if (!response.ok) {
-      const detail = body?.detail || body?.error || response.statusText || 'Request failed';
+      const detail = body?.detail || body?.error || body?.raw || response.statusText || 'Request failed';
       throw new Error(String(detail));
     }
     return body;

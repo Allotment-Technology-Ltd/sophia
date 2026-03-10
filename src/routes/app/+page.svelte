@@ -624,57 +624,6 @@
     return null;
   });
 
-  const currentQueryModelProvider = $derived(
-    lastAssistantMsg?.metadata?.selected_model_provider ?? selectedModel.provider
-  );
-  const currentQueryModelId = $derived(
-    lastAssistantMsg?.metadata?.selected_model_id ?? selectedModel.modelId
-  );
-
-  const resolvedCurrentModelProvider = $derived.by(() => {
-    const provider = currentQueryModelProvider;
-    if (provider && provider !== 'auto' && isReasoningProvider(provider)) return provider;
-    const byModel = lastAssistantMsg?.metadata?.model_cost_breakdown?.by_model ?? [];
-    if (byModel.length === 1) return byModel[0].provider;
-    if (byModel.length > 1) {
-      return [...byModel]
-        .sort((a, b) => (b.estimated_cost_usd ?? 0) - (a.estimated_cost_usd ?? 0))[0]
-        ?.provider ?? 'vertex';
-    }
-    if (selectedModel.provider !== 'auto') return selectedModel.provider;
-    return 'vertex';
-  });
-
-  const resolvedCurrentModelId = $derived.by(() => {
-    if (currentQueryModelId) return currentQueryModelId;
-    const byModel = lastAssistantMsg?.metadata?.model_cost_breakdown?.by_model ?? [];
-    if (byModel.length === 0) return selectedModel.modelId;
-    const matchingProvider = byModel.find((entry) => entry.provider === resolvedCurrentModelProvider);
-    if (matchingProvider) return matchingProvider.model;
-    return byModel[0].model;
-  });
-
-  const alternateModelOptions = $derived.by(() => {
-    const all = modelOptions;
-    if (all.length === 0) return [] as ModelOption[];
-    return all.filter(
-      (option) =>
-        option.provider !== resolvedCurrentModelProvider
-    );
-  });
-
-  const compareOption = $derived.by(() => {
-    if (alternateModelOptions.length === 0) return null;
-    const providerPriority: ReasoningProvider[] = REASONING_PROVIDER_ORDER.filter(
-      (provider) => provider !== resolvedCurrentModelProvider
-    );
-    for (const provider of providerPriority) {
-      const match = alternateModelOptions.find((option) => option.provider === provider);
-      if (match) return match;
-    }
-    return alternateModelOptions[0];
-  });
-
   const currentQuery = $derived(
     conversation.messages.findLast((m) => m.role === 'user')?.content ?? ''
   );
@@ -765,19 +714,6 @@
     }
     return [...entries].reverse();
   });
-
-  function getCachedForModel(option: ModelOption | null): ReturnType<typeof historyStore.getCachedResult> {
-    if (!option || !currentQuery) return null;
-    return historyStore.getCachedResult(currentQuery, {
-      lens: selectedLens || undefined,
-      depthMode: currentDepthMode,
-      modelProvider: option.provider,
-      modelId: option.id,
-      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
-      domain: selectedDomain === 'auto' ? undefined : selectedDomain,
-      ...buildRuntimeResourceOptions()
-    });
-  }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   function stripSophiaMeta(text: string): string {
@@ -985,7 +921,8 @@
         .filter((pass): pass is PassId =>
           pass === 'analysis' || pass === 'critique' || pass === 'synthesis' || pass === 'verification'
         );
-      const bucketPasses: PassId[] = resolvedPasses.length > 0 ? resolvedPasses : ['analysis'];
+      if (resolvedPasses.length === 0) continue;
+      const bucketPasses: PassId[] = resolvedPasses;
       const weight = 1 / bucketPasses.length;
       const modelLabel = `${getModelProviderLabel(item.provider)} · ${item.model}`;
       for (const pass of bucketPasses) {
@@ -1127,7 +1064,7 @@
     });
 
     if (cached) {
-      conversation.showCachedResult(entry.question, cached, { appendUserMessage: false });
+      conversation.showCachedResult(entry.question, cached, { appendUserMessage: true });
       autoFocusFirstPass = false;
       return;
     }
@@ -1183,47 +1120,6 @@
       domain: selectedDomain === 'auto' ? undefined : selectedDomain,
       ...buildRuntimeResourceOptions()
     });
-  }
-
-  async function rerunWithModel(modelOption: ModelOption): Promise<void> {
-    if (conversation.isLoading) return;
-    const lastQuery = conversation.messages.findLast((m) => m.role === 'user')?.content;
-    if (!lastQuery) return;
-    selectedModelValue = modelOption.value;
-    prepareForNewRun();
-    await conversation.submitQuery(lastQuery, selectedLens || undefined, {
-      queryKind: 'rerun',
-      depthMode: currentDepthMode,
-      ...buildCredentialOptions(),
-      modelProvider: modelOption.provider,
-      modelId: modelOption.id,
-      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
-      domain: selectedDomain === 'auto' ? undefined : selectedDomain,
-      ...buildRuntimeResourceOptions(),
-      bypassQuestionLimit: true
-    });
-  }
-
-  async function switchToModelResult(modelOption: ModelOption): Promise<void> {
-    if (conversation.isLoading) return;
-    const lastQuery = conversation.messages.findLast((m) => m.role === 'user')?.content;
-    if (!lastQuery) return;
-    selectedModelValue = modelOption.value;
-    prepareForNewRun();
-    const switched = conversation.showCachedVariant(lastQuery, {
-      lens: selectedLens || undefined,
-      depthMode: currentDepthMode,
-      modelProvider: modelOption.provider,
-      modelId: modelOption.id,
-      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
-      domain: selectedDomain === 'auto' ? undefined : selectedDomain,
-      ...buildRuntimeResourceOptions()
-    });
-    if (switched) {
-      autoFocusFirstPass = false;
-      return;
-    }
-    await rerunWithModel(modelOption);
   }
 
   async function rerunWithExternalSources(): Promise<void> {
@@ -2183,23 +2079,6 @@
                   </button>
                   <span class="upgrade-note">
                     Re-run same query with richer pass depth.
-                  </span>
-                </div>
-              {/if}
-              {#if compareOption}
-                {@const compareCached = getCachedForModel(compareOption)}
-                <div class="upgrade-row">
-                  <button
-                    class="upgrade-btn"
-                    onclick={() => switchToModelResult(compareOption)}
-                    disabled={conversation.isLoading}
-                  >
-                    {compareCached ? `View ${compareOption.label}` : `Run again with ${compareOption.label}`}
-                  </button>
-                  <span class="upgrade-note">
-                    {compareCached
-                      ? 'Open cached result instantly.'
-                      : 'Compare pass outputs across concrete models.'}
                   </span>
                 </div>
               {/if}

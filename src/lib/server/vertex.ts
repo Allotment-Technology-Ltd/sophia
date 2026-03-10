@@ -83,10 +83,6 @@ function getGoogleForApiKey(apiKey: string) {
   return instance;
 }
 
-function isOpenAICompatibleProvider(provider: ReasoningProvider): provider is Exclude<ReasoningProvider, 'vertex' | 'anthropic'> {
-  return provider !== 'vertex' && provider !== 'anthropic';
-}
-
 function getPlatformApiKey(provider: ReasoningProvider): string | undefined {
   if (provider === 'vertex') return undefined;
   if (provider === 'anthropic') return process.env.ANTHROPIC_API_KEY?.trim() || undefined;
@@ -271,15 +267,17 @@ function getProviderModelCatalog(
   const prefix = provider.toUpperCase();
   const reasoning = config.providerReasoningModelIds[provider];
   const deep = config.providerDeepModelIds[provider] || reasoning;
-  const passSpecific =
-    provider === 'anthropic' && pass && pass !== 'generic'
-      ? [
-          pass === 'analysis' ? process.env.ANTHROPIC_DEEP_ANALYSIS_MODEL : undefined,
-          pass === 'critique' ? process.env.ANTHROPIC_DEEP_CRITIQUE_MODEL : undefined,
-          pass === 'synthesis' ? process.env.ANTHROPIC_DEEP_SYNTHESIS_MODEL : undefined,
-          pass === 'verification' ? process.env.ANTHROPIC_DEEP_VERIFICATION_MODEL : undefined
-        ]
-      : [];
+  let passSpecific: Array<string | undefined> = [];
+  if (provider === 'anthropic') {
+    if (pass && pass !== 'generic') {
+      passSpecific = [
+        pass === 'analysis' ? process.env.ANTHROPIC_DEEP_ANALYSIS_MODEL : undefined,
+        pass === 'critique' ? process.env.ANTHROPIC_DEEP_CRITIQUE_MODEL : undefined,
+        pass === 'synthesis' ? process.env.ANTHROPIC_DEEP_SYNTHESIS_MODEL : undefined,
+        pass === 'verification' ? process.env.ANTHROPIC_DEEP_VERIFICATION_MODEL : undefined
+      ];
+    }
+  }
 
   return uniqueModelIds([
     reasoning,

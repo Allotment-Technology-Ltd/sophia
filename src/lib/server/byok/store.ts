@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from '$lib/server/firebase-admin';
 import { decryptByokSecret, encryptByokSecret, type EncryptedSecret } from './crypto';
@@ -29,7 +28,9 @@ function providerRef(uid: string, provider: ByokProvider) {
 }
 
 function buildFingerprintLast8(apiKey: string): string {
-  return createHash('sha256').update(apiKey).digest('hex').slice(-8);
+  const normalized = apiKey.trim();
+  if (!normalized) return '';
+  return normalized.slice(-8);
 }
 
 function toIso(value: Timestamp | null | undefined): string | null {

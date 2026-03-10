@@ -13,8 +13,7 @@ function webhookEventRef(eventId: string) {
   return adminDb.collection('billingWebhookEvents').doc(eventId);
 }
 
-async function rememberCustomerUid(customerId: string | undefined, uid: string | undefined): Promise<void> {
-  if (!customerId || !uid) return;
+async function rememberCustomerUid(customerId: string, uid: string): Promise<void> {
   await customerMapRef(customerId).set(
     {
       uid,
