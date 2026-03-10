@@ -125,6 +125,19 @@
     return { provider, modelId };
   }
 
+  function applyModelSelection(provider?: ModelProvider, modelId?: string): void {
+    if (!provider || provider === 'auto') {
+      selectedModelValue = 'auto';
+      return;
+    }
+    if (modelId?.trim()) {
+      selectedModelValue = `${provider}::${modelId.trim()}`;
+      return;
+    }
+    const fallback = modelOptions.find((option) => option.provider === provider);
+    selectedModelValue = fallback ? fallback.value : 'auto';
+  }
+
   const selectedModel = $derived(parseSelectedModel(selectedModelValue));
 
   onMount(async () => {
@@ -437,8 +450,36 @@
   async function handleHistorySelect(entryId: string): Promise<void> {
     const entry = historyStore.items.find(e => e.id === entryId);
     if (!entry) return;
-    queryInput = entry.question;
-    await handleSubmit();
+    const depthMode = entry.depthMode ?? 'standard';
+    const modelProvider = entry.modelProvider ?? 'auto';
+    const modelId = entry.modelId;
+
+    selectedDepth = depthMode;
+    applyModelSelection(modelProvider, modelId);
+    activeResultPass = 'analysis';
+
+    const cached = historyStore.findCachedResult(entry.question, {
+      depthMode,
+      modelProvider,
+      modelId
+    });
+
+    if (cached) {
+      conversation.showCachedResult(entry.question, cached, { appendUserMessage: false });
+      revealed = true;
+      return;
+    }
+
+    revealed = false;
+    await conversation.submitQuery(entry.question, selectedLens || undefined, {
+      depthMode,
+      modelProvider,
+      modelId,
+      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+      domain: selectedDomain === 'auto' ? undefined : selectedDomain,
+      ...buildRuntimeResourceOptions(),
+      bypassQuestionLimit: true
+    });
   }
 
   function handleTabChange(tab: TabId): void {
