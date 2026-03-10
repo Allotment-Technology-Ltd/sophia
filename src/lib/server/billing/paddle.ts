@@ -65,8 +65,7 @@ function assertRuntimeCompatibleValue(base: string, runtime: PaddleRuntime, valu
   }
 }
 
-function requireRuntimeEnv(base: string): string {
-  const runtime = resolvePaddleRuntime();
+function requireRuntimeEnv(base: string, runtime = resolvePaddleRuntime()): string {
   for (const key of runtimeEnvCandidates(base, runtime)) {
     const value = process.env[key]?.trim();
     if (value) {
@@ -79,8 +78,7 @@ function requireRuntimeEnv(base: string): string {
   );
 }
 
-function optionalRuntimeEnv(base: string): string | null {
-  const runtime = resolvePaddleRuntime();
+function optionalRuntimeEnv(base: string, runtime = resolvePaddleRuntime()): string | null {
   for (const key of runtimeEnvCandidates(base, runtime)) {
     const value = process.env[key]?.trim();
     if (value) return value;
@@ -88,15 +86,15 @@ function optionalRuntimeEnv(base: string): string | null {
   return null;
 }
 
-function paddleApiBase(): string {
-  return resolvePaddleRuntime() === 'production'
+function paddleApiBase(runtime = resolvePaddleRuntime()): string {
+  return runtime === 'production'
     ? 'https://api.paddle.com'
     : 'https://sandbox-api.paddle.com';
 }
 
-function paddleAuthHeaders(): Record<string, string> {
+function paddleAuthHeaders(runtime = resolvePaddleRuntime()): Record<string, string> {
   return {
-    Authorization: `Bearer ${requireRuntimeEnv('PADDLE_API_KEY')}`,
+    Authorization: `Bearer ${requireRuntimeEnv('PADDLE_API_KEY', runtime)}`,
     'Content-Type': 'application/json'
   };
 }
@@ -124,10 +122,14 @@ function parseCheckoutUrl(payload: PaddleApiResponse<PaddleTransaction>): string
   return url;
 }
 
-async function paddlePost<T>(path: string, body: Record<string, unknown>): Promise<PaddleApiResponse<T>> {
-  const response = await fetch(`${paddleApiBase()}${path}`, {
+async function paddlePost<T>(
+  path: string,
+  body: Record<string, unknown>,
+  runtime = resolvePaddleRuntime()
+): Promise<PaddleApiResponse<T>> {
+  const response = await fetch(`${paddleApiBase(runtime)}${path}`, {
     method: 'POST',
-    headers: paddleAuthHeaders(),
+    headers: paddleAuthHeaders(runtime),
     body: JSON.stringify(body)
   });
   const payload = (await response.json().catch(() => ({}))) as PaddleApiResponse<T>;
@@ -138,10 +140,13 @@ async function paddlePost<T>(path: string, body: Record<string, unknown>): Promi
   return payload;
 }
 
-async function paddleGet<T>(path: string): Promise<PaddleApiResponse<T>> {
-  const response = await fetch(`${paddleApiBase()}${path}`, {
+async function paddleGet<T>(
+  path: string,
+  runtime = resolvePaddleRuntime()
+): Promise<PaddleApiResponse<T>> {
+  const response = await fetch(`${paddleApiBase(runtime)}${path}`, {
     method: 'GET',
-    headers: paddleAuthHeaders()
+    headers: paddleAuthHeaders(runtime)
   });
   const payload = (await response.json().catch(() => ({}))) as PaddleApiResponse<T>;
   if (!response.ok) {
@@ -169,7 +174,8 @@ export async function createSubscriptionCheckout(params: {
   const cancelUrl = appUrl ? `${appUrl}/?billing=cancelled` : undefined;
   const checkoutPageUrl =
     appUrl && !isLocalhostAppUrl(appUrl) ? `${appUrl.replace(/\/+$/, '')}/pricing` : undefined;
-  const priceId = requireRuntimeEnv(tierPriceEnvKey(params.tier, params.currency));
+  const runtime = resolvePaddleRuntime({ requestUrl: appUrl || undefined });
+  const priceId = requireRuntimeEnv(tierPriceEnvKey(params.tier, params.currency), runtime);
 
   const payload = await paddlePost<PaddleTransaction>('/transactions', {
     items: [{ price_id: priceId, quantity: 1 }],
@@ -187,7 +193,7 @@ export async function createSubscriptionCheckout(params: {
       success_url: successUrl,
       cancel_url: cancelUrl
     }
-  });
+  }, runtime);
 
   return {
     checkoutUrl: parseCheckoutUrl(payload),
@@ -212,7 +218,8 @@ export async function createTopupCheckout(params: {
   const checkoutPageUrl =
     appUrl && !isLocalhostAppUrl(appUrl) ? `${appUrl.replace(/\/+$/, '')}/pricing` : undefined;
   const kind: CheckoutKind = params.pack === 'large' ? 'topup_large' : 'topup_small';
-  const priceId = requireRuntimeEnv(topupPriceEnvKey(kind, params.currency));
+  const runtime = resolvePaddleRuntime({ requestUrl: appUrl || undefined });
+  const priceId = requireRuntimeEnv(topupPriceEnvKey(kind, params.currency), runtime);
   const topupCents =
     params.pack === 'large'
       ? Number.parseInt(process.env.BYOK_TOPUP_LARGE_CENTS ?? '1500', 10) || 1500
@@ -233,7 +240,7 @@ export async function createTopupCheckout(params: {
       success_url: successUrl,
       cancel_url: cancelUrl
     }
-  });
+  }, runtime);
 
   return {
     checkoutUrl: parseCheckoutUrl(payload),
@@ -244,19 +251,26 @@ export async function createTopupCheckout(params: {
 
 export async function createCustomerPortalSession(params: {
   paddleCustomerId: string;
+  appUrl?: string | null;
 }): Promise<string> {
+  const runtime = resolvePaddleRuntime({ requestUrl: params.appUrl?.trim() || undefined });
   const payload = await paddlePost<PaddlePortalSession>(
     `/customers/${params.paddleCustomerId}/portal-sessions`,
-    {}
+    {},
+    runtime
   );
   const url = payload.data?.urls?.general?.overview;
   if (!url) throw new Error('Paddle portal session URL missing from response');
   return url;
 }
 
-export async function listRecentTransactions(limit = 50): Promise<PaddleTransaction[]> {
+export async function listRecentTransactions(
+  limit = 50,
+  options?: { appUrl?: string | null }
+): Promise<PaddleTransaction[]> {
   const perPage = Math.min(100, Math.max(1, Math.floor(limit)));
-  const payload = await paddleGet<PaddleTransactionsListResponse>(`/transactions?per_page=${perPage}`);
+  const runtime = resolvePaddleRuntime({ requestUrl: options?.appUrl?.trim() || undefined });
+  const payload = await paddleGet<PaddleTransactionsListResponse>(`/transactions?per_page=${perPage}`, runtime);
   return Array.isArray(payload?.data) ? payload.data : [];
 }
 
@@ -274,7 +288,8 @@ function parsePaddleSignatureHeader(signatureHeader: string): { ts: string; h1: 
 }
 
 export function verifyPaddleWebhookSignature(rawBody: string, signatureHeader: string | null): boolean {
-  const secret = optionalRuntimeEnv('PADDLE_WEBHOOK_SECRET');
+  const runtime = resolvePaddleRuntime();
+  const secret = optionalRuntimeEnv('PADDLE_WEBHOOK_SECRET', runtime);
   if (!secret) {
     return (process.env.PADDLE_ALLOW_UNSIGNED_WEBHOOKS ?? 'false').toLowerCase() === 'true';
   }

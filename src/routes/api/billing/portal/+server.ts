@@ -4,7 +4,7 @@ import { ensureBillingState } from '$lib/server/billing/store';
 import { createCustomerPortalSession } from '$lib/server/billing/paddle';
 import { BILLING_FEATURE_ENABLED } from '$lib/server/billing/flags';
 
-export const POST: RequestHandler = async ({ locals }) => {
+export const POST: RequestHandler = async ({ locals, request }) => {
   try {
     if (!BILLING_FEATURE_ENABLED) {
       return json({ error: 'Billing is currently disabled' }, { status: 503 });
@@ -25,7 +25,8 @@ export const POST: RequestHandler = async ({ locals }) => {
     }
 
     const portalUrl = await createCustomerPortalSession({
-      paddleCustomerId: customerId
+      paddleCustomerId: customerId,
+      appUrl: new URL(request.url).origin
     });
 
     return json({ portal_url: portalUrl });

@@ -54,7 +54,7 @@ function parseTransactionTimestamp(tx: PaddleTransactionRecord): number {
   return Number.isFinite(ms) ? ms : 0;
 }
 
-export const POST: RequestHandler = async ({ locals }) => {
+export const POST: RequestHandler = async ({ locals, request }) => {
   if (!BILLING_FEATURE_ENABLED) {
     return json({ ok: true, message: 'billing disabled' }, { status: 202 });
   }
@@ -65,7 +65,7 @@ export const POST: RequestHandler = async ({ locals }) => {
   }
 
   try {
-    const all = (await listRecentTransactions(100)) as PaddleTransactionRecord[];
+    const all = (await listRecentTransactions(100, { appUrl: new URL(request.url).origin })) as PaddleTransactionRecord[];
     const mine = all.filter((tx) => (tx.custom_data?.uid ?? null) === uid);
 
     const completedLike = mine.filter((tx) => {
@@ -131,4 +131,3 @@ export const POST: RequestHandler = async ({ locals }) => {
     return json({ error: message }, { status: 502 });
   }
 };
-
