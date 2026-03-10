@@ -46,8 +46,8 @@ function resolveCheckoutVariant(): 'one-page' | 'multi-page' | null {
   return null;
 }
 
-export const load: PageServerLoad = async ({ locals }) => {
-  const runtime = resolvePaddleRuntime();
+export const load: PageServerLoad = async ({ locals, url }) => {
+  const runtime = resolvePaddleRuntime({ requestUrl: url.toString() });
   return {
     paddleRuntime: runtime,
     paddleClientToken: resolveClientToken(runtime),
