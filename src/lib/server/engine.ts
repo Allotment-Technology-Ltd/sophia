@@ -499,18 +499,25 @@ export async function runDialecticalEngine(
   let argumentsRetrieved = 0;
   let retrievalDegraded = false;
   let retrievalDegradedReason: string | undefined;
-  const retrievalTopK = depthMode === 'deep' ? 10 : depthMode === 'quick' ? 3 : 5;
+  const retrievalTopK = depthMode === 'deep' ? 12 : depthMode === 'quick' ? 3 : 6;
+  const retrievalMaxHops = depthMode === 'deep' ? 3 : depthMode === 'quick' ? 1 : 2;
+  const retrievalMaxClaims = depthMode === 'deep' ? 140 : depthMode === 'quick' ? 36 : 84;
 
   try {
     const t0 = Date.now();
-    const retrievalResult = await retrieveContext(query, { domain: retrievalDomain, topK: retrievalTopK });
+    const retrievalResult = await retrieveContext(query, {
+      domain: retrievalDomain,
+      topK: retrievalTopK,
+      maxHops: retrievalMaxHops,
+      maxClaims: retrievalMaxClaims
+    });
     contextBlock = buildContextBlock(retrievalResult);
     claimsRetrieved = retrievalResult.claims.length;
     argumentsRetrieved = retrievalResult.arguments.length;
     retrievalDegraded = retrievalResult.degraded;
     retrievalDegradedReason = retrievalResult.degraded_reason;
     console.log(
-      `[ENGINE] Retrieval done in ${Date.now() - t0}ms — topK=${retrievalTopK} claims=${claimsRetrieved} arguments=${argumentsRetrieved}`
+      `[ENGINE] Retrieval done in ${Date.now() - t0}ms — topK=${retrievalTopK} hops=${retrievalMaxHops} claims=${claimsRetrieved} arguments=${argumentsRetrieved}`
     );
     if (retrievalDegraded) {
       console.warn('[ENGINE] Retrieval degraded mode active', { reason: retrievalDegradedReason });

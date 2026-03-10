@@ -30,18 +30,52 @@ export function RELATIONS_USER(claimsJson: string): string {
 }
 
 // Zod schema for relations
+const RELATION_TYPE_VALUES = [
+	'supports',
+	'contradicts',
+	'depends_on',
+	'responds_to',
+	'refines',
+	'exemplifies'
+] as const;
+
+const STRENGTH_VALUES = ['strong', 'moderate', 'weak'] as const;
+
+function normalizeLabel(value: unknown): string | unknown {
+	if (typeof value !== 'string') return value;
+	return value.toLowerCase().trim().replace(/[\s-]+/g, '_');
+}
+
+function coercePositiveInt(value: unknown): unknown {
+	const numberValue = Number(value);
+	if (!Number.isFinite(numberValue)) return value;
+	return Math.max(1, Math.trunc(numberValue));
+}
+
+function normalizeRelationType(value: unknown): unknown {
+	const normalized = normalizeLabel(value);
+	if (typeof normalized !== 'string') return normalized;
+	const relationMap: Record<string, (typeof RELATION_TYPE_VALUES)[number]> = {
+		supports: 'supports',
+		support: 'supports',
+		contradicts: 'contradicts',
+		contradict: 'contradicts',
+		depends_on: 'depends_on',
+		depends: 'depends_on',
+		responds_to: 'responds_to',
+		responds: 'responds_to',
+		refines: 'refines',
+		exemplifies: 'exemplifies',
+		example_of: 'exemplifies'
+	};
+	return relationMap[normalized] ?? normalized;
+}
+
 export const RelationSchema = z.object({
-	from_position: z.number().int().positive().describe('position_in_source of source claim'),
-	to_position: z.number().int().positive().describe('position_in_source of target claim'),
-	relation_type: z.enum([
-		'supports',
-		'contradicts',
-		'depends_on',
-		'responds_to',
-		'refines',
-		'exemplifies'
-	]),
-	strength: z.enum(['strong', 'moderate', 'weak']),
+	from_position: z.preprocess(coercePositiveInt, z.number().int().positive()).describe('position_in_source of source claim'),
+	to_position: z.preprocess(coercePositiveInt, z.number().int().positive()).describe('position_in_source of target claim'),
+	relation_type: z.preprocess(normalizeRelationType, z.enum(RELATION_TYPE_VALUES)),
+	strength: z.preprocess(normalizeLabel, z.enum(STRENGTH_VALUES)),
 	note: z.string().optional().describe('One sentence explaining the relation')
 });
 

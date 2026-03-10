@@ -99,7 +99,7 @@ After synthesis, users can optionally trigger a fourth pass that cross-checks ke
 | Frontend + Backend | SvelteKit 2, Svelte 5, TypeScript | Full-stack with SSE streaming; Svelte 5 runes throughout |
 | Database | SurrealDB v2 | Graph + vector + document in one query path |
 | AI — query runtime | Vertex AI Gemini 2.5 Flash + Google Search Grounding | Three-pass engine; grounding provides per-pass web sources |
-| AI — ingestion pipeline | Anthropic Claude Sonnet (claim + relation extraction); Gemini (cross-validation) | Runs offline, not at query time |
+| AI — ingestion pipeline | Vertex Gemini (default claim/relation/group extraction); Anthropic (manual rollback) | Runs offline, not at query time; cross-model validation is opt-in only |
 | Embeddings | Vertex AI text-embedding-005 (768-dim) | Standardised across ingestion and query-time retrieval as of Phase 3d |
 | Auth | Firebase Auth (Google Sign-In) | ID tokens verified server-side |
 | History / Cache | Firestore | Per-user, serverless, pairs with Firebase UIDs |
@@ -126,7 +126,8 @@ Results: SOPHIA 8/10, draw 1/10, loss 1/10. Largest gap in counterargument cover
 - Node.js 20+, pnpm 9+
 - SurrealDB v2 (local or remote)
 - GCP project with Vertex AI enabled (for query-time embedding and LLM calls)
-- Anthropic API key (for ingestion pipeline only — not needed to run the app)
+- GCP project with Vertex AI enabled (for ingestion pipeline + query-time model calls)
+- Anthropic API key (optional; only needed for manual ingestion rollback via `--ingest-provider anthropic`)
 - Firebase project (Auth + Firestore)
 - See `.env.example` for the full list of required variables
 
@@ -179,7 +180,11 @@ pnpm tsx scripts/fetch-source.ts --source-list data/source-list-3a.json --wave 1
 # Pre-scan (cost estimate + blocker check)
 pnpm tsx scripts/pre-scan.ts --source-list data/source-list-3a.json --wave 1
 
-# Ingest with Gemini cross-validation
+# Ingest (Vertex-first, no cross-model validation by default)
+pnpm tsx scripts/ingest-batch.ts --source-list data/source-list-3a.json --wave 1
+# Optional explicit provider selection (default is Vertex):
+pnpm tsx scripts/ingest-batch.ts --source-list data/source-list-3a.json --wave 1 --ingest-provider vertex
+# Optional spot-check mode (explicitly enable cross-model validation):
 pnpm tsx scripts/ingest-batch.ts --source-list data/source-list-3a.json --wave 1 --validate
 ```
 

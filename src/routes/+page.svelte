@@ -2,6 +2,7 @@
   import { conversation } from '$lib/stores/conversation.svelte';
   import { referencesStore } from '$lib/stores/references.svelte';
   import { historyStore } from '$lib/stores/history.svelte';
+  import { comparisonStore } from '$lib/stores/comparison.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
   import { renderMarkdown } from '$lib/utils/markdown';
   import { goto, replaceState } from '$app/navigation';
@@ -60,9 +61,7 @@
     }
   ];
   let selectedDepth = $state<'quick' | 'standard' | 'deep'>('standard');
-  let selectedResourceMode = $state<'standard' | 'expanded'>('standard');
   let userLinksInput = $state('');
-  let queueForNightlyIngest = $state(false);
   let selectedDomain = $state<'auto' | 'ethics' | 'philosophy_of_mind'>('auto');
   const domainSelectorEnabled =
     (import.meta.env.PUBLIC_ENABLE_DOMAIN_OVERRIDE_UI ?? 'true').toLowerCase() === 'true';
@@ -330,36 +329,44 @@
     conversation.messages.findLast((m) => m.role === 'user')?.content ?? ''
   );
 
-  const geminiCachedResult = $derived.by(() =>
-    !currentQuery
-      ? null
-      : historyStore.getCachedResult(currentQuery, {
-          lens: selectedLens || undefined,
-          depthMode: currentDepthMode,
-          modelProvider: 'vertex',
-          modelId: modelOptions.find((option) => option.provider === 'vertex')?.id,
-          domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
-          domain: selectedDomain === 'auto' ? undefined : selectedDomain,
-          ...buildRuntimeResourceOptions()
-        })
+  const currentQueryNormalized = $derived(
+    currentQuery.trim().toLowerCase()
+  );
+  const runtimeUserLinks = $derived(
+    parseUserLinksInput(userLinksInput)
   );
 
-  const claudeCachedResult = $derived.by(() =>
-    !currentQuery
-      ? null
-      : historyStore.getCachedResult(currentQuery, {
-          lens: selectedLens || undefined,
-          depthMode: currentDepthMode,
-          modelProvider: 'anthropic',
-          modelId: modelOptions.find((option) => option.provider === 'anthropic')?.id,
-          domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
-          domain: selectedDomain === 'auto' ? undefined : selectedDomain,
-          ...buildRuntimeResourceOptions()
-        })
+  const comparisonCandidate = $derived.by(() => {
+    const normalizedQuery = currentQueryNormalized;
+    if (!normalizedQuery || !lastAssistantMsg?.passes) return null;
+    const currentRunId = lastAssistantMsg.metadata?.query_run_id;
+    const currentPasses = lastAssistantMsg.passes;
+    const candidates = historyStore.cachedResults.filter(
+      (entry) => entry.query.trim().toLowerCase() === normalizedQuery
+    );
+    for (const entry of candidates) {
+      const candidateRunId = entry.metadata?.query_run_id;
+      if (currentRunId && candidateRunId && currentRunId === candidateRunId) continue;
+      const samePasses =
+        entry.passes.analysis === (currentPasses.analysis ?? '') &&
+        entry.passes.critique === (currentPasses.critique ?? '') &&
+        entry.passes.synthesis === (currentPasses.synthesis ?? '') &&
+        (entry.passes.verification ?? '') === (currentPasses.verification ?? '');
+      if (!currentRunId && samePasses) continue;
+      return entry;
+    }
+    return null;
+  });
+
+  const currentVariantLabel = $derived.by(() =>
+    formatRunVariantLabel(lastAssistantMsg?.metadata, 'Current run')
   );
 
-  const hasCachedGemini = $derived(!!geminiCachedResult);
-  const hasCachedClaude = $derived(!!claudeCachedResult);
+  const comparisonVariantLabel = $derived.by(() =>
+    comparisonCandidate
+      ? formatRunVariantLabel(comparisonCandidate.metadata, 'Previous run')
+      : 'Previous run'
+  );
 
   function getCachedForModel(option: ModelOption | null): ReturnType<typeof historyStore.getCachedResult> {
     if (!option || !currentQuery) return null;
@@ -406,20 +413,48 @@
     return `${(ms / 1000).toFixed(1)}s`;
   }
 
+  function parseUserLinksInput(value: string): string[] {
+    return value
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 5);
+  }
+
+  function formatRunVariantLabel(
+    metadata:
+      | {
+          selected_model_provider?: 'auto' | 'vertex' | 'anthropic';
+          selected_model_id?: string;
+          depth_mode?: 'quick' | 'standard' | 'deep';
+          user_links_count?: number;
+        }
+      | undefined,
+    fallback: string
+  ): string {
+    if (!metadata) return fallback;
+    const provider =
+      metadata.selected_model_provider === 'anthropic'
+        ? 'Claude'
+        : metadata.selected_model_provider === 'vertex'
+          ? 'Gemini'
+          : 'Auto';
+    const model = metadata.selected_model_id ? ` · ${metadata.selected_model_id}` : '';
+    const depth = metadata.depth_mode ? ` · ${metadata.depth_mode}` : '';
+    const links = metadata.user_links_count ? ` · ${metadata.user_links_count} links` : '';
+    return `${provider}${model}${depth}${links}`;
+  }
+
   function buildRuntimeResourceOptions(): {
     resourceMode: 'standard' | 'expanded';
     userLinks: string[];
     queueForNightlyIngest: boolean;
   } {
-    const userLinks = userLinksInput
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .slice(0, 5);
+    const userLinks = parseUserLinksInput(userLinksInput);
     return {
-      resourceMode: selectedResourceMode,
+      resourceMode: userLinks.length > 0 ? 'expanded' : 'standard',
       userLinks,
-      queueForNightlyIngest
+      queueForNightlyIngest: userLinks.length > 0
     };
   }
 
@@ -494,6 +529,23 @@
     replaceState(url.toString(), page.state);
   }
 
+  async function openGraphVisualization(mode: 'panel' | 'full' = 'full'): Promise<void> {
+    if (mode === 'panel') {
+      activeTab = 'map';
+      panelStore.openPanel();
+      handleTabChange('map');
+      return;
+    }
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.pathname = '/map';
+      url.searchParams.delete('panelTab');
+      await goto(url.toString(), { replaceState: false, noScroll: true, keepFocus: true });
+      return;
+    }
+    await goto('/map');
+  }
+
   async function retryLastQuery(): Promise<void> {
     const lastQuery = conversation.messages.findLast(m => m.role === 'user')?.content;
     if (!lastQuery) return;
@@ -546,6 +598,25 @@
     }
     revealed = false;
     await rerunWithModel(modelOption);
+  }
+
+  async function rerunWithExternalSources(): Promise<void> {
+    if (conversation.isLoading) return;
+    const lastQuery = conversation.messages.findLast((m) => m.role === 'user')?.content;
+    if (!lastQuery) return;
+    const userLinks = parseUserLinksInput(userLinksInput);
+    if (userLinks.length === 0) return;
+    activeResultPass = 'analysis';
+    revealed = false;
+    await conversation.submitQuery(lastQuery, selectedLens || undefined, {
+      depthMode: currentDepthMode,
+      modelProvider: selectedModel.provider,
+      modelId: selectedModel.modelId,
+      domainMode: selectedDomain === 'auto' ? 'auto' : 'manual',
+      domain: selectedDomain === 'auto' ? undefined : selectedDomain,
+      ...buildRuntimeResourceOptions(),
+      bypassQuestionLimit: true
+    });
   }
 
   async function upgradeDepth(): Promise<void> {
@@ -623,6 +694,14 @@
     syncTabFromUrl();
     window.addEventListener('popstate', syncTabFromUrl);
     return () => window.removeEventListener('popstate', syncTabFromUrl);
+  });
+
+  $effect(() => {
+    if (!comparisonCandidate || !currentQueryNormalized) {
+      comparisonStore.clear();
+      return;
+    }
+    comparisonStore.setBaselineFromCached(comparisonCandidate, comparisonVariantLabel);
   });
 
   let pageTitle = $derived.by(() => {
@@ -845,8 +924,20 @@
             <p class="query-sub">Be specific · More context → richer analysis</p>
 
             <div class="query-input-wrap">
+              <QuestionInput
+                bind:value={queryInput}
+                onSubmit={handleSubmit}
+                disabled={conversation.isLoading}
+                onkeydown={handleKeydown}
+              />
+
+              <DepthSelector bind:value={selectedDepth} disabled={conversation.isLoading} />
+
               <div class="reasoning-frame">
                 <div class="frame-title">Reasoning Frame</div>
+                <p class="frame-copy">
+                  Keep this on Auto for most queries. Override only if you need a specific domain lens or model.
+                </p>
                 {#if domainSelectorEnabled}
                   <div class="domain-row">
                     <label for="domain-select">Domain</label>
@@ -872,18 +963,12 @@
                 />
               </div>
 
-              <DepthSelector bind:value={selectedDepth} disabled={conversation.isLoading} />
-
               <div class="resource-frame">
-                <div class="frame-title">External Resources (Phase 1)</div>
-                <div class="resource-row">
-                  <label for="resource-mode">Mode</label>
-                  <select id="resource-mode" bind:value={selectedResourceMode}>
-                    <option value="standard">Standard runtime intake</option>
-                    <option value="expanded">Expanded runtime intake</option>
-                  </select>
-                </div>
-                <label class="resource-label" for="user-links">User links (one URL per line, max 5)</label>
+                <div class="frame-title">External Sources</div>
+                <p class="resource-copy">
+                  Add up to 5 URLs. We use relevant material in this run and automatically queue valid links for overnight ingestion.
+                </p>
+                <label class="resource-label" for="user-links">Sources to prioritize (optional)</label>
                 <textarea
                   id="user-links"
                   bind:value={userLinksInput}
@@ -891,18 +976,14 @@
                   rows="4"
                   placeholder="https://example.com/source-1"
                 ></textarea>
-                <label class="resource-toggle">
-                  <input type="checkbox" bind:checked={queueForNightlyIngest} />
-                  <span>Queue these links for nightly ingestion</span>
-                </label>
+                <p class="resource-note">
+                  {#if runtimeUserLinks.length > 0}
+                    {runtimeUserLinks.length} link(s) will be used now and queued for tonight.
+                  {:else}
+                    You can also add sources after the first run, then re-run and compare pass/graph differences.
+                  {/if}
+                </p>
               </div>
-
-              <QuestionInput
-                bind:value={queryInput}
-                onSubmit={handleSubmit}
-                disabled={conversation.isLoading}
-                onkeydown={handleKeydown}
-              />
 
               <div class="query-actions">
                 <Button
@@ -917,13 +998,13 @@
               <div class="suggested-questions">
                 <div class="suggested-header">
                   <h3>Suggested Questions</h3>
-                  <p>Tailored to your selected domain and lens.</p>
+                  <p>Tailored to your selected domain and lens. Click to prefill, then edit before running.</p>
                 </div>
                 <div class="example-pills" aria-label="Suggested questions">
                 {#each rotatingQuestions as q}
                   <button
                     class="pill"
-                    onclick={() => { queryInput = q; handleSubmit(); }}
+                    onclick={() => { queryInput = q; }}
                   >
                     {q}
                   </button>
@@ -983,6 +1064,21 @@
               </div>
             {/if}
 
+            <div class="graph-cta">
+              <div class="graph-cta-copy">
+                <strong>See how the answer was built.</strong>
+                <span>Open the graph visualisation to inspect traversal paths, filters, and argument structure.</span>
+              </div>
+              <div class="graph-cta-actions">
+                <button class="graph-cta-btn" onclick={() => openGraphVisualization('full')}>
+                  Open Graph Visualisation
+                </button>
+                <button class="graph-cta-btn ghost" onclick={() => openGraphVisualization('panel')}>
+                  Open In Side Panel
+                </button>
+              </div>
+            </div>
+
             <!-- Pass cards (tabbed: one visible at a time) -->
             {#if activeResultPass === 'analysis' && passes.analysis}
               <div id="pass-analysis">
@@ -1018,6 +1114,33 @@
             {#if epistemicContent}
               <EpistemicStatus content={epistemicContent} />
             {/if}
+
+            <div class="resource-rerun-card">
+              <div class="resource-rerun-head">
+                <h3>Add External Sources And Re-Run</h3>
+                <p>
+                  Paste links to steer evidence retrieval. Relevant links are used immediately and queued for overnight ingestion automatically.
+                </p>
+              </div>
+              <textarea
+                bind:value={userLinksInput}
+                class="links-input"
+                rows="3"
+                placeholder="https://example.com/new-source"
+              ></textarea>
+              <div class="upgrade-row">
+                <button
+                  class="upgrade-btn"
+                  onclick={rerunWithExternalSources}
+                  disabled={conversation.isLoading || runtimeUserLinks.length === 0}
+                >
+                  Re-run With Sources
+                </button>
+                <span class="upgrade-note">
+                  Compare this run against the previous run in the panel below.
+                </span>
+              </div>
+            </div>
 
             <!-- Web verification section (tabbed) -->
             {#if activeResultPass === 'verification'}
@@ -1124,20 +1247,24 @@
               {/if}
             {/if}
 
-            {#if geminiCachedResult && claudeCachedResult}
+            {#if comparisonCandidate}
               <ModelComparePanel
-                geminiPasses={{
-                  analysis: geminiCachedResult.passes.analysis,
-                  critique: geminiCachedResult.passes.critique,
-                  synthesis: geminiCachedResult.passes.synthesis,
-                  verification: geminiCachedResult.passes.verification
+                leftLabel={comparisonVariantLabel}
+                rightLabel={currentVariantLabel}
+                leftPasses={{
+                  analysis: comparisonCandidate.passes.analysis,
+                  critique: comparisonCandidate.passes.critique,
+                  synthesis: comparisonCandidate.passes.synthesis,
+                  verification: comparisonCandidate.passes.verification
                 }}
-                claudePasses={{
-                  analysis: claudeCachedResult.passes.analysis,
-                  critique: claudeCachedResult.passes.critique,
-                  synthesis: claudeCachedResult.passes.synthesis,
-                  verification: claudeCachedResult.passes.verification
+                rightPasses={{
+                  analysis: lastAssistantMsg.passes.analysis,
+                  critique: lastAssistantMsg.passes.critique,
+                  synthesis: lastAssistantMsg.passes.synthesis,
+                  verification: lastAssistantMsg.passes.verification
                 }}
+                leftMeta={comparisonCandidate.metadata}
+                rightMeta={lastAssistantMsg.metadata}
               />
             {/if}
 
@@ -1323,6 +1450,15 @@
     text-align: left;
   }
 
+  .frame-copy {
+    margin: -2px 0 2px;
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    color: var(--color-dim);
+    text-align: left;
+    line-height: 1.4;
+  }
+
   .domain-row {
     width: 100%;
     display: flex;
@@ -1355,6 +1491,7 @@
   }
 
   .resource-frame {
+    width: min(700px, 100%);
     border: 1px solid var(--color-border);
     border-radius: 10px;
     padding: 0.8rem;
@@ -1363,26 +1500,13 @@
     background: color-mix(in oklab, var(--color-bg-elev) 92%, var(--color-bg) 8%);
   }
 
-  .resource-row {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .resource-row label {
-    font-size: 0.88rem;
-    color: var(--color-text-muted);
-    min-width: 52px;
-  }
-
-  .resource-row select {
-    flex: 1;
-    background: var(--color-bg-soft);
-    color: var(--color-text);
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    padding: 0.45rem 0.6rem;
-    font-size: 0.9rem;
+  .resource-copy {
+    margin: -2px 0 2px;
+    font-family: var(--font-ui);
+    font-size: 0.74rem;
+    color: var(--color-dim);
+    text-align: left;
+    line-height: 1.45;
   }
 
   .resource-label {
@@ -1403,12 +1527,38 @@
     line-height: 1.35;
   }
 
-  .resource-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.85rem;
-    color: var(--color-text-muted);
+  .resource-note {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    color: var(--color-muted);
+    text-align: left;
+  }
+
+  .resource-rerun-card {
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-surface);
+    padding: var(--space-3);
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .resource-rerun-head h3 {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+  }
+
+  .resource-rerun-head p {
+    margin: 6px 0 0;
+    font-family: var(--font-ui);
+    font-size: 0.73rem;
+    color: var(--color-dim);
+    line-height: 1.45;
   }
 
   .suggested-questions {
@@ -1515,6 +1665,69 @@
     color: var(--color-muted);
     margin: 0;
     line-height: 1.65;
+  }
+
+  .graph-cta {
+    border: 1px solid var(--color-sage-border);
+    background: color-mix(in srgb, var(--color-sage) 14%, var(--color-surface));
+    border-radius: 4px;
+    padding: var(--space-3);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .graph-cta-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 240px;
+  }
+
+  .graph-cta-copy strong {
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-text);
+  }
+
+  .graph-cta-copy span {
+    font-family: var(--font-ui);
+    font-size: 0.74rem;
+    color: var(--color-muted);
+    line-height: 1.4;
+  }
+
+  .graph-cta-actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .graph-cta-btn {
+    border: 1px solid var(--color-sage-border);
+    background: var(--color-sage);
+    color: var(--color-bg);
+    border-radius: 3px;
+    padding: 8px 12px;
+    font-family: var(--font-ui);
+    font-size: 0.68rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: filter var(--transition-fast), border-color var(--transition-fast);
+  }
+
+  .graph-cta-btn:hover {
+    filter: brightness(1.05);
+  }
+
+  .graph-cta-btn.ghost {
+    background: transparent;
+    color: var(--color-sage);
   }
 
   /* ── Verification section ───────────────────────────────────────────── */

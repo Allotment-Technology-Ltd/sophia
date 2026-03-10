@@ -1,6 +1,6 @@
 # Domain Expansion Runbook
 
-**Version:** 0.3.0
+**Version:** 0.4.0
 **Branch:** `domain-expansion`
 **Last updated:** 2026-03-09
 
@@ -43,7 +43,7 @@ SURREAL_PASS='<password>' \
 npx tsx --env-file=.env --env-file=.env.local scripts/ingest-batch.ts ...
 ```
 
-> **Note on env files:** `ANTHROPIC_API_KEY` lives in `.env.local`; infrastructure vars live in `.env`. Both files must be passed to `npx tsx` so child processes inherit the full environment. The batch script automatically detects and forwards both files to child processes.
+> **Note on env files:** Vertex/GCP settings should be in `.env` (or `.env.local`). `ANTHROPIC_API_KEY` is optional and only needed for manual rollback (`--ingest-provider anthropic`). Pass both env files so child processes inherit the same provider configuration.
 
 **Performance tip:** Install NumPy to improve IAP tunnel TCP throughput:
 
@@ -61,7 +61,7 @@ Before starting a new domain expansion:
 - [ ] `gcloud` authenticated with access to `sophia-488807`
 - [ ] Domain name chosen from `PhilosophicalDomain` type in [src/lib/types/domains.ts](../../src/lib/types/domains.ts)
 - [ ] At least 10 sources identified and curated (Step 2 below)
-- [ ] `.env` and `.env.local` files present with `ANTHROPIC_API_KEY`, `GOOGLE_VERTEX_PROJECT`
+- [ ] `.env` and `.env.local` files present with `GOOGLE_VERTEX_PROJECT` (and optional `ANTHROPIC_API_KEY` for manual rollback)
 
 ---
 
@@ -199,7 +199,7 @@ npx tsx --env-file=.env --env-file=.env.local scripts/pre-scan.ts \
 - Review estimated wave cost — should be under $20 for a 10-source wave
 - Any PDF or unreachable URL must be fixed before proceeding
 
-> **Note:** Cost estimates in pre-scan assume fresh extraction. Sources with existing checkpoint files (`data/ingested/{slug}-partial.json`) will skip Claude extraction and only pay for embedding, which is ~$0.001/source.
+> **Note:** Cost estimates in pre-scan assume fresh extraction. Sources with existing checkpoint files (`data/ingested/{slug}-partial.json`) will skip extraction and only pay for embedding, which is ~$0.001/source.
 
 ---
 
@@ -214,15 +214,18 @@ SURREAL_PASS='<password>' \
 npx tsx --env-file=.env --env-file=.env.local scripts/ingest-batch.ts \
   --source-list data/source-list-{domain}.json \
   --wave 1 \
+  --ingest-provider vertex \
   --domain {domain} \
   --yes
 ```
 
 **Flags:**
 
-- `--domain {domain}` — stamps all claims with the correct domain (overrides Claude's extraction-time domain assignment)
+- `--ingest-provider vertex|anthropic` — extraction provider for stages 1-3 (default: `vertex`)
+- `--domain {domain}` — stamps all claims with the correct domain (overrides extraction-time domain assignment)
 - `--yes` — skips cost confirmation prompt (pre-scan already ran above)
-- `--validate` — enables Gemini cross-validation; requires `GOOGLE_AI_API_KEY` in `.env.local`
+- `--validate` — optional spot-check mode for Gemini cross-validation (default ingestion path skips this for cost/latency)
+- Vertex is the default provider for ingestion. Use `--ingest-provider anthropic` only for manual rollback.
 
 **Monitor DB write progress** in a separate terminal while the batch runs:
 
@@ -370,9 +373,9 @@ IEP Consciousness and Chinese Room both have high claim counts but relatively fe
 12 arguments for 336 claims suggests grouping stage assigned only ~36% of claims to an argument. Chalmers' paper is a tightly structured argument; the grouping prompt may have struggled with its dialectical density. Candidate for `--force-stage grouping` re-run.
 
 **3. No Gemini cross-validation**
-`--validate` was not run for Wave 1 because `GOOGLE_AI_API_KEY` was not configured. This means no independent quality check was performed on extracted claims. Configure `GOOGLE_AI_API_KEY` in `.env.local` before Wave 2 and run with `--validate`.
+`--validate` was not run for Wave 1. For Vertex-first prototype ingestion, this is acceptable because cross-model validation is now treated as optional spot-checking rather than default pipeline behavior.
 
-**4. Source 109 re-ran Claude extraction unnecessarily**
+**4. Source 109 re-ran extraction unnecessarily**
 A slug mismatch (`artificial-intelligence` vs `philosophy-of-artificial-intelligence`) caused the checkpoint file to not be found, so Stage 1 (extraction) ran from scratch at a cost of ~$1.34. This bug has been fixed in the batch script (URL-first slug resolution).
 
 **5. Source 102 silently skipped (slug collision)**
@@ -385,7 +388,7 @@ Two sources both titled "Consciousness" shared the title-derived slug `conscious
 
 1. Re-run relation extraction for sources 101 and 108: `--force-stage relating`
 2. Re-run argument grouping for source 103: `--force-stage grouping`
-3. Configure `GOOGLE_AI_API_KEY` and run `--validate` for Wave 2
+3. Run optional spot-check validation (`--validate`) only on sampled sources if quality concerns appear
 4. Implement `quality-report.ts` with the acceptance criteria checks
 
 ---
@@ -450,5 +453,6 @@ The pre-scan will block sources with estimated cost >$2.00. Options:
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 0.4.0 | 2026-03-10 | Vertex-first ingestion provider guidance added (`--ingest-provider`), Anthropic moved to manual rollback path |
 | 0.3.0 | 2026-03-09 | Production DB access (IAP tunnel); retire local Docker workflow; Wave 1 quality analysis; slug collision and .env.local fixes |
 | 0.2.0 | 2026-03-08 | Initial runbook — Philosophy of Mind expansion |

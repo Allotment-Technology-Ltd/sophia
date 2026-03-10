@@ -60,23 +60,20 @@ SURREAL_PASS='<password>' \
 npx tsx --env-file=.env --env-file=.env.local scripts/ingest-batch.ts \
   --source-list data/source-list-pom.json \
   --wave 2 \
+  --ingest-provider vertex \
   --domain philosophy_of_mind \
   --yes
 ```
 
-If validation is enabled in your environment, include `--validate`.
+Validation policy for this cutover:
 
-```bash
-SURREAL_URL=http://localhost:8800 \
-SURREAL_USER=root \
-SURREAL_PASS='<password>' \
-npx tsx --env-file=.env --env-file=.env.local scripts/ingest-batch.ts \
-  --source-list data/source-list-pom.json \
-  --wave 2 \
-  --domain philosophy_of_mind \
-  --validate \
-  --yes
-```
+- Do **not** run cross-model validation by default (skip `--validate`) to keep Vertex cost measurement clean.
+- Use `--validate` only for explicit spot-check runs.
+
+Provider note:
+
+- `vertex` is the default ingestion provider.
+- `anthropic` remains available as manual rollback only (`--ingest-provider anthropic`).
 
 ---
 

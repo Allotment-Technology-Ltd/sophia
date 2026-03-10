@@ -41,34 +41,90 @@ export function EXTRACTION_USER(
 }
 
 // Zod schema for extracted claims
+const CLAIM_TYPE_VALUES = [
+	'thesis',
+	'premise',
+	'objection',
+	'response',
+	'definition',
+	'thought_experiment',
+	'empirical',
+	'methodological'
+] as const;
+
+const DOMAIN_VALUES = [
+	'ethics',
+	'epistemology',
+	'metaphysics',
+	'philosophy_of_mind',
+	'political_philosophy',
+	'logic',
+	'aesthetics',
+	'philosophy_of_science',
+	'philosophy_of_language',
+	'applied_ethics',
+	'philosophy_of_ai'
+] as const;
+
+function normalizeLabel(value: unknown): string | unknown {
+	if (typeof value !== 'string') return value;
+	return value.toLowerCase().trim().replace(/[\s-]+/g, '_');
+}
+
+function coercePositiveInt(value: unknown): unknown {
+	const numberValue = Number(value);
+	if (!Number.isFinite(numberValue)) return value;
+	return Math.max(1, Math.trunc(numberValue));
+}
+
+function normalizeClaimType(value: unknown): unknown {
+	const normalized = normalizeLabel(value);
+	if (typeof normalized !== 'string') return normalized;
+	const claimTypeMap: Record<string, (typeof CLAIM_TYPE_VALUES)[number]> = {
+		thesis: 'thesis',
+		premise: 'premise',
+		objection: 'objection',
+		counterargument: 'objection',
+		counter_argument: 'objection',
+		response: 'response',
+		reply: 'response',
+		rebuttal: 'response',
+		definition: 'definition',
+		thought_experiment: 'thought_experiment',
+		thoughtexperiment: 'thought_experiment',
+		empirical: 'empirical',
+		methodological: 'methodological'
+	};
+	return claimTypeMap[normalized] ?? normalized;
+}
+
+function normalizeDomain(value: unknown): unknown {
+	const normalized = normalizeLabel(value);
+	if (typeof normalized !== 'string') return normalized;
+	const domainMap: Record<string, (typeof DOMAIN_VALUES)[number]> = {
+		ethics: 'ethics',
+		epistemology: 'epistemology',
+		metaphysics: 'metaphysics',
+		philosophy_of_mind: 'philosophy_of_mind',
+		mind: 'philosophy_of_mind',
+		political_philosophy: 'political_philosophy',
+		logic: 'logic',
+		aesthetics: 'aesthetics',
+		philosophy_of_science: 'philosophy_of_science',
+		philosophy_of_language: 'philosophy_of_language',
+		applied_ethics: 'applied_ethics',
+		philosophy_of_ai: 'philosophy_of_ai'
+	};
+	return domainMap[normalized] ?? normalized;
+}
+
 export const ExtractionClaimSchema = z.object({
 	text: z.string().describe('The claim in clear, concise language'),
-	claim_type: z.enum([
-		'thesis',
-		'premise',
-		'objection',
-		'response',
-		'definition',
-		'thought_experiment',
-		'empirical',
-		'methodological'
-	]),
-	domain: z.enum([
-		'ethics',
-		'epistemology',
-		'metaphysics',
-		'philosophy_of_mind',
-		'political_philosophy',
-		'logic',
-		'aesthetics',
-		'philosophy_of_science',
-		'philosophy_of_language',
-		'applied_ethics',
-		'philosophy_of_ai'
-	]),
+	claim_type: z.preprocess(normalizeClaimType, z.enum(CLAIM_TYPE_VALUES)),
+	domain: z.preprocess(normalizeDomain, z.enum(DOMAIN_VALUES)),
 	section_context: z.string().nullable().optional().describe('The section or heading'),
-	position_in_source: z.number().int().positive().describe('Sequential position in source'),
-	confidence: z.number().min(0).max(1).describe('Confidence score 0.0-1.0')
+	position_in_source: z.preprocess(coercePositiveInt, z.number().int().positive()).describe('Sequential position in source'),
+	confidence: z.coerce.number().min(0).max(1).describe('Confidence score 0.0-1.0')
 });
 
 export const ExtractionOutputSchema = z.array(ExtractionClaimSchema);

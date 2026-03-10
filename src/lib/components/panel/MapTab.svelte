@@ -4,6 +4,7 @@
   import { page } from '$app/state';
   import { graphStore } from '$lib/stores/graph.svelte';
   import { referencesStore } from '$lib/stores/references.svelte';
+  import { comparisonStore } from '$lib/stores/comparison.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
   import type { GraphEdge, GraphNode } from '$lib/types/api';
   import { trackEvent } from '$lib/utils/analytics';
@@ -38,7 +39,7 @@
   }
 
   type ViewMode = 'structure' | 'flow' | 'trust';
-  type LensMode = 'all' | 'seed' | 'traversed';
+  type LensMode = 'all' | 'seed' | 'traversed' | 'new' | 'shared';
   type DensityMode = 'beginner' | 'expert';
   type TimelinePhase = 'all' | 'retrieval' | 'analysis' | 'critique' | 'synthesis';
   type ConfidenceBand = 'high' | 'medium' | 'low';
@@ -67,6 +68,17 @@
     qualifies: 'Qualifies',
     assumes: 'Assumes',
     resolves: 'Resolves'
+  };
+
+  const RELATION_TOOLTIPS: Record<GraphEdge['type'], string> = {
+    contains: 'Source-to-claim containment links. Useful for provenance context.',
+    supports: 'Claims or sources that reinforce a target claim.',
+    contradicts: 'Claims that directly conflict with a target claim.',
+    'responds-to': 'Rebuttals or replies that engage another claim.',
+    'depends-on': 'Claims that require another claim to hold.',
+    qualifies: 'Scope-limiting relations that narrow when a claim applies.',
+    assumes: 'Implicit premises required by a claim.',
+    resolves: 'Relations that reduce or settle a contradiction.'
   };
 
   let containerEl = $state<HTMLDivElement | null>(null);
@@ -102,6 +114,66 @@
   const isFullPageRoute = $derived(page.url.pathname === '/map');
   const selectedNodeId = $derived(graphStore.selectedNodeId);
   const selectedNode = $derived(graphStore.rawNodes.find((node) => node.id === selectedNodeId) ?? null);
+  const comparisonBaseline = $derived(comparisonStore.baseline);
+  const baselineClaimNodeIds = $derived.by(() => {
+    const baseline = comparisonBaseline;
+    if (!baseline) return new Set<string>();
+    const ids = new Set<string>();
+    for (const pass of baseline.claimsByPass) {
+      for (const claim of pass.claims) ids.add(claim.id);
+    }
+    return ids;
+  });
+  const baselineRelationKeys = $derived.by(() => {
+    const baseline = comparisonBaseline;
+    if (!baseline) return new Set<string>();
+    const keys = new Set<string>();
+    for (const pass of baseline.relationsByPass) {
+      for (const bundle of pass.relations) {
+        for (const relation of bundle.relations) {
+          keys.add(buildRelationKey(bundle.claimId, relation.target, relation.type));
+        }
+      }
+    }
+    return keys;
+  });
+  const comparisonDelta = $derived.by(() => {
+    const baseline = comparisonBaseline;
+    if (!baseline) return null;
+
+    const currentClaimIds = new Set(
+      graphStore.rawNodes
+        .filter((node) => node.type === 'claim')
+        .map((node) => node.id)
+    );
+    const currentRelationKeys = new Set(
+      graphStore.rawEdges
+        .filter((edge) => edge.type !== 'contains')
+        .map((edge) => buildRelationKey(edge.from, edge.to, edge.type))
+    );
+
+    let newClaims = 0;
+    let sharedClaims = 0;
+    for (const claimId of currentClaimIds) {
+      if (baselineClaimNodeIds.has(claimId)) sharedClaims += 1;
+      else newClaims += 1;
+    }
+
+    let newRelations = 0;
+    let sharedRelations = 0;
+    for (const relationKey of currentRelationKeys) {
+      if (baselineRelationKeys.has(relationKey)) sharedRelations += 1;
+      else newRelations += 1;
+    }
+
+    return {
+      label: baseline.label,
+      newClaims,
+      sharedClaims,
+      newRelations,
+      sharedRelations
+    };
+  });
   const a11ySummary = $derived.by(() => {
     const reason = retrievalExplainability.degraded
       ? `Degraded mode active${retrievalExplainability.degradedReason ? `: ${retrievalExplainability.degradedReason}` : ''}.`
@@ -229,6 +301,18 @@
     return node.type === 'claim';
   }
 
+  function buildRelationKey(from: string, to: string, type: GraphEdge['type']): string {
+    return `${from}|${to}|${type}`;
+  }
+
+  function isClaimInBaseline(nodeId: string): boolean {
+    return baselineClaimNodeIds.has(nodeId);
+  }
+
+  function isRelationInBaseline(edge: GraphEdge): boolean {
+    return baselineRelationKeys.has(buildRelationKey(edge.from, edge.to, edge.type));
+  }
+
   function parseCsvSet<T extends string>(param: string | null, allowed: T[]): Set<T> {
     if (!param) return new Set(allowed);
     const values = param
@@ -295,7 +379,13 @@
     const density = url.searchParams.get('mapDensity');
     const phase = url.searchParams.get('mapPhase');
     viewMode = mode === 'flow' || mode === 'trust' ? mode : 'structure';
-    lensMode = lens === 'seed' || lens === 'traversed' ? lens : 'all';
+    const parsedLens: LensMode =
+      lens === 'seed' || lens === 'traversed' || lens === 'new' || lens === 'shared'
+        ? lens
+        : 'all';
+    lensMode = comparisonBaseline || (parsedLens !== 'new' && parsedLens !== 'shared')
+      ? parsedLens
+      : 'all';
     densityMode = density === 'expert' ? 'expert' : 'beginner';
     timelinePhase = phase && ALL_TIMELINE_PHASES.includes(phase as TimelinePhase) ? (phase as TimelinePhase) : 'all';
 
@@ -386,6 +476,10 @@
     void goto(url.toString(), { replaceState: false, noScroll: true, keepFocus: true, invalidateAll: false });
   }
 
+  function openFilterGuide(): void {
+    void goto('/help/graph-filters', { replaceState: false, keepFocus: true, noScroll: false });
+  }
+
   async function toggleFullscreen(): Promise<void> {
     if (typeof document === 'undefined' || !containerEl) return;
     try {
@@ -417,6 +511,8 @@
     if (!isClaimNode(node)) return true;
     if (lensMode === 'seed' && !node.isSeed) return false;
     if (lensMode === 'traversed' && !node.isTraversed) return false;
+    if (lensMode === 'new' && comparisonBaseline && isClaimInBaseline(node.id)) return false;
+    if (lensMode === 'shared' && comparisonBaseline && !isClaimInBaseline(node.id)) return false;
     if (!passFilter.has((node.phase as TimelinePhase) ?? 'retrieval')) return false;
     if (sourceFilter.size > 0 && (!node.sourceTitle || !sourceFilter.has(node.sourceTitle))) return false;
     if (domainFilter.size > 0 && (!node.domain || !domainFilter.has(node.domain))) return false;
@@ -432,6 +528,18 @@
 
     if (timelinePhase !== 'all') {
       filteredEdges = filteredEdges.filter((edge) => edge.phaseOrigin === timelinePhase || edge.type === 'contains');
+    }
+
+    if ((lensMode === 'new' || lensMode === 'shared') && comparisonBaseline) {
+      filteredEdges = filteredEdges.filter((edge) => {
+        if (edge.type === 'contains') return false;
+        const from = nodeById.get(edge.from);
+        const to = nodeById.get(edge.to);
+        if (!from || !to) return false;
+        if (!isClaimNode(from) || !isClaimNode(to)) return false;
+        const inBaseline = isRelationInBaseline(edge);
+        return lensMode === 'new' ? !inBaseline : inBaseline;
+      });
     }
 
     filteredEdges = filteredEdges.filter((edge) => {
@@ -725,6 +833,13 @@
   });
 
   $effect(() => {
+    if (comparisonBaseline) return;
+    if (lensMode === 'new' || lensMode === 'shared') {
+      lensMode = 'all';
+    }
+  });
+
+  $effect(() => {
     if (!hasHydrated || syncingFromUrl) return;
     syncToUrl();
   });
@@ -755,6 +870,11 @@
     <span>{graphStore.snapshotMeta?.seedNodeIds?.length ?? 0} seed nodes</span>
     <span>sufficiency: {retrievalExplainability.contextSufficiency}</span>
     <span>v{graphStore.snapshotVersion}</span>
+    {#if comparisonDelta}
+      <span>compare: {comparisonDelta.label}</span>
+      <span>new claims {comparisonDelta.newClaims}</span>
+      <span>new relations {comparisonDelta.newRelations}</span>
+    {/if}
     {#if !hasGraph && referencesStore.activeClaims.length > 0}
       <button type="button" class="mini-btn" onclick={rebuildGraphFromSession}>
         Load Graph From Analysis
@@ -775,18 +895,31 @@
     {/each}
   </div>
 
+  {#if comparisonDelta}
+    <div class="legend-card compare-banner">
+      <p class="legend-title">Graph Compare</p>
+      <p class="legend-line">Baseline: {comparisonDelta.label}</p>
+      <p class="legend-line">
+        Current graph adds {comparisonDelta.newClaims} claim nodes and {comparisonDelta.newRelations} relation edges.
+      </p>
+      <p class="legend-line">Use Lens = New vs baseline or Shared with baseline for a visual diff.</p>
+    </div>
+  {/if}
+
   <div class="map-controls">
     {#each RELATION_TYPES as type}
       <button
         type="button"
         class="filter-pill"
         class:is-active={enabledTypes.includes(type)}
+        title={RELATION_TOOLTIPS[type]}
         onclick={() => toggleRelationType(type)}
       >
         {RELATION_LABELS[type]}
       </button>
     {/each}
-    <button type="button" class="filter-pill" onclick={() => graphStore.resetFilters()}>Reset</button>
+    <button type="button" class="filter-pill" title="Reset relation filters to include all relation types." onclick={() => graphStore.resetFilters()}>Reset</button>
+    <button type="button" class="filter-pill" title="Learn what each map control and filter means." onclick={openFilterGuide}>Filter Guide</button>
     <button type="button" class="filter-pill share" data-testid="share-view" onclick={copyShareLink}>
       {shareStatus === 'copied' ? 'Copied' : shareStatus === 'failed' ? 'Copy Failed' : 'Share View'}
     </button>
@@ -807,7 +940,7 @@
   <div class="storyline-row">
     <label>
       Timeline
-      <select bind:value={timelinePhase}>
+      <select bind:value={timelinePhase} title="Focus on a reasoning stage: retrieval, analysis, critique, or synthesis.">
         <option value="all">All phases</option>
         <option value="retrieval">Retrieval</option>
         <option value="analysis">Analysis</option>
@@ -818,16 +951,20 @@
 
     <label>
       Lens
-      <select bind:value={lensMode}>
+      <select bind:value={lensMode} title="Change node scope: seeds, traversed nodes, or comparison deltas.">
         <option value="all">All nodes</option>
         <option value="seed">Seed only</option>
         <option value="traversed">Traversed only</option>
+        {#if comparisonBaseline}
+          <option value="new">New vs baseline</option>
+          <option value="shared">Shared with baseline</option>
+        {/if}
       </select>
     </label>
 
     <label>
       Density
-      <select bind:value={densityMode}>
+      <select bind:value={densityMode} title="Beginner hides structural clutter. Expert shows full relation density.">
         <option value="beginner">Beginner</option>
         <option value="expert">Expert</option>
       </select>
@@ -1151,6 +1288,11 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
+  }
+
+  .compare-banner {
+    border-color: var(--color-sage-border);
+    background: color-mix(in srgb, var(--color-sage) 9%, var(--color-surface));
   }
 
   .legend-title, .chip-label, .insight-title, .insight-subtitle {

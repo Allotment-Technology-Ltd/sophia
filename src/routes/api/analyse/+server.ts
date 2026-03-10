@@ -594,7 +594,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const domainMode = body.domain_mode ?? 'auto';
   const domain = body.domain;
   const requestedResourceMode = body.resource_mode ?? 'standard';
-  const queueForNightlyIngest = body.queue_for_nightly_ingest ?? false;
+  const requestedNightlyQueue = body.queue_for_nightly_ingest;
   const reuse = body.reuse;
   const domainOverrideEnabled =
     process.env.ENABLE_DOMAIN_OVERRIDE_UI?.toLowerCase() !== 'false';
@@ -616,7 +616,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (requestedResourceMode !== 'standard' && requestedResourceMode !== 'expanded') {
     return json({ error: 'resource_mode must be one of standard|expanded' }, { status: 400 });
   }
-  if (typeof queueForNightlyIngest !== 'boolean') {
+  if (requestedNightlyQueue !== undefined && typeof requestedNightlyQueue !== 'boolean') {
     return json({ error: 'queue_for_nightly_ingest must be a boolean' }, { status: 400 });
   }
   const normalizedUserLinksResult = normalizeAndValidateUserLinks(body.user_links);
@@ -624,6 +624,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ error: normalizedUserLinksResult.error }, { status: 400 });
   }
   const normalizedUserLinks = normalizedUserLinksResult.links;
+  const queueForNightlyIngest = normalizedUserLinks.length > 0 || requestedNightlyQueue === true;
   const resourceMode: ResourceMode = normalizedUserLinks.length > 0 ? 'expanded' : requestedResourceMode;
 
   if (!['quick', 'standard', 'deep'].includes(depthMode)) {

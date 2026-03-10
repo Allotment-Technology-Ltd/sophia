@@ -2,12 +2,34 @@
   import { renderMarkdown } from '$lib/utils/markdown';
   import { buildModelDiffResult, type PassId } from '$lib/utils/modelDiff';
 
+  type ComparisonMetadata = {
+    claims_retrieved?: number;
+    arguments_retrieved?: number;
+    depth_mode?: 'quick' | 'standard' | 'deep';
+    selected_model_provider?: 'auto' | 'vertex' | 'anthropic';
+    selected_model_id?: string;
+    user_links_count?: number;
+    runtime_links_processed?: number;
+    nightly_queue_enqueued?: number;
+  };
+
   interface Props {
-    geminiPasses: Partial<Record<PassId, string>>;
-    claudePasses: Partial<Record<PassId, string>>;
+    leftLabel: string;
+    rightLabel: string;
+    leftPasses: Partial<Record<PassId, string>>;
+    rightPasses: Partial<Record<PassId, string>>;
+    leftMeta?: ComparisonMetadata;
+    rightMeta?: ComparisonMetadata;
   }
 
-  let { geminiPasses, claudePasses }: Props = $props();
+  let {
+    leftLabel,
+    rightLabel,
+    leftPasses,
+    rightPasses,
+    leftMeta,
+    rightMeta
+  }: Props = $props();
 
   const PASS_LABELS: Record<PassId, string> = {
     analysis: 'Analysis',
@@ -20,20 +42,61 @@
 
   const availablePasses = $derived.by(() =>
     (['analysis', 'critique', 'synthesis', 'verification'] as const).filter(
-      (pass) => (geminiPasses[pass] ?? '').trim().length > 0 || (claudePasses[pass] ?? '').trim().length > 0
+      (pass) => (leftPasses[pass] ?? '').trim().length > 0 || (rightPasses[pass] ?? '').trim().length > 0
     )
   );
 
   const diffResult = $derived(
     buildModelDiffResult({
-      analysis: { gemini: geminiPasses.analysis ?? '', claude: claudePasses.analysis ?? '' },
-      critique: { gemini: geminiPasses.critique ?? '', claude: claudePasses.critique ?? '' },
-      synthesis: { gemini: geminiPasses.synthesis ?? '', claude: claudePasses.synthesis ?? '' },
-      verification: { gemini: geminiPasses.verification ?? '', claude: claudePasses.verification ?? '' }
+      analysis: { gemini: leftPasses.analysis ?? '', claude: rightPasses.analysis ?? '' },
+      critique: { gemini: leftPasses.critique ?? '', claude: rightPasses.critique ?? '' },
+      synthesis: { gemini: leftPasses.synthesis ?? '', claude: rightPasses.synthesis ?? '' },
+      verification: { gemini: leftPasses.verification ?? '', claude: rightPasses.verification ?? '' }
     })
   );
 
   const activePassDiff = $derived(diffResult.byPass[activePass] ?? null);
+
+  const retrievalStats = $derived.by(() => {
+    const leftClaims = leftMeta?.claims_retrieved;
+    const rightClaims = rightMeta?.claims_retrieved;
+    const leftArguments = leftMeta?.arguments_retrieved;
+    const rightArguments = rightMeta?.arguments_retrieved;
+    const leftLinks = leftMeta?.runtime_links_processed;
+    const rightLinks = rightMeta?.runtime_links_processed;
+    const leftQueued = leftMeta?.nightly_queue_enqueued;
+    const rightQueued = rightMeta?.nightly_queue_enqueued;
+    return [
+      typeof leftClaims === 'number' || typeof rightClaims === 'number'
+        ? {
+            label: 'Claims retrieved',
+            left: leftClaims ?? 0,
+            right: rightClaims ?? 0
+          }
+        : null,
+      typeof leftArguments === 'number' || typeof rightArguments === 'number'
+        ? {
+            label: 'Arguments retrieved',
+            left: leftArguments ?? 0,
+            right: rightArguments ?? 0
+          }
+        : null,
+      typeof leftLinks === 'number' || typeof rightLinks === 'number'
+        ? {
+            label: 'Runtime links processed',
+            left: leftLinks ?? 0,
+            right: rightLinks ?? 0
+          }
+        : null,
+      typeof leftQueued === 'number' || typeof rightQueued === 'number'
+        ? {
+            label: 'Nightly queued links',
+            left: leftQueued ?? 0,
+            right: rightQueued ?? 0
+          }
+        : null
+    ].filter((item): item is { label: string; left: number; right: number } => item !== null);
+  });
 
   $effect(() => {
     if (!availablePasses.includes(activePass) && availablePasses.length > 0) {
@@ -44,14 +107,30 @@
   function renderPass(text: string): string {
     return renderMarkdown(text.replace(/```sophia-meta[\s\S]*?```/g, '').trim());
   }
+
+  function formatSignedDelta(value: number): string {
+    if (value === 0) return '0';
+    return value > 0 ? `+${value}` : `${value}`;
+  }
 </script>
 
 {#if availablePasses.length > 0}
-  <section class="compare-panel" aria-label="Gemini vs Claude pass comparison">
+  <section class="compare-panel" aria-label="Run comparison panel">
     <header class="compare-header">
-      <h3>Model Comparison</h3>
-      <p>Pass-by-pass differences between Gemini and Claude outputs.</p>
+      <h3>Run Comparison</h3>
+      <p>Differences between your previous run and your current run.</p>
     </header>
+
+    {#if retrievalStats.length > 0}
+      <div class="retrieval-row" aria-label="Retrieval and traversal deltas">
+        {#each retrievalStats as stat}
+          {@const delta = stat.right - stat.left}
+          <span class="metric">
+            <strong>{stat.label}</strong> {stat.left} → {stat.right} ({formatSignedDelta(delta)})
+          </span>
+        {/each}
+      </div>
+    {/if}
 
     <div class="compare-tabs" role="tablist" aria-label="Comparison pass tabs">
       {#each availablePasses as pass}
@@ -71,15 +150,15 @@
       {@const passDiff = activePassDiff}
       <div class="metrics-row">
         <span class="metric">Overlap {(passDiff.overlapRatio * 100).toFixed(0)}%</span>
-        <span class="metric">Gemini {passDiff.tokenCountGemini} tokens</span>
-        <span class="metric">Claude {passDiff.tokenCountClaude} tokens</span>
-        <span class="metric">Gemini {passDiff.sentenceCountGemini} points</span>
-        <span class="metric">Claude {passDiff.sentenceCountClaude} points</span>
+        <span class="metric">{leftLabel} {passDiff.tokenCountGemini} tokens</span>
+        <span class="metric">{rightLabel} {passDiff.tokenCountClaude} tokens</span>
+        <span class="metric">{leftLabel} {passDiff.sentenceCountGemini} points</span>
+        <span class="metric">{rightLabel} {passDiff.sentenceCountClaude} points</span>
       </div>
 
       <div class="delta-grid">
         <div class="delta-card">
-          <h4>Unique to Gemini</h4>
+          <h4>Unique To {leftLabel}</h4>
           {#if passDiff.uniqueToGemini.length}
             <ul>
               {#each passDiff.uniqueToGemini as sentence}
@@ -87,11 +166,11 @@
               {/each}
             </ul>
           {:else}
-            <p>Mostly aligned with Claude on this pass.</p>
+            <p>Mostly aligned on this pass.</p>
           {/if}
         </div>
         <div class="delta-card">
-          <h4>Unique to Claude</h4>
+          <h4>Unique To {rightLabel}</h4>
           {#if passDiff.uniqueToClaude.length}
             <ul>
               {#each passDiff.uniqueToClaude as sentence}
@@ -99,23 +178,23 @@
               {/each}
             </ul>
           {:else}
-            <p>Mostly aligned with Gemini on this pass.</p>
+            <p>Mostly aligned on this pass.</p>
           {/if}
         </div>
       </div>
     {/if}
 
     <div class="side-by-side">
-      <article class="model-card model-gemini">
-        <div class="model-title">Gemini</div>
+      <article class="model-card">
+        <div class="model-title">{leftLabel}</div>
         <div class="model-content">
-          {@html renderPass(geminiPasses[activePass] ?? '')}
+          {@html renderPass(leftPasses[activePass] ?? '')}
         </div>
       </article>
-      <article class="model-card model-claude">
-        <div class="model-title">Claude</div>
+      <article class="model-card">
+        <div class="model-title">{rightLabel}</div>
         <div class="model-content">
-          {@html renderPass(claudePasses[activePass] ?? '')}
+          {@html renderPass(rightPasses[activePass] ?? '')}
         </div>
       </article>
     </div>
@@ -175,7 +254,8 @@
     background: color-mix(in srgb, var(--color-sage) 14%, transparent);
   }
 
-  .metrics-row {
+  .metrics-row,
+  .retrieval-row {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
@@ -189,6 +269,11 @@
     font-size: 0.62rem;
     color: var(--color-muted);
     background: var(--color-surface-raised);
+  }
+
+  .metric strong {
+    color: var(--color-text);
+    font-weight: 600;
   }
 
   .delta-grid {
@@ -258,29 +343,13 @@
     font-family: var(--font-display);
     font-size: 0.9rem;
     line-height: 1.65;
-    color: var(--color-muted);
   }
 
   .model-content :global(p) {
     margin: 0 0 10px;
   }
 
-  .model-content :global(h1),
-  .model-content :global(h2),
-  .model-content :global(h3),
-  .model-content :global(h4) {
-    margin: 0 0 8px;
-    color: var(--color-text);
-    font-family: var(--font-display);
-  }
-
-  .model-content :global(ul),
-  .model-content :global(ol) {
-    margin: 0 0 10px;
-    padding-left: 18px;
-  }
-
-  @media (max-width: 1024px) {
+  @media (max-width: 920px) {
     .delta-grid,
     .side-by-side {
       grid-template-columns: 1fr;

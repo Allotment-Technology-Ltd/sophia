@@ -101,6 +101,10 @@ export interface RetrievalOptions {
 	domain?: PhilosophicalDomain;
 	/** Minimum confidence threshold for claims (default: 0) */
 	minConfidence?: number;
+	/** Optional override for graph traversal depth (hops from seed claims) */
+	maxHops?: number;
+	/** Optional cap on total claims returned after traversal */
+	maxClaims?: number;
 }
 
 const EMPTY_RESULT: RetrievalResult = {
@@ -127,7 +131,9 @@ export async function retrieveContext(
 	userQuery: string,
 	options: RetrievalOptions = {}
 ): Promise<RetrievalResult> {
-	const { topK = 5, domain, minConfidence = 0 } = options;
+	const { topK = 5, domain, minConfidence = 0, maxHops, maxClaims } = options;
+	const traversalMaxHops = Math.max(1, maxHops ?? (topK >= 10 ? 3 : topK <= 3 ? 1 : 2));
+	const traversalClaimCap = Math.max(topK, maxClaims ?? (topK >= 10 ? 120 : topK <= 3 ? 32 : 72));
 
 	try {
 		// ── Step 1: Embed the query ──────────────────────────────────
@@ -277,6 +283,10 @@ export async function retrieveContext(
 			contradicting_outgoing_claims: GraphClaim[];
 			responds_to_incoming_claims: GraphClaim[];
 			responds_to_outgoing_claims: GraphClaim[];
+			refining_incoming_claims: GraphClaim[];
+			refining_outgoing_claims: GraphClaim[];
+			exemplifying_incoming_claims: GraphClaim[];
+			exemplifying_outgoing_claims: GraphClaim[];
 			arguments: GraphArgRef[];
 		};
 
@@ -312,91 +322,224 @@ export async function retrieveContext(
 			});
 		}
 
-		// Traverse graph for each seed
-		for (const seed of seedClaims) {
-			const seedId = typeof seed.id === 'object' ? String(seed.id) : seed.id;
+		const resolveSource = (claim: GraphClaim): { title: string; author: string[] } => {
+			if (claim.source && typeof claim.source === 'object' && 'title' in claim.source) {
+				return {
+					title: (claim.source as { title: string }).title,
+					author: (claim.source as { author: string[] }).author ?? []
+				};
+			}
+			return { title: 'Unknown', author: [] };
+		};
+
+		const registerCandidate = (
+			claim: GraphClaim | undefined,
+			anchorId: string,
+			hopCandidates: Map<string, { claim: GraphClaim; anchorId: string }>
+		): void => {
+			if (!claim) return;
+			const claimId = typeof claim.id === 'object' ? String(claim.id) : claim.id;
+			const source = resolveSource(claim);
+			if (allGraphClaims.has(claimId)) {
+				addRejectedClaim({
+					id: claimId,
+					text: claim.text,
+					source_title: source.title,
+					confidence: claim.confidence,
+					reason_code: 'duplicate_traversal',
+					considered_in: 'traversal',
+					anchor_claim_id: anchorId
+				});
+				return;
+			}
+			const existing = hopCandidates.get(claimId);
+			if (!existing || (claim.confidence ?? 0) > (existing.claim.confidence ?? 0)) {
+				hopCandidates.set(claimId, { claim, anchorId });
+			}
+		};
+
+		const maxNewClaimsPerHop = topK >= 10 ? 48 : topK <= 3 ? 12 : 28;
+		let frontier = new Set(seedClaimIds);
+		const traversedAnchors = new Set<string>();
+
+		for (let hop = 1; hop <= traversalMaxHops; hop++) {
+			if (frontier.size === 0 || allGraphClaims.size >= traversalClaimCap) break;
+
+			const hopCandidates = new Map<string, { claim: GraphClaim; anchorId: string }>();
+
+			for (const anchorId of frontier) {
+				if (traversedAnchors.has(anchorId)) continue;
+				traversedAnchors.add(anchorId);
+
+				try {
+					const traversal = await query<TraversalRow[]>(
+						`SELECT
+							<-depends_on<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS depends_on_incoming_claims,
+							->depends_on->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS depends_on_outgoing_claims,
+							<-supports<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS supporting_incoming_claims,
+							->supports->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS supporting_outgoing_claims,
+							<-contradicts<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS contradicting_incoming_claims,
+							->contradicts->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS contradicting_outgoing_claims,
+							<-responds_to<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS responds_to_incoming_claims,
+							->responds_to->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS responds_to_outgoing_claims,
+							<-refines<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS refining_incoming_claims,
+							->refines->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS refining_outgoing_claims,
+							<-exemplifies<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS exemplifying_incoming_claims,
+							->exemplifies->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS exemplifying_outgoing_claims,
+							->part_of->argument.{id} AS arguments
+						FROM $seed_id`,
+						{ seed_id: anchorId }
+					);
+					if (!traversal || traversal.length === 0) continue;
+					const row = Array.isArray(traversal) ? traversal[0] : traversal;
+
+					const addGraphClaims = (claims: GraphClaim[] | undefined) => {
+						if (!claims || !Array.isArray(claims)) return;
+						for (const c of claims) registerCandidate(c, anchorId, hopCandidates);
+					};
+
+					addGraphClaims(row.depends_on_incoming_claims);
+					addGraphClaims(row.depends_on_outgoing_claims);
+					addGraphClaims(row.supporting_incoming_claims);
+					addGraphClaims(row.supporting_outgoing_claims);
+					addGraphClaims(row.contradicting_incoming_claims);
+					addGraphClaims(row.contradicting_outgoing_claims);
+					addGraphClaims(row.responds_to_incoming_claims);
+					addGraphClaims(row.responds_to_outgoing_claims);
+					addGraphClaims(row.refining_incoming_claims);
+					addGraphClaims(row.refining_outgoing_claims);
+					addGraphClaims(row.exemplifying_incoming_claims);
+					addGraphClaims(row.exemplifying_outgoing_claims);
+
+					if (row.arguments && Array.isArray(row.arguments)) {
+						for (const a of row.arguments) {
+							const aId = typeof a.id === 'object' ? String(a.id) : a.id;
+							argumentIds.add(aId);
+						}
+					}
+				} catch (traversalErr) {
+					console.warn(
+						`[RETRIEVAL] Graph traversal failed for ${anchorId}:`,
+						traversalErr instanceof Error ? traversalErr.message : traversalErr
+					);
+				}
+			}
+
+			const candidates = Array.from(hopCandidates.values()).sort(
+				(a, b) => (b.claim.confidence ?? 0) - (a.claim.confidence ?? 0)
+			);
+			const selected: Array<{ claim: GraphClaim; anchorId: string }> = [];
+			const seenSources = new Set<string>();
+			const hopBudget = Math.min(
+				maxNewClaimsPerHop,
+				Math.max(traversalClaimCap - allGraphClaims.size, 0)
+			);
+
+			for (const candidate of candidates) {
+				if (selected.length >= hopBudget) break;
+				const sourceTitle = resolveSource(candidate.claim).title;
+				if (seenSources.has(sourceTitle)) continue;
+				seenSources.add(sourceTitle);
+				selected.push(candidate);
+			}
+			for (const candidate of candidates) {
+				if (selected.length >= hopBudget) break;
+				if (selected.includes(candidate)) continue;
+				selected.push(candidate);
+			}
+
+			const nextFrontier = new Set<string>();
+			for (const { claim } of selected) {
+				const cId = typeof claim.id === 'object' ? String(claim.id) : claim.id;
+				const source = resolveSource(claim);
+				allGraphClaims.set(cId, {
+					id: cId,
+					text: claim.text,
+					claim_type: claim.claim_type,
+					domain: claim.domain,
+					source_title: source.title,
+					source_author: source.author,
+					confidence: claim.confidence ?? 0.5,
+					position_in_source: claim.position_in_source ?? 0
+				});
+				nextFrontier.add(cId);
+			}
+			console.log(
+				`[RETRIEVAL] hop ${hop}/${traversalMaxHops}: added ${selected.length} claims (frontier ${nextFrontier.size})`
+			);
+			frontier = nextFrontier;
+		}
+
+		// Add argument-neighborhood claims so traversal can surface complete
+		// argument structures (conclusions + key premises), not only local edges.
+		if (argumentIds.size > 0 && allGraphClaims.size < traversalClaimCap) {
+			type ArgumentMemberRow = {
+				in: {
+					id: string;
+					text: string;
+					claim_type: string;
+					domain: PhilosophicalDomain;
+					confidence: number;
+					position_in_source: number;
+					source: { title: string; author: string[] } | string;
+				};
+				role: string;
+			};
 
 			try {
-				const traversal = await query<TraversalRow[]>(
+				const memberRows = await query<ArgumentMemberRow[]>(
 					`SELECT
-						<-depends_on<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS depends_on_incoming_claims,
-						->depends_on->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS depends_on_outgoing_claims,
-						<-supports<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS supporting_incoming_claims,
-						->supports->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS supporting_outgoing_claims,
-						<-contradicts<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS contradicting_incoming_claims,
-						->contradicts->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS contradicting_outgoing_claims,
-						<-responds_to<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS responds_to_incoming_claims,
-						->responds_to->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS responds_to_outgoing_claims,
-						->part_of->argument.{id} AS arguments
-					FROM $seed_id`,
-					{ seed_id: seedId }
+						in.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS in,
+						role
+					FROM part_of
+					WHERE out INSIDE $arg_ids`,
+					{ arg_ids: Array.from(argumentIds) }
 				);
 
-				if (!traversal || traversal.length === 0) continue;
+				if (memberRows && Array.isArray(memberRows)) {
+					const roleRank = (role: string): number => {
+						if (role === 'conclusion') return 0;
+						if (role === 'key_premise') return 1;
+						if (role === 'supporting_premise') return 2;
+						return 3;
+					};
+					const sorted = [...memberRows].sort((a, b) => {
+						const rankDelta = roleRank(a.role) - roleRank(b.role);
+						if (rankDelta !== 0) return rankDelta;
+						return (b.in?.confidence ?? 0) - (a.in?.confidence ?? 0);
+					});
 
-				const row = Array.isArray(traversal) ? traversal[0] : traversal;
-
-				// Helper to add graph claims to the deduplicated map
-				const addGraphClaims = (claims: GraphClaim[] | undefined) => {
-					if (!claims || !Array.isArray(claims)) return;
-					for (const c of claims) {
-						const cId = typeof c.id === 'object' ? String(c.id) : c.id;
-
-						// Resolve source fields — may be nested object or record link
-						let sourceTitle = 'Unknown';
-						let sourceAuthor: string[] = [];
-						if (c.source && typeof c.source === 'object' && 'title' in c.source) {
-							sourceTitle = (c.source as { title: string }).title;
-							sourceAuthor = (c.source as { author: string[] }).author ?? [];
-						}
-						if (allGraphClaims.has(cId)) {
-							addRejectedClaim({
-								id: cId,
-								text: c.text,
-								source_title: sourceTitle,
-								confidence: c.confidence,
-								reason_code: 'duplicate_traversal',
-								considered_in: 'traversal',
-								anchor_claim_id: seedId
-							});
-							continue; // already seen
-						}
+					for (const row of sorted) {
+						if (allGraphClaims.size >= traversalClaimCap) break;
+						if (!row.in) continue;
+						const claim = row.in;
+						const cId = typeof claim.id === 'object' ? String(claim.id) : claim.id;
+						if (allGraphClaims.has(cId)) continue;
+						const source =
+							claim.source && typeof claim.source === 'object' && 'title' in claim.source
+								? {
+										title: (claim.source as { title: string }).title,
+										author: (claim.source as { author: string[] }).author ?? []
+									}
+								: { title: 'Unknown', author: [] };
 
 						allGraphClaims.set(cId, {
 							id: cId,
-							text: c.text,
-							claim_type: c.claim_type,
-							domain: c.domain,
-							source_title: sourceTitle,
-							source_author: sourceAuthor,
-							confidence: c.confidence ?? 0.5,
-							position_in_source: c.position_in_source ?? 0
+							text: claim.text,
+							claim_type: claim.claim_type,
+							domain: claim.domain,
+							source_title: source.title,
+							source_author: source.author,
+							confidence: claim.confidence ?? 0.5,
+							position_in_source: claim.position_in_source ?? 0
 						});
 					}
-				};
-
-				addGraphClaims(row.depends_on_incoming_claims);
-				addGraphClaims(row.depends_on_outgoing_claims);
-				addGraphClaims(row.supporting_incoming_claims);
-				addGraphClaims(row.supporting_outgoing_claims);
-				addGraphClaims(row.contradicting_incoming_claims);
-				addGraphClaims(row.contradicting_outgoing_claims);
-				addGraphClaims(row.responds_to_incoming_claims);
-				addGraphClaims(row.responds_to_outgoing_claims);
-
-				// Collect argument IDs
-				if (row.arguments && Array.isArray(row.arguments)) {
-					for (const a of row.arguments) {
-						const aId = typeof a.id === 'object' ? String(a.id) : a.id;
-						argumentIds.add(aId);
-					}
 				}
-			} catch (traversalErr) {
+			} catch (argNeighborhoodErr) {
 				console.warn(
-					`[RETRIEVAL] Graph traversal failed for ${seedId}:`,
-					traversalErr instanceof Error ? traversalErr.message : traversalErr
+					'[RETRIEVAL] Failed to expand argument-neighborhood claims:',
+					argNeighborhoodErr instanceof Error ? argNeighborhoodErr.message : argNeighborhoodErr
 				);
-				// Continue with other seeds
 			}
 		}
 
