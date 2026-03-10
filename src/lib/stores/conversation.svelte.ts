@@ -138,6 +138,7 @@ function createConversationStore() {
   let error = $state<string | null>(null);
   let confidenceSummary = $state<{ avgConfidence: number; lowConfidenceCount: number; totalClaims: number } | null>(null);
   let questionCount = $state(0);
+  let inquiryDepthMode = $state<'quick' | 'standard' | 'deep'>('standard');
   let loadingModelProvider = $state<ModelProvider>('auto');
   let loadingModelId = $state<string | null>(null);
   let passModels = $state<Partial<Record<PassType, PassModelInfo>>>({});
@@ -145,7 +146,16 @@ function createConversationStore() {
   let passWorkingLastAt = $state<Partial<Record<PassType, number>>>({});
   let passWorkingLastSig = $state<Partial<Record<PassType, string>>>({});
 
-  const QUESTION_LIMIT = Math.max(1, Number.parseInt(import.meta.env.PUBLIC_QUESTION_LIMIT ?? '1', 10) || 1);
+  const LEGACY_QUESTION_LIMIT = Math.max(1, Number.parseInt(import.meta.env.PUBLIC_QUESTION_LIMIT ?? '1', 10) || 1);
+  const QUESTION_LIMIT_BY_DEPTH: Record<'quick' | 'standard' | 'deep', number> = {
+    quick: Math.max(1, Number.parseInt(import.meta.env.PUBLIC_QUESTION_LIMIT_QUICK ?? '2', 10) || 2),
+    standard: Math.max(1, Number.parseInt(import.meta.env.PUBLIC_QUESTION_LIMIT_STANDARD ?? '2', 10) || 2),
+    deep: Math.max(1, Number.parseInt(import.meta.env.PUBLIC_QUESTION_LIMIT_DEEP ?? String(LEGACY_QUESTION_LIMIT), 10) || LEGACY_QUESTION_LIMIT)
+  };
+
+  function getActiveQuestionLimit(depthMode: 'quick' | 'standard' | 'deep'): number {
+    return QUESTION_LIMIT_BY_DEPTH[depthMode] ?? LEGACY_QUESTION_LIMIT;
+  }
   const WORKING_UPDATE_MIN_INTERVAL_MS = 4000;
 
   function normalizeWorkingSignature(text: string): string {
@@ -200,6 +210,7 @@ function createConversationStore() {
   ): void {
     // Loading from history/cache restarts the depth counter — fresh exploration
     questionCount = 0;
+    inquiryDepthMode = cached.metadata?.depth_mode ?? 'standard';
     currentPass = null;
     const cachedCompleted = new Set<PassType>();
     if (cached.passes.analysis) cachedCompleted.add('analysis');
@@ -284,8 +295,8 @@ function createConversationStore() {
     get error() { return error; },
     get confidenceSummary() { return confidenceSummary; },
     get questionCount() { return questionCount; },
-    get questionLimit() { return QUESTION_LIMIT; },
-    get isAtQuestionLimit() { return questionCount >= QUESTION_LIMIT; },
+    get questionLimit() { return getActiveQuestionLimit(inquiryDepthMode); },
+    get isAtQuestionLimit() { return questionCount >= getActiveQuestionLimit(inquiryDepthMode); },
     get loadingModelProvider() { return loadingModelProvider; },
     get loadingModelId() { return loadingModelId; },
     get passModels() { return passModels; },
@@ -310,8 +321,10 @@ function createConversationStore() {
         };
       }
     ): Promise<void> {
+      const depthMode = options?.depthMode ?? 'standard';
+      const activeLimit = getActiveQuestionLimit(depthMode);
       // Enforce question limit (only for live queries, not cache hits)
-      if (!options?.bypassQuestionLimit && questionCount >= QUESTION_LIMIT) return;
+      if (!options?.bypassQuestionLimit && questionCount >= activeLimit) return;
 
       error = null;
       isLoading = true;
@@ -329,7 +342,6 @@ function createConversationStore() {
 
       const domainMode = options?.domainMode ?? 'auto';
       const domain = options?.domain;
-      const depthMode = options?.depthMode ?? 'standard';
       const modelProvider = options?.modelProvider ?? 'auto';
       const modelId = options?.modelId?.trim() || undefined;
       loadingModelProvider = modelProvider;
@@ -370,6 +382,7 @@ function createConversationStore() {
 
       // Only count depth for live API queries (not cache/history hits/upgrades)
       if (!options?.bypassQuestionLimit) {
+        inquiryDepthMode = depthMode;
         questionCount += 1;
       }
 
@@ -875,6 +888,7 @@ function createConversationStore() {
       confidenceSummary = null;
       isLoading = false;
       questionCount = 0;
+      inquiryDepthMode = 'standard';
       loadingModelProvider = 'auto';
       loadingModelId = null;
       passModels = {};
