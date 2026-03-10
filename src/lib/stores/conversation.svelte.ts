@@ -4,7 +4,7 @@ import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib
 import type { ReasoningEvaluation } from '$lib/types/verification';
 import { handleSSEEvent } from '$lib/utils/sseHandler';
 import { referencesStore } from '$lib/stores/references.svelte';
-import { historyStore } from '$lib/stores/history.svelte';
+import { historyStore, type CachedQueryResult } from '$lib/stores/history.svelte';
 import { graphStore } from '$lib/stores/graph.svelte';
 import { getIdToken } from '$lib/firebase';
 import { trackEvent } from '$lib/utils/analytics';
@@ -931,6 +931,12 @@ function createConversationStore() {
       isLoading = false;
       applyCachedResult(query, cached, { appendUserMessage: false });
       return true;
+    },
+
+    showCachedResult(query: string, cached: CachedQueryResult, options?: { appendUserMessage?: boolean }): void {
+      error = null;
+      isLoading = false;
+      applyCachedResult(query, cached, { appendUserMessage: options?.appendUserMessage ?? false });
     },
 
     clear(): void {

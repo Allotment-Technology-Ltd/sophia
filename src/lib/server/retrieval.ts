@@ -269,10 +269,14 @@ export async function retrieveContext(
 		// Collect all claim IDs and argument IDs discovered via traversal
 
 		type TraversalRow = {
-			depends_on_claims: GraphClaim[];
-			supporting_claims: GraphClaim[];
-			contradicting_claims: GraphClaim[];
-			responds_to_claims: GraphClaim[];
+			depends_on_incoming_claims: GraphClaim[];
+			depends_on_outgoing_claims: GraphClaim[];
+			supporting_incoming_claims: GraphClaim[];
+			supporting_outgoing_claims: GraphClaim[];
+			contradicting_incoming_claims: GraphClaim[];
+			contradicting_outgoing_claims: GraphClaim[];
+			responds_to_incoming_claims: GraphClaim[];
+			responds_to_outgoing_claims: GraphClaim[];
 			arguments: GraphArgRef[];
 		};
 
@@ -315,10 +319,14 @@ export async function retrieveContext(
 			try {
 				const traversal = await query<TraversalRow[]>(
 					`SELECT
-						<-depends_on<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS depends_on_claims,
-						<-supports<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS supporting_claims,
-						<-contradicts<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS contradicting_claims,
-						->responds_to->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS responds_to_claims,
+						<-depends_on<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS depends_on_incoming_claims,
+						->depends_on->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS depends_on_outgoing_claims,
+						<-supports<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS supporting_incoming_claims,
+						->supports->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS supporting_outgoing_claims,
+						<-contradicts<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS contradicting_incoming_claims,
+						->contradicts->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS contradicting_outgoing_claims,
+						<-responds_to<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS responds_to_incoming_claims,
+						->responds_to->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS responds_to_outgoing_claims,
 						->part_of->argument.{id} AS arguments
 					FROM $seed_id`,
 					{ seed_id: seedId }
@@ -367,10 +375,14 @@ export async function retrieveContext(
 					}
 				};
 
-				addGraphClaims(row.depends_on_claims);
-				addGraphClaims(row.supporting_claims);
-				addGraphClaims(row.contradicting_claims);
-				addGraphClaims(row.responds_to_claims);
+				addGraphClaims(row.depends_on_incoming_claims);
+				addGraphClaims(row.depends_on_outgoing_claims);
+				addGraphClaims(row.supporting_incoming_claims);
+				addGraphClaims(row.supporting_outgoing_claims);
+				addGraphClaims(row.contradicting_incoming_claims);
+				addGraphClaims(row.contradicting_outgoing_claims);
+				addGraphClaims(row.responds_to_incoming_claims);
+				addGraphClaims(row.responds_to_outgoing_claims);
 
 				// Collect argument IDs
 				if (row.arguments && Array.isArray(row.arguments)) {
