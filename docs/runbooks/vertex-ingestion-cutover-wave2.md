@@ -60,6 +60,7 @@ SURREAL_PASS='<password>' \
 npx tsx --env-file=.env --env-file=.env.local scripts/ingest-batch.ts \
   --source-list data/source-list-pom.json \
   --wave 2 \
+  --ingest-provider vertex \
   --domain philosophy_of_mind \
   --yes
 ```
@@ -73,10 +74,16 @@ SURREAL_PASS='<password>' \
 npx tsx --env-file=.env --env-file=.env.local scripts/ingest-batch.ts \
   --source-list data/source-list-pom.json \
   --wave 2 \
+  --ingest-provider vertex \
   --domain philosophy_of_mind \
   --validate \
   --yes
 ```
+
+Provider note:
+
+- `vertex` is the default ingestion provider.
+- `anthropic` remains available as manual rollback only (`--ingest-provider anthropic`).
 
 ---
 

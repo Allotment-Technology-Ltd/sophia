@@ -59,10 +59,19 @@ import { BatchInserter } from '../src/lib/server/batch-inserter.js';
 // ─── Configuration ─────────────────────────────────────────────────────────
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const INGEST_VERTEX_MODEL = process.env.INGEST_VERTEX_MODEL || 'gemini-2.0-flash';
+const INGEST_PROVIDER_DEFAULT = (process.env.INGEST_PROVIDER || 'vertex').toLowerCase();
 
 const CLAUDE_MODELS = parseModelList(process.env.CLAUDE_MODELS, [
 	CLAUDE_MODEL,
 	'claude-sonnet-4-5-20250929'
+]);
+
+const INGEST_VERTEX_MODELS = parseModelList(process.env.INGEST_VERTEX_MODELS, [
+	INGEST_VERTEX_MODEL,
+	'gemini-2.0-flash',
+	'gemini-2.5-flash',
+	'gemini-2.5-pro'
 ]);
 
 const GEMINI_MODELS = parseModelList(process.env.GEMINI_MODELS, [
@@ -140,9 +149,15 @@ function estimateCostUsd(): string {
 	return (claudeInput + claudeOutput + vertex + gemini).toFixed(4);
 }
 
-function logClaudeCost(label: string) {
+function logExtractionCost(label: string, provider: IngestProvider) {
+	if (provider === 'anthropic') {
+		console.log(
+			`  [COST] ${label}: Claude tokens — input: ${costs.claudeInputTokens.toLocaleString()}, output: ${costs.claudeOutputTokens.toLocaleString()} (running total: $${estimateCostUsd()})`
+		);
+		return;
+	}
 	console.log(
-		`  [COST] ${label}: Claude tokens — input: ${costs.claudeInputTokens.toLocaleString()}, output: ${costs.claudeOutputTokens.toLocaleString()} (running total: $${estimateCostUsd()})`
+		`  [COST] ${label}: Gemini tokens — ${costs.geminiTokens.toLocaleString()} (running total: $${estimateCostUsd()})`
 	);
 }
 
@@ -270,6 +285,18 @@ function isModelUnavailableError(error: unknown): boolean {
 	);
 }
 
+type IngestProvider = 'vertex' | 'anthropic';
+
+function parseIngestProvider(value: string | undefined): IngestProvider {
+	if (!value) return 'vertex';
+	const normalized = value.toLowerCase().trim();
+	return normalized === 'anthropic' ? 'anthropic' : 'vertex';
+}
+
+function getProviderLabel(provider: IngestProvider): string {
+	return provider === 'anthropic' ? 'Claude' : 'Vertex Gemini';
+}
+
 function getSectionTokenLimit(sourceType: string): number {
 	if (sourceType === 'book') {
 		return BOOK_MAX_TOKENS_PER_SECTION;
@@ -392,7 +419,7 @@ function splitIntoSections(text: string, maxTokensPerSection = MAX_TOKENS_PER_SE
 }
 
 /**
- * Parse JSON from Claude's response, stripping markdown code fences if present
+ * Parse JSON from model response, stripping markdown code fences if present
  */
 function parseJsonResponse(text: string): unknown {
 	// Strip markdown code fences if present
@@ -409,20 +436,25 @@ function parseJsonResponse(text: string): unknown {
 }
 
 /**
- * Call Claude with retry and exponential backoff
+ * Call extraction model with retry and exponential backoff
  */
 async function callClaude(
-	client: Anthropic,
+	provider: IngestProvider,
+	client: Anthropic | null,
+	vertex: ReturnType<typeof createVertex> | null,
 	systemPrompt: string,
 	userMessage: string,
 	maxRetries = 3
 ): Promise<string> {
 	let lastError: Error | null = null;
 
-	for (let modelIndex = 0; modelIndex < CLAUDE_MODELS.length; modelIndex++) {
-		const model = CLAUDE_MODELS[modelIndex];
+	const modelList = provider === 'anthropic' ? CLAUDE_MODELS : INGEST_VERTEX_MODELS;
+	const providerLabel = getProviderLabel(provider);
+
+	for (let modelIndex = 0; modelIndex < modelList.length; modelIndex++) {
+		const model = modelList[modelIndex];
 		if (modelIndex > 0) {
-			console.log(`  [MODEL] Falling back to Claude model: ${model}`);
+			console.log(`  [MODEL] Falling back to ${providerLabel} model: ${model}`);
 		}
 
 		for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -433,31 +465,49 @@ async function callClaude(
 					await sleep(delayMs);
 				}
 
-				const response = await client.messages.create({
-					model,
-					max_tokens: 32768,
+				if (provider === 'anthropic') {
+					if (!client) throw new Error('Anthropic client unavailable');
+
+					const response = await client.messages.create({
+						model,
+						max_tokens: 32768,
+						system: systemPrompt,
+						messages: [{ role: 'user', content: userMessage }]
+					});
+
+					if (response.usage) {
+						costs.claudeInputTokens += response.usage.input_tokens;
+						costs.claudeOutputTokens += response.usage.output_tokens;
+					}
+
+					// Detect truncated output before it causes a JSON parse failure downstream
+					if (response.stop_reason === 'max_tokens') {
+						throw new Error(
+							'Model output was truncated (max_tokens reached) — reduce section size or increase max_tokens'
+						);
+					}
+
+					const textBlock = response.content.find((block) => block.type === 'text');
+					if (!textBlock || textBlock.type !== 'text') {
+						throw new Error('No text block in model response');
+					}
+
+					return textBlock.text;
+				}
+
+				if (!vertex) throw new Error('Vertex client unavailable');
+				const { text, usage } = await generateText({
+					model: vertex(model),
 					system: systemPrompt,
-					messages: [{ role: 'user', content: userMessage }]
+					messages: [{ role: 'user', content: userMessage }],
+					temperature: 0.1
 				});
 
-				if (response.usage) {
-					costs.claudeInputTokens += response.usage.input_tokens;
-					costs.claudeOutputTokens += response.usage.output_tokens;
+				if (usage) {
+					costs.geminiTokens += (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
 				}
 
-				// Detect truncated output before it causes a JSON parse failure downstream
-				if (response.stop_reason === 'max_tokens') {
-					throw new Error(
-						'Claude output was truncated (max_tokens reached) — reduce section size or increase max_tokens'
-					);
-				}
-
-				const textBlock = response.content.find((block) => block.type === 'text');
-				if (!textBlock || textBlock.type !== 'text') {
-					throw new Error('No text block in Claude response');
-				}
-
-				return textBlock.text;
+				return text;
 			} catch (error) {
 				lastError = error instanceof Error ? error : new Error(String(error));
 
@@ -473,13 +523,13 @@ async function callClaude(
 				lastError.message.includes('timeout') ||
 				lastError.message.includes('prompt_too_long') ||
 				lastError.message.includes('context_length');
-				console.warn(`  [WARN] Claude API error: ${lastError.message}`);
+				console.warn(`  [WARN] ${providerLabel} API error: ${lastError.message}`);
 			}
 		}
 	}
 
 	throw new Error(
-		`Claude API failed after ${maxRetries + 1} attempts: ${lastError?.message || 'Unknown error'}`
+		`${providerLabel} API failed after ${maxRetries + 1} attempts: ${lastError?.message || 'Unknown error'}`
 	);
 }
 
@@ -487,14 +537,16 @@ async function callClaude(
  * Wrapper around callClaude that shows a spinner while waiting
  */
 async function callClaudeWithProgress(
-	client: Anthropic,
+	provider: IngestProvider,
+	client: Anthropic | null,
+	vertex: ReturnType<typeof createVertex> | null,
 	systemPrompt: string,
 	userMessage: string,
 	label: string
 ): Promise<string> {
 	const spinner = startSpinner(label);
 	try {
-		const result = await callClaude(client, systemPrompt, userMessage);
+		const result = await callClaude(provider, client, vertex, systemPrompt, userMessage);
 		spinner.stop();
 		return result;
 	} catch (e) {
@@ -507,12 +559,14 @@ async function callClaudeWithProgress(
  * Attempt to fix malformed JSON by asking Claude
  */
 async function fixJsonWithClaude(
-	client: Anthropic,
+	provider: IngestProvider,
+	client: Anthropic | null,
+	vertex: ReturnType<typeof createVertex> | null,
 	originalJson: string,
 	parseError: string,
 	schema: string
 ): Promise<string> {
-	console.log('  [FIX] Asking Claude to fix malformed JSON...');
+	console.log(`  [FIX] Asking ${getProviderLabel(provider)} to fix malformed JSON...`);
 
 	const fixPrompt = `The following JSON output was malformed. Please fix it so it is valid JSON matching this schema:
 
@@ -526,10 +580,12 @@ ${originalJson}
 Respond ONLY with the corrected JSON array. No explanation, no markdown backticks.`;
 
 	return callClaudeWithProgress(
+		provider,
 		client,
+		vertex,
 		'You are a JSON repair assistant. Fix the malformed JSON to be valid. Respond with only the corrected JSON.',
 		fixPrompt,
-		'Fixing malformed JSON via Claude'
+		`Fixing malformed JSON via ${getProviderLabel(provider)}`
 	);
 }
 
@@ -691,6 +747,9 @@ async function main() {
 	const args = process.argv.slice(2);
 	const filePath = args.find((a) => !a.startsWith('--'));
 	const shouldValidate = args.includes('--validate');
+	const ingestProviderFlagIdx = args.findIndex((a) => a === '--ingest-provider');
+	const ingestProviderFlag = ingestProviderFlagIdx !== -1 ? args[ingestProviderFlagIdx + 1] : undefined;
+	const ingestProvider = parseIngestProvider(ingestProviderFlag ?? INGEST_PROVIDER_DEFAULT);
 	// Pipeline mode: exit after stages 1-4 so the batch can start the next source's
 	// Claude extraction while Gemini validation runs for this source in a separate process.
 	const stopAfterEmbedding = args.includes('--stop-after-embedding');
@@ -715,6 +774,7 @@ async function main() {
 		console.error('\nFlags:');
 		console.error('  --validate              Run Gemini cross-model validation (requires GOOGLE_AI_API_KEY)');
 		console.error('  --domain <domain>       Override claim domain tag (e.g. philosophy_of_mind)');
+		console.error('  --ingest-provider <p>   Extraction provider: vertex | anthropic (default: vertex)');
 		console.error('  --force-stage <stage>   Re-run from this stage onwards, ignoring saved progress');
 		console.error(`                          Valid stages: ${STAGES_ORDER.join(', ')}`);
 		console.error('\nResume is automatic — re-run the same source to pick up where it left off.');
@@ -722,8 +782,12 @@ async function main() {
 	}
 
 	// Validate environment
-	if (!ANTHROPIC_API_KEY) {
-		console.error('[ERROR] ANTHROPIC_API_KEY not set');
+	if (ingestProvider === 'anthropic' && !ANTHROPIC_API_KEY) {
+		console.error('[ERROR] INGEST_PROVIDER=anthropic requires ANTHROPIC_API_KEY');
+		process.exit(1);
+	}
+	if (!GOOGLE_VERTEX_PROJECT) {
+		console.error('[ERROR] GOOGLE_VERTEX_PROJECT (or GCP_PROJECT_ID) is required');
 		process.exit(1);
 	}
 	if (shouldValidate && !GOOGLE_VERTEX_PROJECT) {
@@ -832,14 +896,16 @@ async function main() {
 	console.log(`Type:   ${sourceMeta.source_type}`);
 	console.log(`Words:  ${sourceMeta.word_count.toLocaleString()}`);
 	console.log(`Est. tokens: ~${estimateTokens(sourceText).toLocaleString()}`);
+	console.log(`Ingest provider: ${ingestProvider}`);
 	console.log(`Validate: ${shouldValidate ? 'YES (Gemini)' : 'No'}`);
 	if (resumeFromStage) {
 		console.log(`Resume from: ${resumeFromStage}`);
 	}
 	console.log('');
 
-	// Initialize clients
-	const claude = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+	// Initialize model clients
+	const claude = ingestProvider === 'anthropic' ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
+	const vertexIngestClient = createVertex({ project: GOOGLE_VERTEX_PROJECT, location: GOOGLE_VERTEX_LOCATION });
 
 	try {
 		// ═══════════════════════════════════════════════════════════════
@@ -896,10 +962,12 @@ async function main() {
 					let rawResponse: string;
 					try {
 						rawResponse = await callClaudeWithProgress(
+							ingestProvider,
 							claude,
+							vertexIngestClient,
 							EXTRACTION_SYSTEM,
 							userMsg,
-							`Extracting section ${sectionLabel} via Claude`
+							`Extracting section ${sectionLabel} via ${getProviderLabel(ingestProvider)}`
 						);
 					} catch (apiError) {
 						const apiMsg = apiError instanceof Error ? apiError.message : String(apiError);
@@ -915,7 +983,7 @@ async function main() {
 						}
 						throw apiError;
 					}
-					logClaudeCost('Extraction');
+					logExtractionCost('Extraction', ingestProvider);
 
 					try {
 						const parsed = parseJsonResponse(rawResponse);
@@ -943,7 +1011,9 @@ async function main() {
 						let fixedResponse: string;
 						try {
 							fixedResponse = await fixJsonWithClaude(
+								ingestProvider,
 								claude,
+								vertexIngestClient,
 								rawResponse,
 								parseError instanceof Error ? parseError.message : String(parseError),
 								'Array of { text, claim_type, domain, section_context, position_in_source, confidence }'
@@ -988,8 +1058,14 @@ async function main() {
 					sourceText
 				);
 
-				const rawResponse = await callClaude(claude, EXTRACTION_SYSTEM, userMsg);
-				logClaudeCost('Extraction');
+				const rawResponse = await callClaude(
+					ingestProvider,
+					claude,
+					vertexIngestClient,
+					EXTRACTION_SYSTEM,
+					userMsg
+				);
+				logExtractionCost('Extraction', ingestProvider);
 
 				try {
 					const parsed = parseJsonResponse(rawResponse);
@@ -999,7 +1075,9 @@ async function main() {
 					console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
 
 					const fixedResponse = await fixJsonWithClaude(
+						ingestProvider,
 						claude,
+						vertexIngestClient,
 						rawResponse,
 						parseError instanceof Error ? parseError.message : String(parseError),
 						'Array of { text, claim_type, domain, section_context, position_in_source, confidence }'
@@ -1059,8 +1137,14 @@ async function main() {
 
 			const claimsJson = JSON.stringify(allClaims, null, 2);
 			const relUserMsg = RELATIONS_USER(claimsJson);
-			const relRawResponse = await callClaude(claude, RELATIONS_SYSTEM, relUserMsg);
-			logClaudeCost('Relations');
+			const relRawResponse = await callClaude(
+				ingestProvider,
+				claude,
+				vertexIngestClient,
+				RELATIONS_SYSTEM,
+				relUserMsg
+			);
+			logExtractionCost('Relations', ingestProvider);
 
 			try {
 				const parsed = parseJsonResponse(relRawResponse);
@@ -1069,7 +1153,9 @@ async function main() {
 			} catch (parseError) {
 				console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
 				const fixedResponse = await fixJsonWithClaude(
+					ingestProvider,
 					claude,
+					vertexIngestClient,
 					relRawResponse,
 					parseError instanceof Error ? parseError.message : String(parseError),
 					'Array of { from_position, to_position, relation_type, strength, note? }'
@@ -1121,8 +1207,14 @@ async function main() {
 				const claimsJson = JSON.stringify(allClaims, null, 2);
 				const relationsJson = JSON.stringify(relations, null, 2);
 				const grpUserMsg = GROUPING_USER(claimsJson, relationsJson);
-				const grpRawResponse = await callClaude(claude, GROUPING_SYSTEM, grpUserMsg);
-				logClaudeCost('Grouping');
+				const grpRawResponse = await callClaude(
+					ingestProvider,
+					claude,
+					vertexIngestClient,
+					GROUPING_SYSTEM,
+					grpUserMsg
+				);
+				logExtractionCost('Grouping', ingestProvider);
 
 				try {
 					const parsed = parseJsonResponse(grpRawResponse);
@@ -1131,7 +1223,9 @@ async function main() {
 				} catch (parseError) {
 					console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
 					const fixedResponse = await fixJsonWithClaude(
+						ingestProvider,
 						claude,
+						vertexIngestClient,
 						grpRawResponse,
 						parseError instanceof Error ? parseError.message : String(parseError),
 						'Array of { name, tradition?, domain, summary, claims: [{ position_in_source, role }] }'

@@ -3,7 +3,7 @@
  *
  * Ingest multiple sources from the curated source list.
  *
- * Usage: npx tsx --env-file=.env scripts/ingest-batch.ts [--wave 1|2|3] [--validate] [--dry-run] [--status] [--retry] [--fast] [--fail-fast] [--domain <domain>] [--source-list <path>] [--yes]
+ * Usage: npx tsx --env-file=.env scripts/ingest-batch.ts [--wave 1|2|3] [--validate] [--dry-run] [--status] [--retry] [--fast] [--fail-fast] [--domain <domain>] [--ingest-provider <vertex|anthropic>] [--source-list <path>] [--yes]
  *
  * Flags:
  *   --wave N                Only ingest sources from wave N (1, 2, or 3)
@@ -14,11 +14,12 @@
  *   --fast                  Fast extraction mode (no validation, detailed error logging)
  *   --fail-fast             Stop launching new sources after first failure
  *   --domain <domain>       Override claim domain tag for all sources (e.g. philosophy_of_mind)
+ *   --ingest-provider <p>   Extraction provider for stages 1-3: vertex | anthropic (default: vertex)
  *   --source-list <path>    Path to source list JSON (default: ./data/source-list-3a.json)
  *   --yes                   Skip cost confirmation prompt (for CI / automated runs)
  *
  * Pipeline mode (default):
- *   Phase A (stages 1-4, Claude + Voyage) runs in parallel — up to PHASE_A_CONCURRENCY.
+ *   Phase A (stages 1-4, extraction + embeddings) runs in parallel — up to PHASE_A_CONCURRENCY.
  *   Phase B (stage 5 Gemini + stage 6 Store) runs async — up to GEMINI_CONCURRENCY in parallel.
  *   When each Phase A finishes, Phase B starts in the background.
  *   Set PHASE_A_CONCURRENCY env var to control parallel extraction workers (default: 4).
@@ -43,6 +44,7 @@ const SURREAL_NAMESPACE = process.env.SURREAL_NAMESPACE || 'sophia';
 const SURREAL_DATABASE = process.env.SURREAL_DATABASE || 'sophia';
 const GEMINI_CONCURRENCY = parseInt(process.env.GEMINI_CONCURRENCY || '2', 10);
 const PHASE_A_CONCURRENCY = parseInt(process.env.PHASE_A_CONCURRENCY || '4', 10);
+const INGEST_PROVIDER_DEFAULT = (process.env.INGEST_PROVIDER || 'vertex').toLowerCase();
 
 // Pass --env-file args to child tsx processes so they inherit the same env.
 // Supports split env files (e.g. .env for infra, .env.local for API keys).
@@ -80,6 +82,7 @@ interface BatchSummary {
 	timestamp: string;
 	wave_filter: number | null;
 	validation_enabled: boolean;
+	ingest_provider: 'vertex' | 'anthropic';
 	total_sources: number;
 	successfully_ingested: number;
 	skipped: number;
@@ -102,6 +105,14 @@ interface IngestionLogRecord {
 	validation_score?: number;
 	error_message?: string;
 	cost_usd?: number;
+}
+
+type IngestProvider = 'vertex' | 'anthropic';
+
+function parseIngestProvider(value: string | undefined): IngestProvider {
+	if (!value) return 'vertex';
+	const normalized = value.toLowerCase().trim();
+	return normalized === 'anthropic' ? 'anthropic' : 'vertex';
 }
 
 // ─── Semaphore for concurrency control ────────────────────────────────────
@@ -239,11 +250,18 @@ function spawnAsync(
 }
 
 /**
- * Run ingest.ts Phase A: stages 1-4 (Claude extraction + Voyage embedding).
+ * Run ingest.ts Phase A: stages 1-4 (provider extraction + embeddings).
  * Exits after embedding via --stop-after-embedding flag.
  * Enhanced with detailed error detection for fast-mode diagnostics.
  */
-async function runPhaseA(slug: string, validate: boolean, label: string, fastMode = false, domain: string | null = null): Promise<boolean> {
+async function runPhaseA(
+	slug: string,
+	validate: boolean,
+	label: string,
+	ingestProvider: IngestProvider,
+	fastMode = false,
+	domain: string | null = null
+): Promise<boolean> {
 	const txtPath = path.join(SOURCES_DIR, `${slug}.txt`);
 	const args = [
 		...TSX_ENV_ARGS,
@@ -252,9 +270,10 @@ async function runPhaseA(slug: string, validate: boolean, label: string, fastMod
 		'--stop-after-embedding'
 	];
 	if (validate) args.push('--validate');
+	args.push('--ingest-provider', ingestProvider);
 	if (domain) { args.push('--domain'); args.push(domain); }
 
-	console.log(`  [PHASE A] Running stages 1-4 (Claude+Voyage): ${label}`);
+	console.log(`  [PHASE A] Running stages 1-4 (${ingestProvider}+embeddings): ${label}`);
 	const phaseStart = Date.now();
 	const result = await spawnAsync(args, slug);
 
@@ -291,11 +310,13 @@ async function runPhaseB(
 	slug: string,
 	validate: boolean,
 	label: string,
+	ingestProvider: IngestProvider,
 	domain: string | null = null
 ): Promise<{ success: boolean; claims?: number; relations?: number; arguments?: number; cost_gbp?: number }> {
 	const txtPath = path.join(SOURCES_DIR, `${slug}.txt`);
 	const args = [...TSX_ENV_ARGS, 'scripts/ingest.ts', txtPath];
 	if (validate) args.push('--validate');
+	args.push('--ingest-provider', ingestProvider);
 	if (domain) { args.push('--domain'); args.push(domain); }
 
 	console.log(`  [PHASE B] Running stages 5-6 (Gemini+Store): ${label}`);
@@ -327,11 +348,13 @@ async function runPhaseB(
 async function ingestSourceFull(
 	slug: string,
 	validate: boolean,
+	ingestProvider: IngestProvider,
 	domain: string | null = null
 ): Promise<{ success: boolean; claims?: number; relations?: number; arguments?: number; cost_gbp?: number }> {
 	const txtPath = path.join(SOURCES_DIR, `${slug}.txt`);
 	const args = [...TSX_ENV_ARGS, 'scripts/ingest.ts', txtPath];
 	if (validate) args.push('--validate');
+	args.push('--ingest-provider', ingestProvider);
 	if (domain) { args.push('--domain'); args.push(domain); }
 
 	const result = await spawnAsync(args, slug);
@@ -498,6 +521,7 @@ async function main() {
 	let fastMode = false;
 	let failFast = false;
 	let domainOverride: string | null = null;
+	let ingestProvider: IngestProvider = parseIngestProvider(INGEST_PROVIDER_DEFAULT);
 	let sourceListPath = DEFAULT_SOURCE_LIST_PATH;
 	let skipConfirm = false;
 
@@ -520,6 +544,8 @@ async function main() {
 			failFast = true;
 		} else if (args[i] === '--domain' && i + 1 < args.length) {
 			domainOverride = args[++i];
+		} else if (args[i] === '--ingest-provider' && i + 1 < args.length) {
+			ingestProvider = parseIngestProvider(args[++i]);
 		} else if (args[i] === '--source-list' && i + 1 < args.length) {
 			sourceListPath = args[++i];
 		} else if (args[i] === '--yes') {
@@ -624,6 +650,7 @@ async function main() {
 	console.log(`Sources to process: ${sources.length}`);
 	console.log(`Wave filter: ${waveFilter !== null ? waveFilter : 'None (all waves)'}`);
 	console.log(`Mode: ${fastMode ? '⚡ FAST (extraction only, no validation)' : dryRun ? 'DRY RUN (no actual changes)' : 'LIVE'}`);
+	console.log(`Ingest provider: ${ingestProvider}`);
 	console.log(`Validation: ${validate ? 'ENABLED' : 'Disabled'}`);
 	console.log(`Pre-scan: MANDATORY (ran above)`);
 	if (domainOverride) console.log(`Domain override: ${domainOverride}`);
@@ -660,7 +687,7 @@ async function main() {
 	}
 
 	// ─── Pipelined ingestion ────────────────────────────────────────────────
-	// Phase A (Claude+Voyage, stages 1-4) runs in parallel via phaseASem.
+	// Phase A (provider extraction + embeddings, stages 1-4) runs in parallel via phaseASem.
 	// Phase B (Gemini+Store, stages 5-6) runs async, up to GEMINI_CONCURRENCY via sem.
 	const sem = new Semaphore(GEMINI_CONCURRENCY);
 	const phaseASem = new Semaphore(PHASE_A_CONCURRENCY);
@@ -791,7 +818,7 @@ async function main() {
 				const phaseATask = (async () => {
 					await phaseASem.acquire();
 					try {
-						const phaseAOk = await runPhaseA(capturedSlug, validate, capturedLabel, fastMode, domainOverride);
+						const phaseAOk = await runPhaseA(capturedSlug, validate, capturedLabel, ingestProvider, fastMode, domainOverride);
 
 						if (!phaseAOk) {
 							console.error(`  [FAILED] Phase A failed for: ${capturedSource.title}`);
@@ -812,7 +839,7 @@ async function main() {
 						console.log(`  [PIPELINE] Phase A complete — handing off to Phase B (background)`);
 
 						await sem.acquire();
-						const phaseBTask = runPhaseB(capturedSlug, validate, capturedLabel, domainOverride)
+						const phaseBTask = runPhaseB(capturedSlug, validate, capturedLabel, ingestProvider, domainOverride)
 							.then((result) => {
 								if (result.success) {
 									successCount++;
@@ -859,7 +886,7 @@ async function main() {
 			} else {
 				// ── Non-pipelined mode (no Gemini) ──────────────────────────
 				// No Gemini validation, so no benefit to pipelining — run sequentially.
-				const ingestResult = await ingestSourceFull(ingestSlug, validate, domainOverride);
+				const ingestResult = await ingestSourceFull(ingestSlug, validate, ingestProvider, domainOverride);
 
 				if (!ingestResult.success) {
 					console.error('  [FAILED] Ingestion failed');
@@ -968,6 +995,7 @@ async function main() {
 		timestamp: new Date().toISOString(),
 		wave_filter: waveFilter,
 		validation_enabled: validate,
+		ingest_provider: ingestProvider,
 		total_sources: sources.length,
 		successfully_ingested: successCount,
 		skipped: skippedCount,
