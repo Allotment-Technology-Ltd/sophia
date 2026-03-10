@@ -35,6 +35,7 @@
 | Document | Purpose |
 | --- | --- |
 | [byok-rollout-plan.md](byok-rollout-plan.md) | Canonical BYOK (Bring Your Own Key) rollout plan: Phase 1, Phase 1b, Phase 1c, and deferred Phase 2 monetization |
+| [consumer-monetization-rollout-plan.md](consumer-monetization-rollout-plan.md) | Consumer monetization + legal hardening implementation plan (Paddle billing, BYOK metering, entitlements, and legal rollout controls) |
 | [argument-map-gold-standard-plan.md](argument-map-gold-standard-plan.md) | Gold-standard delivery plan for the Phase 9 argument map experience |
 
 ## Archive

@@ -1,6 +1,9 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { verifyApiKey } from '$lib/server/apiAuth';
+import { loadByokProviderApiKeys } from '$lib/server/byok/store';
+import { resolveByokOwnerUid } from '$lib/server/byok/tenantIdentity';
+import type { ProviderApiKeys } from '$lib/server/byok/types';
 import {
   runVerificationPipeline
 } from '$lib/server/verification/pipeline';
@@ -139,9 +142,24 @@ export const POST: RequestHandler = async ({ request }) => {
     });
   }
 
+  const tenantIdentity = resolveByokOwnerUid(request, auth.owner_uid);
+  let providerApiKeys: ProviderApiKeys = {};
+  if (tenantIdentity.ownerUid) {
+    try {
+      providerApiKeys = await loadByokProviderApiKeys(tenantIdentity.ownerUid);
+    } catch (error) {
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn('[BYOK] Unable to load provider keys for verify request:', error instanceof Error ? error.message : String(error));
+      }
+    }
+  }
+
   if (!acceptsStream) {
     try {
-      const pipeline = await runVerificationPipeline(parsedRequest, { includePassOutputs: true });
+      const pipeline = await runVerificationPipeline(parsedRequest, {
+        includePassOutputs: true,
+        providerApiKeys
+      });
       const processingTimeMs = Date.now() - startedAt;
       const response = buildVerificationResult(
         requestId,
@@ -216,6 +234,7 @@ export const POST: RequestHandler = async ({ request }) => {
       try {
         const pipeline = await runVerificationPipeline(parsedRequest, {
           includePassOutputs: true,
+          providerApiKeys,
           callbacks: {
             onPassStart(pass) {
               send({ type: 'pass_start', pass });

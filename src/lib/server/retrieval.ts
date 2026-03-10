@@ -105,6 +105,8 @@ export interface RetrievalOptions {
 	maxHops?: number;
 	/** Optional cap on total claims returned after traversal */
 	maxClaims?: number;
+	/** Optional authenticated user; enables access to owner-private sources */
+	viewerUid?: string | null;
 }
 
 const EMPTY_RESULT: RetrievalResult = {
@@ -114,6 +116,16 @@ const EMPTY_RESULT: RetrievalResult = {
 	seed_claim_ids: [],
 	degraded: false
 };
+
+function canViewSource(
+	visibilityScope: string | undefined,
+	ownerUid: string | undefined,
+	viewerUid: string | null | undefined
+): boolean {
+	if (!visibilityScope || visibilityScope === 'public_shared') return true;
+	if (visibilityScope !== 'private_user_only') return true;
+	return Boolean(viewerUid && ownerUid && viewerUid === ownerUid);
+}
 
 // ─── Main retrieval function ───────────────────────────────────────────────
 
@@ -131,7 +143,7 @@ export async function retrieveContext(
 	userQuery: string,
 	options: RetrievalOptions = {}
 ): Promise<RetrievalResult> {
-	const { topK = 5, domain, minConfidence = 0, maxHops, maxClaims } = options;
+	const { topK = 5, domain, minConfidence = 0, maxHops, maxClaims, viewerUid = null } = options;
 	const traversalMaxHops = Math.max(1, maxHops ?? (topK >= 10 ? 3 : topK <= 3 ? 1 : 2));
 	const traversalClaimCap = Math.max(topK, maxClaims ?? (topK >= 10 ? 120 : topK <= 3 ? 32 : 72));
 
@@ -155,11 +167,16 @@ export async function retrieveContext(
 		// SurrealDB v2: MTREE KNN operator (<|N|>) does not support additional
 		// WHERE conditions inline. Use a subquery to KNN-search a larger pool,
 		// then filter/rank in the outer query.
-		const knnPool = domain || minConfidence > 0 ? topK * 4 : topK;
-		const postFilters: string[] = [];
-		if (domain) postFilters.push('domain = $domain');
-		if (minConfidence > 0) postFilters.push('confidence >= $minConfidence');
-		const postWhere = postFilters.length > 0 ? `WHERE ${postFilters.join(' AND ')}` : '';
+			const knnPool = domain || minConfidence > 0 ? topK * 4 : topK;
+			const postFilters: string[] = [];
+			if (domain) postFilters.push('domain = $domain');
+			if (minConfidence > 0) postFilters.push('confidence >= $minConfidence');
+			postFilters.push(
+				viewerUid
+					? "(source.visibility_scope = NONE OR source.visibility_scope = 'public_shared' OR (source.visibility_scope = 'private_user_only' AND source.owner_uid = $viewer_uid))"
+					: "(source.visibility_scope = NONE OR source.visibility_scope = 'public_shared')"
+			);
+			const postWhere = postFilters.length > 0 ? `WHERE ${postFilters.join(' AND ')}` : '';
 
 		type SeedRow = {
 			id: string;
@@ -169,9 +186,11 @@ export async function retrieveContext(
 			confidence: number;
 			position_in_source: number;
 			section_context: string | null;
-			source_title: string;
-			source_author: string[];
-		};
+				source_title: string;
+				source_author: string[];
+				source_visibility_scope?: string;
+				source_owner_uid?: string;
+			};
 
 		let seedClaims: SeedRow[];
 		let seedPoolCount = 0;
@@ -192,23 +211,26 @@ export async function retrieveContext(
 					claim_type,
 					domain,
 					confidence,
-					position_in_source,
-					section_context,
-					source.title AS source_title,
-					source.author AS source_author
-				FROM (
-					SELECT *
-					FROM claim
+						position_in_source,
+						section_context,
+						source.title AS source_title,
+						source.author AS source_author,
+						source.visibility_scope AS source_visibility_scope,
+						source.owner_uid AS source_owner_uid
+					FROM (
+						SELECT *
+						FROM claim
 					WHERE embedding <|${knnPool}|> $query_embedding
 				)
 				${postWhere}
 				LIMIT ${knnPool}`,
 				{
-					query_embedding: queryEmbedding,
-					...(domain ? { domain } : {}),
-					...(minConfidence > 0 ? { minConfidence } : {})
-				}
-			);
+						query_embedding: queryEmbedding,
+						...(domain ? { domain } : {}),
+						...(minConfidence > 0 ? { minConfidence } : {}),
+						viewer_uid: viewerUid
+					}
+				);
 			console.log('[RETRIEVAL] ✓ Vector search returned:', seedClaims?.length || 0, 'claims');
 			seedPoolCount = seedClaims?.length || 0;
 		} catch (dbErr) {
@@ -232,7 +254,7 @@ export async function retrieveContext(
 
 		// Diversity-aware seed selection: prefer source variety before filling by rank.
 		// This reduces flat neighborhoods dominated by one source.
-		if (seedClaims.length > 1) {
+			if (seedClaims.length > 1) {
 			const diverse: SeedRow[] = [];
 			const seenSources = new Set<string>();
 			for (const claim of seedClaims) {
@@ -250,10 +272,17 @@ export async function retrieveContext(
 					if (diverse.length >= topK) break;
 				}
 			}
-			seedClaims = diverse.slice(0, topK);
-		}
+				seedClaims = diverse.slice(0, topK);
+			}
+			seedClaims = seedClaims.filter((seed) =>
+				canViewSource(seed.source_visibility_scope, seed.source_owner_uid, viewerUid)
+			);
+			if (seedClaims.length === 0) {
+				console.log('[RETRIEVAL] No visible seed claims after visibility filtering');
+				return EMPTY_RESULT;
+			}
 
-		console.log(`[RETRIEVAL] Found ${seedClaims.length} seed claims`);
+			console.log(`[RETRIEVAL] Found ${seedClaims.length} seed claims`);
 		const seedClaimIds = seedClaims.map((seed) =>
 			typeof seed.id === 'object' ? String(seed.id) : seed.id
 		);
@@ -290,15 +319,22 @@ export async function retrieveContext(
 			arguments: GraphArgRef[];
 		};
 
-		type GraphClaim = {
-			id: string;
-			text: string;
-			claim_type: string;
-			domain: PhilosophicalDomain;
-			confidence: number;
-			position_in_source: number;
-			source: { title: string; author: string[] } | string;
-		};
+			type GraphClaim = {
+				id: string;
+				text: string;
+				claim_type: string;
+				domain: PhilosophicalDomain;
+				confidence: number;
+				position_in_source: number;
+				source:
+					| {
+						title: string;
+						author: string[];
+						visibility_scope?: string;
+						owner_uid?: string;
+					}
+					| string;
+			};
 
 		type GraphArgRef = {
 			id: string;
@@ -307,12 +343,13 @@ export async function retrieveContext(
 		const allGraphClaims: Map<string, RetrievedClaim> = new Map();
 		const argumentIds: Set<string> = new Set();
 
-		// Add seed claims to the map first
-		for (const seed of seedClaims) {
-			const id = typeof seed.id === 'object' ? String(seed.id) : seed.id;
-			allGraphClaims.set(id, {
-				id,
-				text: seed.text,
+			// Add seed claims to the map first
+			for (const seed of seedClaims) {
+				const id = typeof seed.id === 'object' ? String(seed.id) : seed.id;
+				if (!canViewSource(seed.source_visibility_scope, seed.source_owner_uid, viewerUid)) continue;
+				allGraphClaims.set(id, {
+					id,
+					text: seed.text,
 				claim_type: seed.claim_type,
 				domain: seed.domain,
 				source_title: seed.source_title ?? 'Unknown',
@@ -322,27 +359,39 @@ export async function retrieveContext(
 			});
 		}
 
-		const resolveSource = (claim: GraphClaim): { title: string; author: string[] } => {
-			if (claim.source && typeof claim.source === 'object' && 'title' in claim.source) {
-				return {
-					title: (claim.source as { title: string }).title,
-					author: (claim.source as { author: string[] }).author ?? []
-				};
-			}
-			return { title: 'Unknown', author: [] };
-		};
+			const resolveSource = (
+				claim: GraphClaim
+			): {
+				title: string;
+				author: string[];
+				visibilityScope?: string;
+				ownerUid?: string;
+			} => {
+				if (claim.source && typeof claim.source === 'object' && 'title' in claim.source) {
+					return {
+						title: (claim.source as { title: string }).title,
+						author: (claim.source as { author: string[] }).author ?? [],
+						visibilityScope: (claim.source as { visibility_scope?: string }).visibility_scope,
+						ownerUid: (claim.source as { owner_uid?: string }).owner_uid
+					};
+				}
+				return { title: 'Unknown', author: [] };
+			};
 
 		const registerCandidate = (
 			claim: GraphClaim | undefined,
 			anchorId: string,
 			hopCandidates: Map<string, { claim: GraphClaim; anchorId: string }>
 		): void => {
-			if (!claim) return;
-			const claimId = typeof claim.id === 'object' ? String(claim.id) : claim.id;
-			const source = resolveSource(claim);
-			if (allGraphClaims.has(claimId)) {
-				addRejectedClaim({
-					id: claimId,
+				if (!claim) return;
+				const claimId = typeof claim.id === 'object' ? String(claim.id) : claim.id;
+				const source = resolveSource(claim);
+				if (!canViewSource(source.visibilityScope, source.ownerUid, viewerUid)) {
+					return;
+				}
+				if (allGraphClaims.has(claimId)) {
+					addRejectedClaim({
+						id: claimId,
 					text: claim.text,
 					source_title: source.title,
 					confidence: claim.confidence,
@@ -374,18 +423,18 @@ export async function retrieveContext(
 				try {
 					const traversal = await query<TraversalRow[]>(
 						`SELECT
-							<-depends_on<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS depends_on_incoming_claims,
-							->depends_on->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS depends_on_outgoing_claims,
-							<-supports<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS supporting_incoming_claims,
-							->supports->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS supporting_outgoing_claims,
-							<-contradicts<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS contradicting_incoming_claims,
-							->contradicts->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS contradicting_outgoing_claims,
-							<-responds_to<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS responds_to_incoming_claims,
-							->responds_to->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS responds_to_outgoing_claims,
-							<-refines<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS refining_incoming_claims,
-							->refines->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS refining_outgoing_claims,
-							<-exemplifies<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS exemplifying_incoming_claims,
-							->exemplifies->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS exemplifying_outgoing_claims,
+							<-depends_on<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author, visibility_scope, owner_uid}} AS depends_on_incoming_claims,
+							->depends_on->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author, visibility_scope, owner_uid}} AS depends_on_outgoing_claims,
+							<-supports<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author, visibility_scope, owner_uid}} AS supporting_incoming_claims,
+							->supports->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author, visibility_scope, owner_uid}} AS supporting_outgoing_claims,
+							<-contradicts<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author, visibility_scope, owner_uid}} AS contradicting_incoming_claims,
+							->contradicts->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author, visibility_scope, owner_uid}} AS contradicting_outgoing_claims,
+							<-responds_to<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author, visibility_scope, owner_uid}} AS responds_to_incoming_claims,
+							->responds_to->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author, visibility_scope, owner_uid}} AS responds_to_outgoing_claims,
+							<-refines<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author, visibility_scope, owner_uid}} AS refining_incoming_claims,
+							->refines->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author, visibility_scope, owner_uid}} AS refining_outgoing_claims,
+							<-exemplifies<-claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author, visibility_scope, owner_uid}} AS exemplifying_incoming_claims,
+							->exemplifies->claim.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author, visibility_scope, owner_uid}} AS exemplifying_outgoing_claims,
 							->part_of->argument.{id} AS arguments
 						FROM $seed_id`,
 						{ seed_id: anchorId }
@@ -473,26 +522,33 @@ export async function retrieveContext(
 		// Add argument-neighborhood claims so traversal can surface complete
 		// argument structures (conclusions + key premises), not only local edges.
 		if (argumentIds.size > 0 && allGraphClaims.size < traversalClaimCap) {
-			type ArgumentMemberRow = {
-				in: {
-					id: string;
-					text: string;
-					claim_type: string;
-					domain: PhilosophicalDomain;
-					confidence: number;
-					position_in_source: number;
-					source: { title: string; author: string[] } | string;
+				type ArgumentMemberRow = {
+					in: {
+						id: string;
+						text: string;
+						claim_type: string;
+						domain: PhilosophicalDomain;
+						confidence: number;
+						position_in_source: number;
+						source:
+							| {
+								title: string;
+								author: string[];
+								visibility_scope?: string;
+								owner_uid?: string;
+							}
+							| string;
+					};
+					role: string;
 				};
-				role: string;
-			};
 
 			try {
 				const memberRows = await query<ArgumentMemberRow[]>(
-					`SELECT
-						in.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author}} AS in,
-						role
-					FROM part_of
-					WHERE out INSIDE $arg_ids`,
+						`SELECT
+							in.{id, text, claim_type, domain, confidence, position_in_source, source.{title, author, visibility_scope, owner_uid}} AS in,
+							role
+						FROM part_of
+						WHERE out INSIDE $arg_ids`,
 					{ arg_ids: Array.from(argumentIds) }
 				);
 
@@ -515,15 +571,18 @@ export async function retrieveContext(
 						const claim = row.in;
 						const cId = typeof claim.id === 'object' ? String(claim.id) : claim.id;
 						if (allGraphClaims.has(cId)) continue;
-						const source =
-							claim.source && typeof claim.source === 'object' && 'title' in claim.source
-								? {
-										title: (claim.source as { title: string }).title,
-										author: (claim.source as { author: string[] }).author ?? []
-									}
-								: { title: 'Unknown', author: [] };
+							const source =
+								claim.source && typeof claim.source === 'object' && 'title' in claim.source
+									? {
+											title: (claim.source as { title: string }).title,
+											author: (claim.source as { author: string[] }).author ?? [],
+											visibilityScope: (claim.source as { visibility_scope?: string }).visibility_scope,
+											ownerUid: (claim.source as { owner_uid?: string }).owner_uid
+										}
+									: { title: 'Unknown', author: [], visibilityScope: undefined, ownerUid: undefined };
+							if (!canViewSource(source.visibilityScope, source.ownerUid, viewerUid)) continue;
 
-						allGraphClaims.set(cId, {
+							allGraphClaims.set(cId, {
 							id: cId,
 							text: claim.text,
 							claim_type: claim.claim_type,
@@ -671,18 +730,22 @@ export async function retrieveContext(
 				const keyPremises: string[] = [];
 
 				// Fetch part_of relations pointing to this argument
-				type PartOfRow = {
-					in: string;
-					role: string;
-					claim_text?: string;
-				};
+					type PartOfRow = {
+						in: string;
+						role: string;
+						claim_text?: string;
+					};
+					const partOfVisibilityWhere = viewerUid
+						? "(in.source.visibility_scope = NONE OR in.source.visibility_scope = 'public_shared' OR (in.source.visibility_scope = 'private_user_only' AND in.source.owner_uid = $viewer_uid))"
+						: "(in.source.visibility_scope = NONE OR in.source.visibility_scope = 'public_shared')";
 
-				const partOfRels = await query<PartOfRow[]>(
-					`SELECT in, role, in.text AS claim_text
-					FROM part_of
-					WHERE out = $arg_id`,
-					{ arg_id: argId }
-				);
+					const partOfRels = await query<PartOfRow[]>(
+						`SELECT in, role, in.text AS claim_text
+						FROM part_of
+						WHERE out = $arg_id
+						  AND ${partOfVisibilityWhere}`,
+						{ arg_id: argId, viewer_uid: viewerUid }
+					);
 
 				if (partOfRels && Array.isArray(partOfRels)) {
 					for (const po of partOfRels) {

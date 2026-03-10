@@ -12,6 +12,7 @@
   import { onMount } from 'svelte';
   import { type Snippet } from 'svelte';
   import { env as publicEnv } from '$env/dynamic/public';
+  import { getModelProviderLabel } from '$lib/types/providers';
   const PUBLIC_GA4_MEASUREMENT_ID = publicEnv.PUBLIC_GA4_MEASUREMENT_ID;
 
   let { children }: { children: Snippet } = $props();
@@ -41,9 +42,21 @@
   onMount(() => {
     if (!browser) return;
 
-    const PUBLIC_ROUTES = new Set(['/auth', '/privacy', '/terms', '/developer', '/api-access']);
+    const PUBLIC_ROUTES = new Set([
+      '/',
+      '/auth',
+      '/landing',
+      '/pricing',
+      '/privacy',
+      '/terms',
+      '/legal/changelog',
+      '/developer',
+      '/api-access'
+    ]);
     const isPublicRoute = (path: string) =>
       PUBLIC_ROUTES.has(path) || path.startsWith('/auth');
+
+    let lastAuthUid: string | null = auth?.currentUser?.uid ?? null;
 
     const applyAuthGuard = (user: unknown) => {
       const onPublicRoute = isPublicRoute($page.url.pathname);
@@ -51,25 +64,26 @@
       authResolved = true;
 
       if (isAuthenticated && $page.url.pathname.startsWith('/auth')) {
-        goto('/');
+        goto('/app');
       } else if (!isAuthenticated && !onPublicRoute) {
-        goto('/auth');
+        goto('/');
       }
     };
 
     const initialUser = auth?.currentUser ?? null;
+    isAuthenticated = !!initialUser;
     historyStore.setUid(initialUser?.uid ?? null);
     if (initialUser?.uid) historyStore.syncFromServer();
-    applyAuthGuard(initialUser);
 
     return onAuthChange((user) => {
-      const prevUid = auth?.currentUser?.uid ?? null;
+      const prevUid = lastAuthUid;
       const newUid = user?.uid ?? null;
+      lastAuthUid = newUid;
 
       // Scope history to the new user and clear in-memory state on switch/sign-out
       historyStore.setUid(newUid);
       if (newUid) historyStore.syncFromServer();
-      if (!newUid || newUid !== prevUid) {
+      if (prevUid !== null && newUid !== prevUid) {
         conversation.clear();
       }
 
@@ -77,10 +91,23 @@
     });
   });
 
-  const BARE_ROUTES = new Set(['/privacy', '/terms', '/developer', '/api-access']);
-  let isAuthPage = $derived(
-    $page.url.pathname.startsWith('/auth') || BARE_ROUTES.has($page.url.pathname)
-  );
+  const BARE_ROUTES = new Set([
+    '/',
+    '/landing',
+    '/privacy',
+    '/terms',
+    '/legal/changelog',
+    '/developer',
+    '/api-access'
+  ]);
+  let isAuthPage = $derived.by(() => {
+    const path = $page.url.pathname;
+    if (path.startsWith('/auth')) return true;
+    if (path === '/pricing') {
+      return !isAuthenticated;
+    }
+    return BARE_ROUTES.has(path);
+  });
 
   // Context query: the most recent user message (shown centred in TopBar on results/loading screens)
   let contextQuery = $derived(
@@ -98,16 +125,30 @@
     if (!conversation.isLoading || !conversation.currentPass) return undefined;
     const passModel = conversation.passModels[conversation.currentPass];
     if (passModel) {
-      return passModel.provider === 'anthropic' ? 'Claude' : 'Gemini';
+      return getModelProviderLabel(passModel.provider);
     }
-    return conversation.loadingModelProvider === 'anthropic'
-      ? 'Claude'
-      : conversation.loadingModelProvider === 'vertex'
-        ? 'Gemini'
-        : 'Auto';
+    return conversation.loadingModelProvider && conversation.loadingModelProvider !== 'auto'
+      ? getModelProviderLabel(conversation.loadingModelProvider)
+      : 'Auto';
   });
 
   let menuDotVisible = $derived(referencesStore.isLive);
+
+  async function handleTopBarMenuToggle(): Promise<void> {
+    if (!browser) return;
+    const path = $page.url.pathname;
+    if (path.startsWith('/app')) {
+      panelStore.toggle();
+      return;
+    }
+    if (!isAuthenticated) {
+      await goto('/auth');
+      return;
+    }
+    const destination = new URL('/app', window.location.origin);
+    destination.searchParams.set('panelTab', 'settings');
+    await goto(destination.toString(), { noScroll: true, keepFocus: true });
+  }
 </script>
 
 <svelte:head>
@@ -124,7 +165,7 @@
     {streamingModel}
     {menuDotVisible}
     panelOpen={panelStore.open}
-    onMenuToggle={() => panelStore.toggle()}
+    onMenuToggle={handleTopBarMenuToggle}
     onNew={() => conversation.clear()}
   />
 {/if}
@@ -138,6 +179,8 @@
     </div>
     <footer class="site-footer" aria-label="Site footer">
       <nav class="footer-nav" aria-label="Legal links">
+        <a href="/" aria-current={$page.url.pathname === '/' ? 'page' : undefined}>About</a>
+        <a href="/pricing" aria-current={$page.url.pathname === '/pricing' ? 'page' : undefined}>Pricing</a>
         <a href="/privacy" aria-current={$page.url.pathname === '/privacy' ? 'page' : undefined}>Privacy</a>
         <a href="/terms" aria-current={$page.url.pathname === '/terms' ? 'page' : undefined}>Terms</a>
       </nav>

@@ -152,6 +152,63 @@ pnpm dev
 
 Note: without a populated SurrealDB knowledge graph, the engine will run without graph context — reasoning quality degrades but the system stays functional.
 
+### Bootstrap Paddle billing catalog (optional)
+
+If you want to provision Paddle with minimal manual setup, use the bootstrap script:
+
+```bash
+# 1) Set at least:
+#    PADDLE_API_KEY, PADDLE_ENV, PUBLIC_APP_URL in .env
+
+# 2) Preview what will be created/reused
+npm run billing:paddle:bootstrap -- --dry-run
+
+# Optional if Paddle sandbox list endpoints are throttled:
+# skip discovery and create resources directly
+npm run billing:paddle:bootstrap -- --force-create
+
+# 3) Apply and generate a ready-to-paste env block
+npm run billing:paddle:bootstrap -- --write-env=.env.paddle.generated
+```
+
+The script creates/reuses SOPHIA products, prices, and webhook destination, then prints:
+- `PADDLE_PRICE_*` IDs for app routes
+- `PADDLE_WEBHOOK_SECRET` (when returned by API)
+- billing feature flag defaults
+
+Checkout presentation is centrally env-driven:
+- `PADDLE_CHECKOUT_MODE=redirect|overlay|inline`
+- `PADDLE_CHECKOUT_LOCALE` (optional, e.g. `en-GB`)
+- `PADDLE_CHECKOUT_THEME=light|dark` (optional)
+
+Runtime-safe Paddle setup (recommended):
+- Keep both sandbox and production values in `.env`:
+  - `PADDLE_API_KEY_SANDBOX`, `PADDLE_API_KEY_PRODUCTION`
+  - `PADDLE_WEBHOOK_SECRET_SANDBOX`, `PADDLE_WEBHOOK_SECRET_PRODUCTION`
+  - `PADDLE_PRICE_*_SANDBOX`, `PADDLE_PRICE_*_PRODUCTION`
+- App auto-selects by runtime:
+  - local/dev runtime -> sandbox
+  - production runtime -> production
+- Optional override: `PADDLE_RUNTIME=sandbox|production`
+- Legacy unsuffixed vars (`PADDLE_API_KEY`, `PADDLE_PRICE_*`, `PADDLE_WEBHOOK_SECRET`) still work as fallback.
+- Set client-side tokens for payment-link checkout pages:
+  - `PUBLIC_PADDLE_CLIENT_TOKEN_SANDBOX`
+  - `PUBLIC_PADDLE_CLIENT_TOKEN_PRODUCTION`
+- Optional client-side checkout design controls:
+  - `PUBLIC_PADDLE_CHECKOUT_LOCALE` (e.g. `en-GB`)
+  - `PUBLIC_PADDLE_CHECKOUT_THEME=light|dark`
+  - `PUBLIC_PADDLE_CHECKOUT_VARIANT=one-page|multi-page`
+  - `PUBLIC_PADDLE_CHECKOUT_ALLOW_LOGOUT=true|false`
+  - `PUBLIC_PADDLE_CHECKOUT_SHOW_ADD_TAX_ID=true|false`
+
+To sync production Paddle values from `.env` into Google Secret Manager:
+
+```bash
+npm run billing:paddle:sync-prod-secrets
+```
+
+This expects all `*_PRODUCTION` Paddle values to be set in `.env` and pushes them to secrets with the same names.
+
 ### Run locally against production SurrealDB (manual QA)
 
 If you want full-fidelity manual testing with production graph data, use:

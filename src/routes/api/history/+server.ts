@@ -1,13 +1,14 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { adminDb } from '$lib/server/firebase-admin';
+import type { ModelProvider } from '$lib/types/providers';
 
 type HistoryEntry = {
   id: string;
   question: string;
   timestamp: string; // ISO string
   passCount: number;
-  modelProvider?: 'auto' | 'vertex' | 'anthropic';
+  modelProvider?: ModelProvider;
   modelId?: string;
   depthMode?: 'quick' | 'standard' | 'deep';
 };
@@ -30,9 +31,9 @@ export const GET: RequestHandler = async ({ locals }) => {
       const data = doc.data();
       const events = Array.isArray(data.events) ? data.events : [];
       const passCount = events.filter((e: { type: string }) => e.type === 'pass_complete').length;
-      const metadataEvent = events.find((e: { type?: string }) => e.type === 'metadata') as
-        | {
-            selected_model_provider?: 'auto' | 'vertex' | 'anthropic';
+          const metadataEvent = events.find((e: { type?: string }) => e.type === 'metadata') as
+            | {
+            selected_model_provider?: ModelProvider;
             selected_model_id?: string;
             depth_mode?: 'quick' | 'standard' | 'deep';
           }
@@ -52,8 +53,13 @@ export const GET: RequestHandler = async ({ locals }) => {
     return json({ entries });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.warn('[HISTORY] Fetch failed; returning empty history:', message);
-    return json({ entries: [] });
+    console.warn('[HISTORY] Fetch failed:', message);
+    return json(
+      {
+        error: 'history_fetch_failed'
+      },
+      { status: 503 }
+    );
   }
 };
 

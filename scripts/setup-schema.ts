@@ -33,21 +33,37 @@ async function setupSchema() {
 		console.log('[SETUP] Creating schema...');
 
 		// 1. SOURCE TABLE
-		await db.query(`
-			DEFINE TABLE IF NOT EXISTS source SCHEMAFULL;
-			DEFINE FIELD IF NOT EXISTS title ON source TYPE string;
-			DEFINE FIELD IF NOT EXISTS author ON source TYPE array<string>;
-			DEFINE FIELD IF NOT EXISTS year ON source TYPE option<int>;
-			DEFINE FIELD IF NOT EXISTS source_type ON source TYPE string
-				ASSERT $value IN ['book', 'paper', 'sep_entry', 'iep_entry', 'article', 'institutional'];
-			DEFINE FIELD IF NOT EXISTS url ON source TYPE option<string>;
-			DEFINE FIELD IF NOT EXISTS ingested_at ON source TYPE datetime VALUE time::now();
-			DEFINE FIELD IF NOT EXISTS claim_count ON source TYPE option<int>;
-			DEFINE FIELD IF NOT EXISTS status ON source TYPE string
-				DEFAULT 'pending'
-				ASSERT $value IN ['pending', 'ingested', 'validated', 'quarantined'];
-		`);
-		console.log('[SETUP] ✓ Table: source');
+			await db.query(`
+				DEFINE TABLE IF NOT EXISTS source SCHEMAFULL;
+				DEFINE FIELD IF NOT EXISTS title ON source TYPE string;
+				DEFINE FIELD IF NOT EXISTS author ON source TYPE array<string>;
+				DEFINE FIELD IF NOT EXISTS year ON source TYPE option<int>;
+				DEFINE FIELD IF NOT EXISTS source_type ON source TYPE string
+					ASSERT $value IN ['book', 'paper', 'sep_entry', 'iep_entry', 'article', 'institutional'];
+				DEFINE FIELD IF NOT EXISTS url ON source TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS visibility_scope ON source TYPE string
+					DEFAULT 'public_shared'
+					ASSERT $value IN ['public_shared', 'private_user_only'];
+				DEFINE FIELD IF NOT EXISTS owner_uid ON source TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS contributor_uid ON source TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS deletion_state ON source TYPE string
+					DEFAULT 'active'
+					ASSERT $value IN ['active', 'deleted'];
+				DEFINE FIELD IF NOT EXISTS ingested_at ON source TYPE datetime VALUE time::now();
+				DEFINE FIELD IF NOT EXISTS claim_count ON source TYPE option<int>;
+				DEFINE FIELD IF NOT EXISTS status ON source TYPE string
+					DEFAULT 'pending'
+					ASSERT $value IN ['pending', 'ingested', 'validated', 'quarantined'];
+			`);
+			console.log('[SETUP] ✓ Table: source');
+
+			await db.query(`
+				DEFINE INDEX IF NOT EXISTS source_visibility_scope ON source FIELDS visibility_scope;
+				DEFINE INDEX IF NOT EXISTS source_owner_uid ON source FIELDS owner_uid;
+				DEFINE INDEX IF NOT EXISTS source_contributor_uid ON source FIELDS contributor_uid;
+				DEFINE INDEX IF NOT EXISTS source_url_visibility_owner ON source FIELDS url, visibility_scope, owner_uid;
+			`);
+			console.log('[SETUP] ✓ Indexes: source (visibility_scope, owner_uid, contributor_uid, url_visibility_owner)');
 
 		// 2. CLAIM TABLE
 		await db.query(`
@@ -163,14 +179,22 @@ async function setupSchema() {
 		console.log('[SETUP] ✓ Index: query_cache_hash');
 
 		// 12. LINK_INGESTION_QUEUE TABLE (deferred nightly ingestion)
-		await db.query(`
-			DEFINE TABLE IF NOT EXISTS link_ingestion_queue SCHEMAFULL;
-			DEFINE FIELD IF NOT EXISTS canonical_url ON link_ingestion_queue TYPE string;
-			DEFINE FIELD IF NOT EXISTS canonical_url_hash ON link_ingestion_queue TYPE string;
-			DEFINE FIELD IF NOT EXISTS hostname ON link_ingestion_queue TYPE string;
-			DEFINE FIELD IF NOT EXISTS status ON link_ingestion_queue TYPE string
-				DEFAULT 'queued'
-				ASSERT $value IN ['queued', 'pending_review', 'approved', 'ingesting', 'ingested', 'failed', 'rejected'];
+			await db.query(`
+				DEFINE TABLE IF NOT EXISTS link_ingestion_queue SCHEMAFULL;
+				DEFINE FIELD IF NOT EXISTS canonical_url ON link_ingestion_queue TYPE string;
+				DEFINE FIELD IF NOT EXISTS canonical_url_hash ON link_ingestion_queue TYPE string;
+				DEFINE FIELD IF NOT EXISTS hostname ON link_ingestion_queue TYPE string;
+				DEFINE FIELD IF NOT EXISTS visibility_scope ON link_ingestion_queue TYPE string
+					DEFAULT 'public_shared'
+					ASSERT $value IN ['public_shared', 'private_user_only'];
+				DEFINE FIELD IF NOT EXISTS owner_uid ON link_ingestion_queue TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS contributor_uid ON link_ingestion_queue TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS deletion_state ON link_ingestion_queue TYPE string
+					DEFAULT 'active'
+					ASSERT $value IN ['active', 'deleted'];
+				DEFINE FIELD IF NOT EXISTS status ON link_ingestion_queue TYPE string
+					DEFAULT 'queued'
+					ASSERT $value IN ['queued', 'pending_review', 'approved', 'ingesting', 'ingested', 'failed', 'rejected'];
 			DEFINE FIELD IF NOT EXISTS source_kinds ON link_ingestion_queue TYPE array<string>;
 			DEFINE FIELD IF NOT EXISTS query_run_ids ON link_ingestion_queue TYPE array<string>;
 			DEFINE FIELD IF NOT EXISTS latest_query_run_id ON link_ingestion_queue TYPE option<string>;
@@ -195,12 +219,16 @@ async function setupSchema() {
 		await db.query(`
 			DEFINE INDEX IF NOT EXISTS link_ingestion_queue_canonical_hash
 			ON link_ingestion_queue FIELDS canonical_url_hash UNIQUE;
-			DEFINE INDEX IF NOT EXISTS link_ingestion_queue_status
-			ON link_ingestion_queue FIELDS status;
-			DEFINE INDEX IF NOT EXISTS link_ingestion_queue_last_submitted_at
-			ON link_ingestion_queue FIELDS last_submitted_at;
-		`);
-		console.log('[SETUP] ✓ Indexes: link_ingestion_queue (canonical_hash, status, last_submitted_at)');
+				DEFINE INDEX IF NOT EXISTS link_ingestion_queue_status
+				ON link_ingestion_queue FIELDS status;
+				DEFINE INDEX IF NOT EXISTS link_ingestion_queue_last_submitted_at
+				ON link_ingestion_queue FIELDS last_submitted_at;
+				DEFINE INDEX IF NOT EXISTS link_ingestion_queue_visibility_scope
+				ON link_ingestion_queue FIELDS visibility_scope;
+				DEFINE INDEX IF NOT EXISTS link_ingestion_queue_owner_uid
+				ON link_ingestion_queue FIELDS owner_uid;
+			`);
+			console.log('[SETUP] ✓ Indexes: link_ingestion_queue (canonical_hash, status, last_submitted_at, visibility_scope, owner_uid)');
 
 		// Verify schema by querying table counts
 		console.log('\n[SETUP] Verifying schema...');

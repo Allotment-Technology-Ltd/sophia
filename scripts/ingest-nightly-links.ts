@@ -22,6 +22,9 @@ interface QueueRow {
   canonical_url: string;
   canonical_url_hash: string;
   hostname?: string;
+  visibility_scope?: 'public_shared' | 'private_user_only';
+  owner_uid?: string | null;
+  contributor_uid?: string | null;
   title_hint?: string;
   last_submitted_at?: string;
   status?: QueueStatus;
@@ -37,6 +40,14 @@ const SOURCE_MAX_LATENCY_MS = Math.max(
   Number.parseInt(process.env.NIGHTLY_INGEST_SOURCE_MAX_LATENCY_MS ?? '20000', 10) || 20_000
 );
 const VALIDATE_ON_INGEST = (process.env.NIGHTLY_INGEST_VALIDATE ?? 'false').toLowerCase() === 'true';
+const NIGHTLY_INGEST_ESTIMATED_COST_GBP = Math.max(
+  0,
+  Number.parseFloat(process.env.NIGHTLY_INGEST_ESTIMATED_COST_GBP ?? '1') || 1
+);
+const NIGHTLY_INGEST_BUDGET_GBP = Math.max(
+  0,
+  Number.parseFloat(process.env.NIGHTLY_INGEST_BUDGET_GBP ?? '0') || 0
+);
 const WORK_DIR = process.cwd();
 const NIGHTLY_SOURCE_DIR = path.join(WORK_DIR, 'data', 'sources', 'nightly');
 const SURREAL_URL = process.env.SURREAL_URL || 'http://localhost:8000/rpc';
@@ -94,9 +105,10 @@ function deriveTitle(row: QueueRow, urlString: string): string {
 
 async function listApprovedQueueRows(limit: number): Promise<QueueRow[]> {
   const rows = await runQuery(
-    `SELECT id, canonical_url, canonical_url_hash, hostname, title_hint, last_submitted_at, status, attempt_count
+    `SELECT id, canonical_url, canonical_url_hash, hostname, visibility_scope, owner_uid, contributor_uid, title_hint, last_submitted_at, status, attempt_count
      FROM link_ingestion_queue
      WHERE status = 'approved'
+       AND (deletion_state = NONE OR deletion_state = 'active')
      ORDER BY last_submitted_at ASC
      LIMIT $limit`,
     { limit }
@@ -188,6 +200,10 @@ async function materializeSourceFiles(row: QueueRow): Promise<string> {
         author: [],
         source_type: sourceType,
         url: row.canonical_url,
+        visibility_scope: row.visibility_scope ?? 'public_shared',
+        owner_uid: row.owner_uid ?? undefined,
+        contributor_uid: row.contributor_uid ?? undefined,
+        deletion_state: 'active',
         fetched_at: new Date().toISOString(),
         word_count: text.split(/\s+/).filter(Boolean).length,
         char_count: text.length,
@@ -290,7 +306,7 @@ async function main(): Promise<void> {
   const dryRun = parseDryRunFlag();
   console.log('[NIGHTLY] Starting deferred ingestion worker');
   console.log(
-    `[NIGHTLY] Config batch=${BATCH_SIZE} maxRetries=${MAX_RETRIES} retryBaseMs=${RETRY_BASE_MS} validate=${VALIDATE_ON_INGEST} dryRun=${dryRun}`
+    `[NIGHTLY] Config batch=${BATCH_SIZE} maxRetries=${MAX_RETRIES} retryBaseMs=${RETRY_BASE_MS} validate=${VALIDATE_ON_INGEST} dryRun=${dryRun} estimatedCostPerIngestGBP=${NIGHTLY_INGEST_ESTIMATED_COST_GBP} budgetGBP=${NIGHTLY_INGEST_BUDGET_GBP || 'unlimited'}`
   );
   await connectDb();
 
@@ -304,11 +320,23 @@ async function main(): Promise<void> {
     let succeeded = 0;
     let failed = 0;
     let attempts = 0;
+    let estimatedSpend = 0;
 
     for (const row of rows) {
+      if (
+        NIGHTLY_INGEST_BUDGET_GBP > 0 &&
+        estimatedSpend + NIGHTLY_INGEST_ESTIMATED_COST_GBP > NIGHTLY_INGEST_BUDGET_GBP
+      ) {
+        console.warn(
+          `[NIGHTLY] Budget guard triggered; stopping batch before ${row.id}. estimatedSpendGBP=${estimatedSpend.toFixed(2)} budgetGBP=${NIGHTLY_INGEST_BUDGET_GBP.toFixed(2)}`
+        );
+        break;
+      }
+
       console.log(`[NIGHTLY] Processing ${row.id} -> ${row.canonical_url}`);
       const result = await processRow(row, dryRun);
       attempts += result.attemptsUsed;
+      estimatedSpend += NIGHTLY_INGEST_ESTIMATED_COST_GBP;
       if (result.success) {
         succeeded += 1;
         console.log(`[NIGHTLY] Success ${row.id}`);
@@ -319,7 +347,7 @@ async function main(): Promise<void> {
     }
 
     console.log(
-      `[NIGHTLY] Completed batch processed=${rows.length} succeeded=${succeeded} failed=${failed} attempts=${attempts}`
+      `[NIGHTLY] Completed batch processed=${rows.length} succeeded=${succeeded} failed=${failed} attempts=${attempts} estimated_spend_gbp=${estimatedSpend.toFixed(2)}`
     );
   } finally {
     try {

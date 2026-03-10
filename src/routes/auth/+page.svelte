@@ -11,7 +11,7 @@
     error = '';
     try {
       await signInWithGoogle();
-      await goto('/');
+      await goto('/app');
     } catch (err) {
       error = err instanceof Error ? err.message : 'Sign-in failed. Please try again.';
       console.error('Auth error:', err);

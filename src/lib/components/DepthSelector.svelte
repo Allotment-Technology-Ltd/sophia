@@ -4,9 +4,14 @@
   interface Props {
     value?: DepthMode;
     disabled?: boolean;
+    allowDeep?: boolean;
   }
 
-  let { value = $bindable<DepthMode>('standard'), disabled = false }: Props = $props();
+  let {
+    value = $bindable<DepthMode>('standard'),
+    disabled = false,
+    allowDeep = true
+  }: Props = $props();
 
   const options: Array<{ value: DepthMode; label: string; eta: string; description: string }> = [
     {
@@ -40,12 +45,12 @@
         aria-checked={value === option.value}
         class="chip"
         class:active={value === option.value}
-        disabled={disabled}
+        disabled={disabled || (option.value === 'deep' && !allowDeep)}
         onclick={() => (value = option.value)}
       >
         <strong>{option.label}</strong>
         <span>{option.eta}</span>
-        <small>{option.description}</small>
+        <small>{option.value === 'deep' && !allowDeep ? 'Requires your own API key' : option.description}</small>
       </button>
     {/each}
   </div>

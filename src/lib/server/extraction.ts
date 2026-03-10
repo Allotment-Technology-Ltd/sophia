@@ -2,6 +2,7 @@ import { generateText } from 'ai';
 import { z } from 'zod';
 import { extractSophiaMetaBlock } from './engine';
 import { getExtractionModel, trackTokens } from './vertex';
+import type { ProviderApiKeys } from './byok/types';
 import {
   ExtractionResultSchema,
   type ExtractionResult,
@@ -23,7 +24,10 @@ function getSourceText(request: VerificationRequest): string {
   return [request.question, request.answer, request.text].filter(Boolean).join('\n\n');
 }
 
-export async function extractClaims(request: VerificationRequest): Promise<ExtractionResult> {
+export async function extractClaims(
+  request: VerificationRequest,
+  options?: { providerApiKeys?: ProviderApiKeys }
+): Promise<ExtractionResult> {
   const startedAt = Date.now();
   const sourceText = getSourceText(request);
 
@@ -32,7 +36,7 @@ export async function extractClaims(request: VerificationRequest): Promise<Extra
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
     try {
       const result = await generateText({
-        model: getExtractionModel(),
+        model: getExtractionModel({ providerApiKeys: options?.providerApiKeys }),
         system: VERIFICATION_EXTRACTION_SYSTEM_PROMPT,
         prompt: buildVerificationExtractionUserPrompt(request),
         maxOutputTokens: 2048

@@ -1,164 +1,179 @@
+<script lang="ts">
+  import {
+    LEGAL_CHANGELOG_PATH,
+    LEGAL_EFFECTIVE_DATE,
+    LEGAL_VERSION
+  } from '$lib/constants/legal';
+</script>
+
 <svelte:head>
-  <title>Privacy Policy — SOPHIA</title>
-  <meta name="description" content="Privacy policy for SOPHIA, the philosophical reasoning engine by Allotment Technology Ltd." />
+  <title>Privacy Policy - SOPHIA</title>
+  <meta
+    name="description"
+    content="Privacy policy for SOPHIA, including billing, BYOK wallet metering, and ingestion visibility controls."
+  />
 </svelte:head>
 
 <div class="legal-page">
   <header class="legal-header">
     <a href="/" class="back-link">← Back to SOPHIA</a>
     <h1>Privacy Policy</h1>
-    <p class="meta">Allotment Technology Ltd · Last updated: 9 March 2026</p>
+    <p class="meta">
+      Allotment Technology Ltd · Version {LEGAL_VERSION} · Effective {LEGAL_EFFECTIVE_DATE}
+    </p>
+    <p class="meta">
+      <a href={LEGAL_CHANGELOG_PATH}>View legal changelog</a>
+    </p>
   </header>
 
   <div class="legal-body">
-
     <section>
-      <h2>1. Who we are</h2>
+      <h2>1. Who We Are</h2>
       <p>
-        SOPHIA is operated by <strong>Allotment Technology Ltd</strong>, a company registered in England and
-        Wales. Our ICO registration number is ZC092549.
+        SOPHIA is operated by <strong>Allotment Technology Ltd</strong> (England and Wales).
+        We act as the controller for personal data described in this policy. ICO registration:
+        ZC092549.
       </p>
       <p>
-        If you have any questions about this policy or how we handle your data, contact us at
-        <a href="mailto:admin@usesophia.app">admin@usesophia.app</a>.
+        Contact: <a href="mailto:admin@usesophia.app">admin@usesophia.app</a>
       </p>
     </section>
 
     <section>
-      <h2>2. What data we collect and why</h2>
+      <h2>2. Data We Process</h2>
 
-      <h3>Account data</h3>
+      <h3>Account and Authentication</h3>
       <p>
-        When you sign in, we receive your name, email address, and profile picture from Google via
-        Firebase Authentication. We use this to identify your account, associate your query history
-        with you, and enforce per-user rate limits. We do not store your Google password.
+        We receive your name, email address, and account identifiers from Firebase Authentication
+        when you sign in.
       </p>
 
-      <h3>Query data</h3>
+      <h3>Billing and Payments (Paddle as Merchant of Record)</h3>
       <p>
-        Queries you submit to SOPHIA are stored in our database, associated with your account, for
-        up to 30 days. We store queries to power your personal history panel and to serve cached
-        results for repeated queries. Queries are not shared with other users.
+        Paddle processes subscription and top-up payments as Merchant of Record. We do not store
+        your full card details. We store billing profile metadata such as tier, subscription status,
+        currency, provider customer/subscription IDs, and legal acceptance version records.
       </p>
 
-      <h3>Usage data</h3>
+      <h3>BYOK Wallet and Handling-Fee Metering</h3>
       <p>
-        We collect anonymous usage data — including which features are used, how long analyses take,
-        and error rates — to improve the service. This data is not linked to your identity.
+        For BYOK usage, we maintain a prepaid wallet and billing ledger entries. On eligible
+        non-cached BYOK runs, we may compute and charge a handling fee based on estimated model cost.
+        We store idempotent run-linked ledger events for audit and dispute handling.
       </p>
 
-      <h3>Technical data</h3>
+      <h3>Queries, Sources, and Ingestion Preferences</h3>
       <p>
-        Our infrastructure provider (Google Cloud Platform) automatically logs IP addresses,
-        request timestamps, and HTTP headers for security and reliability purposes. These logs are
-        retained for up to 30 days and are not used for profiling.
+        We store query history, selected runtime links, and ingestion preferences. If you mark a
+        source as <code>public_shared</code>, it may be incorporated into SOPHIA's shared
+        knowledge base. If you mark a source as <code>private_user_only</code>, retrieval and
+        management are restricted to your account.
+      </p>
+
+      <h3>Operational and Security Data</h3>
+      <p>
+        We process request metadata (for example IP address, user agent, timestamps, and service
+        logs) for reliability, fraud prevention, abuse control, and incident response.
       </p>
     </section>
 
     <section>
-      <h2>3. How we store and protect your data</h2>
-      <p>
-        Your data is stored and processed in Google Cloud Platform infrastructure in the
-        <strong>europe-west2 (London)</strong> region. We use the following services:
-      </p>
+      <h2>3. Why We Process Data (Legal Bases)</h2>
       <ul>
-        <li><strong>Firebase Authentication</strong> — identity and session management</li>
-        <li><strong>Firestore</strong> — per-user query history and rate-limit counters</li>
-        <li><strong>Cloud Run</strong> — application server (stateless; no persistent user data)</li>
-        <li><strong>SurrealDB on Google Compute Engine</strong> — philosophical knowledge graph
-          (no personally identifiable information stored here)</li>
+        <li><strong>Contract</strong>: provide the app, subscriptions, top-ups, and account features.</li>
+        <li><strong>Legitimate interests</strong>: service security, abuse prevention, diagnostics, and product improvement.</li>
+        <li><strong>Legal obligation</strong>: tax/accounting records, law enforcement requests, and consumer law compliance.</li>
+        <li><strong>Consent</strong>: explicit confirmations for public source sharing and legal-acceptance flows.</li>
       </ul>
       <p>
-        All data in transit is encrypted via TLS. Data at rest is encrypted by Google Cloud's default
-        encryption. Access to production infrastructure is restricted to authorised personnel only,
-        using Google Cloud IAM and Identity-Aware Proxy.
+        For UK and EU users, rights are provided under UK GDPR/EU GDPR. For US users, we apply a
+        baseline consumer disclosure approach and honor applicable state rights requests where required.
       </p>
     </section>
 
     <section>
-      <h2>4. Who we share your data with</h2>
+      <h2>4. Sharing and Sub-processors</h2>
       <p>
-        We do not sell your data. We share data only with the following sub-processors, each bound by
-        their own data processing terms:
+        We do not sell personal data. We share data with vendors only to provide SOPHIA:
       </p>
       <ul>
-        <li><strong>Google LLC</strong> — Firebase Auth, Firestore, Cloud Run, Vertex AI (query
-          processing). Google's data processing terms apply. Queries you submit are processed by
-          Google's Vertex AI service to generate responses.</li>
-        <li><strong>Anthropic PBC</strong> — used only in our offline ingestion pipeline to build
-          the knowledge graph. Your queries are never sent to Anthropic at runtime.</li>
+        <li><strong>Google</strong>: Firebase Auth, Firestore, Cloud infrastructure, and model/runtime services.</li>
+        <li><strong>Paddle</strong>: billing checkout, subscriptions, customer portal, payment administration.</li>
+        <li><strong>Model providers</strong>: BYOK and platform model calls according to your selected run configuration.</li>
       </ul>
       <p>
-        We may disclose data if required to by law, regulation, or court order.
+        We may disclose data where required by law, regulation, or valid legal process.
       </p>
     </section>
 
     <section>
-      <h2>5. Cookies and local storage</h2>
+      <h2>5. International Transfers</h2>
       <p>
-        SOPHIA uses browser local storage to maintain your authentication session (Firebase
-        Authentication). We do not use third-party advertising or tracking cookies.
+        Some processors may handle data outside the UK/EEA, including in the US. Where required,
+        we rely on appropriate transfer mechanisms (for example contractual safeguards and equivalent
+        protections made available by our providers).
       </p>
     </section>
 
     <section>
-      <h2>6. Your rights</h2>
-      <p>
-        Under UK GDPR, you have the following rights:
-      </p>
+      <h2>6. Retention Schedule</h2>
       <ul>
-        <li><strong>Access</strong> — request a copy of the personal data we hold about you</li>
-        <li><strong>Rectification</strong> — ask us to correct inaccurate data</li>
-        <li><strong>Erasure</strong> — ask us to delete your account and associated data</li>
-        <li><strong>Restriction</strong> — ask us to pause processing of your data</li>
-        <li><strong>Portability</strong> — receive your data in a machine-readable format</li>
-        <li><strong>Objection</strong> — object to processing based on legitimate interests</li>
+        <li><strong>Query history/cache events</strong>: typically up to 30 days unless longer retention is required for active debugging or legal compliance.</li>
+        <li><strong>Billing profile and subscription records</strong>: retained while account is active and as required for finance/tax obligations.</li>
+        <li><strong>Billing ledger events (wallet, top-ups, BYOK fees)</strong>: up to 7 years for accounting, fraud, and audit purposes.</li>
+        <li><strong>Private sources</strong>: retained until user deletion or account deletion, subject to backup and legal retention windows.</li>
+        <li><strong>Public contribution records</strong>: retained as part of the shared service knowledge base and associated audit trail.</li>
+        <li><strong>Infrastructure/security logs</strong>: typically up to 30 days unless needed for incident response.</li>
       </ul>
+    </section>
+
+    <section>
+      <h2>7. Your Rights</h2>
       <p>
-        To exercise any of these rights, email us at
-        <a href="mailto:admin@usesophia.app">admin@usesophia.app</a>. We will respond within 30 days.
-        You also have the right to lodge a complaint with the
-        <a href="https://ico.org.uk" rel="noopener noreferrer" target="_blank">
-          Information Commissioner's Office (ICO)
-        </a>.
+        Depending on your location and applicable law, you may request access, correction,
+        deletion, portability, restriction, or objection. You may also request account deletion,
+        private-source deletion, and billing-data access.
+      </p>
+      <p>
+        Send requests to <a href="mailto:admin@usesophia.app">admin@usesophia.app</a>. We may
+        verify identity before acting.
+      </p>
+      <p>
+        UK users can complain to the
+        <a href="https://ico.org.uk" target="_blank" rel="noopener noreferrer">ICO</a>.
       </p>
     </section>
 
     <section>
-      <h2>7. Children</h2>
+      <h2>8. Children</h2>
       <p>
-        SOPHIA is not intended for users under the age of 18. We do not knowingly collect data from
-        children. If you believe we have inadvertently collected data from a child, please contact us
-        immediately.
+        SOPHIA is intended for users 18+ and is not directed to children.
       </p>
     </section>
 
     <section>
-      <h2>8. Data retention</h2>
+      <h2>9. Security</h2>
       <p>
-        Query history is retained for 30 days, after which it is automatically deleted. Account data
-        (name, email) is retained for as long as your account is active. You may request deletion at
-        any time by contacting us.
+        We use technical and organizational controls, including encryption in transit,
+        role-based access controls, and production access restrictions.
       </p>
     </section>
 
     <section>
-      <h2>9. Changes to this policy</h2>
+      <h2>10. Changes</h2>
       <p>
-        We may update this policy as the service evolves. Material changes will be notified via the
-        email address associated with your account. Continued use of SOPHIA after the effective date
-        of a change constitutes acceptance of the updated policy.
+        We may update this policy. Material updates will be reflected by a new legal version,
+        effective date, and changelog entry.
       </p>
     </section>
 
     <section>
-      <h2>10. Contact</h2>
+      <h2>11. Contact</h2>
       <p>
         Allotment Technology Ltd<br />
         <a href="mailto:admin@usesophia.app">admin@usesophia.app</a>
       </p>
     </section>
-
   </div>
 </div>
 
@@ -198,7 +213,7 @@
   .meta {
     color: var(--color-muted);
     font-size: 0.875rem;
-    margin: 0;
+    margin: 0 0 0.35rem;
   }
 
   .legal-body section {

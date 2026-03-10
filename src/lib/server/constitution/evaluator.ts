@@ -4,6 +4,7 @@ import type { ClaimType, ConstitutionalCheck, ConstitutionRule, RuleEvaluation }
 import { ConstitutionalCheckSchema, RuleEvaluationSchema } from '$lib/types/constitution';
 import type { ExtractedClaim, ExtractedRelation } from '$lib/types/verification';
 import { getReasoningModel, trackTokens } from '$lib/server/vertex';
+import type { ProviderApiKeys } from '$lib/server/byok/types';
 import {
   buildConstitutionEvalUserPrompt,
   CONSTITUTION_EVAL_SYSTEM_PROMPT
@@ -238,7 +239,8 @@ function collectRule2Heuristics(claims: ExtractedClaim[], relations: ExtractedRe
 async function evaluateLlmRules(
   claims: ExtractedClaim[],
   relations: ExtractedRelation[],
-  originalText: string
+  originalText: string,
+  options?: { providerApiKeys?: ProviderApiKeys }
 ): Promise<LlmEvaluationBatchResult> {
   const llmRules = EPISTEMIC_RULES.filter((rule) => LLM_RULE_IDS.has(rule.id));
   if (llmRules.length === 0) {
@@ -259,7 +261,7 @@ async function evaluateLlmRules(
 
   try {
     const result = await generateText({
-      model: getReasoningModel(),
+      model: getReasoningModel({ providerApiKeys: options?.providerApiKeys }),
       system: CONSTITUTION_EVAL_SYSTEM_PROMPT,
       prompt,
       maxOutputTokens: 1400
@@ -694,16 +696,18 @@ export function checkSourceDiversity(
 export async function evaluateConstitution(
   claims: ExtractedClaim[],
   relations: ExtractedRelation[],
-  originalText: string
+  originalText: string,
+  options?: { providerApiKeys?: ProviderApiKeys }
 ): Promise<ConstitutionalCheck> {
-  const result = await evaluateConstitutionWithTelemetry(claims, relations, originalText);
+  const result = await evaluateConstitutionWithTelemetry(claims, relations, originalText, options);
   return result.check;
 }
 
 export async function evaluateConstitutionWithTelemetry(
   claims: ExtractedClaim[],
   relations: ExtractedRelation[],
-  originalText: string
+  originalText: string,
+  options?: { providerApiKeys?: ProviderApiKeys }
 ): Promise<ConstitutionEvaluationResult> {
   const deterministicEvaluations: RuleEvaluation[] = [
     checkEvidenceRequirement(claims, relations),
@@ -714,7 +718,7 @@ export async function evaluateConstitutionWithTelemetry(
     checkSourceDiversity(claims, relations)
   ];
 
-  const llmBatchResult = await evaluateLlmRules(claims, relations, originalText);
+  const llmBatchResult = await evaluateLlmRules(claims, relations, originalText, options);
   const allEvaluations = [...deterministicEvaluations, ...llmBatchResult.evaluations];
   const check = finalizeEvaluations(allEvaluations);
   const constitutionRuleViolations = check.violated.map((evaluation) => evaluation.rule_id);
