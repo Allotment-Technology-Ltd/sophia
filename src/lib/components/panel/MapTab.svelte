@@ -115,27 +115,15 @@
   const selectedNodeId = $derived(graphStore.selectedNodeId);
   const selectedNode = $derived(graphStore.rawNodes.find((node) => node.id === selectedNodeId) ?? null);
   const comparisonBaseline = $derived(comparisonStore.baseline);
-  const baselineClaimNodeIds = $derived.by(() => {
+  const baselineClaimFingerprints = $derived.by(() => {
     const baseline = comparisonBaseline;
     if (!baseline) return new Set<string>();
-    const ids = new Set<string>();
-    for (const pass of baseline.claimsByPass) {
-      for (const claim of pass.claims) ids.add(claim.id);
-    }
-    return ids;
+    return new Set(baseline.claimFingerprints);
   });
-  const baselineRelationKeys = $derived.by(() => {
+  const baselineRelationFingerprints = $derived.by(() => {
     const baseline = comparisonBaseline;
     if (!baseline) return new Set<string>();
-    const keys = new Set<string>();
-    for (const pass of baseline.relationsByPass) {
-      for (const bundle of pass.relations) {
-        for (const relation of bundle.relations) {
-          keys.add(buildRelationKey(bundle.claimId, relation.target, relation.type));
-        }
-      }
-    }
-    return keys;
+    return new Set(baseline.relationFingerprints);
   });
   const comparisonDelta = $derived.by(() => {
     const baseline = comparisonBaseline;
@@ -144,25 +132,27 @@
     const currentClaimIds = new Set(
       graphStore.rawNodes
         .filter((node) => node.type === 'claim')
-        .map((node) => node.id)
+        .map((node) => claimFingerprint(node.label))
+        .filter((fingerprint) => fingerprint.length > 0)
     );
     const currentRelationKeys = new Set(
       graphStore.rawEdges
         .filter((edge) => edge.type !== 'contains')
-        .map((edge) => buildRelationKey(edge.from, edge.to, edge.type))
+        .map((edge) => relationFingerprint(edge))
+        .filter((fingerprint) => fingerprint.length > 0)
     );
 
     let newClaims = 0;
     let sharedClaims = 0;
     for (const claimId of currentClaimIds) {
-      if (baselineClaimNodeIds.has(claimId)) sharedClaims += 1;
+      if (baselineClaimFingerprints.has(claimId)) sharedClaims += 1;
       else newClaims += 1;
     }
 
     let newRelations = 0;
     let sharedRelations = 0;
     for (const relationKey of currentRelationKeys) {
-      if (baselineRelationKeys.has(relationKey)) sharedRelations += 1;
+      if (baselineRelationFingerprints.has(relationKey)) sharedRelations += 1;
       else newRelations += 1;
     }
 
@@ -231,6 +221,46 @@
     };
   });
 
+  const relationTelemetry = $derived.by(() => {
+    const edgeTypes: GraphEdge['type'][] = [
+      'supports',
+      'contradicts',
+      'responds-to',
+      'depends-on',
+      'qualifies',
+      'assumes',
+      'resolves'
+    ];
+    const fromSnapshot = graphStore.snapshotMeta?.relationTypeCounts ?? {};
+    const fromRaw = graphStore.rawEdges.reduce<Record<GraphEdge['type'], number>>(
+      (acc, edge) => {
+        acc[edge.type] = (acc[edge.type] ?? 0) + 1;
+        return acc;
+      },
+      {
+        contains: 0,
+        supports: 0,
+        contradicts: 0,
+        'responds-to': 0,
+        'depends-on': 0,
+        qualifies: 0,
+        assumes: 0,
+        resolves: 0
+      }
+    );
+    const rows = edgeTypes.map((type) => ({
+      type,
+      snapshot: fromSnapshot[type] ?? 0,
+      raw: fromRaw[type] ?? 0
+    }));
+    const totalLogical = rows.reduce((sum, row) => sum + row.raw, 0);
+    return {
+      rows,
+      totalLogical,
+      hasSignal: totalLogical > 0
+    };
+  });
+
   const enrichmentExplainability = $derived.by(() => graphStore.enrichmentStatus);
   const rejectedGhostNodes = $derived.by(() => graphStore.snapshotMeta?.rejectedNodes ?? []);
   const rejectedGhostEdges = $derived.by(() =>
@@ -263,6 +293,10 @@
       .map(([nodeId, count]) => ({ nodeId, count, label: getNodeLabel(nodeId) }));
   });
 
+  const globalContradictionCount = $derived.by(() =>
+    graphStore.rawEdges.filter((edge) => edge.type === 'contradicts').length
+  );
+
   const uncertaintyHotspots = $derived.by(() =>
     filteredGraph.nodes
       .filter((node) => node.type === 'claim' && node.confidenceBand === 'low')
@@ -270,25 +304,27 @@
       .map((node) => ({ nodeId: node.id, label: node.label }))
   );
 
-  const analysisSupportChain = $derived.by(() => strongestChain(
-    (edge) => edge.phaseOrigin === 'analysis' && edge.type === 'supports'
-  ));
-  const critiqueAttackChain = $derived.by(() => strongestChain(
-    (edge) => edge.phaseOrigin === 'critique' && edge.type === 'contradicts'
-  ));
+  const analysisSupportChain = $derived.by(() =>
+    strongestChainWithFallback('analysis', 'supports')
+  );
+  const critiqueAttackChain = $derived.by(() =>
+    strongestChainWithFallback('critique', 'contradicts')
+  );
 
   const synthesisResolution = $derived.by(() => {
     const contradictions = filteredGraph.edges.filter((edge) => edge.type === 'contradicts');
-    const responses = filteredGraph.edges.filter((edge) => edge.type === 'responds-to');
+    const resolutionEdges = filteredGraph.edges.filter((edge) =>
+      edge.type === 'responds-to' || edge.type === 'resolves' || edge.type === 'qualifies'
+    );
     let resolved = 0;
     for (const contradiction of contradictions) {
-      const hasResponse = responses.some((response) =>
-        response.from === contradiction.from ||
-        response.to === contradiction.to ||
-        response.from === contradiction.to ||
-        response.to === contradiction.from
+      const hasResolution = resolutionEdges.some((edge) =>
+        edge.from === contradiction.from ||
+        edge.to === contradiction.to ||
+        edge.from === contradiction.to ||
+        edge.to === contradiction.from
       );
-      if (hasResponse) resolved += 1;
+      if (hasResolution) resolved += 1;
     }
     return {
       total: contradictions.length,
@@ -301,16 +337,38 @@
     return node.type === 'claim';
   }
 
-  function buildRelationKey(from: string, to: string, type: GraphEdge['type']): string {
-    return `${from}|${to}|${type}`;
+  function normalizeFingerprint(value: string): string {
+    return value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function clip(value: string, max = 96): string {
+    const trimmed = value.trim();
+    return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
+  }
+
+  function claimFingerprint(label: string): string {
+    return normalizeFingerprint(clip(label));
+  }
+
+  function relationFingerprint(edge: GraphEdge): string {
+    const fromLabel = getNodeLabel(edge.from);
+    const toLabel = getNodeLabel(edge.to);
+    if (!fromLabel || !toLabel) return '';
+    return normalizeFingerprint(`${clip(fromLabel)}|${edge.type}|${clip(toLabel)}`);
   }
 
   function isClaimInBaseline(nodeId: string): boolean {
-    return baselineClaimNodeIds.has(nodeId);
+    const node = graphStore.rawNodes.find((candidate) => candidate.id === nodeId);
+    if (!node || node.type !== 'claim') return false;
+    return baselineClaimFingerprints.has(claimFingerprint(node.label));
   }
 
   function isRelationInBaseline(edge: GraphEdge): boolean {
-    return baselineRelationKeys.has(buildRelationKey(edge.from, edge.to, edge.type));
+    return baselineRelationFingerprints.has(relationFingerprint(edge));
   }
 
   function parseCsvSet<T extends string>(param: string | null, allowed: T[]): Set<T> {
@@ -670,6 +728,17 @@
     return chain;
   }
 
+  function strongestChainWithFallback(
+    phase: 'analysis' | 'critique',
+    relationType: GraphEdge['type']
+  ): string[] {
+    const phaseChain = strongestChain(
+      (edge) => edge.phaseOrigin === phase && edge.type === relationType
+    );
+    if (phaseChain.length > 0) return phaseChain;
+    return strongestChain((edge) => edge.type === relationType);
+  }
+
   function scrollPassForNode(node: GraphNode | null): void {
     if (!node || !node.phase || node.phase === 'retrieval') return;
     document.getElementById(`pass-${node.phase}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -868,6 +937,7 @@
     <span>{rejectedGhostNodes.length} rejected nodes</span>
     <span>{rejectedGhostEdges.length} rejected edges</span>
     <span>{graphStore.snapshotMeta?.seedNodeIds?.length ?? 0} seed nodes</span>
+    <span>logical edges {relationTelemetry.totalLogical}</span>
     <span>sufficiency: {retrievalExplainability.contextSufficiency}</span>
     <span>v{graphStore.snapshotVersion}</span>
     {#if comparisonDelta}
@@ -1153,6 +1223,20 @@
       <p class="insight-row">Context sufficiency: {retrievalExplainability.contextSufficiency}</p>
       <p class="insight-row">Rejected nodes (gated): {rejectedGhostNodes.length}</p>
       <p class="insight-row">Rejected edges (gated): {rejectedGhostEdges.length}</p>
+      <p class="insight-subtitle">Relation telemetry (this run)</p>
+      {#if relationTelemetry.hasSignal}
+        {#each relationTelemetry.rows as row}
+          <p class="insight-row">
+            {row.type}: {row.raw}
+            {#if row.snapshot !== row.raw}
+              (snapshot {row.snapshot})
+            {/if}
+          </p>
+        {/each}
+      {:else}
+        <p class="insight-row warning">No logical relation edges were produced in this run.</p>
+        <p class="insight-row">If this persists, check retrieval trace and DB/env health.</p>
+      {/if}
       {#if retrievalExplainability.trace}
         <p class="insight-subtitle">Traversal ledger</p>
         <p class="insight-row">Seed pool examined: {retrievalExplainability.trace.seedPoolCount}</p>
@@ -1190,6 +1274,9 @@
       <p class="insight-subtitle">Contradiction hotspots</p>
       {#if contradictionHotspots.length === 0}
         <p class="insight-row">No contradiction hotspots in filtered graph.</p>
+        {#if globalContradictionCount > 0}
+          <p class="insight-row">There are {globalContradictionCount} contradiction edges in the full graph. Clear filters or switch lens to view them.</p>
+        {/if}
       {:else}
         {#each contradictionHotspots as hotspot}
           <p class="insight-row">{hotspot.label} ({hotspot.count})</p>
