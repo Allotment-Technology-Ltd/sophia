@@ -12,6 +12,7 @@
 - Align pre-scan section sizing with live ingest settings (including book-specific limits).
 - Add monitor coverage for non-`source-list-3a` waves and alerts for stuck stages, zero-relations, and repeated retries.
 
+Related roadmap: [Unified Architecture Roadmap](./unified-architecture-roadmap.md).
 ### 2) Step 2: Gutenberg Pilot (Kant Groundwork)
 - Run a dedicated full-pipeline pilot on Gutenberg *Groundwork* using policy-compliant acquisition paths.
 - Add Gutenberg-specific parsing/normalization hardening (boilerplate stripping, metadata extraction robustness, chapter-aware segmentation).
