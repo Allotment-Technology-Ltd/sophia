@@ -55,6 +55,12 @@ import {
 	type ValidationOutput
 } from '../src/lib/server/prompts/validation.js';
 import { BatchInserter } from '../src/lib/server/batch-inserter.js';
+import {
+	canonicalizeSourceUrl,
+	hashCanonicalUrl,
+	isUnknownTitle,
+	isValidSourceType
+} from './source-identity.js';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929';
@@ -558,6 +564,74 @@ function normalizeExtractionPayload(payload: unknown, forcedDomain?: string): un
 	});
 }
 
+function parseEstimatedCostUsdStrict(): number {
+	const parsed = Number.parseFloat(estimateCostUsd());
+	if (!Number.isFinite(parsed) || parsed < 0) {
+		throw new Error(`Invalid cost estimate generated: ${estimateCostUsd()}`);
+	}
+	return parsed;
+}
+
+function normalizeClaimsToMonotonicPositions(claims: ExtractionOutput): ExtractionOutput {
+	return claims.map((claim, index) => ({
+		...claim,
+		position_in_source: index + 1
+	}));
+}
+
+function findDuplicateClaimPositions(claims: ExtractionOutput): number[] {
+	const seen = new Set<number>();
+	const duplicates = new Set<number>();
+	for (const claim of claims) {
+		const pos = claim.position_in_source;
+		if (seen.has(pos)) duplicates.add(pos);
+		seen.add(pos);
+	}
+	return [...duplicates].sort((a, b) => a - b);
+}
+
+function findMissingRelationEndpoints(
+	claims: ExtractionOutput,
+	relations: RelationsOutput
+): Array<{ from: number; to: number; relationType: string }> {
+	const validPositions = new Set(claims.map((claim) => claim.position_in_source));
+	const missing: Array<{ from: number; to: number; relationType: string }> = [];
+	for (const rel of relations) {
+		if (!validPositions.has(rel.from_position) || !validPositions.has(rel.to_position)) {
+			missing.push({ from: rel.from_position, to: rel.to_position, relationType: rel.relation_type });
+		}
+	}
+	return missing;
+}
+
+function resolveSourceIdentity(sourceMeta: SourceMeta): SourceIdentity {
+	const canonicalFromUrl = canonicalizeSourceUrl(sourceMeta.url);
+	if (!canonicalFromUrl) {
+		throw new Error(`Invalid source URL in metadata: ${sourceMeta.url}`);
+	}
+
+	if (sourceMeta.canonical_url && sourceMeta.canonical_url !== canonicalFromUrl) {
+		throw new Error(
+			`Metadata mismatch: canonical_url (${sourceMeta.canonical_url}) does not match canonicalized url (${canonicalFromUrl})`
+		);
+	}
+
+	const canonicalUrl = sourceMeta.canonical_url ?? canonicalFromUrl;
+	const computedHash = hashCanonicalUrl(canonicalUrl);
+	if (sourceMeta.canonical_url_hash && sourceMeta.canonical_url_hash !== computedHash) {
+		throw new Error(
+			`Metadata mismatch: canonical_url_hash (${sourceMeta.canonical_url_hash}) does not match computed hash (${computedHash})`
+		);
+	}
+
+	sourceMeta.canonical_url = canonicalUrl;
+	sourceMeta.canonical_url_hash = computedHash;
+	return {
+		canonicalUrl,
+		canonicalUrlHash: computedHash
+	};
+}
+
 /**
  * Call extraction model with retry and exponential backoff
  */
@@ -567,7 +641,8 @@ async function callClaude(
 	vertex: ReturnType<typeof createVertex> | null,
 	systemPrompt: string,
 	userMessage: string,
-	maxRetries = 3
+	maxRetries = 3,
+	stageKey?: StageKey
 ): Promise<string> {
 	let lastError: Error | null = null;
 
@@ -576,6 +651,9 @@ async function callClaude(
 
 	for (let modelIndex = 0; modelIndex < modelList.length; modelIndex++) {
 		const model = modelList[modelIndex];
+		if (ACTIVE_TELEMETRY && stageKey) {
+			recordStageModelAttempt(ACTIVE_TELEMETRY, stageKey, model);
+		}
 		if (modelIndex > 0) {
 			console.log(`  [MODEL] Falling back to ${providerLabel} model: ${model}`);
 		}
@@ -583,6 +661,9 @@ async function callClaude(
 		for (let attempt = 0; attempt <= maxRetries; attempt++) {
 			try {
 				if (attempt > 0) {
+					if (ACTIVE_TELEMETRY && stageKey) {
+						recordStageRetry(ACTIVE_TELEMETRY, stageKey);
+					}
 					const delayMs = 1000 * Math.pow(2, attempt - 1);
 					console.log(`  [RETRY] Attempt ${attempt + 1}/${maxRetries + 1} (waiting ${delayMs}ms)...`);
 					await sleep(delayMs);
@@ -618,6 +699,9 @@ async function callClaude(
 					if (!textBlock || textBlock.type !== 'text') {
 						throw new Error('No text block in model response');
 					}
+					if (ACTIVE_TELEMETRY && stageKey) {
+						recordStageModelSelected(ACTIVE_TELEMETRY, stageKey, model);
+					}
 
 					return textBlock.text;
 				}
@@ -636,6 +720,9 @@ async function callClaude(
 
 				if (usage) {
 					costs.geminiTokens += (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
+				}
+				if (ACTIVE_TELEMETRY && stageKey) {
+					recordStageModelSelected(ACTIVE_TELEMETRY, stageKey, model);
 				}
 
 				return text;
@@ -673,11 +760,12 @@ async function callClaudeWithProgress(
 	vertex: ReturnType<typeof createVertex> | null,
 	systemPrompt: string,
 	userMessage: string,
-	label: string
+	label: string,
+	stageKey?: StageKey
 ): Promise<string> {
 	const spinner = startSpinner(label);
 	try {
-		const result = await callClaude(provider, client, vertex, systemPrompt, userMessage);
+		const result = await callClaude(provider, client, vertex, systemPrompt, userMessage, 3, stageKey);
 		spinner.stop();
 		return result;
 	} catch (e) {
@@ -695,9 +783,13 @@ async function fixJsonWithClaude(
 	vertex: ReturnType<typeof createVertex> | null,
 	originalJson: string,
 	parseError: string,
-	schema: string
+	schema: string,
+	stageKey: StageKey
 ): Promise<string> {
 	console.log(`  [FIX] Asking ${getProviderLabel(provider)} to fix malformed JSON...`);
+	if (ACTIVE_TELEMETRY) {
+		recordStageParseRepairAttempt(ACTIVE_TELEMETRY, stageKey);
+	}
 
 	const fixPrompt = `The following JSON output was malformed. Please fix it so it is valid JSON matching this schema:
 
@@ -716,7 +808,8 @@ Respond ONLY with the corrected JSON array. No explanation, no markdown backtick
 		vertex,
 		'You are a JSON repair assistant. Fix the malformed JSON to be valid. Respond with only the corrected JSON.',
 		fixPrompt,
-		`Fixing malformed JSON via ${getProviderLabel(provider)}`
+		`Fixing malformed JSON via ${getProviderLabel(provider)}`,
+		stageKey
 	);
 }
 
@@ -731,10 +824,17 @@ interface SourceMeta {
 	owner_uid?: string;
 	contributor_uid?: string;
 	deletion_state?: 'active' | 'deleted';
+	canonical_url?: string;
+	canonical_url_hash?: string;
 	fetched_at: string;
 	word_count: number;
 	char_count: number;
 	estimated_tokens: number;
+}
+
+interface SourceIdentity {
+	canonicalUrl: string;
+	canonicalUrlHash: string;
 }
 
 // ─── Partial Results (for crash recovery) ──────────────────────────────────
@@ -753,11 +853,11 @@ interface PartialResults {
 	};
 }
 
-function savePartialResults(slug: string, results: PartialResults) {
+function savePartialResults(checkpointKey: string, results: PartialResults) {
 	if (!fs.existsSync(INGESTED_DIR)) {
 		fs.mkdirSync(INGESTED_DIR, { recursive: true });
 	}
-	const partialPath = path.join(INGESTED_DIR, `${slug}-partial.json`);
+	const partialPath = path.join(INGESTED_DIR, `${checkpointKey}-partial.json`);
 	const tmpPath = `${partialPath}.tmp`;
 	// Write to temp file first, then atomic rename — prevents corruption on crash mid-write
 	fs.writeFileSync(tmpPath, JSON.stringify(results, null, 2), 'utf-8');
@@ -765,8 +865,8 @@ function savePartialResults(slug: string, results: PartialResults) {
 	console.log(`  [SAVE] Partial results saved to: ${partialPath}`);
 }
 
-function loadPartialResults(slug: string): PartialResults | null {
-	const partialPath = path.join(INGESTED_DIR, `${slug}-partial.json`);
+function loadPartialResults(checkpointKey: string): PartialResults | null {
+	const partialPath = path.join(INGESTED_DIR, `${checkpointKey}-partial.json`);
 	if (!fs.existsSync(partialPath)) {
 		return null;
 	}
@@ -782,9 +882,17 @@ function loadPartialResults(slug: string): PartialResults | null {
 // ─── Ingestion Log (DB-based tracking) ────────────────────────────────────
 interface IngestionLogRecord {
 	id?: string;
+	canonical_url_hash?: string;
+	canonical_url?: string;
 	source_url: string;
 	source_title: string;
 	status: string;
+	run_attempt_count?: number;
+	retry_count_total?: number;
+	parse_repair_attempts_total?: number;
+	stage_telemetry?: Record<string, unknown>;
+	stage_timings_ms?: Record<string, number>;
+	cost_breakdown?: Record<string, unknown>;
 	stage_completed?: string;
 	claims_extracted?: number;
 	relations_extracted?: number;
@@ -796,39 +904,209 @@ interface IngestionLogRecord {
 	completed_at?: string;
 }
 
-async function getIngestionLog(db: Surreal, sourceUrl: string): Promise<IngestionLogRecord | null> {
+type StageKey = 'extracting' | 'relating' | 'grouping' | 'embedding' | 'validating' | 'storing';
+
+type StageStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+
+interface StageTelemetryRecord {
+	status: StageStatus;
+	started_at?: string;
+	completed_at?: string;
+	duration_ms?: number;
+	provider?: string;
+	model_attempt_order: string[];
+	selected_model?: string;
+	retry_count: number;
+	parse_repair_attempts: number;
+	failure_reason?: string;
+}
+
+interface IngestionTelemetry {
+	ingest_provider: string;
+	run_attempt_count: number;
+	stages: Record<StageKey, StageTelemetryRecord>;
+}
+
+let ACTIVE_TELEMETRY: IngestionTelemetry | null = null;
+
+function makeEmptyStageTelemetry(): StageTelemetryRecord {
+	return {
+		status: 'pending',
+		model_attempt_order: [],
+		retry_count: 0,
+		parse_repair_attempts: 0
+	};
+}
+
+function createIngestionTelemetry(ingestProvider: IngestProvider, runAttemptCount: number): IngestionTelemetry {
+	return {
+		ingest_provider: ingestProvider,
+		run_attempt_count: runAttemptCount,
+		stages: {
+			extracting: makeEmptyStageTelemetry(),
+			relating: makeEmptyStageTelemetry(),
+			grouping: makeEmptyStageTelemetry(),
+			embedding: makeEmptyStageTelemetry(),
+			validating: makeEmptyStageTelemetry(),
+			storing: makeEmptyStageTelemetry()
+		}
+	};
+}
+
+function markStageStart(telemetry: IngestionTelemetry, stage: StageKey, provider?: string): void {
+	const target = telemetry.stages[stage];
+	target.status = 'running';
+	target.started_at = new Date().toISOString();
+	target.completed_at = undefined;
+	target.duration_ms = undefined;
+	target.failure_reason = undefined;
+	if (provider) target.provider = provider;
+}
+
+function markStageEnd(telemetry: IngestionTelemetry, stage: StageKey, status: StageStatus, failureReason?: string): void {
+	const target = telemetry.stages[stage];
+	target.status = status;
+	target.completed_at = new Date().toISOString();
+	if (target.started_at) {
+		const started = Date.parse(target.started_at);
+		const ended = Date.parse(target.completed_at);
+		if (!Number.isNaN(started) && !Number.isNaN(ended) && ended >= started) {
+			target.duration_ms = ended - started;
+		}
+	}
+	if (failureReason) {
+		target.failure_reason = failureReason;
+	}
+}
+
+function markStageSkipped(telemetry: IngestionTelemetry, stage: StageKey): void {
+	const target = telemetry.stages[stage];
+	target.status = 'skipped';
+	target.completed_at = new Date().toISOString();
+}
+
+function recordStageModelAttempt(telemetry: IngestionTelemetry, stage: StageKey, model: string): void {
+	const target = telemetry.stages[stage];
+	if (!target.model_attempt_order.includes(model)) {
+		target.model_attempt_order.push(model);
+	}
+}
+
+function recordStageModelSelected(telemetry: IngestionTelemetry, stage: StageKey, model: string): void {
+	const target = telemetry.stages[stage];
+	target.selected_model = model;
+}
+
+function recordStageRetry(telemetry: IngestionTelemetry, stage: StageKey): void {
+	telemetry.stages[stage].retry_count += 1;
+}
+
+function recordStageParseRepairAttempt(telemetry: IngestionTelemetry, stage: StageKey): void {
+	telemetry.stages[stage].parse_repair_attempts += 1;
+}
+
+function buildTelemetryLogUpdate(telemetry: IngestionTelemetry): Record<string, unknown> {
+	const retryCountTotal = (Object.values(telemetry.stages) as StageTelemetryRecord[]).reduce(
+		(sum, stage) => sum + stage.retry_count,
+		0
+	);
+	const parseRepairAttemptsTotal = (Object.values(telemetry.stages) as StageTelemetryRecord[]).reduce(
+		(sum, stage) => sum + stage.parse_repair_attempts,
+		0
+	);
+	const stageTimingsMs: Record<string, number> = {};
+	for (const [stage, record] of Object.entries(telemetry.stages)) {
+		if (typeof record.duration_ms === 'number' && Number.isFinite(record.duration_ms)) {
+			stageTimingsMs[stage] = record.duration_ms;
+		}
+	}
+
+	return {
+		ingest_provider: telemetry.ingest_provider,
+		run_attempt_count: telemetry.run_attempt_count,
+		retry_count_total: retryCountTotal,
+		parse_repair_attempts_total: parseRepairAttemptsTotal,
+		stage_telemetry: telemetry.stages,
+		stage_timings_ms: stageTimingsMs,
+		cost_breakdown: {
+			claude_input_tokens: costs.claudeInputTokens,
+			claude_output_tokens: costs.claudeOutputTokens,
+			vertex_chars: costs.vertexChars,
+			gemini_tokens: costs.geminiTokens,
+			total_cost_usd: parseEstimatedCostUsdStrict()
+		}
+	};
+}
+
+async function getIngestionLog(
+	db: Surreal,
+	canonicalUrlHash: string,
+	sourceUrl: string
+): Promise<IngestionLogRecord | null> {
 	const result = await db.query<IngestionLogRecord[][]>(
-		`SELECT * FROM ingestion_log WHERE source_url = $url LIMIT 1`,
-		{ url: sourceUrl }
+		`SELECT * FROM ingestion_log
+		 WHERE canonical_url_hash = $canonical_url_hash OR source_url = $source_url
+		 LIMIT 1`,
+		{ canonical_url_hash: canonicalUrlHash, source_url: sourceUrl }
 	);
 	const rows = Array.isArray(result?.[0]) ? result[0] : [];
 	return rows.length > 0 ? rows[0] : null;
 }
 
-async function createIngestionLog(db: Surreal, sourceUrl: string, sourceTitle: string): Promise<void> {
+async function createIngestionLog(
+	db: Surreal,
+	sourceIdentity: SourceIdentity,
+	sourceUrl: string,
+	sourceTitle: string
+): Promise<void> {
+	const telemetryUpdate = ACTIVE_TELEMETRY ? buildTelemetryLogUpdate(ACTIVE_TELEMETRY) : {};
 	await db.query(
 		`CREATE ingestion_log CONTENT {
+			canonical_url_hash: $canonical_url_hash,
+			canonical_url: $canonical_url,
 			source_url: $url,
 			source_title: $title,
 			status: 'extracting',
-			started_at: time::now()
+			started_at: time::now(),
+			ingest_provider: $ingest_provider,
+			run_attempt_count: $run_attempt_count,
+			retry_count_total: $retry_count_total,
+			parse_repair_attempts_total: $parse_repair_attempts_total,
+			stage_telemetry: $stage_telemetry,
+			stage_timings_ms: $stage_timings_ms,
+			cost_breakdown: $cost_breakdown
 		}`,
-		{ url: sourceUrl, title: sourceTitle }
+		{
+			canonical_url_hash: sourceIdentity.canonicalUrlHash,
+			canonical_url: sourceIdentity.canonicalUrl,
+			url: sourceUrl,
+			title: sourceTitle,
+			ingest_provider: telemetryUpdate.ingest_provider ?? null,
+			run_attempt_count: telemetryUpdate.run_attempt_count ?? 1,
+			retry_count_total: telemetryUpdate.retry_count_total ?? 0,
+			parse_repair_attempts_total: telemetryUpdate.parse_repair_attempts_total ?? 0,
+			stage_telemetry: telemetryUpdate.stage_telemetry ?? {},
+			stage_timings_ms: telemetryUpdate.stage_timings_ms ?? {},
+			cost_breakdown: telemetryUpdate.cost_breakdown ?? {}
+		}
 	);
 }
 
 async function updateIngestionLog(
 	db: Surreal,
+	canonicalUrlHash: string,
 	sourceUrl: string,
 	updates: Record<string, unknown>
 ): Promise<void> {
-	if (Object.keys(updates).length === 0) return;
+	const telemetryUpdate = ACTIVE_TELEMETRY ? buildTelemetryLogUpdate(ACTIVE_TELEMETRY) : {};
+	const mergedUpdates = { ...telemetryUpdate, ...updates };
+	if (Object.keys(mergedUpdates).length === 0) return;
 
-	const setClauses = Object.keys(updates)
+	const setClauses = Object.keys(mergedUpdates)
 		.map((key) => `${key} = $${key}`)
 		.join(', ');
-	const sql = `UPDATE ingestion_log SET ${setClauses} WHERE source_url = $url`;
-	const vars = { ...updates, url: sourceUrl };
+	const sql = `UPDATE ingestion_log SET ${setClauses} WHERE canonical_url_hash = $canonical_url_hash OR source_url = $source_url`;
+	const vars = { ...mergedUpdates, canonical_url_hash: canonicalUrlHash, source_url: sourceUrl };
 	await dbQueryWithRetry(db, sql, vars, 3);
 }
 
@@ -945,7 +1223,22 @@ async function main() {
 
 	const sourceText = fs.readFileSync(txtPath, 'utf-8');
 	const sourceMeta: SourceMeta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-	const slug = path.basename(txtPath, '.txt');
+	if (isUnknownTitle(sourceMeta.title)) {
+		console.error(`[ERROR] Metadata gate failed: source title is empty/unknown ("${sourceMeta.title}")`);
+		process.exit(1);
+	}
+	if (!isValidSourceType(sourceMeta.source_type)) {
+		console.error(`[ERROR] Metadata gate failed: invalid source_type "${sourceMeta.source_type}"`);
+		process.exit(1);
+	}
+	let sourceIdentity: SourceIdentity;
+	try {
+		sourceIdentity = resolveSourceIdentity(sourceMeta);
+	} catch (error) {
+		console.error(`[ERROR] Metadata gate failed: ${error instanceof Error ? error.message : String(error)}`);
+		process.exit(1);
+	}
+	const checkpointKey = sourceIdentity.canonicalUrlHash;
 
 	// ─── Connect to SurrealDB (used for ingestion log + Stage 6 storage) ───
 	const db = new Surreal();
@@ -959,9 +1252,16 @@ async function main() {
 
 	// ─── Check ingestion log for resume status ─────────────────────────────
 	let resumeFromStage: string | null = null;
-	const existingLog = await getIngestionLog(db, sourceMeta.url);
+	const existingLog = await getIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url);
+	const telemetry = createIngestionTelemetry(ingestProvider, (existingLog?.run_attempt_count ?? 0) + 1);
+	ACTIVE_TELEMETRY = telemetry;
 
 	if (existingLog) {
+		await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, {
+			canonical_url_hash: sourceIdentity.canonicalUrlHash,
+			canonical_url: sourceIdentity.canonicalUrl
+		});
+
 		if (existingLog.status === 'complete' && !forceStage) {
 			console.log(`[SKIP] "${sourceMeta.title}" already ingested (status: complete)`);
 			await db.close();
@@ -982,13 +1282,13 @@ async function main() {
 		console.log('');
 
 		// Clear error state for retry
-		await updateIngestionLog(db, sourceMeta.url, {
+		await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, {
 			status: 'extracting',
 			error_message: undefined
 		});
 	} else {
 		// Fresh start
-		await createIngestionLog(db, sourceMeta.url, sourceMeta.title);
+		await createIngestionLog(db, sourceIdentity, sourceMeta.url, sourceMeta.title);
 	}
 
 	// --force-stage overrides the resume point regardless of what's in the DB log.
@@ -1002,9 +1302,24 @@ async function main() {
 	// Load partial results from disk if resuming
 	let partial: PartialResults;
 	if (resumeFromStage) {
-		const loaded = loadPartialResults(slug);
+		const loaded = loadPartialResults(checkpointKey);
 		if (loaded) {
 			partial = loaded;
+			if (partial.source.url !== sourceMeta.url) {
+				throw new Error(
+					`Metadata mismatch: checkpoint url (${partial.source.url}) does not match source metadata url (${sourceMeta.url})`
+				);
+			}
+			if (partial.source.source_type !== sourceMeta.source_type) {
+				throw new Error(
+					`Metadata mismatch: checkpoint source_type (${partial.source.source_type}) does not match source metadata source_type (${sourceMeta.source_type})`
+				);
+			}
+			if (partial.source.canonical_url_hash && partial.source.canonical_url_hash !== sourceIdentity.canonicalUrlHash) {
+				throw new Error(
+					`Metadata mismatch: checkpoint canonical_url_hash (${partial.source.canonical_url_hash}) does not match source identity (${sourceIdentity.canonicalUrlHash})`
+				);
+			}
 			const normalized = normalizeResumeStage(resumeFromStage, partial);
 			if (normalized !== resumeFromStage) {
 				console.log(
@@ -1036,11 +1351,13 @@ async function main() {
 	if (resumeFromStage) {
 		console.log(`Resume from: ${resumeFromStage}`);
 	}
+	console.log(`Identity key: ${sourceIdentity.canonicalUrlHash}`);
 	console.log('');
 
 	// Initialize model clients
 	const claude = ingestProvider === 'anthropic' ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
 	const vertexIngestClient = createVertex({ project: GOOGLE_VERTEX_PROJECT, location: GOOGLE_VERTEX_LOCATION });
+	let currentStage: StageKey | null = null;
 
 	try {
 		// ═══════════════════════════════════════════════════════════════
@@ -1049,7 +1366,9 @@ async function main() {
 		let allClaims: ExtractionOutput = [];
 
 		if (shouldRunStage('extracting', resumeFromStage)) {
-			await updateIngestionLog(db, sourceMeta.url, { status: 'extracting' });
+			currentStage = 'extracting';
+			markStageStart(telemetry, 'extracting', getProviderLabel(ingestProvider));
+			await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, { status: 'extracting' });
 
 			console.log('┌──────────────────────────────────────────────────────────┐');
 			console.log('│ STAGE 1: CLAIM EXTRACTION                               │');
@@ -1102,7 +1421,8 @@ async function main() {
 							vertexIngestClient,
 							EXTRACTION_SYSTEM,
 							userMsg,
-							`Extracting section ${sectionLabel} via ${getProviderLabel(ingestProvider)}`
+							`Extracting section ${sectionLabel} via ${getProviderLabel(ingestProvider)}`,
+							'extracting'
 						);
 					} catch (apiError) {
 						const apiMsg = apiError instanceof Error ? apiError.message : String(apiError);
@@ -1141,7 +1461,7 @@ async function main() {
 							claims_so_far: [...allClaims],
 							remaining_sections: sectionQueue.slice(i + 1)
 						};
-						savePartialResults(slug, partial);
+						savePartialResults(checkpointKey, partial);
 					} catch (parseError) {
 						console.warn(`  [WARN] JSON parse/validation failed for section ${sectionLabel}. Attempting fix...`);
 
@@ -1153,7 +1473,8 @@ async function main() {
 								vertexIngestClient,
 								rawResponse,
 								parseError instanceof Error ? parseError.message : String(parseError),
-								'Array of { text, claim_type, domain, section_context, position_in_source, confidence }'
+								'Array of { text, claim_type, domain, section_context, position_in_source, confidence }',
+								'extracting'
 							);
 						} catch (fixError) {
 							const fixMsg = fixError instanceof Error ? fixError.message : String(fixError);
@@ -1186,7 +1507,7 @@ async function main() {
 							claims_so_far: [...allClaims],
 							remaining_sections: sectionQueue.slice(i + 1)
 						};
-						savePartialResults(slug, partial);
+						savePartialResults(checkpointKey, partial);
 					}
 				}
 			} else {
@@ -1202,7 +1523,9 @@ async function main() {
 					claude,
 					vertexIngestClient,
 					EXTRACTION_SYSTEM,
-					userMsg
+					userMsg,
+					3,
+					'extracting'
 				);
 				logExtractionCost('Extraction', ingestProvider);
 
@@ -1221,7 +1544,8 @@ async function main() {
 						vertexIngestClient,
 						rawResponse,
 						parseError instanceof Error ? parseError.message : String(parseError),
-						'Array of { text, claim_type, domain, section_context, position_in_source, confidence }'
+						'Array of { text, claim_type, domain, section_context, position_in_source, confidence }',
+						'extracting'
 					);
 
 					const fixedParsed = parseJsonResponse(fixedResponse);
@@ -1245,14 +1569,15 @@ async function main() {
 			partial.claims = allClaims;
 			partial.stage_completed = 'extracting';
 			partial.extraction_progress = undefined; // Clear mid-stage progress — extraction is now complete
-			savePartialResults(slug, partial);
-			await updateIngestionLog(db, sourceMeta.url, {
+			savePartialResults(checkpointKey, partial);
+			await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, {
 				stage_completed: 'extracting',
 				claims_extracted: allClaims.length,
-				cost_usd: parseFloat(estimateCostUsd())
+				cost_usd: parseEstimatedCostUsdStrict()
 			});
 		} else {
 			console.log('  [SKIP] Stage 1: Extraction (already completed)\n');
+			markStageSkipped(telemetry, 'extracting');
 			if (!Array.isArray(partial.claims) || partial.claims.length === 0) {
 				throw new Error('Resume data missing claims for skipped Stage 1; rerun without resume or regenerate partial results');
 			}
@@ -1265,6 +1590,18 @@ async function main() {
 				'Stage 1 produced 0 claims — check extraction prompt or source quality before proceeding'
 			);
 		}
+		const duplicatePositions = findDuplicateClaimPositions(allClaims);
+		if (duplicatePositions.length > 0) {
+			const preview = duplicatePositions.slice(0, 15).join(', ');
+			throw new Error(
+				`Integrity gate failed: duplicate claim positions detected (${duplicatePositions.length} duplicate position(s)). Positions: ${preview}`
+			);
+		}
+		allClaims = normalizeClaimsToMonotonicPositions(allClaims);
+		partial.claims = allClaims;
+		savePartialResults(checkpointKey, partial);
+		markStageEnd(telemetry, 'extracting', 'completed');
+		currentStage = null;
 
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 2: RELATION EXTRACTION
@@ -1272,7 +1609,9 @@ async function main() {
 		let relations: RelationsOutput = [];
 
 		if (shouldRunStage('relating', resumeFromStage)) {
-			await updateIngestionLog(db, sourceMeta.url, { status: 'relating' });
+			currentStage = 'relating';
+			markStageStart(telemetry, 'relating', getProviderLabel(ingestProvider));
+			await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, { status: 'relating' });
 
 			console.log('\n┌──────────────────────────────────────────────────────────┐');
 			console.log('│ STAGE 2: RELATION EXTRACTION                            │');
@@ -1285,7 +1624,9 @@ async function main() {
 				claude,
 				vertexIngestClient,
 				RELATIONS_SYSTEM,
-				relUserMsg
+				relUserMsg,
+				3,
+				'relating'
 			);
 			logExtractionCost('Relations', ingestProvider);
 
@@ -1301,7 +1642,8 @@ async function main() {
 					vertexIngestClient,
 					relRawResponse,
 					parseError instanceof Error ? parseError.message : String(parseError),
-					'Array of { from_position, to_position, relation_type, strength, note? }'
+					'Array of { from_position, to_position, relation_type, strength, note? }',
+					'relating'
 				);
 				const fixedParsed = parseJsonResponse(fixedResponse);
 				relations = RelationsOutputSchema.parse(fixedParsed);
@@ -1320,19 +1662,33 @@ async function main() {
 
 			partial.relations = relations;
 			partial.stage_completed = 'relating';
-			savePartialResults(slug, partial);
-			await updateIngestionLog(db, sourceMeta.url, {
+			savePartialResults(checkpointKey, partial);
+			await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, {
 				stage_completed: 'relating',
 				relations_extracted: relations.length,
-				cost_usd: parseFloat(estimateCostUsd())
+				cost_usd: parseEstimatedCostUsdStrict()
 			});
 		} else {
 			console.log('  [SKIP] Stage 2: Relations (already completed)\n');
+			markStageSkipped(telemetry, 'relating');
 			if (!Array.isArray(partial.relations)) {
 				throw new Error('Resume data missing relations for skipped Stage 2; rerun from Stage 2');
 			}
 			relations = partial.relations;
 		}
+
+		const missingRelationEndpoints = findMissingRelationEndpoints(allClaims, relations);
+		if (missingRelationEndpoints.length > 0) {
+			const preview = missingRelationEndpoints
+				.slice(0, 10)
+				.map((entry) => `${entry.relationType}:${entry.from}->${entry.to}`)
+				.join(', ');
+			throw new Error(
+				`Integrity gate failed: ${missingRelationEndpoints.length} relation endpoint(s) reference missing claims. Examples: ${preview}`
+			);
+		}
+		markStageEnd(telemetry, 'relating', 'completed');
+		currentStage = null;
 
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 3: ARGUMENT GROUPING
@@ -1340,7 +1696,9 @@ async function main() {
 		let arguments_: GroupingOutput = [];
 
 		if (shouldRunStage('grouping', resumeFromStage)) {
-			await updateIngestionLog(db, sourceMeta.url, { status: 'grouping' });
+			currentStage = 'grouping';
+			markStageStart(telemetry, 'grouping', getProviderLabel(ingestProvider));
+			await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, { status: 'grouping' });
 
 			console.log('\n┌──────────────────────────────────────────────────────────┐');
 			console.log('│ STAGE 3: ARGUMENT GROUPING                              │');
@@ -1355,7 +1713,9 @@ async function main() {
 					claude,
 					vertexIngestClient,
 					GROUPING_SYSTEM,
-					grpUserMsg
+					grpUserMsg,
+					3,
+					'grouping'
 				);
 				logExtractionCost('Grouping', ingestProvider);
 
@@ -1371,7 +1731,8 @@ async function main() {
 						vertexIngestClient,
 						grpRawResponse,
 						parseError instanceof Error ? parseError.message : String(parseError),
-						'Array of { name, tradition?, domain, summary, claims: [{ position_in_source, role }] }'
+						'Array of { name, tradition?, domain, summary, claims: [{ position_in_source, role }] }',
+						'grouping'
 					);
 					const fixedParsed = parseJsonResponse(fixedResponse);
 					arguments_ = GroupingOutputSchema.parse(normalizeGroupingPayload(fixedParsed));
@@ -1386,14 +1747,17 @@ async function main() {
 
 			partial.arguments = arguments_;
 			partial.stage_completed = 'grouping';
-			savePartialResults(slug, partial);
-			await updateIngestionLog(db, sourceMeta.url, {
+			savePartialResults(checkpointKey, partial);
+			await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, {
 				stage_completed: 'grouping',
 				arguments_grouped: arguments_.length,
-				cost_usd: parseFloat(estimateCostUsd())
+				cost_usd: parseEstimatedCostUsdStrict()
 			});
+			markStageEnd(telemetry, 'grouping', 'completed');
+			currentStage = null;
 		} else {
 			console.log('  [SKIP] Stage 3: Grouping (already completed)\n');
+			markStageSkipped(telemetry, 'grouping');
 			if (!Array.isArray(partial.arguments)) {
 				throw new Error('Resume data missing arguments for skipped Stage 3; rerun from Stage 3');
 			}
@@ -1406,7 +1770,9 @@ async function main() {
 		let allEmbeddings: number[][] = [];
 
 		if (shouldRunStage('embedding', resumeFromStage)) {
-			await updateIngestionLog(db, sourceMeta.url, { status: 'embedding' });
+			currentStage = 'embedding';
+			markStageStart(telemetry, 'embedding', 'Vertex Embeddings');
+			await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, { status: 'embedding' });
 
 			console.log('\n┌──────────────────────────────────────────────────────────┐');
 			console.log('│ STAGE 4: EMBEDDING (Vertex AI text-embedding-005)        │');
@@ -1426,13 +1792,16 @@ async function main() {
 
 			partial.embeddings = allEmbeddings;
 			partial.stage_completed = 'embedding';
-			savePartialResults(slug, partial);
-			await updateIngestionLog(db, sourceMeta.url, {
+			savePartialResults(checkpointKey, partial);
+			await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, {
 				stage_completed: 'embedding',
-				cost_usd: parseFloat(estimateCostUsd())
+				cost_usd: parseEstimatedCostUsdStrict()
 			});
+			markStageEnd(telemetry, 'embedding', 'completed');
+			currentStage = null;
 		} else {
 			console.log('  [SKIP] Stage 4: Embedding (already completed)\n');
+			markStageSkipped(telemetry, 'embedding');
 			if (!Array.isArray(partial.embeddings)) {
 				throw new Error('Resume data missing embeddings for skipped Stage 4; rerun from Stage 4');
 			}
@@ -1444,10 +1813,10 @@ async function main() {
 		// the next source's Claude extraction while Gemini validates this one.
 		if (stopAfterEmbedding) {
 			console.log('\n  [PIPELINE] Stages 1-4 complete. Handing off to Gemini+Store phase.');
-			await updateIngestionLog(db, sourceMeta.url, {
+			await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, {
 				status: 'validating',
 				stage_completed: 'embedding',
-				cost_usd: parseFloat(estimateCostUsd())
+				cost_usd: parseEstimatedCostUsdStrict()
 			});
 			await db.close();
 			process.exit(0);
@@ -1459,8 +1828,10 @@ async function main() {
 		let validationResult: ValidationOutput | null = null;
 
 		if (shouldRunStage('validating', resumeFromStage)) {
+			currentStage = 'validating';
+			markStageStart(telemetry, 'validating', shouldValidate ? 'Gemini Validation' : 'validation_disabled');
 			if (shouldValidate) {
-				await updateIngestionLog(db, sourceMeta.url, { status: 'validating' });
+				await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, { status: 'validating' });
 
 				console.log('\n┌──────────────────────────────────────────────────────────┐');
 				console.log('│ STAGE 5: CROSS-MODEL VALIDATION (Gemini)                │');
@@ -1482,12 +1853,14 @@ async function main() {
 				let validationError: Error | null = null;
 
 				for (const modelName of GEMINI_MODELS) {
+					recordStageModelAttempt(telemetry, 'validating', modelName);
 					let validationAttempts = 0;
 					const maxValidationRetries = 3;
 
 					while (validationAttempts <= maxValidationRetries) {
 						try {
 							if (validationAttempts > 0) {
+								recordStageRetry(telemetry, 'validating');
 								const delay = 1000 * Math.pow(2, validationAttempts - 1);
 								console.log(`  [RETRY] Attempt ${validationAttempts + 1} (waiting ${delay}ms)...`);
 								await sleep(delay);
@@ -1505,6 +1878,7 @@ async function main() {
 							costs.geminiTokens += (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
 							const parsed = parseJsonResponse(responseText);
 							validationResult = ValidationOutputSchema.parse(parsed);
+							recordStageModelSelected(telemetry, 'validating', modelName);
 							if (modelName !== GEMINI_MODEL) {
 								console.log(`  [MODEL] Gemini fallback selected: ${modelName}`);
 							}
@@ -1556,19 +1930,22 @@ async function main() {
 
 			partial.validation = validationResult;
 			partial.stage_completed = 'validating';
-			savePartialResults(slug, partial);
+			savePartialResults(checkpointKey, partial);
 
 			const valScore = validationResult?.claims?.length
 				? validationResult.claims.reduce((a, b) => a + b.faithfulness_score, 0) / validationResult.claims.length
 				: undefined;
 
-			await updateIngestionLog(db, sourceMeta.url, {
+			await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, {
 				stage_completed: 'validating',
 				validation_score: valScore,
-				cost_usd: parseFloat(estimateCostUsd())
+				cost_usd: parseEstimatedCostUsdStrict()
 			});
+			markStageEnd(telemetry, 'validating', 'completed');
+			currentStage = null;
 		} else {
 			console.log('  [SKIP] Stage 5: Validation (already completed)\n');
+			markStageSkipped(telemetry, 'validating');
 			validationResult = partial.validation ?? null;
 		}
 
@@ -1576,13 +1953,15 @@ async function main() {
 		// STAGE 6: STORE IN SURREALDB
 		// ═══════════════════════════════════════════════════════════════
 		if (shouldRunStage('storing', resumeFromStage)) {
+			currentStage = 'storing';
+			markStageStart(telemetry, 'storing', 'SurrealDB');
 			// ── Pre-stage 6 health check ──────────────────────────────
 			// Stages 1–5 can take 20+ minutes; verify the DB session is still
 			// alive before beginning the critical write phase.
 			console.log('\n  [CHECK] Verifying DB connection before store...');
 			await ensureDbConnected(db);
 
-			await updateIngestionLog(db, sourceMeta.url, { status: 'storing' });
+			await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, { status: 'storing' });
 
 			console.log('\n┌──────────────────────────────────────────────────────────┐');
 			console.log('│ STAGE 6: STORE IN SURREALDB                             │');
@@ -1756,10 +2135,9 @@ async function main() {
 				const toId = claimIdMap.get(rel.to_position);
 
 				if (!fromId || !toId) {
-					console.warn(
-						`  [SKIP] Relation ${rel.from_position}->${rel.to_position}: missing claim ID`
+					throw new Error(
+						`Integrity gate failed during store: relation ${rel.from_position}->${rel.to_position} missing claim ID mapping`
 					);
-					continue;
 				}
 
 				try {
@@ -1931,9 +2309,12 @@ async function main() {
 			}
 
 			partial.stage_completed = 'stored';
-			savePartialResults(slug, partial);
+			savePartialResults(checkpointKey, partial);
+			markStageEnd(telemetry, 'storing', 'completed');
+			currentStage = null;
 		} else {
 			console.log('  [SKIP] Stage 6: Storage (already completed)\n');
+			markStageSkipped(telemetry, 'storing');
 		}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -1946,14 +2327,14 @@ async function main() {
 				)
 			: null;
 
-		await updateIngestionLog(db, sourceMeta.url, {
+		await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, {
 			status: 'complete',
 			stage_completed: 'storing',
 			claims_extracted: allClaims.length,
 			relations_extracted: relations.length,
 			arguments_grouped: arguments_.length,
 			validation_score: validationAvg ?? undefined,
-			cost_usd: parseFloat(estimateCostUsd()),
+			cost_usd: parseEstimatedCostUsdStrict(),
 			completed_at: new Date()
 		});
 
@@ -1992,6 +2373,14 @@ async function main() {
 
 		process.exit(0);
 	} catch (error) {
+		if (currentStage) {
+			markStageEnd(
+				telemetry,
+				currentStage,
+				'failed',
+				error instanceof Error ? error.message : String(error)
+			);
+		}
 		console.error('\n[FATAL ERROR]', error instanceof Error ? error.message : String(error));
 		if (error instanceof Error && error.stack) {
 			console.error(error.stack);
@@ -1999,16 +2388,16 @@ async function main() {
 
 		// Update ingestion log with failure
 		try {
-			await updateIngestionLog(db, sourceMeta.url, {
+			await updateIngestionLog(db, sourceIdentity.canonicalUrlHash, sourceMeta.url, {
 				status: 'failed',
 				error_message: error instanceof Error ? error.message : String(error),
-				cost_usd: parseFloat(estimateCostUsd())
+				cost_usd: parseEstimatedCostUsdStrict()
 			});
 		} catch {
 			// If we can't update the log, we still want to save partial results
 		}
 
-		savePartialResults(slug, partial);
+		savePartialResults(checkpointKey, partial);
 
 		try {
 			await db.close();
@@ -2017,6 +2406,8 @@ async function main() {
 		}
 
 		process.exit(1);
+	} finally {
+		ACTIVE_TELEMETRY = null;
 	}
 }
 

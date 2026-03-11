@@ -31,6 +31,11 @@ import * as path from 'path';
 import { spawn, spawnSync } from 'child_process';
 import { Surreal } from 'surrealdb';
 import { runPreScan } from './pre-scan.js';
+import {
+	deriveCanonicalSourceIdentity,
+	isUnknownTitle,
+	normalizeSourceType
+} from './source-identity.js';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 const DEFAULT_SOURCE_LIST_PATH = './data/source-list-3a.json';
@@ -95,6 +100,8 @@ interface BatchSummary {
 }
 
 interface IngestionLogRecord {
+	canonical_url_hash?: string;
+	canonical_url?: string;
 	source_url: string;
 	source_title: string;
 	status: string;
@@ -164,13 +171,25 @@ function isSourceFetched(slug: string): boolean {
  * Find the slug actually saved by fetch-source.ts by matching URL in meta.json files.
  */
 function findFetchedSlug(url: string): string | null {
+	const identity = deriveCanonicalSourceIdentity(url);
 	try {
 		const files = fs.readdirSync(SOURCES_DIR);
 		for (const file of files) {
 			if (!file.endsWith('.meta.json')) continue;
 			const metaPath = path.join(SOURCES_DIR, file);
 			try {
-				const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as { url?: string };
+				const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as {
+					url?: string;
+					canonical_url?: string;
+					canonical_url_hash?: string;
+				};
+				if (
+					identity &&
+					meta.canonical_url_hash &&
+					meta.canonical_url_hash === identity.canonicalUrlHash
+				) {
+					return file.replace('.meta.json', '');
+				}
 				if (meta.url === url) return file.replace('.meta.json', '');
 			} catch {
 				// skip unreadable meta files
@@ -383,7 +402,10 @@ async function getIngestionLogMap(db: Surreal): Promise<Map<string, IngestionLog
 		const rows = Array.isArray(result?.[0]) ? result[0] : [];
 		const map = new Map<string, IngestionLogRecord>();
 		for (const row of rows) {
-			map.set(row.source_url, row);
+			const identity = row.canonical_url_hash || deriveCanonicalSourceIdentity(row.source_url)?.canonicalUrlHash;
+			if (identity) {
+				map.set(identity, row);
+			}
 		}
 		return map;
 	} catch {
@@ -398,7 +420,8 @@ function printProgress(sources: SourceEntry[], logMap: Map<string, IngestionLogR
 	let remaining = 0;
 
 	for (const source of sources) {
-		const log = logMap.get(source.url);
+		const sourceIdentity = deriveCanonicalSourceIdentity(source.url);
+		const log = sourceIdentity ? logMap.get(sourceIdentity.canonicalUrlHash) : undefined;
 		if (!log) {
 			remaining++;
 		} else if (log.status === 'complete') {
@@ -429,7 +452,8 @@ function printStatusTable(sources: SourceEntry[], logMap: Map<string, IngestionL
 	};
 
 	for (const source of sources) {
-		const log = logMap.get(source.url);
+		const sourceIdentity = deriveCanonicalSourceIdentity(source.url);
+		const log = sourceIdentity ? logMap.get(sourceIdentity.canonicalUrlHash) : undefined;
 		const label = `[${source.id}] ${source.title} (wave ${source.wave})`;
 		if (!log) {
 			statusGroups.remaining.push(label);
@@ -506,6 +530,54 @@ function logBatchFailure(
 			...extra
 		})}`
 	);
+}
+
+function validateFetchedMetadata(slug: string, source: SourceEntry): string | null {
+	const metaPath = path.join(SOURCES_DIR, `${slug}.meta.json`);
+	if (!fs.existsSync(metaPath)) {
+		return `Metadata file not found for slug "${slug}"`;
+	}
+
+	try {
+		const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as {
+			title?: string;
+			url?: string;
+			canonical_url?: string;
+			canonical_url_hash?: string;
+			source_type?: string;
+		};
+
+		if (isUnknownTitle(meta.title)) {
+			return `Metadata title is empty/unknown for "${slug}"`;
+		}
+
+		const expectedIdentity = deriveCanonicalSourceIdentity(source.url);
+		if (!expectedIdentity) {
+			return `Cannot canonicalize source URL: ${source.url}`;
+		}
+
+		const metaIdentity = deriveCanonicalSourceIdentity(meta.url ?? '');
+		if (!metaIdentity) {
+			return `Metadata URL is invalid: ${meta.url ?? '(missing)'}`;
+		}
+
+		if (metaIdentity.canonicalUrlHash !== expectedIdentity.canonicalUrlHash) {
+			return `Metadata mismatch: URL/hash do not match source list entry (expected ${expectedIdentity.canonicalUrlHash}, got ${metaIdentity.canonicalUrlHash})`;
+		}
+		if (meta.canonical_url && meta.canonical_url !== expectedIdentity.canonicalUrl) {
+			return `Metadata mismatch: canonical_url differs from expected canonical URL`;
+		}
+		if (meta.canonical_url_hash && meta.canonical_url_hash !== expectedIdentity.canonicalUrlHash) {
+			return `Metadata mismatch: canonical_url_hash differs from expected canonical hash`;
+		}
+		if (normalizeSourceType(meta.source_type) !== normalizeSourceType(source.source_type)) {
+			return `Metadata mismatch: source_type "${meta.source_type}" does not match source list "${source.source_type}"`;
+		}
+
+		return null;
+	} catch (error) {
+		return `Failed to parse metadata for "${slug}": ${error instanceof Error ? error.message : String(error)}`;
+	}
 }
 
 // ─── Main Function ─────────────────────────────────────────────────────────
@@ -670,7 +742,8 @@ async function main() {
 		for (const source of sources) {
 			const slug = createSlug(source.title);
 			const fetched = isSourceFetched(slug);
-			const log = logMap.get(source.url);
+			const sourceIdentity = deriveCanonicalSourceIdentity(source.url);
+			const log = sourceIdentity ? logMap.get(sourceIdentity.canonicalUrlHash) : undefined;
 			const logStatus = log ? ` [ingestion_log: ${log.status}]` : '';
 			console.log(
 				`[${source.id}] ${source.title} (${source.source_type}, wave ${source.wave})${logStatus}`
@@ -725,8 +798,26 @@ async function main() {
 		console.log('');
 
 		try {
+			const sourceIdentity = deriveCanonicalSourceIdentity(source.url);
+			if (!sourceIdentity) {
+				console.error(`  [FAILED] Invalid source URL (cannot canonicalize): ${source.url}`);
+				logBatchFailure(source, 'identity', 'Invalid source URL');
+				results.push({
+					id: source.id,
+					title: source.title,
+					status: 'failed',
+					reason: `Invalid source URL: ${source.url}`
+				});
+				failedCount++;
+				if (failFast) {
+					stopLaunchingNewSources = true;
+				}
+				console.log('');
+				continue;
+			}
+
 			// Check ingestion_log status
-			const log = logMap.get(source.url);
+			const log = logMap.get(sourceIdentity.canonicalUrlHash);
 
 			if (log?.status === 'complete') {
 				console.log('  [SKIP] Source already complete (ingestion_log)');
@@ -808,6 +899,24 @@ async function main() {
 				if (ingestSlug !== slug) {
 					console.log(`  [INFO] Fetch saved as '${ingestSlug}' (title-derived slug was '${slug}')`);
 				}
+			}
+
+			const metadataMismatch = validateFetchedMetadata(ingestSlug, source);
+			if (metadataMismatch) {
+				console.error(`  [FAILED] ${metadataMismatch}`);
+				logBatchFailure(source, 'metadata-gate', metadataMismatch);
+				results.push({
+					id: source.id,
+					title: source.title,
+					status: 'failed',
+					reason: metadataMismatch
+				});
+				failedCount++;
+				if (failFast) {
+					stopLaunchingNewSources = true;
+				}
+				console.log('');
+				continue;
 			}
 
 			if (validate) {
