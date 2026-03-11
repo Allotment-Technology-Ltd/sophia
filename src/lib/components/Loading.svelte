@@ -21,14 +21,14 @@
     depthMode = 'standard',
     completionReady = false,
     onReveal,
-    passLabel = 'Analysis',
+    passLabel = 'Foundations',
     depthLabel = 'Standard',
     modelLabel = 'Auto',
     workingLines = []
   }: Props = $props();
 </script>
 
-<div class="loading-screen" aria-live="polite" aria-label="Analysis in progress">
+<div class="loading-screen" aria-live="polite" aria-label="Reasoning in progress">
   <DialecticalTriangle
     mode={completionReady ? 'complete' : 'loading'}
     {currentPass}
@@ -41,9 +41,9 @@
 
   <p class="status-text">{statusText}</p>
   <div class="loading-meta" aria-live="off">
-    <span class="meta-pill"><strong>Pass</strong> {passLabel}</span>
-    <span class="meta-pill"><strong>Depth</strong> {depthLabel}</span>
-    <span class="meta-pill"><strong>Model</strong> {modelLabel}</span>
+    <span class="meta-pill"><strong>Stage</strong> {passLabel}</span>
+    <span class="meta-pill"><strong>Level of Exploration</strong> {depthLabel}</span>
+    <span class="meta-pill"><strong>Thinking Engine</strong> {modelLabel}</span>
   </div>
   {#if workingLines.length > 0}
     <div class="working-notes" aria-live="polite">

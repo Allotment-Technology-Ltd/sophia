@@ -16,7 +16,7 @@
     <textarea
       bind:value
       {disabled}
-      placeholder="What's on your mind?"
+      placeholder="What do you want to think about today?"
       class="textarea"
       {onkeydown}
     ></textarea>

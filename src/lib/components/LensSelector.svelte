@@ -16,35 +16,33 @@
   let { value = $bindable(''), disabled = false, domain = 'auto' }: Props = $props();
 
   const options: LensOption[] = [
-    { value: '', label: 'None', description: 'General perspective' },
-    { value: 'utilitarian', label: 'Utilitarian', description: 'Outcomes and aggregate welfare' },
-    { value: 'deontological', label: 'Deontological', description: 'Duties, rights, and constraints' },
-    { value: 'virtue_ethics', label: 'Virtue', description: 'Character and flourishing' },
-    { value: 'rawlsian', label: 'Rawlsian', description: 'Fairness and justice as fairness' },
-    { value: 'care_ethics', label: 'Care ethics', description: 'Relationships and dependency' },
-    { value: 'physicalist', label: 'Physicalist', description: 'Mind as fully physical and brain-based' },
-    { value: 'dualist', label: 'Dualist', description: 'Mental and physical as fundamentally distinct' },
-    { value: 'functionalist', label: 'Functionalist', description: 'Mental states by causal/functional roles' },
-    { value: 'enactivist', label: 'Enactivist', description: 'Mind as embodied, embedded activity' },
-    { value: 'phenomenological', label: 'Phenomenological', description: 'First-person structure of lived experience' }
+    { value: '', label: 'None', description: 'No specific style selected.' },
+    {
+      value: 'balanced_dialogue',
+      label: 'Balanced Dialogue',
+      description: 'Clear, even-handed reasoning guided by empathy and logic.'
+    },
+    {
+      value: 'socratic',
+      label: 'Socratic',
+      description: 'Exploratory questioning — answers built through dialogue.'
+    },
+    {
+      value: 'realist_pragmatist',
+      label: 'Realist / Pragmatist',
+      description: 'Emphasis on grounded consequences and moral clarity.'
+    },
+    {
+      value: 'continental',
+      label: 'Continental',
+      description: 'Rich, interpretive language, teasing out hidden meanings.'
+    }
   ];
 
   const allowedByDomain: Record<DomainSelection, string[]> = {
-    auto: [
-      '',
-      'utilitarian',
-      'deontological',
-      'virtue_ethics',
-      'rawlsian',
-      'care_ethics',
-      'physicalist',
-      'dualist',
-      'functionalist',
-      'enactivist',
-      'phenomenological'
-    ],
-    ethics: ['', 'utilitarian', 'deontological', 'virtue_ethics', 'rawlsian', 'care_ethics'],
-    philosophy_of_mind: ['', 'physicalist', 'dualist', 'functionalist', 'enactivist', 'phenomenological']
+    auto: ['', 'balanced_dialogue', 'socratic', 'realist_pragmatist', 'continental'],
+    ethics: ['', 'balanced_dialogue', 'socratic', 'realist_pragmatist', 'continental'],
+    philosophy_of_mind: ['', 'balanced_dialogue', 'socratic', 'realist_pragmatist', 'continental']
   };
 
   const isDomainAuto = $derived(domain === 'auto');
@@ -54,21 +52,25 @@
   const activeOption = $derived(availableOptions.find((option) => option.value === value) ?? availableOptions[0]);
   const domainHint = $derived(
     isDomainAuto
-      ? 'Lens is disabled while domain is Auto.'
-      : domain === 'philosophy_of_mind'
-      ? 'Showing Philosophy of Mind lenses.'
+      ? 'Perspective is disabled while reasoning focus is Auto.'
       : activeOption.description
   );
 </script>
 
 <div class="selector-row" aria-label="Reasoning lens selector">
-  <label for="lens-select">Lens</label>
+  <label for="lens-select">Perspective (optional)</label>
   <select id="lens-select" bind:value disabled={disabled || isDomainAuto}>
     {#each availableOptions as option}
       <option value={option.value}>{option.label}</option>
     {/each}
   </select>
-  <span class="hint">{domainHint}</span>
+  <span class="hint">
+    {#if !isDomainAuto}
+      Each lens changes SOPHIA's reasoning voice — not her intelligence, but her style of engagement.
+    {:else}
+      {domainHint}
+    {/if}
+  </span>
 </div>
 
 <style>

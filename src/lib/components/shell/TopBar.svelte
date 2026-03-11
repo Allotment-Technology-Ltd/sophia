@@ -108,7 +108,7 @@
   <!-- Right: actions -->
   <div class="nav-actions">
     <button class="nav-btn-ghost" onclick={onNew} aria-label="New conversation">
-      + New
+      + New Inquiry
     </button>
 
     {#if currentUser}
@@ -273,7 +273,7 @@
     flex-shrink: 0;
   }
 
-  /* + New ghost button */
+  /* + New Inquiry ghost button */
   .nav-btn-ghost {
     font-family: var(--font-ui);
     font-size: 0.69rem;

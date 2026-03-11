@@ -4,9 +4,9 @@
   import ClaimCard from './ClaimCard.svelte';
 
   const PHASE_LABELS: Record<AnalysisPhase, string> = {
-    analysis: 'Analysis',
-    critique: 'Critique',
-    synthesis: 'Synthesis',
+    analysis: 'Foundations',
+    critique: 'Challenges',
+    synthesis: 'Resolution',
   };
 
   // Group claims by phase, preserving phase order
@@ -43,13 +43,13 @@
 <div class="claims-view" bind:this={container} aria-live="polite">
   {#if referencesStore.activeClaims.length > 0}
     <div class="claims-notice">
-      Claims are AI-generated from the knowledge base and live web search. Run <strong>Web Verification</strong> to cross-check factual claims against academic consensus. <em>Interpretive</em> claims represent philosophical reasoning and are not directly verifiable.
+      Claims are AI-generated from the knowledge base and live web search. Run <strong>Scholarly Review</strong> to cross-check factual claims against academic consensus. <em>Interpretive</em> claims represent philosophical reasoning and are not directly verifiable.
     </div>
   {/if}
 
   {#if referencesStore.activeClaims.length === 0}
     <div class="empty-state">
-      <p class="empty-text">No claims yet. Analysis will populate this panel.</p>
+      <p class="empty-text">No claims yet. Foundations will appear here once reasoning begins.</p>
     </div>
   {:else}
     {#each groupedClaims() as group (group.phase)}

@@ -997,7 +997,7 @@
       <button type="button" class="filter-pill" data-testid="toggle-fullscreen" onclick={toggleFullscreen}>
         {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
       </button>
-      <button type="button" class="filter-pill" onclick={openPanelMap}>Open In Panel</button>
+      <button type="button" class="filter-pill" onclick={openPanelMap}>Study Side by Side</button>
     {:else}
       <button type="button" class="filter-pill is-active" onclick={openFullPageMap}>Open Full Page</button>
     {/if}
@@ -1049,7 +1049,7 @@
       onclick={() => showRejectedLayer = !showRejectedLayer}
       title="Show candidates considered by retrieval but gated out"
     >
-      {showRejectedLayer ? 'Hide Rejected Layer' : 'Show Rejected Layer'}
+      {showRejectedLayer ? 'Hide Low-Confidence Ideas' : 'Show Low-Confidence Ideas'}
     </button>
   </div>
 
@@ -1175,7 +1175,7 @@
 
   <div class="insight-grid">
     <div class="insight-card">
-      <p class="insight-title">Shortest Path</p>
+      <p class="insight-title">Explore Logical Pathways</p>
       <div class="insight-actions">
         <button class="mini-btn" data-testid="set-path-start" onclick={setPathStart} disabled={!selectedNodeId}>Set Start</button>
         <button class="mini-btn" data-testid="set-path-end" onclick={setPathEnd} disabled={!selectedNodeId}>Set End</button>
@@ -1191,7 +1191,7 @@
     </div>
 
     <div class="insight-card">
-      <p class="insight-title">Why This Node?</p>
+      <p class="insight-title">Reason for this connection</p>
       {#if selectedNode}
         <p class="insight-row"><strong>Label:</strong> {selectedNode.label}</p>
         <p class="insight-row"><strong>Type:</strong> {selectedNode.type}</p>
@@ -1215,13 +1215,13 @@
 
   <div class="insight-grid">
     <div class="insight-card">
-      <p class="insight-title">Retrieval Explainability</p>
+      <p class="insight-title">How SOPHIA built this argument</p>
       <p class="insight-row">Seed nodes: {retrievalExplainability.seedCount}</p>
       <p class="insight-row">Traversed nodes: {retrievalExplainability.traversedCount}</p>
       <p class="insight-row">Avg traversal depth: {retrievalExplainability.avgDepth.toFixed(2)}</p>
       <p class="insight-row">Max hops: {retrievalExplainability.maxHops}</p>
       <p class="insight-row">Context sufficiency: {retrievalExplainability.contextSufficiency}</p>
-      <p class="insight-row">Rejected nodes (gated): {rejectedGhostNodes.length}</p>
+      <p class="insight-row">Ideas withheld for low confidence: {rejectedGhostNodes.length}</p>
       <p class="insight-row">Rejected edges (gated): {rejectedGhostEdges.length}</p>
       <p class="insight-subtitle">Relation telemetry (this run)</p>
       {#if relationTelemetry.hasSignal}
@@ -1270,8 +1270,8 @@
     </div>
 
     <div class="insight-card">
-      <p class="insight-title">Trust Hotspots</p>
-      <p class="insight-subtitle">Contradiction hotspots</p>
+      <p class="insight-title">Areas well supported</p>
+      <p class="insight-subtitle">Areas of internal tension</p>
       {#if contradictionHotspots.length === 0}
         <p class="insight-row">No contradiction hotspots in filtered graph.</p>
         {#if globalContradictionCount > 0}

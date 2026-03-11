@@ -18,26 +18,26 @@
       value: 'quick',
       label: 'Quick',
       eta: '~10s',
-      description: 'Analysis pass only'
+      description: 'A concise overview'
     },
     {
       value: 'standard',
       label: 'Standard',
       eta: '~25s',
-      description: 'Three-pass dialectic'
+      description: 'Full three-pass dialectic'
     },
     {
       value: 'deep',
       label: 'Deep',
       eta: '~40s',
-      description: 'Extended three-pass detail'
+      description: 'Extended reasoning and refinement'
     }
   ];
 </script>
 
-<div class="depth-wrap" aria-label="Depth mode selector">
-  <span class="label">Depth</span>
-  <div class="chips" role="radiogroup" aria-label="Analysis depth mode">
+<div class="depth-wrap" aria-label="Level of exploration selector">
+  <span class="label">Level of Exploration</span>
+  <div class="chips" role="radiogroup" aria-label="Level of exploration">
     {#each options as option}
       <button
         type="button"

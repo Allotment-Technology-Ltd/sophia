@@ -18,10 +18,10 @@
   const corePasses = ['analysis', 'critique', 'synthesis'] as const;
 
   const labels: Record<string, string> = {
-    analysis: 'Analysis',
-    critique: 'Critique',
-    synthesis: 'Synthesis',
-    verification: 'Verification',
+    analysis: 'Foundations',
+    critique: 'Challenges',
+    synthesis: 'Resolution',
+    verification: 'Evidence & Sources',
   };
 </script>
 
