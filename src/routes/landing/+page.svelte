@@ -4,7 +4,7 @@
 </script>
 
 <svelte:head>
-  <title>SOPHIA — Learn Through Reasoning. Think Through Philosophy.</title>
+  <title>Learn Through Reasoning. Think Through Philosophy.</title>
   <meta
     name="description"
     content="SOPHIA helps you build clearer ideas through lessons, inquiry, and writing feedback grounded in philosophical discipline."
