@@ -154,7 +154,7 @@
   <meta name="description" content="Apply structured philosophical reasoning to any question, dilemma, or argument" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <link rel="apple-touch-icon" href="/og-logo-512.png" />
+  <link rel="apple-touch-icon" href="/og-wordmark-1200x630.png" />
 
   <meta property="og:site_name" content="SOPHIA" />
   <meta property="og:type" content="website" />
@@ -164,10 +164,10 @@
     content="SOPHIA helps you build clearer ideas through lessons, inquiry, and writing feedback grounded in philosophical discipline."
   />
   <meta property="og:url" content="https://usesophia.app/" />
-  <meta property="og:image" content="https://usesophia.app/og-logo-512.png" />
-  <meta property="og:image:width" content="512" />
-  <meta property="og:image:height" content="512" />
-  <meta property="og:image:alt" content="SOPHIA logo" />
+  <meta property="og:image" content="https://usesophia.app/og-wordmark-1200x630.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="SOPHIA wordmark and dialectical triangle logo" />
 
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="Learn Through Reasoning. Think Through Philosophy." />
@@ -175,7 +175,7 @@
     name="twitter:description"
     content="SOPHIA helps you build clearer ideas through lessons, inquiry, and writing feedback grounded in philosophical discipline."
   />
-  <meta name="twitter:image" content="https://usesophia.app/og-logo-512.png" />
+  <meta name="twitter:image" content="https://usesophia.app/og-wordmark-1200x630.png" />
 </svelte:head>
 
 {#if !isAuthPage}
