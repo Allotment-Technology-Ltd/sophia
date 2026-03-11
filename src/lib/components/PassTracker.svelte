@@ -8,13 +8,13 @@
 
   const passes = ['analysis', 'critique', 'synthesis'] as const;
   const labels: Record<string, string> = {
-    analysis: 'Analysis',
-    critique: 'Critique',
-    synthesis: 'Synthesis',
+    analysis: 'Foundations',
+    critique: 'Challenges',
+    synthesis: 'Resolution',
   };
 </script>
 
-<div class="tracker" role="list" aria-label="Analysis progress">
+<div class="tracker" role="list" aria-label="Inquiry progress">
   {#each passes as pass, i}
     {#if i > 0}
       <div
@@ -42,11 +42,11 @@
       </div>
       <div class="pass-status">
         {#if currentPass === pass}
-          Streaming…
+          Exploring…
         {:else if completedPasses.includes(pass)}
-          Done
+          Complete
         {:else}
-          Waiting
+          Queued
         {/if}
       </div>
     </div>
@@ -93,7 +93,7 @@
     transition: background 300ms ease, border-color 300ms ease, transform 300ms ease;
   }
 
-  /* Waiting → Active: scale in and pulse */
+  /* Queued → Active: scale in and pulse */
   .pass-node.active .node {
     background: var(--color-sage);
     border-color: var(--color-sage);

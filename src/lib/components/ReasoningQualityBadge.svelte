@@ -24,7 +24,7 @@
 </script>
 
 {#if reasoningQuality}
-  <section class="quality-card" aria-label="Reasoning quality summary">
+  <section class="quality-card" aria-label="Reasoning Quality summary">
     <button class="headline" onclick={() => (expanded = !expanded)} aria-expanded={expanded}>
       <div class="ring" aria-hidden="true">
         <svg viewBox="0 0 80 80" width="68" height="68">
@@ -41,8 +41,8 @@
         <span>{scorePercent}%</span>
       </div>
       <div class="summary">
-        <p class="title">Reasoning quality</p>
-        <p class="subtitle">6-dimension structural evaluation</p>
+        <p class="title">Reasoning Quality</p>
+        <p class="subtitle">SOPHIA's internal coherence and confidence on this topic.</p>
       </div>
       <span class="toggle">{expanded ? 'Hide detail' : 'Show detail'}</span>
     </button>

@@ -17,7 +17,7 @@
 
   <div class="nav-actions">
     <button class="btn-ghost" onclick={onNew} aria-label="New conversation">
-      + New
+      + New Inquiry
     </button>
     <button class="nav-link" onclick={onHistory} aria-label="Open history">
       History

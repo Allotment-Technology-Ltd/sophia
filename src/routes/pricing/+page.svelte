@@ -324,16 +324,16 @@
 <main class="pricing">
   <header class="header">
     <p class="eyebrow">Pricing</p>
-    <h1>Simple plans for individual thinkers.</h1>
+    <h1>Simple plans for thoughtful people.</h1>
     <p>
-      Start free, then upgrade when you need more ingestion allowances or deeper regular use.
-      Checkout currency and tax are handled by Paddle.
+      Start free, then upgrade if you want SOPHIA to explore more ideas each month.
+      Payments and taxes are managed securely through Paddle.
     </p>
   </header>
 
   <section class="plans">
     <article class="plan">
-      <h2>Free</h2>
+      <h2>Curious Thinker</h2>
       <p class="price">£0</p>
       <ul>
         <li>Core SOPHIA query experience</li>
@@ -354,7 +354,7 @@
         disabled={!canSelectCard('pro')}
         onclick={() => selectCard('pro')}
       >
-        <h2>Pro</h2>
+        <h2>Deep Inquirer</h2>
         <p class="price">from £6.99 / month</p>
         <ul>
           <li>Higher usage limits</li>
@@ -376,7 +376,7 @@
         disabled={!canSelectCard('premium')}
         onclick={() => selectCard('premium')}
       >
-        <h2>Premium</h2>
+        <h2>Philosopher's Desk</h2>
         <p class="price">from £11.99 / month</p>
         <ul>
           <li>Highest consumer plan allowances</li>
@@ -399,7 +399,7 @@
         disabled={!canSelectCard('topup_small')}
         onclick={() => selectCard('topup_small')}
       >
-        <h2>Wallet Top-Up (Small)</h2>
+        <h2>Insight Credits (Small)</h2>
         <p class="price">£5.00</p>
         <ul>
           <li>Prepaid wallet credit</li>
@@ -419,7 +419,7 @@
         disabled={!canSelectCard('topup_large')}
         onclick={() => selectCard('topup_large')}
       >
-        <h2>Wallet Top-Up (Large)</h2>
+        <h2>Insight Credits (Large)</h2>
         <p class="price">£15.00</p>
         <ul>
           <li>Prepaid wallet credit</li>
@@ -433,7 +433,7 @@
   <section class="notes">
     {#if showCheckoutFlow}
       <p class="resource-note">
-        Review details above, then continue to open secure checkout.
+        Review your selection, then proceed when you are ready.
       </p>
       {#if isAuthenticated}
         <div class="legal-acks">
@@ -457,7 +457,7 @@
           disabled={!selectedCheckoutCard || checkoutOpening || (legalAcceptanceRequired && (!acceptTerms || !acceptPrivacy))}
           onclick={openCheckoutFromSelection}
         >
-          {checkoutOpening ? 'Opening checkout…' : 'Continue to checkout'}
+          {checkoutOpening ? 'Opening checkout…' : 'Proceed Securely →'}
         </button>
       </div>
     {/if}
@@ -473,10 +473,10 @@
     {#if ptxnCheckoutError}
       <p class="error-note">{ptxnCheckoutError}</p>
     {/if}
-    <h2>Top-ups and billing notes</h2>
+    <h2>Insight Credits and Billing Notes</h2>
     <ul>
-      <li>API key wallet top-ups are prepaid and used for handling fees.</li>
-      <li>No refunds except where required by law.</li>
+      <li>Insight credits cover deeper reasoning or API usage. They never expire.</li>
+      <li>Top-ups are pre-paid and used for deeper runs. Refunds are only provided where the law requires.</li>
       <li>Taxes and payment administration are handled by Paddle as Merchant of Record.</li>
     </ul>
     <p>
@@ -486,7 +486,7 @@
     </p>
     <div class="cta-row">
       {#if showCheckoutFlow}
-        <a class="button primary" href="/app">Return to app</a>
+        <a class="button primary" href="/app">Back to SOPHIA</a>
       {/if}
       {#if !isAuthenticated}
         <a class="button primary" href="/auth">Get started</a>

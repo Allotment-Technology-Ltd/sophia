@@ -10,9 +10,9 @@
   let { pass, content, streaming = false }: Props = $props();
 
   const titles: Record<string, string> = {
-    analysis: 'Analysis',
-    critique: 'Critique',
-    synthesis: 'Synthesis',
+    analysis: 'Foundations',
+    critique: 'Challenges',
+    synthesis: 'Resolution',
   };
 </script>
 

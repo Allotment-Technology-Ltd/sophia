@@ -33,10 +33,10 @@
   }: Props = $props();
 
   const PASS_LABELS: Record<PassId, string> = {
-    analysis: 'Analysis',
-    critique: 'Critique',
-    synthesis: 'Synthesis',
-    verification: 'Verification'
+    analysis: 'Foundations',
+    critique: 'Challenges',
+    synthesis: 'Resolution',
+    verification: 'Evidence & Sources'
   };
 
   let activePass = $state<PassId>('analysis');
@@ -84,7 +84,7 @@
         : null,
       typeof leftLinks === 'number' || typeof rightLinks === 'number'
         ? {
-            label: 'Runtime links processed',
+            label: 'Reference links used',
             left: leftLinks ?? 0,
             right: rightLinks ?? 0
           }
@@ -135,8 +135,8 @@
 {#if availablePasses.length > 0}
   <section class="compare-panel" aria-label="Run comparison panel">
     <header class="compare-header">
-      <h3>Run Comparison</h3>
-      <p>Differences between your previous run and your current run.</p>
+      <h3>Inquiry Comparison</h3>
+      <p>How this inquiry changed between your previous and current exploration.</p>
     </header>
 
     {#if retrievalStats.length > 0}
@@ -168,8 +168,8 @@
       {@const passDiff = activePassDiff}
       <div class="metrics-row">
         <span class="metric">Overlap {(passDiff.overlapRatio * 100).toFixed(0)}%</span>
-        <span class="metric">{leftLabel} {passDiff.tokenCountGemini} tokens</span>
-        <span class="metric">{rightLabel} {passDiff.tokenCountClaude} tokens</span>
+        <span class="metric">{leftLabel} {passDiff.tokenCountGemini} text units</span>
+        <span class="metric">{rightLabel} {passDiff.tokenCountClaude} text units</span>
         <span class="metric">{leftLabel} {passDiff.sentenceCountGemini} points</span>
         <span class="metric">{rightLabel} {passDiff.sentenceCountClaude} points</span>
       </div>

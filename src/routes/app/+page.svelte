@@ -131,17 +131,17 @@
   let baseExamplePool = $state<string[]>([]);
 
   const LOADING_STATUS: Record<string, string> = {
-    analysis: 'Mapping the philosophical landscape…',
-    critique: 'Finding the weakest premises…',
-    synthesis: 'Integrating tensions…',
-    verification: 'Running web verification…',
+    analysis: 'SOPHIA is assembling the first pass of your question - let her think for a moment…',
+    critique: 'Testing the first position for hidden tensions…',
+    synthesis: 'Weaving a balanced resolution from both sides…',
+    verification: 'Reviewing sources and scholarly grounding…',
   };
 
   const PASS_LABELS: Record<string, string> = {
-    analysis: 'Analysis',
-    critique: 'Critique',
-    synthesis: 'Synthesis',
-    verification: 'Verification'
+    analysis: 'Foundations',
+    critique: 'Challenges',
+    synthesis: 'Resolution',
+    verification: 'Evidence & Sources'
   };
 
   const DEPTH_LABELS: Record<'quick' | 'standard' | 'deep', Record<'auto' | ReasoningProvider, string>> = {
@@ -545,7 +545,9 @@
 
   let loadingStatusText = $derived.by(() => {
     if (!conversation.currentPass) {
-      return hasStreamingCorePass ? 'Preparing next pass…' : 'Preparing first pass…';
+      return hasStreamingCorePass
+        ? 'SOPHIA is continuing the inquiry…'
+        : 'SOPHIA is assembling the first pass of your question - let her think for a moment…';
     }
     const base = LOADING_STATUS[conversation.currentPass] ?? 'Thinking…';
     const provider = conversation.passModels[conversation.currentPass]?.provider ?? conversation.loadingModelProvider;
@@ -556,7 +558,7 @@
   });
 
   let loadingPassLabel = $derived(
-    conversation.currentPass ? (PASS_LABELS[conversation.currentPass] ?? 'Analysis') : 'Analysis'
+    conversation.currentPass ? (PASS_LABELS[conversation.currentPass] ?? 'Foundations') : 'Foundations'
   );
 
   let loadingModelLabel = $derived.by(() => {
@@ -586,12 +588,12 @@
 
   let liveProgressHint = $derived.by(() => {
     if (!completedPasses.includes('analysis')) {
-      return 'Preparing the first pass for reading.';
+      return 'The first layer is taking shape.';
     }
     if (!completionReadyForDepth) {
-      return 'Reading is unlocked while remaining passes continue.';
+      return 'You can begin reading while the deeper passes continue.';
     }
-    return 'Finalizing this run...';
+    return 'Thought complete. Here is what emerged.';
   });
 
   let epistemicContent = $derived.by(() => {
@@ -1440,8 +1442,8 @@
               <DialecticalTriangle mode="logo" size={80} />
             </div>
             <h1 class="query-heading">What do you want to think about today?</h1>
-            <p class="query-sub">Provide detailed parameters for a structured philosophical breakdown.</p>
-            <p class="query-persona">SOPHIA is your thinking partner for a collaborative journey into deep logic.</p>
+            <p class="query-sub">Ask a question that matters. SOPHIA will explore it through analysis, critique, and synthesis - three voices in one conversation.</p>
+            <p class="query-persona">You can just start typing. Or choose a sample question below.</p>
 
             <div class="query-input-wrap">
               <QuestionInput
@@ -1453,8 +1455,8 @@
 
               <div class="suggested-frame">
                 <div class="suggested-header">
-                  <h3>Suggested Questions</h3>
-                  <p>Tailored to your selected domain and lens. Click to prefill, then edit before running.</p>
+                  <h3>Try one of these timeless questions:</h3>
+                  <p>Tap one to begin, then revise it in your own words.</p>
                 </div>
                 <div class="example-pills" aria-label="Suggested questions">
                 {#each rotatingQuestions as q}
@@ -1469,9 +1471,9 @@
               </div>
 
               <div class="key-model-frame">
-                <div class="frame-title">Credentials &amp; Model</div>
+                <div class="frame-title">Thinking Engine</div>
                 <p class="frame-copy">
-                  Your selected key determines which provider models are available in this run.
+                  Choose where SOPHIA should reason from for this inquiry.
                 </p>
                 <div class="credential-stack">
                   <div class="key-source-row">
@@ -1515,13 +1517,13 @@
               </div>
 
               <div class="reasoning-frame">
-                <div class="frame-title">Reasoning Frame</div>
+                <div class="frame-title">Advanced settings →</div>
                 <p class="frame-copy">
-                  Keep this on Auto for most queries. Override only if you need a specific domain lens.
+                  Adjust SOPHIA's reasoning depth, domain focus, or data sources. These options are for when you want to steer her reasoning more precisely.
                 </p>
                 {#if domainSelectorEnabled}
                   <div class="domain-row">
-                    <label for="domain-select">Domain</label>
+                    <label for="domain-select">Reasoning Focus</label>
                     <select id="domain-select" bind:value={selectedDomain}>
                       <option value="auto">Auto</option>
                       <option value="ethics">Ethics</option>
@@ -1539,9 +1541,9 @@
               />
 
               <div class="resource-frame">
-                <div class="frame-title">External Sources</div>
+                <div class="frame-title">Reference Material (optional)</div>
                 <p class="resource-copy">
-                  Add up to 5 URLs. We use relevant material in this run. Ingestion is opt-in per link.
+                  Add URLs you want SOPHIA to consider in her analysis.
                 </p>
                 <div class="ingestion-budget">
                   <span>Remaining public ingestions: {ingestionBilling.publicRemaining ?? '—'}</span>
@@ -1668,7 +1670,7 @@
                   onclick={handleSubmit}
                   disabled={conversation.isLoading || !queryInput.trim() || hasPendingPublicShareAcknowledgement}
                 >
-                  Begin analysis →
+                  Begin Reasoning →
                 </Button>
               </div>
             </div>
@@ -1713,15 +1715,15 @@
                 lockToPass(p as 'analysis' | 'critique' | 'synthesis' | 'verification');
               }}
             />
-            <section class="run-cost-panel" aria-label="Run cost details">
+            <section class="run-cost-panel" aria-label="Insight depth estimate">
               <header class="run-cost-panel-head">
-                <h3>Run Cost</h3>
+                <h3>Insight depth estimate</h3>
                 {#if conversation.isLoading}
                   <span class="run-cost-live">Live</span>
                 {/if}
               </header>
               {#if runCostHistory.length === 0}
-                <p class="run-cost-empty">Cost details appear after the first pass completes.</p>
+                <p class="run-cost-empty">Insight details appear after the first pass completes.</p>
               {:else}
                 <div class="run-cost-list">
                   {#each runCostHistory as run, idx (run.id)}
@@ -1744,8 +1746,8 @@
                             <tr>
                               <th>Pass</th>
                               <th>Model</th>
-                              <th>Tokens</th>
-                              <th>Cost</th>
+                              <th>Text Volume</th>
+                              <th>Usage</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1809,7 +1811,7 @@
                   Open Graph Visualisation
                 </button>
                 <button class="graph-cta-btn ghost" onclick={() => openGraphVisualization('panel')}>
-                  Open In Side Panel
+                  Study Side by Side
                 </button>
               </div>
             </div>
@@ -1858,9 +1860,9 @@
 
             <div class="resource-rerun-card">
               <div class="resource-rerun-head">
-                <h3>Add External Sources And Re-Run</h3>
+                <h3>Add Reference Material (optional) And Re-Run</h3>
                 <p>
-                  Paste links to steer evidence retrieval, or re-run with a different key/model.
+                  Add links to guide retrieval, or rerun with a different thinking engine.
                 </p>
               </div>
               <div class="rerun-config-grid">
@@ -1988,7 +1990,7 @@
                   onclick={rerunWithExternalSources}
                   disabled={conversation.isLoading || hasPendingPublicShareAcknowledgement}
                 >
-                  Re-run Query
+                  Explore Again
                 </button>
                 <span class="upgrade-note">
                   Uses selected key/model above. {selectedIngestionCount} link(s) selected for ingestion.
@@ -2006,7 +2008,7 @@
                         <circle cx="5" cy="5" r="4" stroke="var(--color-amber)" stroke-width="1"/>
                         <path d="M5 2v3l2 1" stroke="var(--color-amber)" stroke-width="1" stroke-linecap="round"/>
                       </svg>
-                      Web Verification
+                      Scholarly Review
                     </div>
                     <div class="prose">
                       {@html renderPass(passes.verification)}
@@ -2038,7 +2040,7 @@
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                       <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
                     </svg>
-                    Run Web Verification
+                    Run Scholarly Review
                   </button>
                 {/if}
               </div>

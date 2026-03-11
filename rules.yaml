@@ -164,6 +164,35 @@ design_system:
     - Warm, honest error messages (not "Oops!")
     - Never lose user input on error
 
+copy_system:
+  source_of_truth: docs/copy-dictionary.md
+  mandate:
+    - Treat the copy dictionary as the baseline for all user-facing text changes.
+    - Before changing UI text, consult docs/copy-dictionary.md and preserve tone/terminology.
+    - If introducing new UI copy, add or update an entry in docs/copy-dictionary.md in the same change.
+    - Do not merge UI copy changes that conflict with the dictionary without explicit product approval.
+  voice:
+    tone: "Warmly intellectual, clear, unhurried, confident."
+    style: "Reflective, invitational, articulate; mentor-like, never robotic."
+    pacing: "Short sentences and rhythmic phrasing with space for thought."
+  terminology:
+    preferred:
+      - Begin
+      - Explore
+      - Insight
+      - Depth
+      - Inquiry
+      - Reflection
+    avoid:
+      - Submit
+      - token
+      - cost
+      - credits
+      - runtime
+  ui_casing:
+    headers: Title Case
+    helper_text: Sentence case
+
 error_handling:
   claude_api:
     - Retry with exponential backoff (max 3 retries)
