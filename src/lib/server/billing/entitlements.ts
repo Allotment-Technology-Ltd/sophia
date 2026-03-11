@@ -4,6 +4,7 @@ import {
   currentMonthKeyUtc,
   summarizeEntitlements,
   TIER_INGESTION_RULES,
+  deriveEffectiveTier,
   normalizeBillingStatus,
   normalizeCurrency,
   normalizeTier,
@@ -12,6 +13,7 @@ import {
   type IngestionConsumeResult,
   type IngestVisibilityScope
 } from './types';
+import { normalizeFounderOffer } from './founder';
 import {
   defaultEntitlements,
   defaultBillingProfile,
@@ -76,13 +78,10 @@ export async function consumeIngestionEntitlement(
       ...defaultBillingProfile(),
       tier: normalizeTier(profileData?.tier),
       status: normalizeBillingStatus(profileData?.status),
-      currency: normalizeCurrency(profileData?.currency)
+      currency: normalizeCurrency(profileData?.currency),
+      founder_offer: normalizeFounderOffer(profileData?.founder_offer)
     };
-    const effectiveTier = profile.tier === 'free'
-      ? 'free'
-      : profile.status === 'active' || profile.status === 'trialing'
-        ? profile.tier
-        : 'free';
+    const effectiveTier = deriveEffectiveTier(profile);
 
     const defaultEnt = defaultEntitlements();
     const entData = (entitlementSnap.exists ? entitlementSnap.data() : {}) as Record<string, unknown>;
@@ -109,7 +108,7 @@ export async function consumeIngestionEntitlement(
           };
 
     // Paid tier without active/trialing status cannot consume paid quotas.
-    if (profile.tier !== 'free' && effectiveTier === 'free') {
+    if (profile.tier !== 'free' && effectiveTier === 'free' && !profile.founder_offer) {
       return {
         allowed: false,
         reason: 'billing_inactive',
@@ -204,13 +203,10 @@ export async function consumeIngestionEntitlements(
       ...defaultBillingProfile(),
       tier: normalizeTier(profileData?.tier),
       status: normalizeBillingStatus(profileData?.status),
-      currency: normalizeCurrency(profileData?.currency)
+      currency: normalizeCurrency(profileData?.currency),
+      founder_offer: normalizeFounderOffer(profileData?.founder_offer)
     };
-    const effectiveTier = profile.tier === 'free'
-      ? 'free'
-      : profile.status === 'active' || profile.status === 'trialing'
-        ? profile.tier
-        : 'free';
+    const effectiveTier = deriveEffectiveTier(profile);
 
     const defaultEnt = defaultEntitlements();
     const entData = (entitlementSnap.exists ? entitlementSnap.data() : {}) as Record<string, unknown>;
@@ -230,7 +226,7 @@ export async function consumeIngestionEntitlements(
       privateUsed = 0;
     }
 
-    if (profile.tier !== 'free' && effectiveTier === 'free') {
+    if (profile.tier !== 'free' && effectiveTier === 'free' && !profile.founder_offer) {
       return {
         allowed: false,
         reason: 'billing_inactive',

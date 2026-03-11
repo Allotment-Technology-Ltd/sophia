@@ -24,6 +24,26 @@ body {
   background: var(--color-bg);
 }
 
+:root {
+  --page-max-width: 1160px;
+  --page-content-max-width: 760px;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* Accessibility safeguard:
+   Card headings default to readable foreground on dark surfaces.
+   Any component-specific override must keep WCAG AA contrast (>= 4.5:1). */
+:where(.card, [class*='-card'], [class*='card-']) :where(h1, h2, h3, h4, h5, h6) {
+  color: var(--color-text);
+}
+
 ::selection {
   background: var(--color-sage-bg);
   color: var(--color-text);
@@ -50,4 +70,27 @@ a:hover {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+.sophia-page-shell {
+  width: min(100%, var(--page-max-width));
+  margin: 0 auto;
+  padding: clamp(16px, 2.4vw, 28px) clamp(14px, 2.2vw, 24px) clamp(48px, 6vw, 72px);
+}
+
+.sophia-page-surface {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: linear-gradient(165deg, rgba(127, 163, 131, 0.08), rgba(20, 19, 18, 0.94) 42%);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.28);
+}
+
+.sophia-page-surface-muted {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: rgba(20, 19, 18, 0.9);
+}
+
+.sophia-narrow-content {
+  max-width: var(--page-content-max-width);
 }

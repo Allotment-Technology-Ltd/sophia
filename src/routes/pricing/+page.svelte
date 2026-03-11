@@ -3,6 +3,7 @@
   import { browser } from '$app/environment';
   import { auth, getIdToken, onAuthChange } from '$lib/firebase';
   import { LEGAL_CHANGELOG_PATH, LEGAL_EFFECTIVE_DATE, LEGAL_VERSION } from '$lib/constants/legal';
+  import PublicHeader from '$lib/components/shell/PublicHeader.svelte';
 
   let {
     data
@@ -20,6 +21,18 @@
       };
     };
   } = $props();
+  interface FounderOfferSummary {
+    programId: string;
+    slot: number;
+    grantedAt: string;
+    expiresAt: string;
+    bonusWalletCents: number;
+    noticePending: boolean;
+    noticeSeenAt: string | null;
+    active: boolean;
+    limit: number;
+    premiumMonths: number;
+  }
   let hasPtxn = $state(false);
   let checkoutTransactionId = $state<string | null>(null);
   let checkoutIntent = $state<'subscription' | 'topup' | null>(null);
@@ -36,13 +49,24 @@
   let paddleClient: any = null;
   let paddleInitialized = $state(false);
   let paddleInitInFlight: Promise<void> | null = null;
-  let isAuthenticated = $state(false);
+  let clientAuthResolved = $state(false);
+  let clientAuthenticated = $state(false);
+  let founderOffer = $state<FounderOfferSummary | null>(null);
+  let isAuthenticated = $derived(
+    clientAuthResolved ? clientAuthenticated : Boolean(data.isAuthenticated)
+  );
   let showCheckoutFlow = $derived(isAuthenticated || hasPtxn || checkoutIntent !== null);
+  let founderSubscriptionLocked = $derived(founderOffer?.active === true);
+  let founderExpiryLabel = $derived.by(() => {
+    if (!founderOffer?.expiresAt) return 'the end of your founder period';
+    return new Date(founderOffer.expiresAt).toLocaleDateString('en-GB');
+  });
 
   type CheckoutCard = 'pro' | 'premium' | 'topup_small' | 'topup_large';
 
   function canSelectCard(card: CheckoutCard): boolean {
     if (!showCheckoutFlow) return false;
+    if (founderSubscriptionLocked && (card === 'pro' || card === 'premium')) return false;
     return card === 'pro' || card === 'premium' || card === 'topup_small' || card === 'topup_large';
   }
 
@@ -180,11 +204,42 @@
     }
   }
 
+  async function refreshBillingContext(): Promise<void> {
+    if (!browser || !clientAuthenticated) {
+      founderOffer = null;
+      return;
+    }
+    try {
+      const token = await getIdToken();
+      if (!token) {
+        founderOffer = null;
+        return;
+      }
+      const response = await fetch('/api/billing/entitlements', {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+      if (!response.ok) {
+        founderOffer = null;
+        return;
+      }
+      const body = (await response.json()) as { founder_offer?: FounderOfferSummary | null };
+      founderOffer = body.founder_offer ?? null;
+    } catch {
+      founderOffer = null;
+    }
+  }
+
   onMount(() => {
     if (!browser) return;
-    isAuthenticated = Boolean(auth?.currentUser) || Boolean(data.isAuthenticated);
+    clientAuthenticated = Boolean(auth?.currentUser) || Boolean(data.isAuthenticated);
+    clientAuthResolved = true;
     const unsubscribeAuth = onAuthChange((user) => {
-      isAuthenticated = Boolean(user);
+      clientAuthenticated = Boolean(user);
+      clientAuthResolved = true;
+      void refreshBillingContext();
     });
 
     const init = async () => {
@@ -213,6 +268,7 @@
       }
     };
 
+    void refreshBillingContext();
     void init();
     return () => {
       unsubscribeAuth?.();
@@ -225,6 +281,11 @@
     try {
       const selected = selectedCheckoutCard;
       if (!selected) return;
+      if (founderSubscriptionLocked && (selected === 'pro' || selected === 'premium')) {
+        throw new Error(
+          `Founder access already includes Premium until ${founderExpiryLabel}.`
+        );
+      }
 
       const currentMatchesSelected = selectionMatchesCurrentTransaction(selected);
 
@@ -311,34 +372,64 @@
     autoCheckoutAttempted = true;
     void openCheckoutFromSelection();
   });
+
+  $effect(() => {
+    if (!founderSubscriptionLocked) return;
+    if (selectedCheckoutCard === 'pro' || selectedCheckoutCard === 'premium') {
+      selectedCheckoutCard = 'topup_small';
+    }
+  });
 </script>
 
 <svelte:head>
   <title>SOPHIA Pricing</title>
   <meta
     name="description"
-    content="SOPHIA pricing for Free, Pro, and Premium plans, including ingestion allowances and API key wallet top-ups."
+    content="SOPHIA pricing for Free, Pro, and Premium plans, with Learn quotas and Scholar Credits for in-depth essay feedback."
   />
 </svelte:head>
 
-<main class="pricing">
-  <header class="header">
-    <p class="eyebrow">Pricing</p>
-    <h1>Simple plans for thoughtful people.</h1>
-    <p>
-      Start free, then upgrade if you want SOPHIA to explore more ideas each month.
-      Payments and taxes are managed securely through Paddle.
-    </p>
-  </header>
+<main class="pricing sophia-page-shell">
+  {#if !isAuthenticated}
+    <PublicHeader
+      links={[
+        { href: '/#learn-track', label: 'Learn' },
+        { href: '/#inquire-track', label: 'Think' },
+        { href: '/pricing', label: 'Pricing' },
+        { href: '/auth', label: 'Sign In' }
+      ]}
+    />
+  {/if}
 
-  <section class="plans">
+  <div class="pricing-content sophia-page-surface">
+    <header class="header">
+      <p class="eyebrow">Pricing</p>
+      <h1>Simple plans for thoughtful people.</h1>
+      <p>
+        Start free, then upgrade to run more inquiries each month.
+        Payments and taxes are managed securely through Paddle.
+      </p>
+      {#if founderOffer?.active}
+        <p class="founder-callout">
+          Founder access active: Premium included until {founderExpiryLabel} with
+          {` £${(founderOffer.bonusWalletCents / 100).toFixed(2)}`} starter wallet credit.
+        </p>
+      {:else}
+        <p class="founder-callout">
+          Founder offer: first 50 users receive 12 months of Premium plus £10 wallet credit.
+        </p>
+      {/if}
+    </header>
+
+    <section class="plans">
     <article class="plan">
       <h2>Curious Thinker</h2>
       <p class="price">£0</p>
       <ul>
         <li>Core SOPHIA query experience</li>
-        <li>Monthly ingestion: 2 public, 0 private</li>
-        <li>Bring your own API key (BYOK)available with wallet limits</li>
+        <li>Monthly source additions: 2 shared references</li>
+        <li>Learn quota: 2 micro-lessons + 1 short-answer review / month</li>
+        <li>Bring your own API key (BYOK) available with wallet limits</li>
       </ul>
     </article>
     <article
@@ -356,10 +447,14 @@
       >
         <h2>Deep Inquirer</h2>
         <p class="price">from £6.99 / month</p>
+        {#if founderSubscriptionLocked}
+          <p class="founder-tag">Included with Founder access</p>
+        {/if}
         <ul>
           <li>Higher usage limits</li>
-          <li>Monthly ingestion: 3 public, or 1 private + 2 public</li>
-          <li>API wallet + 10% handling-fee metering</li>
+          <li>Monthly source additions: 3 shared, or 1 private + 2 shared</li>
+          <li>Learn quota: 50 micro-lessons + 3 essay reviews / month</li>
+          <li>API wallet with transparent 10% handling fee</li>
         </ul>
       </button>
     </article>
@@ -378,16 +473,20 @@
       >
         <h2>Philosopher's Desk</h2>
         <p class="price">from £11.99 / month</p>
+        {#if founderSubscriptionLocked}
+          <p class="founder-tag">Included with Founder access</p>
+        {/if}
         <ul>
           <li>Highest consumer plan allowances</li>
-          <li>Monthly ingestion: 5 public, or 1 private + 3 public</li>
+          <li>Monthly source additions: 5 shared, or 1 private + 3 shared</li>
+          <li>Learn quota: unlimited lessons + 10 essay reviews / month</li>
           <li>Priority access to premium capabilities</li>
         </ul>
       </button>
     </article>
-  </section>
+    </section>
 
-  <section class="plans topups">
+    <section class="plans topups">
     <article
       class="plan"
       class:is-selected={selectedCheckoutCard === 'topup_small'}
@@ -399,12 +498,12 @@
         disabled={!canSelectCard('topup_small')}
         onclick={() => selectCard('topup_small')}
       >
-        <h2>Insight Credits (Small)</h2>
+        <h2>Scholar Credits (Small)</h2>
         <p class="price">£5.00</p>
         <ul>
           <li>Prepaid wallet credit</li>
           <li>Used for API handling fees</li>
-          <li>Used for paid private ingestion charges</li>
+          <li>Convert inside Learn to Scholar Credits for extra essay reviews</li>
         </ul>
       </button>
     </article>
@@ -419,15 +518,21 @@
         disabled={!canSelectCard('topup_large')}
         onclick={() => selectCard('topup_large')}
       >
-        <h2>Insight Credits (Large)</h2>
+        <h2>Scholar Credits (Large)</h2>
         <p class="price">£15.00</p>
         <ul>
           <li>Prepaid wallet credit</li>
           <li>Used for API handling fees</li>
-          <li>Used for paid private ingestion charges</li>
+          <li>Convert inside Learn to Scholar Credits for extra essay reviews</li>
         </ul>
       </button>
     </article>
+    </section>
+
+    <section class="notes">
+    <p class="resource-note">
+      Scholar Credits are pre-paid tokens for in-depth essay feedback.
+    </p>
   </section>
 
   <section class="notes">
@@ -435,6 +540,11 @@
       <p class="resource-note">
         Review your selection, then proceed when you are ready.
       </p>
+      {#if founderSubscriptionLocked}
+        <p class="resource-note founder-note">
+          Founder access already includes Premium. Subscription checkout is disabled until your founder period ends.
+        </p>
+      {/if}
       {#if isAuthenticated}
         <div class="legal-acks">
           <label class="legal-ack">
@@ -454,7 +564,12 @@
         <button
           class="button primary"
           type="button"
-          disabled={!selectedCheckoutCard || checkoutOpening || (legalAcceptanceRequired && (!acceptTerms || !acceptPrivacy))}
+          disabled={
+            !selectedCheckoutCard
+            || checkoutOpening
+            || (legalAcceptanceRequired && (!acceptTerms || !acceptPrivacy))
+            || (founderSubscriptionLocked && (selectedCheckoutCard === 'pro' || selectedCheckoutCard === 'premium'))
+          }
           onclick={openCheckoutFromSelection}
         >
           {checkoutOpening ? 'Opening checkout…' : 'Proceed Securely →'}
@@ -492,19 +607,23 @@
         <a class="button primary" href="/auth">Get started</a>
       {/if}
     </div>
-  </section>
+    </section>
+  </div>
 </main>
 
 <style>
   .pricing {
     min-height: 100vh;
-    max-width: 1040px;
-    margin: 0 auto;
-    padding: 56px 20px 72px;
     color: var(--color-text);
   }
 
+  .pricing-content {
+    margin-top: 16px;
+    padding: clamp(18px, 2.8vw, 32px);
+  }
+
   .header {
+    margin-top: 16px;
     max-width: 66ch;
   }
 
@@ -528,6 +647,18 @@
     margin: 14px 0 0;
     color: var(--color-muted);
     line-height: 1.6;
+  }
+
+  .founder-callout {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--color-sage-border);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--color-sage) 12%, transparent);
+    color: var(--color-text);
+    font-family: var(--font-ui);
+    font-size: 0.86rem;
+    line-height: 1.45;
   }
 
   .plans {
@@ -582,6 +713,15 @@
     color: var(--color-text);
   }
 
+  .founder-tag {
+    margin: 0 0 10px;
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-sage);
+  }
+
   .plan ul {
     margin: 0;
     padding-left: 18px;
@@ -619,6 +759,10 @@
     margin: 8px 0 0;
     font-size: 0.88rem;
     color: var(--color-muted);
+  }
+
+  .founder-note {
+    color: var(--color-sage);
   }
 
   .notes a {

@@ -11,6 +11,16 @@ export type CurrencyCode = 'GBP' | 'USD';
 
 export type IngestVisibilityScope = 'public_shared' | 'private_user_only';
 
+export interface FounderOfferProfile {
+  program_id: string;
+  slot: number;
+  granted_at: string;
+  expires_at: string;
+  bonus_wallet_cents: number;
+  notice_pending?: boolean;
+  notice_seen_at?: string | null;
+}
+
 export interface TierIngestionRules {
   publicMax: number;
   privateMax: number;
@@ -51,6 +61,7 @@ export interface BillingProfile {
   paddle_customer_id?: string | null;
   paddle_subscription_id?: string | null;
   period_end_at?: string | null;
+  founder_offer?: FounderOfferProfile | null;
   legal_terms_version?: string | null;
   legal_privacy_version?: string | null;
   created_at?: string | null;
@@ -164,7 +175,35 @@ export function currentMonthKeyUtc(now = new Date()): string {
   return `${year}-${month}`;
 }
 
+function parseIsoTimestamp(value: string | undefined | null): number | null {
+  if (!value || typeof value !== 'string') return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function isFounderOfferActive(
+  founderOffer: FounderOfferProfile | null | undefined,
+  now = new Date()
+): boolean {
+  if (!founderOffer) return false;
+  const expiresAt = parseIsoTimestamp(founderOffer.expires_at);
+  if (expiresAt === null) return false;
+  return expiresAt > now.getTime();
+}
+
 export function deriveEffectiveTier(profile: BillingProfile): BillingTier {
+  const founderOfferActive = isFounderOfferActive(profile.founder_offer);
+  if (founderOfferActive) {
+    return 'premium';
+  }
+
+  const hasActiveSubscription =
+    Boolean(profile.paddle_subscription_id?.trim()) &&
+    (profile.status === 'active' || profile.status === 'trialing' || profile.status === 'past_due');
+  if (profile.founder_offer && !founderOfferActive && !hasActiveSubscription) {
+    return 'free';
+  }
+
   if (profile.tier === 'free') return 'free';
   if (profile.status === 'active' || profile.status === 'trialing') return profile.tier;
   return 'free';

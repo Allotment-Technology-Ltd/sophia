@@ -42,7 +42,7 @@
       </div>
       <div class="summary">
         <p class="title">Reasoning Quality</p>
-        <p class="subtitle">SOPHIA's internal coherence and confidence on this topic.</p>
+        <p class="subtitle">Internal coherence and confidence for this topic.</p>
       </div>
       <span class="toggle">{expanded ? 'Hide detail' : 'Show detail'}</span>
     </button>

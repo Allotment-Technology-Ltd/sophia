@@ -309,3 +309,38 @@ export type SSEEvent =
   | EnrichmentStatusEvent
   | ReasoningQualityEvent
   | ConstitutionDeltaEvent;
+
+export interface LearnLessonsResponse {
+  lessons: import('./learn').LessonUnit[];
+  next_cursor: number | null;
+}
+
+export interface LearnLessonResponse {
+  lesson: import('./learn').LessonUnit;
+}
+
+export interface LearnShortReviewResponse {
+  submission_id: string;
+  word_count: number;
+  review: import('./learn').ShortAnswerMiniReview;
+  learn_entitlements?: import('./learn').LearnEntitlementSummary;
+}
+
+export interface LearnEssayReviewResponse {
+  submission_id: string;
+  version_number: number;
+  word_count: number;
+  feedback: import('./learn').EssayFeedback;
+  learn_entitlements?: import('./learn').LearnEntitlementSummary;
+  used_scholar_credit?: boolean;
+}
+
+export interface LearnProgressResponse {
+  skills: import('./learn').SkillScores;
+  recommendation: string;
+  trajectory_delta: number;
+  completed_units: string[];
+  essay_count: number;
+  recent_scores: number[];
+  learn_entitlements?: import('./learn').LearnEntitlementSummary;
+}

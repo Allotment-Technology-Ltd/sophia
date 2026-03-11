@@ -6,6 +6,7 @@ import { ensureBillingState, upsertBillingProfile } from '$lib/server/billing/st
 import { BILLING_FEATURE_ENABLED } from '$lib/server/billing/flags';
 import { LEGAL_VERSION } from '$lib/constants/legal';
 import { getCheckoutPresentation } from '$lib/server/billing/checkout-settings';
+import { founderOfferSummaryFromProfile } from '$lib/server/billing/founder';
 
 interface CheckoutBody {
   tier?: 'pro' | 'premium';
@@ -30,6 +31,15 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
     const billingState = await ensureBillingState(uid);
     const existingProfile = billingState.profile;
+    const founderOffer = founderOfferSummaryFromProfile(existingProfile);
+    if (founderOffer?.active) {
+      return json(
+        {
+          error: `Founder access already includes Premium until ${new Date(founderOffer.expiresAt).toLocaleDateString('en-GB')}. No additional subscription is required.`
+        },
+        { status: 409 }
+      );
+    }
     const hasActiveSubscriptionId = Boolean(existingProfile.paddle_subscription_id?.trim());
     const statusBlocksNewCheckout =
       existingProfile.status === 'active' ||

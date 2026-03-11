@@ -41,7 +41,10 @@ type AnalyticsEvent =
   | { name: 'map_mode_changed'; params: { mode: 'structure' | 'flow' | 'trust' } }
   | { name: 'map_node_selected'; params: { node_type: 'source' | 'claim' } }
   | { name: 'map_share_link_copied'; params: { safe_mode: boolean } }
-  | { name: 'map_degraded_state'; params: { reason: string } };
+  | { name: 'map_degraded_state'; params: { reason: string } }
+  | { name: 'onboarding_layer_viewed'; params: { layer: 'input' | 'synthesis' | 'overview' | 'scholar' } }
+  | { name: 'quote_card_downloaded' }
+  | { name: 'quote_card_copied'; params: { success: boolean } };
 
 type EventName = AnalyticsEvent['name'];
 type EventParams<T extends EventName> = Extract<AnalyticsEvent, { name: T }> extends {

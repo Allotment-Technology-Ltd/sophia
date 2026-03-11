@@ -4,9 +4,16 @@
     onSubmit?: () => void;
     disabled?: boolean;
     onkeydown?: (e: KeyboardEvent) => void;
+    placeholder?: string;
   }
 
-  let { value = $bindable(''), onSubmit, disabled = false, onkeydown }: Props = $props();
+  let {
+    value = $bindable(''),
+    onSubmit,
+    disabled = false,
+    onkeydown,
+    placeholder = 'What do you want to think about today?'
+  }: Props = $props();
 
   let charCount = $derived(value.length);
 </script>
@@ -16,7 +23,7 @@
     <textarea
       bind:value
       {disabled}
-      placeholder="What do you want to think about today?"
+      {placeholder}
       class="textarea"
       {onkeydown}
     ></textarea>

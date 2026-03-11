@@ -66,7 +66,7 @@
   </select>
   <span class="hint">
     {#if !isDomainAuto}
-      Each lens changes SOPHIA's reasoning voice — not her intelligence, but her style of engagement.
+      Each lens changes SOPHIA output style - not the underlying reasoning quality.
     {:else}
       {domainHint}
     {/if}
