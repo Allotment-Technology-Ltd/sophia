@@ -34,11 +34,24 @@ require_cmd gcloud
 require_cmd pnpm
 require_cmd nc
 
-# Ensure gcloud is authenticated before trying tunnel + secret access.
-if ! gcloud auth print-access-token >/dev/null 2>&1; then
-  echo "[ERROR] gcloud is not authenticated. Run: gcloud auth login" >&2
-  exit 1
-fi
+ensure_gcloud_auth() {
+  # First, try existing credentials.
+  if gcloud auth print-access-token >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "[INFO] No active gcloud auth session found. Starting interactive login..."
+  gcloud auth login
+
+  # Re-check after login to fail fast if login was cancelled/failed.
+  if ! gcloud auth print-access-token >/dev/null 2>&1; then
+    echo "[ERROR] gcloud authentication failed. Try running 'gcloud auth login' manually." >&2
+    exit 1
+  fi
+}
+
+ensure_gcloud_auth
+gcloud config set project "$PROJECT_ID" >/dev/null
 
 TUNNEL_PID=""
 if nc -z localhost "$LOCAL_PORT" >/dev/null 2>&1; then

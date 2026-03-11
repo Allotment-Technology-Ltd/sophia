@@ -64,7 +64,7 @@
       authResolved = true;
 
       if (isAuthenticated && $page.url.pathname.startsWith('/auth')) {
-        goto('/app');
+        goto('/home');
       } else if (!isAuthenticated && !onPublicRoute) {
         goto('/');
       }
@@ -94,8 +94,6 @@
   const BARE_ROUTES = new Set([
     '/',
     '/landing',
-    '/privacy',
-    '/terms',
     '/legal/changelog',
     '/developer',
     '/api-access'
@@ -103,7 +101,7 @@
   let isAuthPage = $derived.by(() => {
     const path = $page.url.pathname;
     if (path.startsWith('/auth')) return true;
-    if (path === '/pricing') {
+    if (path === '/pricing' || path === '/privacy' || path === '/terms') {
       return !isAuthenticated;
     }
     return BARE_ROUTES.has(path);
@@ -193,6 +191,10 @@
     min-height: 100vh;
     display: flex;
     flex-direction: column;
+    background:
+      radial-gradient(1200px 540px at 12% 6%, rgba(127, 163, 131, 0.18), transparent 64%),
+      radial-gradient(1000px 520px at 90% 4%, rgba(111, 163, 212, 0.14), transparent 66%),
+      var(--color-bg);
   }
 
   .layout-main {
@@ -202,7 +204,7 @@
 
   .site-footer {
     border-top: 1px solid var(--color-border);
-    background: var(--color-bg);
+    background: rgba(20, 19, 18, 0.9);
     padding: 10px var(--space-3);
   }
 

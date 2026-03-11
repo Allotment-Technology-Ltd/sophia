@@ -1,9 +1,35 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import { browser } from '$app/environment';
+  import { auth, onAuthChange } from '$lib/firebase';
+  import PublicHeader from '$lib/components/shell/PublicHeader.svelte';
   import {
     LEGAL_CHANGELOG_PATH,
     LEGAL_EFFECTIVE_DATE,
     LEGAL_VERSION
   } from '$lib/constants/legal';
+
+  let {
+    data
+  }: {
+    data: {
+      isAuthenticated: boolean;
+    };
+  } = $props();
+  let clientAuthResolved = $state(false);
+  let clientAuthenticated = $state(false);
+  let isAuthenticated = $derived(clientAuthResolved ? clientAuthenticated : Boolean(data.isAuthenticated));
+
+  onMount(() => {
+    if (!browser) return;
+    clientAuthenticated = Boolean(auth?.currentUser) || Boolean(data.isAuthenticated);
+    clientAuthResolved = true;
+    const unsubscribe = onAuthChange((user) => {
+      clientAuthenticated = Boolean(user);
+      clientAuthResolved = true;
+    });
+    return () => unsubscribe?.();
+  });
 </script>
 
 <svelte:head>
@@ -14,19 +40,29 @@
   />
 </svelte:head>
 
-<div class="legal-page">
-  <header class="legal-header">
-    <a href="/" class="back-link">← Back to SOPHIA</a>
-    <h1>Privacy Policy</h1>
-    <p class="meta">
-      Allotment Technology Ltd · Version {LEGAL_VERSION} · Effective {LEGAL_EFFECTIVE_DATE}
-    </p>
-    <p class="meta">
-      <a href={LEGAL_CHANGELOG_PATH}>View legal changelog</a>
-    </p>
-  </header>
+<div class="legal-page sophia-page-shell">
+  {#if !isAuthenticated}
+    <PublicHeader
+      links={[
+        { href: '/#learn-track', label: 'Learn' },
+        { href: '/#inquire-track', label: 'Think' },
+        { href: '/pricing', label: 'Pricing' },
+        { href: '/auth', label: 'Sign In' }
+      ]}
+    />
+  {/if}
+  <div class="legal-surface sophia-page-surface">
+    <header class="legal-header">
+      <h1>Privacy Policy</h1>
+      <p class="meta">
+        Allotment Technology Ltd · Version {LEGAL_VERSION} · Effective {LEGAL_EFFECTIVE_DATE}
+      </p>
+      <p class="meta">
+        <a href={LEGAL_CHANGELOG_PATH}>View legal changelog</a>
+      </p>
+    </header>
 
-  <div class="legal-body">
+    <div class="legal-body">
     <section>
       <h2>1. Who We Are</h2>
       <p>
@@ -174,32 +210,29 @@
         <a href="mailto:admin@usesophia.app">admin@usesophia.app</a>
       </p>
     </section>
+    </div>
   </div>
 </div>
 
 <style>
   .legal-page {
-    max-width: 720px;
-    margin: 0 auto;
-    padding: 3rem 1.5rem 5rem;
     color: var(--color-text);
     font-family: var(--font-ui);
   }
 
+  .legal-surface {
+    width: 100%;
+    margin-top: 16px;
+    padding: clamp(20px, 3vw, 36px);
+  }
+
   .legal-header {
     margin-bottom: 3rem;
+    max-width: 860px;
   }
 
-  .back-link {
-    display: inline-block;
-    color: var(--color-muted);
-    text-decoration: none;
-    font-size: 0.875rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .back-link:hover {
-    color: var(--color-text);
+  .legal-body {
+    max-width: 860px;
   }
 
   h1 {

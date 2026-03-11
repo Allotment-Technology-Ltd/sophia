@@ -11,7 +11,7 @@
     error = '';
     try {
       await signInWithGoogle();
-      await goto('/app');
+      await goto('/home');
     } catch (err) {
       error = err instanceof Error ? err.message : 'Sign-in failed. Please try again.';
       console.error('Auth error:', err);
@@ -35,7 +35,7 @@
           <DialecticalTriangle mode="logo" size={72} />
         </div>
         <h1 class="auth-title">SOPHIA</h1>
-        <p class="auth-subtitle">Structured ontological & philosophical intelligence agent</p>
+        <p class="auth-subtitle">Structured ontological and philosophical reasoning platform</p>
       </div>
 
       <!-- Divider -->

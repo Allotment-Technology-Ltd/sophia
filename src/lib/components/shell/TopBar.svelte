@@ -2,6 +2,8 @@
   import { auth, signOutUser, onAuthChange, getIdToken } from '$lib/firebase';
   import { goto } from '$app/navigation';
   import { browser } from '$app/environment';
+  import { page } from '$app/stores';
+  import { env as publicEnv } from '$env/dynamic/public';
   import { onMount } from 'svelte';
   import DialecticalTriangle from '$lib/components/DialecticalTriangle.svelte';
 
@@ -19,17 +21,21 @@
 
   let currentUser = $state(browser ? auth?.currentUser ?? null : null);
   let billingTier = $state<'free' | 'pro' | 'premium' | null>(null);
+  let founderActive = $state(false);
   let userMenuOpen = $state(false);
+  const learnEnabled = (publicEnv.PUBLIC_ENABLE_LEARN_MODULE ?? 'false').toLowerCase() === 'true';
 
   async function refreshBillingTier(): Promise<void> {
     if (!browser || !currentUser) {
       billingTier = null;
+      founderActive = false;
       return;
     }
     try {
       const token = await getIdToken();
       if (!token) {
         billingTier = null;
+        founderActive = false;
         return;
       }
       const response = await fetch('/api/billing/entitlements', {
@@ -38,13 +44,19 @@
       });
       if (!response.ok) {
         billingTier = null;
+        founderActive = false;
         return;
       }
-      const body = (await response.json()) as { profile?: { tier?: 'free' | 'pro' | 'premium' } };
+      const body = (await response.json()) as {
+        profile?: { tier?: 'free' | 'pro' | 'premium' };
+        founder_offer?: { active?: boolean } | null;
+      };
       const tier = body?.profile?.tier;
       billingTier = tier === 'pro' || tier === 'premium' || tier === 'free' ? tier : 'free';
+      founderActive = body?.founder_offer?.active === true;
     } catch {
       billingTier = null;
+      founderActive = false;
     }
   }
 
@@ -84,10 +96,17 @@
 
 <nav class="top-bar" aria-label="Main navigation">
   <!-- Left: wordmark -->
-  <a href="/app" class="wordmark" aria-label="SOPHIA app home">
+  <a href="/home" class="wordmark" aria-label="SOPHIA home">
     <DialecticalTriangle mode="logo" size={22} />
     <span class="wordmark-text">SOPHIA</span>
   </a>
+
+  <div class="mode-links" aria-label="App sections">
+    <a href="/app" class="mode-link" aria-current={$page.url.pathname.startsWith('/app') ? 'page' : undefined}>Inquire</a>
+    {#if learnEnabled}
+      <a href="/learn" class="mode-link" aria-current={$page.url.pathname.startsWith('/learn') ? 'page' : undefined}>Learn</a>
+    {/if}
+  </div>
 
   <!-- Centre: context query (results / loading screens only) -->
   {#if contextQuery}
@@ -113,7 +132,7 @@
 
     {#if currentUser}
       <span class="plan-badge" aria-label="Current subscription tier">
-        {(billingTier ?? 'free').toUpperCase()}
+        {founderActive ? 'FOUNDER' : (billingTier ?? 'free').toUpperCase()}
       </span>
     {/if}
 
@@ -210,6 +229,33 @@
     gap: 8px;
     text-decoration: none;
     flex-shrink: 0;
+  }
+
+  .mode-links {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-right: auto;
+    margin-left: 10px;
+  }
+
+  .mode-link {
+    font-family: var(--font-ui);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-dim);
+    text-decoration: none;
+    padding: 4px 6px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+  }
+
+  .mode-link:hover,
+  .mode-link[aria-current='page'] {
+    color: var(--color-text);
+    border-color: var(--color-border);
+    background: var(--color-surface-raised);
   }
 
   .wordmark-text {
@@ -317,6 +363,7 @@
     border: none;
     cursor: pointer;
     padding: 0;
+    flex-shrink: 0;
     color: var(--color-dim);
     transition: color var(--transition-fast);
   }
@@ -423,9 +470,59 @@
     color: var(--color-text);
   }
 
+  @media (max-width: 1100px) {
+    .context-display {
+      display: none;
+    }
+  }
+
+  @media (max-width: 920px) {
+    .top-bar {
+      gap: var(--space-2);
+      padding: 0 var(--space-2);
+    }
+
+    .mode-links {
+      display: none;
+    }
+
+    .nav-actions {
+      margin-left: auto;
+      gap: var(--space-2);
+    }
+
+    .nav-btn-ghost,
+    .plan-badge {
+      display: none;
+    }
+
+    .panel-toggle {
+      color: var(--color-text);
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      background: var(--color-surface-raised);
+    }
+  }
+
   @media (max-width: 767px) {
     .context-query {
       max-width: 140px;
+    }
+
+    .wordmark-text {
+      font-size: 1rem;
+      letter-spacing: 0.06em;
+    }
+
+    .user-button {
+      width: 28px;
+      height: 28px;
+    }
+  }
+
+  @media (max-width: 420px) {
+    .user-profile {
+      display: none;
     }
   }
 </style>

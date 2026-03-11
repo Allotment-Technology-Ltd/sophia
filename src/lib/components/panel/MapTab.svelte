@@ -1215,7 +1215,7 @@
 
   <div class="insight-grid">
     <div class="insight-card">
-      <p class="insight-title">How SOPHIA built this argument</p>
+      <p class="insight-title">How this argument was constructed</p>
       <p class="insight-row">Seed nodes: {retrievalExplainability.seedCount}</p>
       <p class="insight-row">Traversed nodes: {retrievalExplainability.traversedCount}</p>
       <p class="insight-row">Avg traversal depth: {retrievalExplainability.avgDepth.toFixed(2)}</p>

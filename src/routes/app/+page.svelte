@@ -5,6 +5,14 @@
   import { comparisonStore } from '$lib/stores/comparison.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
   import { renderMarkdown } from '$lib/utils/markdown';
+  import { trackEvent } from '$lib/utils/analytics';
+  import {
+    buildQuoteFilename,
+    buildQuoteSnippet,
+    copyQuoteCardDataUrl,
+    createQuoteCardDataUrl,
+    downloadQuoteCard
+  } from '$lib/utils/quoteCard';
   import { goto, replaceState } from '$app/navigation';
   import { page } from '$app/state';
   import { onMount } from 'svelte';
@@ -36,7 +44,7 @@
   import QuestionCounter from '$lib/components/QuestionCounter.svelte';
   import { extractFurtherQuestions } from '$lib/utils/extractQuestions';
   import DialecticalTriangle from '$lib/components/DialecticalTriangle.svelte';
-  import { getRandomExamples, type LensId } from '$lib/constants/examples';
+  import { getRandomExamples } from '$lib/constants/examples';
   import {
     DEFAULT_MODEL_CATALOG,
     PROVIDER_UI_META,
@@ -60,6 +68,7 @@
     id: string;
   };
   type QueryKeySource = 'platform' | ReasoningProvider;
+  type SettingsSubTab = 'general' | 'byok' | 'sources' | 'payments';
   interface ByokProviderStatus {
     provider: ByokProvider;
     configured: boolean;
@@ -122,16 +131,24 @@
   const domainSelectorEnabled =
     (import.meta.env.PUBLIC_ENABLE_DOMAIN_OVERRIDE_UI ?? 'true').toLowerCase() === 'true';
   let activeTab = $state<TabId>('references');
+  let settingsSubTab = $state<SettingsSubTab>('general');
   let activeResultPass = $state<'analysis' | 'critique' | 'synthesis' | 'verification'>('analysis');
   let autoFocusFirstPass = $state(true);
+  type SimpleLayer = 'input' | 'synthesis' | 'overview' | 'scholar';
+  let simpleLayer = $state<SimpleLayer>('input');
+  let advancedOptionsOpen = $state(false);
+  let trackedSimpleLayer = '';
+  let quoteCardDataUrl = $state('');
+  let quoteCardStatus = $state('');
+  let quoteCardError = $state('');
 
-  const SUGGESTION_SLOT_COUNT = 1;
+  const SUGGESTION_SLOT_COUNT = 3;
   const ROTATE_INTERVAL_MS = 8000;
   let suggestionTick = $state(0);
   let baseExamplePool = $state<string[]>([]);
 
   const LOADING_STATUS: Record<string, string> = {
-    analysis: 'SOPHIA is assembling the first pass of your question - let her think for a moment…',
+    analysis: 'The first pass for your question is being assembled - this may take a moment…',
     critique: 'Testing the first position for hidden tensions…',
     synthesis: 'Weaving a balanced resolution from both sides…',
     verification: 'Reviewing sources and scholarly grounding…',
@@ -187,9 +204,9 @@
   };
 
   const DOMAIN_ALLOWED_LENSES: Record<'auto' | 'ethics' | 'philosophy_of_mind', string[]> = {
-    auto: [''],
-    ethics: ['', 'utilitarian', 'deontological', 'virtue_ethics', 'rawlsian', 'care_ethics'],
-    philosophy_of_mind: ['', 'physicalist', 'dualist', 'functionalist', 'enactivist', 'phenomenological']
+    auto: ['', 'balanced_dialogue', 'socratic', 'realist_pragmatist', 'continental'],
+    ethics: ['', 'balanced_dialogue', 'socratic', 'realist_pragmatist', 'continental'],
+    philosophy_of_mind: ['', 'balanced_dialogue', 'socratic', 'realist_pragmatist', 'continental']
   };
 
   function parseSelectedModel(selection: string): { provider: ModelProvider; modelId?: string } {
@@ -288,6 +305,30 @@
     return (FALLBACK_MODELS[provider] ?? [])[0] ?? 'model-id';
   }
 
+  function resetQuoteCardState(): void {
+    quoteCardDataUrl = '';
+    quoteCardStatus = '';
+    quoteCardError = '';
+  }
+
+  function resolveLensForSubmit(): string | undefined {
+    return selectedLens || undefined;
+  }
+
+  function summarizePassContent(text: string, maxChars = 260): string {
+    const normalized = text
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/#{1,6}\s+/g, '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/[*_`>\-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!normalized) return 'Summary unavailable while this pass is still forming.';
+    const sentence = normalized.match(/[^.!?]+[.!?]?/)?.[0]?.trim() ?? normalized;
+    if (sentence.length <= maxChars) return sentence;
+    return `${sentence.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+  }
+
   async function loadByokProviders(token: string): Promise<void> {
     try {
       const response = await fetch('/api/byok/providers', {
@@ -365,17 +406,19 @@
       });
   }
 
-  onMount(async () => {
-    try {
-      const token = await getIdToken();
-      if (token) {
-        await loadByokProviders(token);
-        await refreshIngestionBilling(token);
+  onMount(() => {
+    (async () => {
+      try {
+        const token = await getIdToken();
+        if (token) {
+          await loadByokProviders(token);
+          await refreshIngestionBilling(token);
+        }
+        await loadModelOptions(token, keySource);
+      } catch {
+        modelOptions = buildFallbackModelOptions(keySource);
       }
-      await loadModelOptions(token, keySource);
-    } catch {
-      modelOptions = buildFallbackModelOptions(keySource);
-    }
+    })();
   });
 
   const activeByokProviders = $derived.by(() =>
@@ -497,6 +540,52 @@
       verification: lastAssistantMsg?.passes?.verification ?? ''
     };
   });
+  let displayedStructuredPasses = $derived.by(() => {
+    if (conversation.isLoading) {
+      return {
+        analysis: conversation.currentStructuredPasses.analysis,
+        critique: conversation.currentStructuredPasses.critique,
+        synthesis: conversation.currentStructuredPasses.synthesis
+      };
+    }
+    return {
+      analysis: lastAssistantMsg?.structuredPasses?.analysis,
+      critique: lastAssistantMsg?.structuredPasses?.critique,
+      synthesis: lastAssistantMsg?.structuredPasses?.synthesis
+    };
+  });
+  let simplePrimaryPass = $derived.by(() => {
+    if (displayedPasses.synthesis) return 'synthesis' as const;
+    if (displayedPasses.critique) return 'critique' as const;
+    return 'analysis' as const;
+  });
+  let simplePrimaryContent = $derived.by(() => displayedPasses[simplePrimaryPass] ?? '');
+  let simplePrimaryHeading = $derived.by(() => {
+    if (simplePrimaryPass === 'synthesis') return 'Synthesis';
+    if (simplePrimaryPass === 'critique') return 'Critique';
+    return 'Analysis';
+  });
+  let simpleSynthesisReady = $derived.by(() => {
+    if (selectedDepth === 'quick') return Boolean(displayedPasses.analysis);
+    if (displayedPasses.synthesis) return true;
+    return !conversation.isLoading && Boolean(simplePrimaryContent);
+  });
+  let simpleOverviewSummaries = $derived.by(() => {
+    const analysisSummary =
+      displayedStructuredPasses.analysis?.sections?.[0]?.content ??
+      summarizePassContent(displayedPasses.analysis);
+    const critiqueSummary =
+      displayedStructuredPasses.critique?.sections?.[0]?.content ??
+      summarizePassContent(displayedPasses.critique);
+    const synthesisSummary =
+      displayedStructuredPasses.synthesis?.sections?.[0]?.content ??
+      summarizePassContent(displayedPasses.synthesis);
+    return {
+      analysis: summarizePassContent(analysisSummary),
+      critique: summarizePassContent(critiqueSummary),
+      synthesis: summarizePassContent(synthesisSummary)
+    };
+  });
   let hasDisplayedCorePass = $derived.by(() =>
     Boolean(displayedPasses.analysis || displayedPasses.critique || displayedPasses.synthesis)
   );
@@ -546,8 +635,8 @@
   let loadingStatusText = $derived.by(() => {
     if (!conversation.currentPass) {
       return hasStreamingCorePass
-        ? 'SOPHIA is continuing the inquiry…'
-        : 'SOPHIA is assembling the first pass of your question - let her think for a moment…';
+        ? 'Inquiry in progress…'
+        : 'The first pass for your question is being assembled - this may take a moment…';
     }
     const base = LOADING_STATUS[conversation.currentPass] ?? 'Thinking…';
     const provider = conversation.passModels[conversation.currentPass]?.provider ?? conversation.loadingModelProvider;
@@ -1017,6 +1106,8 @@
   function prepareForNewRun(): void {
     activeResultPass = 'analysis';
     autoFocusFirstPass = true;
+    simpleLayer = 'synthesis';
+    resetQuoteCardState();
   }
 
   function lockToPass(pass: 'analysis' | 'critique' | 'synthesis' | 'verification'): void {
@@ -1030,7 +1121,7 @@
     const query = queryInput.trim();
     queryInput = '';
     prepareForNewRun();
-    await conversation.submitQuery(query, selectedLens || undefined, {
+    await conversation.submitQuery(query, resolveLensForSubmit(), {
       queryKind: 'new',
       depthMode: selectedDepth,
       ...buildCredentialOptions(),
@@ -1046,6 +1137,68 @@
       e.preventDefault();
       handleSubmit();
     }
+  }
+
+  function handleAskAnother(): void {
+    conversation.clear();
+    queryInput = '';
+    simpleLayer = 'input';
+    resetQuoteCardState();
+  }
+
+  function openSimpleOverview(): void {
+    simpleLayer = 'overview';
+  }
+
+  function openScholarView(): void {
+    simpleLayer = 'scholar';
+  }
+
+  function ensureQuoteCard(): string | null {
+    if (quoteCardDataUrl) return quoteCardDataUrl;
+    const sourceText =
+      displayedPasses.synthesis || displayedPasses.critique || displayedPasses.analysis;
+    if (!sourceText) {
+      quoteCardError = 'No completed passage available for quote cards yet.';
+      return null;
+    }
+    try {
+      const quote = buildQuoteSnippet(sourceText);
+      const dataUrl = createQuoteCardDataUrl(quote);
+      quoteCardDataUrl = dataUrl;
+      quoteCardError = '';
+      quoteCardStatus = '';
+      return dataUrl;
+    } catch (err) {
+      quoteCardError = err instanceof Error ? err.message : 'Unable to create quote card.';
+      return null;
+    }
+  }
+
+  function generateQuoteCard(): void {
+    const created = ensureQuoteCard();
+    if (created) {
+      quoteCardStatus = 'Quote card ready.';
+      quoteCardError = '';
+    }
+  }
+
+  function downloadQuoteCardImage(): void {
+    const dataUrl = ensureQuoteCard();
+    if (!dataUrl) return;
+    downloadQuoteCard(dataUrl, buildQuoteFilename());
+    quoteCardStatus = 'Quote card downloaded.';
+    trackEvent('quote_card_downloaded');
+  }
+
+  async function copyQuoteCardImage(): Promise<void> {
+    const dataUrl = ensureQuoteCard();
+    if (!dataUrl) return;
+    const copied = await copyQuoteCardDataUrl(dataUrl);
+    quoteCardStatus = copied
+      ? 'Quote card copied to clipboard.'
+      : 'Clipboard image copy is unavailable in this browser.';
+    trackEvent('quote_card_copied', { success: copied });
   }
 
   async function handleHistorySelect(entryId: string): Promise<void> {
@@ -1071,7 +1224,7 @@
       return;
     }
 
-    await conversation.submitQuery(entry.question, selectedLens || undefined, {
+    await conversation.submitQuery(entry.question, resolveLensForSubmit(), {
       queryKind: 'new',
       depthMode,
       ...buildCredentialOptions(),
@@ -1089,6 +1242,21 @@
     if (typeof window === 'undefined') return;
     const url = new URL(window.location.href);
     url.searchParams.set('panelTab', tab);
+    if (tab !== 'settings') {
+      url.searchParams.delete('settingsTab');
+      settingsSubTab = 'general';
+    }
+    replaceState(url.toString(), page.state);
+  }
+
+  function openSettingsSubTab(tab: Extract<SettingsSubTab, 'byok' | 'payments'>): void {
+    activeTab = 'settings';
+    settingsSubTab = tab;
+    panelStore.openPanel();
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('panelTab', 'settings');
+    url.searchParams.set('settingsTab', tab);
     replaceState(url.toString(), page.state);
   }
 
@@ -1113,7 +1281,7 @@
     const lastQuery = conversation.messages.findLast(m => m.role === 'user')?.content;
     if (!lastQuery) return;
     prepareForNewRun();
-    await conversation.submitQuery(lastQuery, selectedLens || undefined, {
+    await conversation.submitQuery(lastQuery, resolveLensForSubmit(), {
       queryKind: 'new',
       depthMode: selectedDepth,
       ...buildCredentialOptions(),
@@ -1129,7 +1297,7 @@
     const lastQuery = conversation.messages.findLast((m) => m.role === 'user')?.content;
     if (!lastQuery) return;
     prepareForNewRun();
-    await conversation.submitQuery(lastQuery, selectedLens || undefined, {
+    await conversation.submitQuery(lastQuery, resolveLensForSubmit(), {
       queryKind: 'rerun',
       depthMode: currentDepthMode,
       ...buildCredentialOptions(),
@@ -1162,7 +1330,7 @@
           : undefined;
     selectedDepth = nextDepthUpgrade;
     prepareForNewRun();
-    await conversation.submitQuery(lastQuery, selectedLens || undefined, {
+    await conversation.submitQuery(lastQuery, resolveLensForSubmit(), {
       queryKind: 'rerun',
       depthMode: nextDepthUpgrade,
       ...buildCredentialOptions(),
@@ -1188,6 +1356,19 @@
   });
 
   $effect(() => {
+    if (simpleLayer === trackedSimpleLayer) return;
+    trackEvent('onboarding_layer_viewed', { layer: simpleLayer });
+    trackedSimpleLayer = simpleLayer;
+  });
+
+  $effect(() => {
+    if (!isQueryState) return;
+    simpleLayer = 'input';
+    advancedOptionsOpen = false;
+    resetQuoteCardState();
+  });
+
+  $effect(() => {
     if (!autoFocusFirstPass) return;
     if (!displayedPasses.analysis) return;
     activeResultPass = 'analysis';
@@ -1200,9 +1381,19 @@
     const syncTabFromUrl = () => {
       const url = new URL(window.location.href);
       const panelTab = url.searchParams.get('panelTab');
+      const requestedSettingsTab = url.searchParams.get('settingsTab');
       const hasMapState = url.searchParams.has('mapNode') || url.searchParams.has('mapRel');
       if (panelTab === 'references' || panelTab === 'map' || panelTab === 'history' || panelTab === 'settings') {
         activeTab = panelTab;
+        if (
+          panelTab === 'settings' &&
+          (requestedSettingsTab === 'general' ||
+            requestedSettingsTab === 'byok' ||
+            requestedSettingsTab === 'sources' ||
+            requestedSettingsTab === 'payments')
+        ) {
+          settingsSubTab = requestedSettingsTab;
+        }
         panelStore.openPanel();
         return;
       }
@@ -1274,16 +1465,10 @@
   };
 
   const LENS_KEYWORDS: Record<string, string[]> = {
-    utilitarian: ['consequence', 'utility', 'welfare', 'aggregate', 'outcome', 'maximize'],
-    deontological: ['duty', 'rule', 'right', 'obligation', 'principle', 'constraint'],
-    virtue_ethics: ['virtue', 'character', 'flourishing', 'habit', 'wisdom'],
-    rawlsian: ['fairness', 'justice', 'equality', 'basic liberty', 'veil', 'difference principle'],
-    care_ethics: ['care', 'relationship', 'dependency', 'vulnerability', 'empathy', 'context'],
-    physicalist: ['physicalism', 'brain', 'neural', 'material', 'reduction', 'naturalism'],
-    dualist: ['dualism', 'soul', 'mental substance', 'zombie', 'qualia', 'non-physical'],
-    functionalist: ['function', 'causal role', 'multiple realizability', 'computation', 'state machine'],
-    enactivist: ['embodied', 'enactive', 'sensorimotor', 'situated cognition', 'environment'],
-    phenomenological: ['lived experience', 'first-person', 'intentionality', 'phenomenology', 'subjective']
+    balanced_dialogue: ['balance', 'clarity', 'structure', 'dialogue', 'reasoned'],
+    socratic: ['question', 'inquiry', 'examine', 'probe', 'assumption'],
+    realist_pragmatist: ['outcome', 'practical', 'consequence', 'feasible', 'tradeoff'],
+    continental: ['interpret', 'meaning', 'existence', 'phenomenology', 'narrative']
   };
 
   function scoreKeywordMatch(text: string, keywords: string[]): number {
@@ -1310,6 +1495,7 @@
   const suggestionDomain = $derived(
     selectedDomain === 'auto' ? inferAutoDomain() : selectedDomain
   );
+  const suggestionLens = $derived(selectedLens);
 
   function scoreRelevance(question: string, terms: Set<string>): number {
     if (terms.size === 0) return 0;
@@ -1335,10 +1521,10 @@
   }
 
   function matchesLensContext(result: { lens?: string; query: string }): boolean {
-    if (!selectedLens) return true;
-    if (result.lens) return result.lens === selectedLens;
+    if (!suggestionLens) return true;
+    if (result.lens) return result.lens === suggestionLens;
     // Legacy cache fallback: infer from query text.
-    return scoreKeywordMatch(result.query, LENS_KEYWORDS[selectedLens] ?? []) > 0;
+    return scoreKeywordMatch(result.query, LENS_KEYWORDS[suggestionLens] ?? []) > 0;
   }
 
   const followOnSuggestions = $derived.by(() => {
@@ -1361,7 +1547,7 @@
         seen.add(key);
         const relevanceScore = scoreRelevance(trimmed, contextTerms);
         const domainScore = scoreKeywordMatch(trimmed, DOMAIN_KEYWORDS[suggestionDomain]);
-        const lensScore = selectedLens ? scoreKeywordMatch(trimmed, LENS_KEYWORDS[selectedLens] ?? []) : 0;
+        const lensScore = suggestionLens ? scoreKeywordMatch(trimmed, LENS_KEYWORDS[suggestionLens] ?? []) : 0;
         const item = {
           text: trimmed,
           score: relevanceScore + domainScore * 2 + lensScore * 2 + (isDomainMatch ? 2 : 0) + (isLensMatch ? 2 : 0),
@@ -1407,10 +1593,24 @@
     return rotating;
   });
 
+  const simpleSuggestedQuestions = $derived.by(() => {
+    const merged = [...rotatingQuestions, ...baseExamplePool];
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const question of merged) {
+      const key = normalizeText(question);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(question);
+      if (deduped.length >= 3) break;
+    }
+    return deduped;
+  });
+
   $effect(() => {
     baseExamplePool = getRandomExamples(20, {
       domain: suggestionDomain,
-      lens: (selectedLens as LensId) || ''
+      lens: ''
     }).map((item) => item.text);
   });
 
@@ -1437,29 +1637,30 @@
            ═══════════════════════════════════════════════════════════════ -->
       {#if isQueryState}
         <div class="query-screen">
-          <div class="query-center">
+          <div class="query-center simple-query-center" data-testid="query-screen">
             <div class="sophia-symbol" aria-hidden="true">
               <DialecticalTriangle mode="logo" size={80} />
             </div>
             <h1 class="query-heading">What do you want to think about today?</h1>
-            <p class="query-sub">Ask a question that matters. SOPHIA will explore it through analysis, critique, and synthesis - three voices in one conversation.</p>
-            <p class="query-persona">You can just start typing. Or choose a sample question below.</p>
+            <p class="query-sub">A space for deep reasoning, made simple.</p>
+            <p class="query-persona">Start with a single question. Expand controls when you need them.</p>
 
-            <div class="query-input-wrap">
+            <div class="query-input-wrap simple-query-wrap">
               <QuestionInput
                 bind:value={queryInput}
                 onSubmit={handleSubmit}
                 disabled={conversation.isLoading}
                 onkeydown={handleKeydown}
+                placeholder="Ask a question…"
               />
 
               <div class="suggested-frame">
                 <div class="suggested-header">
-                  <h3>Try one of these timeless questions:</h3>
-                  <p>Tap one to begin, then revise it in your own words.</p>
+                  <h3>Suggested questions</h3>
+                  <p>Pick one or write your own.</p>
                 </div>
                 <div class="example-pills" aria-label="Suggested questions">
-                {#each rotatingQuestions as q}
+                {#each simpleSuggestedQuestions as q}
                   <button
                     class="pill"
                     onclick={() => { queryInput = q; }}
@@ -1470,136 +1671,169 @@
                 </div>
               </div>
 
-              <div class="key-model-frame">
-                <div class="frame-title">Thinking Engine</div>
-                <p class="frame-copy">
-                  Choose where SOPHIA should reason from for this inquiry.
-                </p>
-                <div class="credential-stack">
-                  <div class="key-source-row">
-                    <label for="key-source-select">Choose your key</label>
-                    <select id="key-source-select" bind:value={keySource}>
-                      <option value="platform">Platform key (limited)</option>
-                      {#each QUERY_KEY_PROVIDER_ORDER as provider}
-                        <option value={provider} disabled={!activeByokProviders.includes(provider)}>
-                          My {PROVIDER_UI_META[provider].label} key {!activeByokProviders.includes(provider) ? '(not active)' : ''}
-                        </option>
-                      {/each}
-                    </select>
-                  </div>
-                  <ModelSelector
-                    bind:value={selectedModelValue}
-                    options={modelSelectOptions}
-                    disabled={conversation.isLoading}
-                  />
-                  {#if keySource !== 'platform'}
-                    <div class="custom-model-row">
-                      <label for="custom-model-id">Or enter any model id</label>
-                      <input
-                        id="custom-model-id"
-                        type="text"
-                        bind:value={customModelId}
-                        disabled={conversation.isLoading}
-                        placeholder={customModelPlaceholder(keySource)}
-                        spellcheck="false"
-                        autocomplete="off"
-                      />
+              <button
+                type="button"
+                class="advanced-toggle-btn"
+                data-testid="advanced-toggle"
+                onclick={() => {
+                  advancedOptionsOpen = !advancedOptionsOpen;
+                }}
+              >
+                Advanced options {advancedOptionsOpen ? '▲' : '▼'}
+              </button>
+
+              {#if advancedOptionsOpen}
+                <div class="key-model-frame">
+                  <div class="frame-title">Thinking Engine</div>
+                  <p class="frame-copy">
+                    Choose which reasoning engine to use for this inquiry.
+                  </p>
+                  <div class="credential-stack">
+                    <div class="key-source-row">
+                      <label for="key-source-select">Choose your key</label>
+                      <select id="key-source-select" bind:value={keySource}>
+                        <option value="platform">Platform key (limited)</option>
+                        {#each QUERY_KEY_PROVIDER_ORDER as provider}
+                          <option value={provider} disabled={!activeByokProviders.includes(provider)}>
+                            My {PROVIDER_UI_META[provider].label} key {!activeByokProviders.includes(provider) ? '(not active)' : ''}
+                          </option>
+                        {/each}
+                      </select>
                     </div>
-                    <p class="custom-model-hint">
-                      Custom model ids are sent directly with your {PROVIDER_UI_META[keySource].label} key.
+                    <ModelSelector
+                      bind:value={selectedModelValue}
+                      options={modelSelectOptions}
+                      disabled={conversation.isLoading}
+                    />
+                    {#if keySource !== 'platform'}
+                      <div class="custom-model-row">
+                        <label for="custom-model-id">Or enter any model id</label>
+                        <input
+                          id="custom-model-id"
+                          type="text"
+                          bind:value={customModelId}
+                          disabled={conversation.isLoading}
+                          placeholder={customModelPlaceholder(keySource)}
+                          spellcheck="false"
+                          autocomplete="off"
+                        />
+                      </div>
+                      <p class="custom-model-hint">
+                        Custom model ids are sent directly with your {PROVIDER_UI_META[keySource].label} key.
+                      </p>
+                    {/if}
+                  </div>
+                  <p class="key-source-hint">{keySourceDescription}</p>
+                  <div class="byok-shortcuts">
+                    <p class="byok-shortcuts-copy">
+                      Need your own model key? Configure BYOK first, then keep wallet credit available
+                      for BYOK handling charges.
                     </p>
+                    <div class="byok-shortcuts-actions">
+                      <button
+                        class="byok-shortcut-btn"
+                        type="button"
+                        onclick={() => openSettingsSubTab('byok')}
+                      >
+                        Open BYOK settings
+                      </button>
+                      <button
+                        class="byok-shortcut-btn secondary"
+                        type="button"
+                        onclick={() => openSettingsSubTab('payments')}
+                      >
+                        Open wallet top-ups
+                      </button>
+                    </div>
+                  </div>
+                  {#if byokStatusError}
+                    <p class="key-source-error">Unable to refresh BYOK status: {byokStatusError}</p>
                   {/if}
                 </div>
-                <p class="key-source-hint">{keySourceDescription}</p>
-                {#if byokStatusError}
-                  <p class="key-source-error">Unable to refresh BYOK status: {byokStatusError}</p>
-                {/if}
-              </div>
 
-              <div class="reasoning-frame">
-                <div class="frame-title">Advanced settings →</div>
-                <p class="frame-copy">
-                  Adjust SOPHIA's reasoning depth, domain focus, or data sources. These options are for when you want to steer her reasoning more precisely.
-                </p>
-                {#if domainSelectorEnabled}
-                  <div class="domain-row">
-                    <label for="domain-select">Reasoning Focus</label>
-                    <select id="domain-select" bind:value={selectedDomain}>
-                      <option value="auto">Auto</option>
-                      <option value="ethics">Ethics</option>
-                      <option value="philosophy_of_mind">Philosophy of Mind</option>
-                    </select>
-                  </div>
-                {/if}
-                <LensSelector bind:value={selectedLens} domain={selectedDomain} disabled={conversation.isLoading} />
-              </div>
-
-              <DepthSelector
-                bind:value={selectedDepth}
-                disabled={conversation.isLoading}
-                allowDeep={canRunDeepWithCurrentKey}
-              />
-
-              <div class="resource-frame">
-                <div class="frame-title">Reference Material (optional)</div>
-                <p class="resource-copy">
-                  Add URLs you want SOPHIA to consider in her analysis.
-                </p>
-                <div class="ingestion-budget">
-                  <span>Remaining public ingestions: {ingestionBilling.publicRemaining ?? '—'}</span>
-                  <span>Remaining private ingestions: {ingestionBilling.privateRemaining ?? '—'}</span>
-                  <span>Wallet: {formatWalletCents(ingestionBilling.walletAvailableCents, ingestionBilling.walletCurrency)}</span>
-                  <button
-                    class="ingestion-refresh"
-                    type="button"
-                    onclick={async () => {
-                      const token = await getIdToken();
-                      if (token) await refreshIngestionBilling(token);
-                    }}
-                    disabled={ingestionBillingLoading}
-                  >
-                    {ingestionBillingLoading ? 'Refreshing…' : 'Refresh limits'}
-                  </button>
+                <div class="reasoning-frame">
+                  <div class="frame-title">Advanced settings →</div>
+                  <p class="frame-copy">
+                    Adjust reasoning depth, domain focus, style lens, or data sources.
+                  </p>
+                  {#if domainSelectorEnabled}
+                    <div class="domain-row">
+                      <label for="domain-select">Reasoning Focus</label>
+                      <select id="domain-select" bind:value={selectedDomain}>
+                        <option value="auto">Auto</option>
+                        <option value="ethics">Ethics</option>
+                        <option value="philosophy_of_mind">Philosophy of Mind</option>
+                      </select>
+                    </div>
+                  {/if}
+                  <LensSelector bind:value={selectedLens} domain={selectedDomain} disabled={conversation.isLoading} />
                 </div>
-                <label class="resource-label" for="user-links">Sources to prioritize (optional)</label>
-                <textarea
-                  id="user-links"
-                  bind:value={userLinksInput}
-                  class="links-input"
-                  rows="4"
-                  placeholder="https://example.com/source-1"
-                ></textarea>
-                {#if runtimeUserLinks.length > 0}
-                  <div class="ingestion-preferences">
-                    <p class="resource-note">
-                      Choose which links to ingest overnight and whether each source is private or shared.
-                    </p>
-                    {#each runtimeUserLinks as link}
-                      <div class="ingestion-item">
-                        <div class="ingestion-head">
-                          <label class="ingestion-toggle">
-                            <input
-                              type="checkbox"
-                              checked={linkIngestionSelected(link)}
-                              disabled={!canQueueAnyIngestion}
-                              onchange={(event) =>
-                                setLinkIngestionSelected(
-                                  link,
-                                  (event.currentTarget as HTMLInputElement).checked
-                                )}
-                            />
-                            <span>Queue this source for ingestion</span>
-                          </label>
-                          <p class="ingestion-link">{link}</p>
-                        </div>
-                        {#if linkIngestionSelected(link)}
-                          <div class="ingestion-visibility">
+
+                <DepthSelector
+                  bind:value={selectedDepth}
+                  disabled={conversation.isLoading}
+                  allowDeep={canRunDeepWithCurrentKey}
+                />
+
+                <div class="resource-frame">
+                  <div class="frame-title">Reference Material (optional)</div>
+                  <p class="resource-copy">
+                    Add URLs you want SOPHIA to consider during analysis.
+                  </p>
+                  <div class="ingestion-budget">
+                    <span>Remaining public ingestions: {ingestionBilling.publicRemaining ?? '—'}</span>
+                    <span>Remaining private ingestions: {ingestionBilling.privateRemaining ?? '—'}</span>
+                    <span>Wallet: {formatWalletCents(ingestionBilling.walletAvailableCents, ingestionBilling.walletCurrency)}</span>
+                    <button
+                      class="ingestion-refresh"
+                      type="button"
+                      onclick={async () => {
+                        const token = await getIdToken();
+                        if (token) await refreshIngestionBilling(token);
+                      }}
+                      disabled={ingestionBillingLoading}
+                    >
+                      {ingestionBillingLoading ? 'Refreshing…' : 'Refresh limits'}
+                    </button>
+                  </div>
+                  <label class="resource-label" for="user-links">Sources to prioritize (optional)</label>
+                  <textarea
+                    id="user-links"
+                    bind:value={userLinksInput}
+                    class="links-input"
+                    rows="4"
+                    placeholder="https://example.com/source-1"
+                  ></textarea>
+                  {#if runtimeUserLinks.length > 0}
+                    <div class="ingestion-preferences">
+                      <p class="resource-note">
+                        Choose which links to ingest overnight and whether each source is private or shared.
+                      </p>
+                      {#each runtimeUserLinks as link}
+                        <div class="ingestion-item">
+                          <div class="ingestion-head">
+                            <label class="ingestion-toggle">
+                              <input
+                                type="checkbox"
+                                checked={linkIngestionSelected(link)}
+                                disabled={!canQueueAnyIngestion}
+                                onchange={(event) =>
+                                  setLinkIngestionSelected(
+                                    link,
+                                    (event.currentTarget as HTMLInputElement).checked
+                                  )}
+                              />
+                              <span>Queue this source for ingestion</span>
+                            </label>
+                            <p class="ingestion-link">{link}</p>
+                          </div>
+                          <div class="ingestion-visibility" class:is-disabled={!linkIngestionSelected(link)}>
                             <label>
                               <input
                                 type="radio"
                                 name={`visibility-${link}`}
                                 checked={linkIngestionVisibility(link) === 'public_shared'}
-                                disabled={!publicIngestionAvailable}
+                                disabled={!linkIngestionSelected(link) || !publicIngestionAvailable}
                                 onchange={() => setLinkIngestionVisibility(link, 'public_shared')}
                               />
                               Public shared ({ingestionBilling.publicRemaining ?? '—'} left)
@@ -1609,60 +1843,67 @@
                                 type="radio"
                                 name={`visibility-${link}`}
                                 checked={linkIngestionVisibility(link) === 'private_user_only'}
-                                disabled={!privateIngestionAvailable}
+                                disabled={!linkIngestionSelected(link) || !privateIngestionAvailable}
                                 onchange={() => setLinkIngestionVisibility(link, 'private_user_only')}
                               />
                               Private to my account ({ingestionBilling.privateRemaining ?? '—'} left)
                             </label>
                           </div>
-                          {#if !publicIngestionAvailable || !privateIngestionAvailable}
-                            <p class="ingestion-limit-note">
-                              {#if !publicIngestionAvailable && !privateIngestionAvailable}
-                                No ingestion capacity left. Top up wallet and/or wait for monthly reset.
-                              {:else if !publicIngestionAvailable}
-                                Public ingestion allowance reached.
-                              {:else if !privateIngestionAvailable}
-                                Private ingestion unavailable (private allowance reached or wallet empty).
-                              {/if}
+                          {#if !linkIngestionSelected(link)}
+                            <p class="ingestion-visibility-note">
+                              Select ingestion above to apply private/public choice for this source.
                             </p>
                           {/if}
-                          {#if linkIngestionVisibility(link) === 'public_shared'}
-                            <label class="ingestion-ack">
-                              <input
-                                type="checkbox"
-                                checked={publicShareAcknowledged(link)}
-                                onchange={(event) =>
-                                  setPublicShareAck(
-                                    link,
-                                    (event.currentTarget as HTMLInputElement).checked
-                                  )}
-                              />
-                              <span>
-                                I confirm this source may be shared with all users under the
-                                <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.
-                              </span>
-                            </label>
+                          {#if linkIngestionSelected(link)}
+                            {#if !publicIngestionAvailable || !privateIngestionAvailable}
+                              <p class="ingestion-limit-note">
+                                {#if !publicIngestionAvailable && !privateIngestionAvailable}
+                                  No ingestion capacity left. Top up wallet and/or wait for monthly reset.
+                                {:else if !publicIngestionAvailable}
+                                  Public ingestion allowance reached.
+                                {:else if !privateIngestionAvailable}
+                                  Private ingestion unavailable (private allowance reached or wallet empty).
+                                {/if}
+                              </p>
+                            {/if}
+                            {#if linkIngestionVisibility(link) === 'public_shared'}
+                              <label class="ingestion-ack">
+                                <input
+                                  type="checkbox"
+                                  checked={publicShareAcknowledged(link)}
+                                  onchange={(event) =>
+                                    setPublicShareAck(
+                                      link,
+                                      (event.currentTarget as HTMLInputElement).checked
+                                    )}
+                                />
+                                <span>
+                                  I confirm this source may be shared with all users under the
+                                  <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.
+                                </span>
+                              </label>
+                            {/if}
                           {/if}
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-                <p class="resource-note">
-                  {#if hasPendingPublicShareAcknowledgement}
-                    Public-share acknowledgement is required for selected public sources.
-                  {:else if !canQueueAnyIngestion}
-                    Ingestion options are disabled until allowance resets or wallet is topped up.
-                  {:else if runtimeUserLinks.length > 0}
-                    {runtimeUserLinks.length} link(s) will be used now. {selectedIngestionCount} selected for overnight ingestion.
-                  {:else}
-                    You can also add sources after the first run, then re-run and compare pass/graph differences.
+                        </div>
+                      {/each}
+                    </div>
                   {/if}
-                </p>
-                {#if ingestionBillingError}
-                  <p class="resource-note resource-error">Unable to load billing limits: {ingestionBillingError}</p>
-                {/if}
-              </div>
+                  <p class="resource-note">
+                    {#if hasPendingPublicShareAcknowledgement}
+                      Public-share acknowledgement is required for selected public sources.
+                    {:else if !canQueueAnyIngestion}
+                      Ingestion options are disabled until allowance resets or wallet is topped up.
+                    {:else if runtimeUserLinks.length > 0}
+                      {runtimeUserLinks.length} link(s) will be used now. {selectedIngestionCount} selected for overnight ingestion.
+                    {:else}
+                      You can also add sources after the first run, then re-run and compare pass/graph differences.
+                    {/if}
+                  </p>
+                  {#if ingestionBillingError}
+                    <p class="resource-note resource-error">Unable to load billing limits: {ingestionBillingError}</p>
+                  {/if}
+                </div>
+              {/if}
 
               <div class="query-actions">
                 <Button
@@ -1670,7 +1911,7 @@
                   onclick={handleSubmit}
                   disabled={conversation.isLoading || !queryInput.trim() || hasPendingPublicShareAcknowledgement}
                 >
-                  Begin Reasoning →
+                  Begin Inquiry →
                 </Button>
               </div>
             </div>
@@ -1703,7 +1944,78 @@
            ═══════════════════════════════════════════════════════════════ -->
       {#if isResultsState}
         {@const passes = displayedPasses}
-
+        {#if simpleLayer !== 'scholar'}
+          <section class="simple-results" data-testid="simple-results">
+            {#if simpleLayer === 'synthesis'}
+              <article class="simple-card" data-testid="simple-synthesis-card" in:fade={{ duration: 220 }}>
+                {#if !simpleSynthesisReady}
+                  <h2>Working on your synthesis…</h2>
+                  <p class="simple-caption">{loadingStatusText}</p>
+                {:else}
+                  <h2>Your Question</h2>
+                  <p class="simple-question">— "{currentQuery}"</p>
+                  <h3>{simplePrimaryHeading}</h3>
+                  <div class="simple-prose">
+                    {@html renderPass(simplePrimaryContent)}
+                  </div>
+                  <div class="simple-actions">
+                    <button type="button" class="simple-link-btn" data-testid="see-reasoning-btn" onclick={openSimpleOverview}>
+                      See reasoning breakdown →
+                    </button>
+                  </div>
+                  <div class="simple-actions secondary">
+                    <button type="button" class="simple-outline-btn" data-testid="quote-card-generate" onclick={generateQuoteCard}>
+                      Save as quote card
+                    </button>
+                    <button type="button" class="simple-outline-btn" onclick={handleAskAnother}>
+                      Ask another
+                    </button>
+                    <button type="button" class="simple-outline-btn" data-testid="open-scholar-btn" onclick={openScholarView}>
+                      Open full scholar view
+                    </button>
+                  </div>
+                  {#if quoteCardDataUrl}
+                    <div class="quote-preview" data-testid="quote-card-preview">
+                      <img src={quoteCardDataUrl} alt="Generated quote card" />
+                      <div class="quote-preview-actions">
+                        <button type="button" class="simple-outline-btn" data-testid="quote-card-download" onclick={downloadQuoteCardImage}>Download</button>
+                        <button type="button" class="simple-outline-btn" data-testid="quote-card-copy" onclick={copyQuoteCardImage}>Copy</button>
+                      </div>
+                    </div>
+                  {/if}
+                  {#if quoteCardStatus}
+                    <p class="simple-note">{quoteCardStatus}</p>
+                  {/if}
+                  {#if quoteCardError}
+                    <p class="simple-note error">{quoteCardError}</p>
+                  {/if}
+                {/if}
+              </article>
+            {:else if simpleLayer === 'overview'}
+              <article class="simple-card" data-testid="simple-overview-card" in:fade={{ duration: 220 }}>
+                <h2>Reasoning Overview</h2>
+                <p class="simple-caption">A three-layer dialectic.</p>
+                <div class="simple-summary-block">
+                  <h3>Analysis (summary)</h3>
+                  <p>{simpleOverviewSummaries.analysis}</p>
+                </div>
+                <div class="simple-summary-block">
+                  <h3>Critique (summary)</h3>
+                  <p>{simpleOverviewSummaries.critique}</p>
+                </div>
+                <div class="simple-summary-block">
+                  <h3>Synthesis (summary)</h3>
+                  <p>{simpleOverviewSummaries.synthesis}</p>
+                </div>
+                <div class="simple-actions">
+                  <button type="button" class="simple-link-btn" data-testid="open-scholar-btn" onclick={openScholarView}>
+                    Open full scholar view →
+                  </button>
+                </div>
+              </article>
+            {/if}
+          </section>
+        {:else}
         <div class="results-layout" in:fly={{ y: 24, duration: 500, delay: 100, easing: quintOut }}>
           <aside class="pass-nav-col">
             <PassNavigator
@@ -1931,29 +2243,34 @@
                         </label>
                         <p class="ingestion-link">{link}</p>
                       </div>
+                      <div class="ingestion-visibility" class:is-disabled={!linkIngestionSelected(link)}>
+                        <label>
+                          <input
+                            type="radio"
+                            name={`rerun-visibility-${link}`}
+                            checked={linkIngestionVisibility(link) === 'public_shared'}
+                            disabled={!linkIngestionSelected(link) || !publicIngestionAvailable}
+                            onchange={() => setLinkIngestionVisibility(link, 'public_shared')}
+                          />
+                          Public ({ingestionBilling.publicRemaining ?? '—'} left)
+                        </label>
+                        <label>
+                          <input
+                            type="radio"
+                            name={`rerun-visibility-${link}`}
+                            checked={linkIngestionVisibility(link) === 'private_user_only'}
+                            disabled={!linkIngestionSelected(link) || !privateIngestionAvailable}
+                            onchange={() => setLinkIngestionVisibility(link, 'private_user_only')}
+                          />
+                          Private ({ingestionBilling.privateRemaining ?? '—'} left)
+                        </label>
+                      </div>
+                      {#if !linkIngestionSelected(link)}
+                        <p class="ingestion-visibility-note">
+                          Select ingestion above to apply private/public choice for this source.
+                        </p>
+                      {/if}
                       {#if linkIngestionSelected(link)}
-                        <div class="ingestion-visibility">
-                          <label>
-                            <input
-                              type="radio"
-                              name={`rerun-visibility-${link}`}
-                              checked={linkIngestionVisibility(link) === 'public_shared'}
-                              disabled={!publicIngestionAvailable}
-                              onchange={() => setLinkIngestionVisibility(link, 'public_shared')}
-                            />
-                            Public ({ingestionBilling.publicRemaining ?? '—'} left)
-                          </label>
-                          <label>
-                            <input
-                              type="radio"
-                              name={`rerun-visibility-${link}`}
-                              checked={linkIngestionVisibility(link) === 'private_user_only'}
-                              disabled={!privateIngestionAvailable}
-                              onchange={() => setLinkIngestionVisibility(link, 'private_user_only')}
-                            />
-                            Private ({ingestionBilling.privateRemaining ?? '—'} left)
-                          </label>
-                        </div>
                         {#if !publicIngestionAvailable || !privateIngestionAvailable}
                           <p class="ingestion-limit-note">
                             {#if !publicIngestionAvailable && !privateIngestionAvailable}
@@ -2126,7 +2443,7 @@
                     questions={hints.slice(0, 1)}
                     onSelect={(q) => {
                       prepareForNewRun();
-                      conversation.submitQuery(q, selectedLens || undefined, {
+                      conversation.submitQuery(q, resolveLensForSubmit(), {
                         queryKind: 'follow_up',
                         depthMode: selectedDepth,
                         ...buildCredentialOptions(),
@@ -2141,7 +2458,7 @@
                 <FollowUpInput
                   onSubmit={(text) => {
                     prepareForNewRun();
-                    conversation.submitQuery(text, selectedLens || undefined, {
+                    conversation.submitQuery(text, resolveLensForSubmit(), {
                       queryKind: 'follow_up',
                       depthMode: selectedDepth,
                       ...buildCredentialOptions(),
@@ -2157,6 +2474,7 @@
             </div>
           </div>
         </div>
+        {/if}
       {/if}
 
       <!-- ═══════════════════════════════════════════════════════════════
@@ -2187,7 +2505,7 @@
           onDelete={(id) => historyStore.deleteEntry(id)}
         />
       {:else if activeTab === 'settings'}
-        <SettingsTab />
+        <SettingsTab initialSettingsTab={settingsSubTab} />
       {/if}
     </SidePanel>
   </div>
@@ -2197,7 +2515,7 @@
   /* ── Shell ──────────────────────────────────────────────────────────── */
   .app-shell {
     min-height: 100vh;
-    background: var(--color-bg);
+    background: transparent;
     color: var(--color-text);
   }
 
@@ -2281,6 +2599,28 @@
     flex-direction: column;
     align-items: center;
     gap: var(--space-3);
+  }
+
+  .simple-query-wrap {
+    gap: var(--space-4);
+  }
+
+  .simple-query-center {
+    max-width: 760px;
+  }
+
+  .advanced-toggle-btn {
+    align-self: center;
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-muted);
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-family: var(--font-ui);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
   }
 
   .reasoning-frame {
@@ -2423,6 +2763,47 @@
     text-align: left;
     text-transform: none;
     letter-spacing: 0;
+  }
+
+  .byok-shortcuts {
+    display: grid;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--color-surface-raised) 70%, transparent);
+  }
+
+  .byok-shortcuts-copy {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: 0.68rem;
+    color: var(--color-muted);
+    line-height: 1.4;
+  }
+
+  .byok-shortcuts-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .byok-shortcut-btn {
+    border: 1px solid var(--color-sage-border);
+    background: transparent;
+    color: var(--color-sage);
+    border-radius: 3px;
+    padding: 5px 9px;
+    font-family: var(--font-ui);
+    font-size: 0.62rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .byok-shortcut-btn.secondary {
+    border-color: var(--color-blue-border);
+    color: var(--color-blue);
   }
 
   .domain-row select {
@@ -2577,6 +2958,16 @@
     gap: 0.3rem;
   }
 
+  .ingestion-visibility.is-disabled {
+    opacity: 0.6;
+  }
+
+  .ingestion-visibility-note {
+    margin: 0;
+    font-size: 0.68rem;
+    color: var(--color-dim);
+  }
+
   .ingestion-ack {
     display: inline-flex;
     align-items: flex-start;
@@ -2728,6 +3119,139 @@
   }
 
   /* ── STATE 2 & 3: Results layout ────────────────────────────────────── */
+  .simple-results {
+    min-height: calc(100vh - var(--nav-height));
+    padding: var(--space-5) var(--space-4);
+    display: flex;
+    justify-content: center;
+  }
+
+  .simple-card {
+    width: min(760px, 100%);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    background: var(--color-surface);
+    padding: clamp(18px, 2vw, 30px);
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .simple-card h2 {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 1.55rem;
+    font-weight: 500;
+  }
+
+  .simple-card h3 {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 1.15rem;
+    font-weight: 500;
+  }
+
+  .simple-question {
+    margin: 0;
+    color: var(--color-dim);
+    font-style: italic;
+  }
+
+  .simple-caption {
+    margin: 0;
+    color: var(--color-dim);
+    font-family: var(--font-ui);
+    font-size: 0.74rem;
+  }
+
+  .simple-prose {
+    color: var(--color-muted);
+    line-height: 1.75;
+  }
+
+  .simple-prose :global(p) {
+    margin: 0 0 0.75rem;
+  }
+
+  .simple-summary-block {
+    border-top: 1px solid var(--color-border);
+    padding-top: var(--space-2);
+    display: grid;
+    gap: 6px;
+  }
+
+  .simple-summary-block p {
+    margin: 0;
+    color: var(--color-muted);
+    line-height: 1.65;
+  }
+
+  .simple-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .simple-actions.secondary {
+    margin-top: -4px;
+  }
+
+  .simple-link-btn {
+    border: none;
+    background: transparent;
+    color: var(--color-blue);
+    padding: 0;
+    cursor: pointer;
+    font-family: var(--font-display);
+    font-size: 1rem;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .simple-outline-btn {
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    background: var(--color-surface-raised);
+    color: var(--color-text);
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+  }
+
+  .quote-preview {
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--color-surface) 90%, var(--color-bg) 10%);
+    padding: var(--space-2);
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .quote-preview img {
+    width: 100%;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  }
+
+  .quote-preview-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .simple-note {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: 0.7rem;
+    color: var(--color-dim);
+  }
+
+  .simple-note.error {
+    color: var(--color-copper);
+  }
+
   .results-layout {
     display: flex;
     min-height: calc(100vh - var(--nav-height));
@@ -3340,6 +3864,14 @@
 
     .query-input-wrap {
       padding: 0;
+    }
+
+    .simple-results {
+      padding: var(--space-3);
+    }
+
+    .simple-card {
+      padding: var(--space-3);
     }
 
     .key-source-row,

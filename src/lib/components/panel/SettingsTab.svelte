@@ -1,12 +1,13 @@
 <script lang="ts">
   import { auth, signOutUser, onAuthChange, getIdToken } from '$lib/firebase';
-  import { goto } from '$app/navigation';
+  import { goto, replaceState } from '$app/navigation';
   import { browser } from '$app/environment';
   import {
     BYOK_PROVIDER_ORDER,
     PROVIDER_UI_META,
     type ByokProvider
   } from '$lib/types/providers';
+  import { page } from '$app/state';
 
   interface ByokProviderStatus {
     provider: ByokProvider;
@@ -52,6 +53,19 @@
     theme: 'light' | 'dark' | null;
   }
 
+  interface FounderOfferSummary {
+    programId: string;
+    slot: number;
+    grantedAt: string;
+    expiresAt: string;
+    bonusWalletCents: number;
+    noticePending: boolean;
+    noticeSeenAt: string | null;
+    active: boolean;
+    limit: number;
+    premiumMonths: number;
+  }
+
   interface PrivateSource {
     id: string;
     title?: string;
@@ -87,17 +101,28 @@
   let billingProfile = $state<BillingProfile | null>(null);
   let billingEntitlements = $state<BillingEntitlements | null>(null);
   let billingWallet = $state<BillingWallet | null>(null);
+  let founderOffer = $state<FounderOfferSummary | null>(null);
   let billingCheckoutPresentation = $state<CheckoutPresentation | null>(null);
   let billingSyncing = $state(false);
   let hasBillingCustomer = $derived(Boolean(billingProfile?.paddle_customer_id?.trim()));
+  let hasPaddleSubscription = $derived(Boolean(billingProfile?.paddle_subscription_id?.trim()));
   let currentTier = $derived((billingProfile?.tier ?? 'free') as 'free' | 'pro' | 'premium');
   let isPaidTier = $derived(currentTier !== 'free');
+  let showBillingCustomerMappingWarning = $derived(
+    isPaidTier && hasPaddleSubscription && !hasBillingCustomer
+  );
   let privateSources = $state<PrivateSource[]>([]);
   let sourcesLoading = $state(false);
   let deletingSourceId = $state('');
   let sourcesError = $state('');
   let sourcesMessage = $state('');
   type SettingsSubTab = 'general' | 'byok' | 'sources' | 'payments';
+
+  interface Props {
+    initialSettingsTab?: SettingsSubTab;
+  }
+
+  let { initialSettingsTab = 'general' }: Props = $props();
   let activeSettingsTab = $state<SettingsSubTab>('general');
 
   function defaultByokStatus(provider: ByokProvider): ByokProviderStatus {
@@ -122,6 +147,18 @@
     if (status === 'invalid') return 'Invalid';
     if (status === 'revoked') return 'Revoked';
     return 'Not configured';
+  }
+
+  function setActiveSettingsTab(tab: SettingsSubTab): void {
+    activeSettingsTab = tab;
+    if (!browser) return;
+    const url = new URL(window.location.href);
+    if (tab === 'general') {
+      url.searchParams.delete('settingsTab');
+    } else {
+      url.searchParams.set('settingsTab', tab);
+    }
+    replaceState(url.toString(), page.state);
   }
 
   function formatDate(iso: string | null | undefined): string {
@@ -213,6 +250,7 @@
       billingProfile = null;
       billingEntitlements = null;
       billingWallet = null;
+      founderOffer = null;
       billingCheckoutPresentation = null;
       billingError = '';
       billingMessage = '';
@@ -228,6 +266,7 @@
       const body = await parseResponseOrThrow(response);
       billingProfile = (body.profile ?? null) as BillingProfile | null;
       billingEntitlements = (body.entitlements ?? null) as BillingEntitlements | null;
+      founderOffer = (body.founder_offer ?? null) as FounderOfferSummary | null;
       const walletRaw = (body.wallet ?? null) as
         | {
             available_cents?: number;
@@ -498,6 +537,17 @@
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);
   });
+
+  $effect(() => {
+    if (
+      initialSettingsTab === 'general' ||
+      initialSettingsTab === 'byok' ||
+      initialSettingsTab === 'sources' ||
+      initialSettingsTab === 'payments'
+    ) {
+      activeSettingsTab = initialSettingsTab;
+    }
+  });
 </script>
 
 <div class="settings-tab">
@@ -507,7 +557,7 @@
       class:is-active={activeSettingsTab === 'general'}
       role="tab"
       aria-selected={activeSettingsTab === 'general'}
-      onclick={() => (activeSettingsTab = 'general')}
+      onclick={() => setActiveSettingsTab('general')}
     >
       General
     </button>
@@ -516,7 +566,7 @@
       class:is-active={activeSettingsTab === 'byok'}
       role="tab"
       aria-selected={activeSettingsTab === 'byok'}
-      onclick={() => (activeSettingsTab = 'byok')}
+      onclick={() => setActiveSettingsTab('byok')}
     >
       BYOK
     </button>
@@ -525,7 +575,7 @@
       class:is-active={activeSettingsTab === 'payments'}
       role="tab"
       aria-selected={activeSettingsTab === 'payments'}
-      onclick={() => (activeSettingsTab = 'payments')}
+      onclick={() => setActiveSettingsTab('payments')}
     >
       Payments
     </button>
@@ -534,7 +584,7 @@
       class:is-active={activeSettingsTab === 'sources'}
       role="tab"
       aria-selected={activeSettingsTab === 'sources'}
-      onclick={() => (activeSettingsTab = 'sources')}
+      onclick={() => setActiveSettingsTab('sources')}
     >
       Sources
     </button>
@@ -603,6 +653,23 @@
     {/if}
   {:else if activeSettingsTab === 'byok'}
     <p class="settings-section-label">BYOK (Bring Your Own Key)</p>
+    <div class="byok-journey">
+      <p class="byok-journey-title">How to use BYOK</p>
+      <ol>
+        <li>Add a provider key below and click Save.</li>
+        <li>Click Validate so the key can be used in model selection.</li>
+        <li>Keep wallet balance above £0 in Payments for BYOK handling charges.</li>
+      </ol>
+      <p>
+        BYOK lets you route runs through your own provider account while SOPHIA manages reasoning
+        flow, metering, and orchestration.
+      </p>
+      <div class="byok-journey-actions">
+        <button class="byok-btn secondary" type="button" onclick={() => setActiveSettingsTab('payments')}>
+          Open wallet and top-ups
+        </button>
+      </div>
+    </div>
 
     {#if !currentUser}
       <div class="setting-row">
@@ -691,6 +758,18 @@
     {/if}
   {:else if activeSettingsTab === 'payments'}
     <p class="settings-section-label">Payments</p>
+    <div class="byok-journey">
+      <p class="byok-journey-title">Wallet and BYOK</p>
+      <p>
+        To run BYOK models you need both an active BYOK key and available wallet credit for
+        handling charges.
+      </p>
+      <div class="byok-journey-actions">
+        <button class="byok-btn secondary" type="button" onclick={() => setActiveSettingsTab('byok')}>
+          Open BYOK key setup
+        </button>
+      </div>
+    </div>
 
     {#if !currentUser}
       <div class="setting-row">
@@ -711,6 +790,17 @@
           <span class="setting-name">
             Plan: {billingProfile?.tier ?? 'free'} ({billingProfile?.status ?? 'inactive'})
           </span>
+          {#if founderOffer}
+            <span class="setting-desc founder-status">
+              Founder offer #{founderOffer.slot}/{founderOffer.limit} ·
+              {founderOffer.active
+                ? `Premium included until ${formatDate(founderOffer.expiresAt)}`
+                : `Founder access ended ${formatDate(founderOffer.expiresAt)}`}
+            </span>
+            <span class="setting-desc founder-status">
+              Included wallet credit: {formatMoneyFromCents(founderOffer.bonusWalletCents, 'GBP')}
+            </span>
+          {/if}
           <span class="setting-desc">
             Wallet: {formatMoneyFromCents(billingWallet?.availableCents ?? 0, billingWallet?.currency ?? (billingProfile?.currency ?? 'GBP'))}
           </span>
@@ -728,7 +818,15 @@
           <p class="billing-actions-note">
             Top up wallet for BYOK and private-ingestion charges.
           </p>
-          {#if !isPaidTier}
+          {#if founderOffer?.active}
+            <button
+              class="byok-btn"
+              disabled
+              title="Founder access already includes Premium."
+            >
+              Founder access includes Premium
+            </button>
+          {:else if !isPaidTier}
             <button
               class="byok-btn"
               onclick={() => beginSubscriptionCheckout('pro')}
@@ -758,18 +856,28 @@
           >
             {billingBusyAction === 'topup:large' ? 'Opening...' : 'Top up wallet (large)'}
           </button>
-          <button
-            class="byok-btn secondary"
-            onclick={openBillingPortal}
-            disabled={billingBusyAction !== '' || !hasBillingCustomer}
-            title={!hasBillingCustomer ? 'Subscription management becomes available once billing customer mapping completes.' : undefined}
-          >
-            {billingBusyAction === 'portal'
-              ? 'Opening...'
-              : isPaidTier
-                ? 'Manage subscription (change plan)'
-                : 'Manage subscription'}
-          </button>
+          {#if founderOffer?.active}
+            <button
+              class="byok-btn secondary"
+              disabled
+              title="Founder access is managed in-app and does not create a Paddle subscription."
+            >
+              No Paddle subscription (founder access)
+            </button>
+          {:else}
+            <button
+              class="byok-btn secondary"
+              onclick={openBillingPortal}
+              disabled={billingBusyAction !== '' || !hasBillingCustomer}
+              title={!hasBillingCustomer ? 'Subscription management becomes available once billing customer mapping completes.' : undefined}
+            >
+              {billingBusyAction === 'portal'
+                ? 'Opening...'
+                : isPaidTier
+                  ? 'Manage subscription (change plan)'
+                  : 'Manage subscription'}
+            </button>
+          {/if}
           <button
             class="byok-btn secondary"
             onclick={refreshBillingStateManual}
@@ -778,7 +886,7 @@
             {billingSyncing ? 'Refreshing...' : 'Refresh billing status'}
           </button>
         </div>
-        {#if isPaidTier && !hasBillingCustomer}
+        {#if showBillingCustomerMappingWarning}
           <p class="billing-warning">
             Your plan appears paid, but customer mapping is missing. Use “Refresh billing status” and check webhook delivery.
           </p>
@@ -934,6 +1042,50 @@
     background: var(--color-surface);
   }
 
+  .byok-journey {
+    display: grid;
+    gap: 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--color-surface-raised) 72%, transparent);
+    padding: 10px;
+    margin: 0 0 12px;
+  }
+
+  .byok-journey-title {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-text);
+  }
+
+  .byok-journey p {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    line-height: 1.4;
+    color: var(--color-muted);
+  }
+
+  .byok-journey ol {
+    margin: 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 4px;
+    font-family: var(--font-ui);
+    font-size: 0.72rem;
+    line-height: 1.45;
+    color: var(--color-muted);
+  }
+
+  .byok-journey-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
   .billing-card {
     display: grid;
     gap: 12px;
@@ -960,6 +1112,11 @@
 
   .billing-purpose {
     color: var(--color-text-muted);
+    line-height: 1.4;
+  }
+
+  .founder-status {
+    color: var(--color-sage);
     line-height: 1.4;
   }
 
