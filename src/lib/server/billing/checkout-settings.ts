@@ -26,7 +26,8 @@ function parseTheme(raw: string | undefined): PaddleCheckoutTheme {
   const value = raw?.trim().toLowerCase();
   if (value === 'dark') return 'dark';
   if (value === 'light') return 'light';
-  return null;
+  // Default to dark so hosted checkout aligns with SOPHIA branding unless explicitly overridden.
+  return 'dark';
 }
 
 export function getCheckoutPresentation(): PaddleCheckoutPresentation {

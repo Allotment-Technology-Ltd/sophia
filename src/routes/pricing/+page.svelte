@@ -432,14 +432,6 @@
 
   <section class="notes">
     {#if showCheckoutFlow}
-      <p class="info-note">
-        Checkout runtime: {data.paddleRuntime} · token prefix:
-        {data.paddleClientToken?.startsWith('test_')
-          ? 'test_'
-          : data.paddleClientToken?.startsWith('live_')
-            ? 'live_'
-            : 'unset'}
-      </p>
       <p class="resource-note">
         Review details above, then continue to open secure checkout.
       </p>
@@ -668,17 +660,6 @@
     border-radius: 8px;
     color: #f3b6b6;
     background: rgba(211, 96, 96, 0.12);
-    font-family: var(--font-ui);
-    font-size: 0.86rem;
-  }
-
-  .info-note {
-    margin: 0 0 12px;
-    padding: 10px 12px;
-    border: 1px solid rgba(96, 139, 211, 0.45);
-    border-radius: 8px;
-    color: #b7cdf6;
-    background: rgba(96, 139, 211, 0.12);
     font-family: var(--font-ui);
     font-size: 0.86rem;
   }

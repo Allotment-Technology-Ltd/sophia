@@ -37,7 +37,8 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean 
 function resolveCheckoutTheme(): 'light' | 'dark' | null {
   const raw = publicEnv.PUBLIC_PADDLE_CHECKOUT_THEME?.trim().toLowerCase();
   if (raw === 'light' || raw === 'dark') return raw;
-  return null;
+  // Keep checkout visuals aligned with app branding by default.
+  return 'dark';
 }
 
 function resolveCheckoutVariant(): 'one-page' | 'multi-page' | null {
