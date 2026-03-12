@@ -84,6 +84,48 @@ export interface RejectedRelationCandidate {
 	note?: string;
 }
 
+export interface ClosureUnitTrace {
+	thesis_claim_id: string;
+	objection_claim_id?: string;
+	reply_claim_id?: string;
+	objection_found: boolean;
+	reply_found: boolean;
+	unit_complete: boolean;
+}
+
+export interface RetrievalClosureStats {
+	major_thesis_count: number;
+	units_attempted: number;
+	units_completed: number;
+	claims_added_for_closure: number;
+	objections_added: number;
+	replies_added: number;
+	cap_limited_units: number;
+	units: ClosureUnitTrace[];
+}
+
+export interface RetrievalSeedTrace {
+	id: string;
+	claim_type: string;
+	domain: PhilosophicalDomain;
+	source_title: string;
+	confidence: number;
+}
+
+export interface RetrievalQueryDecompositionTrace {
+	focus_mode: 'corpus_overview' | 'focused';
+	domain_filter?: PhilosophicalDomain;
+	hybrid_mode: 'auto' | 'dense_only';
+	corpus_level_query: boolean;
+	lexical_terms: string[];
+	lexical_term_count: number;
+}
+
+export interface RetrievalPruningSummaryTrace {
+	claims_by_reason: Record<RejectedClaimReasonCode, number>;
+	relations_by_reason: Record<RejectedRelationReasonCode, number>;
+}
+
 export interface RetrievalResult {
 	claims: RetrievedClaim[];
 	relations: RetrievedRelation[];
@@ -98,11 +140,23 @@ export interface RetrievalResult {
 		lexical_terms?: string[];
 		corpus_level_query?: boolean;
 		seed_balance_stats?: SeedBalanceStats;
+		traversal_mode?: 'beam_trusted_v1';
+		traversal_max_hops?: number;
+		traversal_hop_decay?: number;
+		traversal_base_confidence_threshold?: number;
+		traversal_confidence_thresholds?: number[];
+		traversal_domain_aware?: boolean;
+		traversal_trusted_edges_only?: boolean;
+		traversal_edge_priors?: Partial<Record<string, number>>;
+		query_decomposition?: RetrievalQueryDecompositionTrace;
+		seed_claims?: RetrievalSeedTrace[];
+		pruning_summary?: RetrievalPruningSummaryTrace;
 		traversed_claim_count: number;
 		relation_candidate_count: number;
 		relation_kept_count: number;
 		argument_candidate_count: number;
 		argument_kept_count: number;
+		closure_stats?: RetrievalClosureStats;
 		rejected_claims?: RejectedClaimCandidate[];
 		rejected_relations?: RejectedRelationCandidate[];
 	};
@@ -135,15 +189,15 @@ const EMPTY_RESULT: RetrievalResult = {
 	degraded: false
 };
 
-const RELATION_TRAVERSAL_SPECS = [
-	{ incoming: 'depends_on_incoming_claims', outgoing: 'depends_on_outgoing_claims' },
-	{ incoming: 'supporting_incoming_claims', outgoing: 'supporting_outgoing_claims' },
-	{ incoming: 'contradicting_incoming_claims', outgoing: 'contradicting_outgoing_claims' },
-	{ incoming: 'responds_to_incoming_claims', outgoing: 'responds_to_outgoing_claims' },
-	{ incoming: 'defining_incoming_claims', outgoing: 'defining_outgoing_claims' },
-	{ incoming: 'qualifying_incoming_claims', outgoing: 'qualifying_outgoing_claims' },
-	{ incoming: 'refining_incoming_claims', outgoing: 'refining_outgoing_claims' },
-	{ incoming: 'exemplifying_incoming_claims', outgoing: 'exemplifying_outgoing_claims' }
+const RELATION_TRAVERSAL_BEAM_SPECS = [
+	{ table: 'supports', edgePrior: 1.04 },
+	{ table: 'contradicts', edgePrior: 1.16 },
+	{ table: 'depends_on', edgePrior: 0.92 },
+	{ table: 'responds_to', edgePrior: 1.2 },
+	{ table: 'defines', edgePrior: 0.9 },
+	{ table: 'qualifies', edgePrior: 0.88 },
+	{ table: 'refines', edgePrior: 0.86 },
+	{ table: 'exemplifies', edgePrior: 0.82 }
 ] as const;
 
 const RELATION_FETCH_SPECS = [
@@ -156,6 +210,88 @@ const RELATION_FETCH_SPECS = [
 	{ table: 'refines', relationType: 'qualifies' },
 	{ table: 'exemplifies', relationType: 'supports' }
 ] as const;
+
+const THESIS_CLAIM_TYPES = new Set(['thesis', 'conclusion']);
+const OBJECTION_CLAIM_TYPES = new Set(['objection', 'counterargument', 'counter_argument']);
+const REPLY_CLAIM_TYPES = new Set(['response', 'reply', 'rebuttal']);
+
+function normalizeClaimType(claimType: string): string {
+	return claimType.trim().toLowerCase();
+}
+
+function isThesisClaimType(claimType: string): boolean {
+	return THESIS_CLAIM_TYPES.has(normalizeClaimType(claimType));
+}
+
+function isObjectionClaimType(claimType: string): boolean {
+	return OBJECTION_CLAIM_TYPES.has(normalizeClaimType(claimType));
+}
+
+function isReplyClaimType(claimType: string): boolean {
+	return REPLY_CLAIM_TYPES.has(normalizeClaimType(claimType));
+}
+
+function selectMajorThesisIds(params: {
+	claims: RetrievedClaim[];
+	seedClaimIds: string[];
+	limit: number;
+}): string[] {
+	const { claims, seedClaimIds, limit } = params;
+	if (claims.length === 0 || limit <= 0) return [];
+
+	const seedSet = new Set(seedClaimIds);
+	const thesisClaims = claims
+		.filter((claim) => isThesisClaimType(claim.claim_type))
+		.sort((a, b) => {
+			const aSeed = seedSet.has(a.id) ? 1 : 0;
+			const bSeed = seedSet.has(b.id) ? 1 : 0;
+			if (aSeed !== bSeed) return bSeed - aSeed;
+			return (b.confidence ?? 0) - (a.confidence ?? 0);
+		});
+	if (thesisClaims.length > 0) {
+		return thesisClaims.slice(0, limit).map((claim) => claim.id);
+	}
+
+	// Fallback when claim typing is sparse: treat top seed/supportive claims as thesis anchors.
+	const fallbackClaims = claims
+		.filter((claim) => {
+			const type = normalizeClaimType(claim.claim_type);
+			return type === 'premise' || type === 'support' || type === 'methodological';
+		})
+		.sort((a, b) => {
+			const aSeed = seedSet.has(a.id) ? 1 : 0;
+			const bSeed = seedSet.has(b.id) ? 1 : 0;
+			if (aSeed !== bSeed) return bSeed - aSeed;
+			return (b.confidence ?? 0) - (a.confidence ?? 0);
+		});
+	return fallbackClaims.slice(0, limit).map((claim) => claim.id);
+}
+
+function computeHopConfidenceThreshold(baseThreshold: number, hop: number): number {
+	const clampedBase = Math.max(0.2, Math.min(0.85, baseThreshold));
+	return Math.max(0.2, Math.min(0.9, clampedBase + (hop - 1) * 0.08));
+}
+
+function computeDomainExpansionWeight(params: {
+	targetDomain?: PhilosophicalDomain;
+	anchorDomain?: PhilosophicalDomain;
+	neighborDomain?: PhilosophicalDomain;
+}): number {
+	const { targetDomain, anchorDomain, neighborDomain } = params;
+	if (targetDomain && neighborDomain === targetDomain) return 1.05;
+	if (targetDomain && neighborDomain && neighborDomain !== targetDomain) return 0.72;
+	if (anchorDomain && neighborDomain && neighborDomain === anchorDomain) return 1.0;
+	if (anchorDomain && neighborDomain && neighborDomain !== anchorDomain) return 0.84;
+	return 0.92;
+}
+
+function parseRelationStrengthWeight(strength?: string): number {
+	if (!strength) return 1;
+	const normalized = strength.toLowerCase();
+	if (normalized === 'strong') return 1.08;
+	if (normalized === 'weak') return 0.86;
+	return 1;
+}
 
 // ─── Main retrieval function ───────────────────────────────────────────────
 
@@ -208,6 +344,14 @@ export async function retrieveContext(
 		const lexicalTerms = hybridMode === 'dense_only' ? [] : extractLexicalTerms(userQuery);
 		const corpusLevelQuery =
 			hybridMode === 'dense_only' ? false : detectCorpusLevelQuery(userQuery);
+		const queryDecomposition: RetrievalQueryDecompositionTrace = {
+			focus_mode: corpusLevelQuery ? 'corpus_overview' : 'focused',
+			domain_filter: domain,
+			hybrid_mode: hybridMode,
+			corpus_level_query: corpusLevelQuery,
+			lexical_terms: lexicalTerms.slice(0, 16),
+			lexical_term_count: lexicalTerms.length
+		};
 		const lexicalPool = lexicalTerms.length === 0 ? 0 : corpusLevelQuery ? topK * 8 : topK * 4;
 		const acceptedClaimRows = await query<Array<{ count?: number }>>(
 			`SELECT count() AS count FROM claim WHERE review_state = 'accepted' GROUP ALL`
@@ -219,6 +363,8 @@ export async function retrieveContext(
 		const relationReviewFilter = trustedGraphActive
 			? `review_state = 'accepted'`
 			: `(review_state = NONE OR review_state IN ['candidate', 'needs_review', 'accepted'])`;
+		// Stage 3.2: traversal beam only follows trusted edges.
+		const traversalRelationReviewFilter = `review_state = 'accepted'`;
 		const argumentClaimReviewFilter = trustedGraphActive
 			? `in.review_state = 'accepted'`
 			: `(in.review_state = NONE OR in.review_state IN ['candidate', 'needs_review', 'accepted'])`;
@@ -424,6 +570,13 @@ export async function retrieveContext(
 		const seedClaimIds = seedClaims.map((seed) =>
 			typeof seed.id === 'object' ? String(seed.id) : seed.id
 		);
+		const seedTrace: RetrievalSeedTrace[] = seedClaims.map((seed) => ({
+			id: typeof seed.id === 'object' ? String(seed.id) : seed.id,
+			claim_type: seed.claim_type,
+			domain: seed.domain,
+			source_title: seed.source_title ?? 'Unknown',
+			confidence: seed.confidence ?? 0
+		}));
 		const selectedSeedIds = new Set(seedClaimIds);
 		for (const candidate of vettedSeedPool) {
 			const candidateId = typeof candidate.id === 'object' ? String(candidate.id) : candidate.id;
@@ -440,27 +593,6 @@ export async function retrieveContext(
 
 		// ── Step 3: Graph traversal for each seed claim ──────────────
 		// Collect all claim IDs and argument IDs discovered via traversal
-
-		type TraversalRow = {
-			depends_on_incoming_claims: GraphClaim[];
-			depends_on_outgoing_claims: GraphClaim[];
-			supporting_incoming_claims: GraphClaim[];
-			supporting_outgoing_claims: GraphClaim[];
-			contradicting_incoming_claims: GraphClaim[];
-			contradicting_outgoing_claims: GraphClaim[];
-			responds_to_incoming_claims: GraphClaim[];
-			responds_to_outgoing_claims: GraphClaim[];
-			defining_incoming_claims: GraphClaim[];
-			defining_outgoing_claims: GraphClaim[];
-			qualifying_incoming_claims: GraphClaim[];
-			qualifying_outgoing_claims: GraphClaim[];
-			refining_incoming_claims: GraphClaim[];
-			refining_outgoing_claims: GraphClaim[];
-			exemplifying_incoming_claims: GraphClaim[];
-			exemplifying_outgoing_claims: GraphClaim[];
-			arguments: GraphArgRef[];
-		};
-
 		type GraphClaim = {
 			id: string;
 			text: string;
@@ -472,8 +604,13 @@ export async function retrieveContext(
 			source: { id?: string; title: string; author: string[] } | string;
 		};
 
-		type GraphArgRef = {
-			id: string;
+		type TraversalEdgeRow = {
+			in: string;
+			out: string;
+			in_claim?: GraphClaim;
+			out_claim?: GraphClaim;
+			strength?: string;
+			note?: string;
 		};
 
 		const allGraphClaims: Map<string, RetrievedClaim> = new Map();
@@ -505,100 +642,160 @@ export async function retrieveContext(
 			return { title: 'Unknown', author: [] };
 		};
 
-		const registerCandidate = (
-			claim: GraphClaim | undefined,
-			anchorId: string,
-			hopCandidates: Map<string, { claim: GraphClaim; anchorId: string }>
-		): void => {
-			if (!claim) return;
-			const claimId = typeof claim.id === 'object' ? String(claim.id) : claim.id;
-			const source = resolveSource(claim);
-			if (claim.review_state === 'rejected' || claim.review_state === 'merged') return;
-			if (trustedGraphActive && claim.review_state !== 'accepted') return;
-			if (allGraphClaims.has(claimId)) {
-				addRejectedClaim({
-					id: claimId,
-					text: claim.text,
-					source_title: source.title,
-					confidence: claim.confidence,
-					reason_code: 'duplicate_traversal',
-					considered_in: 'traversal',
-					anchor_claim_id: anchorId
-				});
-				return;
-			}
-			const existing = hopCandidates.get(claimId);
-			if (!existing || (claim.confidence ?? 0) > (existing.claim.confidence ?? 0)) {
-				hopCandidates.set(claimId, { claim, anchorId });
-			}
+		const toClaimId = (idValue: unknown): string | null => {
+			if (!idValue) return null;
+			if (typeof idValue === 'string') return idValue;
+			return String(idValue);
+		};
+		const claimProjection =
+			`{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}}`;
+		const passesTraversalClaimGate = (claim: GraphClaim): boolean => {
+			if (claim.review_state === 'rejected' || claim.review_state === 'merged') return false;
+			if (trustedGraphActive && claim.review_state !== 'accepted') return false;
+			return true;
 		};
 
 		const maxNewClaimsPerHop = topK >= 10 ? 48 : topK <= 3 ? 12 : 28;
+		const beamWidthPerHop = topK >= 10 ? 44 : topK <= 3 ? 10 : 24;
+		const beamQueryLimitPerTable = topK >= 10 ? 260 : topK <= 3 ? 64 : 140;
+		const hopDecayFactor = traversalMaxHops <= 1 ? 1 : 0.78;
+		const traversalBaseConfidence =
+			minConfidence > 0 ? Math.max(0.3, Math.min(0.8, minConfidence)) : 0.38;
+		const traversalConfidenceThresholds = Array.from({ length: traversalMaxHops }, (_, idx) =>
+			computeHopConfidenceThreshold(traversalBaseConfidence, idx + 1)
+		);
 		let frontier = new Set(seedClaimIds);
-		const traversedAnchors = new Set<string>();
 
 		for (let hop = 1; hop <= traversalMaxHops; hop++) {
 			if (frontier.size === 0 || allGraphClaims.size >= traversalClaimCap) break;
 
-			const hopCandidates = new Map<string, { claim: GraphClaim; anchorId: string }>();
+			const frontierIds = Array.from(frontier);
+			const frontierSet = new Set(frontierIds);
+			const hopConfidenceThreshold =
+				traversalConfidenceThresholds[hop - 1] ?? traversalBaseConfidence;
+			const hopDecay = Math.pow(hopDecayFactor, hop - 1);
+			const hopCandidates = new Map<
+				string,
+				{
+					claim: GraphClaim;
+					anchorId: string;
+					score: number;
+				}
+			>();
 
-			for (const anchorId of frontier) {
-				if (traversedAnchors.has(anchorId)) continue;
-				traversedAnchors.add(anchorId);
-
+			for (const spec of RELATION_TRAVERSAL_BEAM_SPECS) {
 				try {
-					const traversal = await query<TraversalRow[]>(
+					const rows = await query<TraversalEdgeRow[]>(
 						`SELECT
-							<-depends_on<-claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS depends_on_incoming_claims,
-							->depends_on->claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS depends_on_outgoing_claims,
-							<-supports<-claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS supporting_incoming_claims,
-							->supports->claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS supporting_outgoing_claims,
-							<-contradicts<-claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS contradicting_incoming_claims,
-							->contradicts->claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS contradicting_outgoing_claims,
-							<-responds_to<-claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS responds_to_incoming_claims,
-							->responds_to->claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS responds_to_outgoing_claims,
-							<-defines<-claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS defining_incoming_claims,
-							->defines->claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS defining_outgoing_claims,
-							<-qualifies<-claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS qualifying_incoming_claims,
-							->qualifies->claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS qualifying_outgoing_claims,
-							<-refines<-claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS refining_incoming_claims,
-							->refines->claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS refining_outgoing_claims,
-							<-exemplifies<-claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS exemplifying_incoming_claims,
-							->exemplifies->claim.{id, text, claim_type, domain, confidence, position_in_source, review_state, source.{id, title, author}} AS exemplifying_outgoing_claims,
-							->part_of->argument.{id} AS arguments
-						FROM $seed_id`,
-						{ seed_id: anchorId }
+							in,
+							out,
+							in.${claimProjection} AS in_claim,
+							out.${claimProjection} AS out_claim,
+							strength,
+							note
+						FROM ${spec.table}
+						WHERE (in INSIDE $frontier_ids OR out INSIDE $frontier_ids) AND ${traversalRelationReviewFilter}
+						LIMIT ${beamQueryLimitPerTable}`,
+						{ frontier_ids: frontierIds }
 					);
-					if (!traversal || traversal.length === 0) continue;
-					const row = Array.isArray(traversal) ? traversal[0] : traversal;
+					if (!rows || !Array.isArray(rows)) continue;
 
-					const addGraphClaims = (claims: GraphClaim[] | undefined) => {
-						if (!claims || !Array.isArray(claims)) return;
-						for (const c of claims) registerCandidate(c, anchorId, hopCandidates);
+					const registerBeamCandidate = (params: {
+						anchorId: string;
+						neighbor?: GraphClaim;
+						strength?: string;
+						edgePrior: number;
+					}): void => {
+						const { anchorId, neighbor, strength, edgePrior } = params;
+						if (!neighbor) return;
+						const neighborId = toClaimId(neighbor.id);
+						if (!neighborId) return;
+						const source = resolveSource(neighbor);
+
+						if (!passesTraversalClaimGate(neighbor)) return;
+						if ((neighbor.confidence ?? 0) < hopConfidenceThreshold) {
+							addRejectedClaim({
+								id: neighborId,
+								text: neighbor.text,
+								source_title: source.title,
+								confidence: neighbor.confidence,
+								reason_code: 'confidence_gate',
+								considered_in: 'traversal',
+								anchor_claim_id: anchorId
+							});
+							return;
+						}
+						if (allGraphClaims.has(neighborId)) {
+							addRejectedClaim({
+								id: neighborId,
+								text: neighbor.text,
+								source_title: source.title,
+								confidence: neighbor.confidence,
+								reason_code: 'duplicate_traversal',
+								considered_in: 'traversal',
+								anchor_claim_id: anchorId
+							});
+							return;
+						}
+
+						const anchor = allGraphClaims.get(anchorId);
+						const domainWeight = computeDomainExpansionWeight({
+							targetDomain: domain,
+							anchorDomain: anchor?.domain,
+							neighborDomain: neighbor.domain
+						});
+						const strengthWeight = parseRelationStrengthWeight(strength);
+						const anchorWeight = 0.7 + 0.3 * (anchor?.confidence ?? 0.6);
+						const score =
+							Math.max(0.01, neighbor.confidence ?? 0.5) *
+							edgePrior *
+							hopDecay *
+							domainWeight *
+							strengthWeight *
+							anchorWeight;
+
+						const existing = hopCandidates.get(neighborId);
+						if (!existing || score > existing.score) {
+							hopCandidates.set(neighborId, {
+								claim: neighbor,
+								anchorId,
+								score
+							});
+						}
 					};
 
-					for (const spec of RELATION_TRAVERSAL_SPECS) {
-						addGraphClaims(row[spec.incoming]);
-						addGraphClaims(row[spec.outgoing]);
-					}
-
-					if (row.arguments && Array.isArray(row.arguments)) {
-						for (const a of row.arguments) {
-							const aId = typeof a.id === 'object' ? String(a.id) : a.id;
-							argumentIds.add(aId);
+					for (const row of rows) {
+						const inId = toClaimId(row.in);
+						const outId = toClaimId(row.out);
+						if (!inId || !outId) continue;
+						if (frontierSet.has(inId)) {
+							registerBeamCandidate({
+								anchorId: inId,
+								neighbor: row.out_claim,
+								strength: row.strength,
+								edgePrior: spec.edgePrior
+							});
+						}
+						if (frontierSet.has(outId)) {
+							registerBeamCandidate({
+								anchorId: outId,
+								neighbor: row.in_claim,
+								strength: row.strength,
+								edgePrior: spec.edgePrior
+							});
 						}
 					}
 				} catch (traversalErr) {
 					console.warn(
-						`[RETRIEVAL] Graph traversal failed for ${anchorId}:`,
+						`[RETRIEVAL] Beam traversal failed for ${spec.table}:`,
 						traversalErr instanceof Error ? traversalErr.message : traversalErr
 					);
 				}
 			}
 
-			const candidates = Array.from(hopCandidates.values()).sort(
-				(a, b) => (b.claim.confidence ?? 0) - (a.claim.confidence ?? 0)
-			);
+			const candidates = Array.from(hopCandidates.values())
+				.sort((a, b) => b.score - a.score)
+				.slice(0, beamWidthPerHop);
 			const selected: Array<{ claim: GraphClaim; anchorId: string }> = [];
 			const seenSources = new Set<string>();
 			const hopBudget = Math.min(
@@ -667,8 +864,30 @@ export async function retrieveContext(
 				});
 				nextFrontier.add(cId);
 			}
+			const selectedClaimIds = Array.from(nextFrontier);
+			if (selectedClaimIds.length > 0) {
+				try {
+					const argRefs = await query<Array<{ arg_id?: string | { id?: string } }>>(
+						`SELECT out.id AS arg_id FROM part_of WHERE in INSIDE $claim_ids LIMIT 200`,
+						{ claim_ids: selectedClaimIds }
+					);
+					if (argRefs && Array.isArray(argRefs)) {
+						for (const row of argRefs) {
+							const aId = toClaimId(row.arg_id);
+							if (aId) argumentIds.add(aId);
+						}
+					}
+				} catch (argRefErr) {
+					console.warn(
+						'[RETRIEVAL] Beam traversal argument lookup failed:',
+						argRefErr instanceof Error ? argRefErr.message : argRefErr
+					);
+				}
+			}
 			console.log(
-				`[RETRIEVAL] hop ${hop}/${traversalMaxHops}: added ${selected.length} claims (frontier ${nextFrontier.size})`
+				`[RETRIEVAL] hop ${hop}/${traversalMaxHops}: candidates=${candidates.length} threshold=${hopConfidenceThreshold.toFixed(
+					2
+				)} added=${selected.length} frontier=${nextFrontier.size}`
 			);
 			frontier = nextFrontier;
 		}
@@ -760,6 +979,242 @@ export async function retrieveContext(
 				);
 			}
 		}
+
+		// ── Stage 3.1: Closure enforcement (thesis -> objection -> reply) ──
+		// For each major thesis, try to ensure at least one objection and one reply
+		// are present in the assembled retrieval set when the graph supports it.
+		type RelationNeighborRow = {
+			in_claim?: GraphClaim;
+			out_claim?: GraphClaim;
+		};
+		const contradictionNeighborCache = new Map<string, Promise<GraphClaim[]>>();
+		const replyNeighborCache = new Map<string, Promise<GraphClaim[]>>();
+		const majorThesisLimit = Math.max(1, Math.min(3, Math.ceil(topK / 4)));
+		const majorThesisIds = selectMajorThesisIds({
+			claims: Array.from(allGraphClaims.values()),
+			seedClaimIds,
+			limit: majorThesisLimit
+		});
+		let closureClaimsAdded = 0;
+		let closureObjectionsAdded = 0;
+		let closureRepliesAdded = 0;
+		let closureCapLimitedUnits = 0;
+		const closureUnits: ClosureUnitTrace[] = [];
+
+		const passesClosureReviewGate = (claim: GraphClaim): boolean => {
+			if (claim.review_state === 'rejected' || claim.review_state === 'merged') return false;
+			if (trustedGraphActive && claim.review_state !== 'accepted') return false;
+			return true;
+		};
+
+		const hasClosurePassageCoverage = async (
+			claim: GraphClaim,
+			anchorClaimId: string
+		): Promise<boolean> => {
+			const source = resolveSource(claim);
+			const covered = await sourceHasPassageCoverage(source.id);
+			if (covered) return true;
+			addRejectedClaim({
+				id: typeof claim.id === 'object' ? String(claim.id) : claim.id,
+				text: claim.text,
+				source_title: source.title,
+				confidence: claim.confidence,
+				reason_code: 'source_integrity_gate',
+				considered_in: 'traversal',
+				anchor_claim_id: anchorClaimId
+			});
+			return false;
+		};
+
+		type ClosureAttachResult = 'present' | 'added' | 'blocked_cap' | 'blocked_source';
+		const attachClaimForClosure = async (
+			claim: GraphClaim,
+			anchorClaimId: string
+		): Promise<ClosureAttachResult> => {
+			const claimId = typeof claim.id === 'object' ? String(claim.id) : claim.id;
+			if (allGraphClaims.has(claimId)) return 'present';
+			if (allGraphClaims.size >= traversalClaimCap) return 'blocked_cap';
+			if (!(await hasClosurePassageCoverage(claim, anchorClaimId))) return 'blocked_source';
+
+			const source = resolveSource(claim);
+			allGraphClaims.set(claimId, {
+				id: claimId,
+				text: claim.text,
+				claim_type: claim.claim_type,
+				domain: claim.domain,
+				source_title: source.title,
+				source_author: source.author,
+				confidence: claim.confidence ?? 0.5,
+				position_in_source: claim.position_in_source ?? 0
+			});
+			return 'added';
+		};
+
+		const fetchRelationNeighbors = async (
+			table: 'contradicts' | 'responds_to',
+			claimId: string,
+			cache: Map<string, Promise<GraphClaim[]>>
+		): Promise<GraphClaim[]> => {
+			const cached = cache.get(claimId);
+			if (cached) return cached;
+			const pending = (async () => {
+				try {
+					const rows = await query<RelationNeighborRow[]>(
+						`SELECT
+							in.${claimProjection} AS in_claim,
+							out.${claimProjection} AS out_claim
+						FROM ${table}
+						WHERE (in = $claim_id OR out = $claim_id) AND ${relationReviewFilter}
+						LIMIT 24`,
+						{ claim_id: claimId }
+					);
+					if (!rows || !Array.isArray(rows)) return [];
+
+					const byId = new Map<string, GraphClaim>();
+					for (const row of rows) {
+						const inClaim = row.in_claim;
+						const outClaim = row.out_claim;
+						if (!inClaim || !outClaim) continue;
+
+						const inId = toClaimId(inClaim.id);
+						const outId = toClaimId(outClaim.id);
+						const neighbor =
+							inId === claimId ? outClaim : outId === claimId ? inClaim : undefined;
+						if (!neighbor) continue;
+						const neighborId = toClaimId(neighbor.id);
+						if (!neighborId) continue;
+						const existing = byId.get(neighborId);
+						if (!existing || (neighbor.confidence ?? 0) > (existing.confidence ?? 0)) {
+							byId.set(neighborId, neighbor);
+						}
+					}
+					return Array.from(byId.values()).sort(
+						(a, b) => (b.confidence ?? 0) - (a.confidence ?? 0)
+					);
+				} catch (err) {
+					console.warn(
+						`[RETRIEVAL] Closure lookup failed for ${table} on ${claimId}:`,
+						err instanceof Error ? err.message : err
+					);
+					return [];
+				}
+			})();
+			cache.set(claimId, pending);
+			return pending;
+		};
+
+		const pickClosureCandidate = async (
+			candidates: GraphClaim[],
+			anchorClaimId: string,
+			matcher: (claimType: string) => boolean
+		): Promise<GraphClaim | null> => {
+			if (candidates.length === 0) return null;
+			for (const requireTypedMatch of [true, false]) {
+				for (const candidate of candidates) {
+					if (!passesClosureReviewGate(candidate)) continue;
+					if (requireTypedMatch && !matcher(candidate.claim_type)) continue;
+					const candidateId = typeof candidate.id === 'object' ? String(candidate.id) : candidate.id;
+					if (allGraphClaims.has(candidateId)) return candidate;
+					if (await hasClosurePassageCoverage(candidate, anchorClaimId)) {
+						return candidate;
+					}
+				}
+			}
+			return null;
+		};
+
+		for (const thesisId of majorThesisIds) {
+			const unit: ClosureUnitTrace = {
+				thesis_claim_id: thesisId,
+				objection_found: false,
+				reply_found: false,
+				unit_complete: false
+			};
+			let capLimitedInUnit = false;
+			const thesisExists = allGraphClaims.has(thesisId);
+			if (!thesisExists) {
+				closureUnits.push(unit);
+				continue;
+			}
+
+			const contradictionNeighbors = await fetchRelationNeighbors(
+				'contradicts',
+				thesisId,
+				contradictionNeighborCache
+			);
+			const objectionCandidate = await pickClosureCandidate(
+				contradictionNeighbors,
+				thesisId,
+				isObjectionClaimType
+			);
+			if (objectionCandidate) {
+				const objectionId =
+					typeof objectionCandidate.id === 'object'
+						? String(objectionCandidate.id)
+						: objectionCandidate.id;
+				const objectionAttach = await attachClaimForClosure(objectionCandidate, thesisId);
+				if (objectionAttach === 'added') {
+					closureClaimsAdded += 1;
+					closureObjectionsAdded += 1;
+				}
+				if (objectionAttach === 'blocked_cap') {
+					capLimitedInUnit = true;
+				}
+				if (objectionAttach === 'added' || objectionAttach === 'present') {
+					unit.objection_found = true;
+					unit.objection_claim_id = objectionId;
+
+					const replyNeighbors = await fetchRelationNeighbors(
+						'responds_to',
+						objectionId,
+						replyNeighborCache
+					);
+					const replyCandidate = await pickClosureCandidate(
+						replyNeighbors,
+						objectionId,
+						isReplyClaimType
+					);
+					if (replyCandidate) {
+						const replyId =
+							typeof replyCandidate.id === 'object'
+								? String(replyCandidate.id)
+								: replyCandidate.id;
+						const replyAttach = await attachClaimForClosure(replyCandidate, objectionId);
+						if (replyAttach === 'added') {
+							closureClaimsAdded += 1;
+							closureRepliesAdded += 1;
+						}
+						if (replyAttach === 'blocked_cap') {
+							capLimitedInUnit = true;
+						}
+						if (replyAttach === 'added' || replyAttach === 'present') {
+							unit.reply_found = true;
+							unit.reply_claim_id = replyId;
+						}
+					}
+				}
+			}
+
+			unit.unit_complete = unit.objection_found && unit.reply_found;
+			if (capLimitedInUnit) closureCapLimitedUnits += 1;
+			closureUnits.push(unit);
+		}
+
+		const closureStats: RetrievalClosureStats = {
+			major_thesis_count: majorThesisIds.length,
+			units_attempted: majorThesisIds.length,
+			units_completed: closureUnits.filter((unit) => unit.unit_complete).length,
+			claims_added_for_closure: closureClaimsAdded,
+			objections_added: closureObjectionsAdded,
+			replies_added: closureRepliesAdded,
+			cap_limited_units: closureCapLimitedUnits,
+			units: closureUnits
+		};
+		console.log('[RETRIEVAL] Closure enforcement', {
+			major_theses: closureStats.major_thesis_count,
+			units_completed: closureStats.units_completed,
+			claims_added: closureStats.claims_added_for_closure
+		});
 
 		// ── Step 4: Build deduplicated claims array ──────────────────
 		const claims = Array.from(allGraphClaims.values());
@@ -921,6 +1376,27 @@ export async function retrieveContext(
 		}
 
 		console.log(`[RETRIEVAL] ${arguments_.length} arguments assembled`);
+		const traversalEdgePriors: Partial<Record<string, number>> = Object.fromEntries(
+			RELATION_TRAVERSAL_BEAM_SPECS.map((spec) => [spec.table, spec.edgePrior])
+		);
+		const pruningSummary: RetrievalPruningSummaryTrace = {
+			claims_by_reason: {
+				seed_pool_pruned: 0,
+				duplicate_traversal: 0,
+				confidence_gate: 0,
+				source_integrity_gate: 0
+			},
+			relations_by_reason: {
+				duplicate_relation: 0,
+				missing_endpoint: 0
+			}
+		};
+		for (const rejected of rejectedClaimsByKey.values()) {
+			pruningSummary.claims_by_reason[rejected.reason_code] += 1;
+		}
+		for (const rejected of rejectedRelations) {
+			pruningSummary.relations_by_reason[rejected.reason_code] += 1;
+		}
 
 		return {
 			claims,
@@ -936,11 +1412,23 @@ export async function retrieveContext(
 				lexical_terms: lexicalTerms.slice(0, 8),
 				corpus_level_query: corpusLevelQuery,
 				seed_balance_stats: seedSet.stats,
+				traversal_mode: 'beam_trusted_v1',
+				traversal_max_hops: traversalMaxHops,
+				traversal_hop_decay: hopDecayFactor,
+				traversal_base_confidence_threshold: traversalBaseConfidence,
+				traversal_confidence_thresholds: traversalConfidenceThresholds,
+				traversal_domain_aware: true,
+				traversal_trusted_edges_only: true,
+				traversal_edge_priors: traversalEdgePriors,
+				query_decomposition: queryDecomposition,
+				seed_claims: seedTrace,
+				pruning_summary: pruningSummary,
 				traversed_claim_count: Math.max(claims.length - seedClaimIds.length, 0),
 				relation_candidate_count: relationCandidateCount,
 				relation_kept_count: relations.length,
 				argument_candidate_count: argumentIds.size,
 				argument_kept_count: arguments_.length,
+				closure_stats: closureStats,
 				rejected_claims: Array.from(rejectedClaimsByKey.values()).slice(0, 60),
 				rejected_relations: rejectedRelations.slice(0, 80)
 			},

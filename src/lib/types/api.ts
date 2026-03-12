@@ -3,6 +3,7 @@ import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from './re
 import type { ConstitutionalCheck } from './constitution';
 import type { ReasoningEvaluation } from './verification';
 import type { ModelProvider, ReasoningProvider } from './providers';
+import type { PhilosophicalDomain } from './domains';
 
 export interface AnalyseRequest {
   query: string;
@@ -307,11 +308,55 @@ export interface GraphSnapshotMeta {
       monoPerspectiveBefore: boolean;
       monoPerspectiveAfter: boolean;
     };
+    traversalMode?: 'beam_trusted_v1';
+    traversalMaxHops?: number;
+    traversalHopDecay?: number;
+    traversalBaseConfidenceThreshold?: number;
+    traversalConfidenceThresholds?: number[];
+    traversalDomainAware?: boolean;
+    traversalTrustedEdgesOnly?: boolean;
+    traversalEdgePriors?: Partial<Record<string, number>>;
+    queryDecomposition?: {
+      focusMode: 'corpus_overview' | 'focused';
+      domainFilter?: PhilosophicalDomain;
+      hybridMode: 'auto' | 'dense_only';
+      corpusLevelQuery: boolean;
+      lexicalTerms: string[];
+      lexicalTermCount: number;
+    };
+    seedClaims?: Array<{
+      id: string;
+      claimType: string;
+      domain: PhilosophicalDomain;
+      sourceTitle: string;
+      confidence: number;
+    }>;
+    pruningSummary?: {
+      claimsByReason: {
+        seed_pool_pruned: number;
+        duplicate_traversal: number;
+        confidence_gate: number;
+        source_integrity_gate: number;
+      };
+      relationsByReason: {
+        duplicate_relation: number;
+        missing_endpoint: number;
+      };
+    };
     traversedClaimCount: number;
     relationCandidateCount: number;
     relationKeptCount: number;
     argumentCandidateCount: number;
     argumentKeptCount: number;
+    closureStats?: {
+      majorThesisCount: number;
+      unitsAttempted: number;
+      unitsCompleted: number;
+      claimsAddedForClosure: number;
+      objectionsAdded: number;
+      repliesAdded: number;
+      capLimitedUnits: number;
+    };
     rejectedClaimCount?: number;
     rejectedRelationCount?: number;
   };
