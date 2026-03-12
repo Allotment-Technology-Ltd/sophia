@@ -73,6 +73,38 @@ export interface MetadataEvent {
   domain_confidence?: 'high' | 'medium' | 'low';
   selected_domain_mode?: 'auto' | 'manual';
   selected_domain?: 'ethics' | 'philosophy_of_mind';
+  context_pack_stats?: {
+    analysis: {
+      token_budget: number;
+      estimated_tokens: number;
+      truncated: boolean;
+      claim_count: number;
+      relation_count: number;
+      argument_count: number;
+      reply_chain_count: number;
+      unresolved_tension_count: number;
+    };
+    critique: {
+      token_budget: number;
+      estimated_tokens: number;
+      truncated: boolean;
+      claim_count: number;
+      relation_count: number;
+      argument_count: number;
+      reply_chain_count: number;
+      unresolved_tension_count: number;
+    };
+    synthesis: {
+      token_budget: number;
+      estimated_tokens: number;
+      truncated: boolean;
+      claim_count: number;
+      relation_count: number;
+      argument_count: number;
+      reply_chain_count: number;
+      unresolved_tension_count: number;
+    };
+  };
   depth_mode?: 'quick' | 'standard' | 'deep';
   selected_model_provider?: ModelProvider;
   selected_model_id?: string;
@@ -241,6 +273,40 @@ export interface GraphSnapshotMeta {
   retrievalTrace?: {
     seedPoolCount: number;
     selectedSeedCount: number;
+    hybridMode?: 'auto' | 'dense_only';
+    denseSeedCount?: number;
+    lexicalSeedCount?: number;
+    lexicalTerms?: string[];
+    corpusLevelQuery?: boolean;
+    seedBalanceStats?: {
+      selectionStrategy: 'mmr_quota_v1';
+      mmrLambda: number;
+      roleCountsPool: {
+        support: number;
+        objection: number;
+        reply: number;
+        definitionDistinction: number;
+      };
+      roleCountsSelected: {
+        support: number;
+        objection: number;
+        reply: number;
+        definitionDistinction: number;
+      };
+      roleQuotas: {
+        support: number;
+        objection: number;
+        reply: number;
+        definitionDistinction: number;
+      };
+      quotaSatisfiedRoles: string[];
+      avgPairwiseSimilarityBefore: number;
+      avgPairwiseSimilarityAfter: number;
+      objectionReplyPresenceBefore: boolean;
+      objectionReplyPresenceAfter: boolean;
+      monoPerspectiveBefore: boolean;
+      monoPerspectiveAfter: boolean;
+    };
     traversedClaimCount: number;
     relationCandidateCount: number;
     relationKeptCount: number;

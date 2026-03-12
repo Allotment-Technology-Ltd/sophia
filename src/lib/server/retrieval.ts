@@ -20,6 +20,12 @@
 import { isDatabaseUnavailable, query } from './db';
 import { embedQuery } from './embeddings';
 import type { PhilosophicalDomain } from './types';
+import {
+	detectCorpusLevelQuery,
+	extractLexicalTerms,
+	fuseHybridCandidates
+} from './hybridCandidateGeneration';
+import { constructSeedSet, type SeedBalanceStats } from './seedSetConstructor';
 
 // ─── Result interfaces ─────────────────────────────────────────────────────
 
@@ -86,6 +92,12 @@ export interface RetrievalResult {
 	trace?: {
 		seed_pool_count: number;
 		selected_seed_count: number;
+		hybrid_mode?: 'auto' | 'dense_only';
+		dense_seed_count?: number;
+		lexical_seed_count?: number;
+		lexical_terms?: string[];
+		corpus_level_query?: boolean;
+		seed_balance_stats?: SeedBalanceStats;
 		traversed_claim_count: number;
 		relation_candidate_count: number;
 		relation_kept_count: number;
@@ -109,6 +121,8 @@ export interface RetrievalOptions {
 	maxHops?: number;
 	/** Optional cap on total claims returned after traversal */
 	maxClaims?: number;
+	/** Optional retrieval mode override for baseline comparisons */
+	hybridMode?: 'auto' | 'dense_only';
 	/** Optional viewer context for trace/audit routing */
 	viewerUid?: string | null;
 }
@@ -159,7 +173,14 @@ export async function retrieveContext(
 	userQuery: string,
 	options: RetrievalOptions = {}
 ): Promise<RetrievalResult> {
-	const { topK = 5, domain, minConfidence = 0, maxHops, maxClaims } = options;
+	const {
+		topK = 5,
+		domain,
+		minConfidence = 0,
+		maxHops,
+		maxClaims,
+		hybridMode = 'auto'
+	} = options;
 	const traversalMaxHops = Math.max(1, maxHops ?? (topK >= 10 ? 3 : topK <= 3 ? 1 : 2));
 	const traversalClaimCap = Math.max(topK, maxClaims ?? (topK >= 10 ? 120 : topK <= 3 ? 32 : 72));
 
@@ -179,11 +200,15 @@ export async function retrieveContext(
 			};
 		}
 
-		// ── Step 2: Vector search for seed claims ────────────────────
-		// SurrealDB v2: MTREE KNN operator (<|N|>) does not support additional
-		// WHERE conditions inline. Use a subquery to KNN-search a larger pool,
-		// then filter/rank in the outer query.
-		const knnPool = domain || minConfidence > 0 ? topK * 4 : topK;
+		// ── Step 2: Hybrid candidate generation (dense + lexical) ───
+		// Dense path: MTREE vector search.
+		// Lexical path: exact-term matching for philosophy-specific phrases.
+		// Fusion: reciprocal-rank fusion + lightweight rerank.
+		const densePool = domain || minConfidence > 0 ? topK * 4 : topK * 3;
+		const lexicalTerms = hybridMode === 'dense_only' ? [] : extractLexicalTerms(userQuery);
+		const corpusLevelQuery =
+			hybridMode === 'dense_only' ? false : detectCorpusLevelQuery(userQuery);
+		const lexicalPool = lexicalTerms.length === 0 ? 0 : corpusLevelQuery ? topK * 8 : topK * 4;
 		const acceptedClaimRows = await query<Array<{ count?: number }>>(
 			`SELECT count() AS count FROM claim WHERE review_state = 'accepted' GROUP ALL`
 		).catch(() => []);
@@ -209,6 +234,7 @@ export async function retrieveContext(
 			claim_type: string;
 			domain: PhilosophicalDomain;
 			confidence: number;
+			embedding?: number[] | null;
 			position_in_source: number;
 			review_state?: string;
 			section_context: string | null;
@@ -246,39 +272,49 @@ export async function retrieveContext(
 			if (rejectedClaimsByKey.has(key)) return;
 			rejectedClaimsByKey.set(key, candidate);
 		};
+
+		const rowProjection = `SELECT
+			id,
+			text,
+			claim_type,
+			domain,
+			confidence,
+			embedding,
+			position_in_source,
+			review_state,
+			section_context,
+			source.id AS source_id,
+			source.title AS source_title,
+			source.author AS source_author`;
+
+		const sharedParams: Record<string, unknown> = {
+			...(domain ? { domain } : {}),
+			...(minConfidence > 0 ? { minConfidence } : {})
+		};
+
+		let denseSeedClaims: SeedRow[] = [];
+		let lexicalSeedClaims: SeedRow[] = [];
+
 		try {
-			console.log('[RETRIEVAL] Starting vector search for topK=', topK);
-			seedClaims = await query<SeedRow[]>(
-				`SELECT
-					id,
-					text,
-					claim_type,
-					domain,
-					confidence,
-					position_in_source,
-					review_state,
-					section_context,
-					source.id AS source_id,
-					source.title AS source_title,
-					source.author AS source_author
+			console.log('[RETRIEVAL] Dense candidate generation topK=', topK);
+			denseSeedClaims = await query<SeedRow[]>(
+				`${rowProjection}
 				FROM (
 					SELECT *
 					FROM claim
-					WHERE embedding <|${knnPool}|> $query_embedding
+					WHERE embedding <|${densePool}|> $query_embedding
 				)
 				${postWhere}
-				LIMIT ${knnPool}`,
+				LIMIT ${densePool}`,
 				{
 					query_embedding: queryEmbedding,
-					...(domain ? { domain } : {}),
-					...(minConfidence > 0 ? { minConfidence } : {})
+					...sharedParams
 				}
 			);
-			console.log('[RETRIEVAL] ✓ Vector search returned:', seedClaims?.length || 0, 'claims');
-			seedPoolCount = seedClaims?.length || 0;
+			console.log('[RETRIEVAL] ✓ Dense candidates:', denseSeedClaims?.length || 0);
 		} catch (dbErr) {
 			if (isDatabaseUnavailable(dbErr)) {
-				console.warn('[RETRIEVAL] Database unavailable during seed retrieval');
+				console.warn('[RETRIEVAL] Database unavailable during dense candidate retrieval');
 				return {
 					...EMPTY_RESULT,
 					degraded: true,
@@ -288,38 +324,73 @@ export async function retrieveContext(
 			throw dbErr;
 		}
 
-		if (!seedClaims || seedClaims.length === 0) {
-			console.log('[RETRIEVAL] No seed claims found via vector search');
+		if (hybridMode !== 'dense_only' && lexicalPool > 0) {
+			try {
+				const lexicalTermClauses = lexicalTerms.map(
+					(_term, idx) => `(text ~ $term_${idx} OR section_context ~ $term_${idx})`
+				);
+				const lexicalWhere = `WHERE (${lexicalTermClauses.join(' OR ')}) AND ${postFilters.join(
+					' AND '
+				)}`;
+				const lexicalParams: Record<string, unknown> = { ...sharedParams };
+				for (const [idx, term] of lexicalTerms.entries()) {
+					lexicalParams[`term_${idx}`] = term;
+				}
+
+				lexicalSeedClaims = await query<SeedRow[]>(
+					`${rowProjection}
+					FROM claim
+					${lexicalWhere}
+					ORDER BY confidence DESC
+					LIMIT ${lexicalPool}`,
+					lexicalParams
+				);
+				console.log(
+					'[RETRIEVAL] ✓ Lexical candidates:',
+					lexicalSeedClaims?.length || 0,
+					'terms=',
+					lexicalTerms.length
+				);
+			} catch (lexicalErr) {
+				console.warn(
+					'[RETRIEVAL] Lexical candidate generation failed (continuing with dense only):',
+					lexicalErr instanceof Error ? lexicalErr.message : lexicalErr
+				);
+			}
+		}
+
+		if ((!denseSeedClaims || denseSeedClaims.length === 0) && lexicalSeedClaims.length === 0) {
+			console.log('[RETRIEVAL] No candidates found in dense or lexical retrieval');
 			return EMPTY_RESULT;
 		}
 
-		const seedPool = [...seedClaims];
-
-		// Diversity-aware seed selection: prefer source variety before filling by rank.
-		// This reduces flat neighborhoods dominated by one source.
-		if (seedClaims.length > 1) {
-			const diverse: SeedRow[] = [];
-			const seenSources = new Set<string>();
-			for (const claim of seedClaims) {
-				const sourceKey = claim.source_title || 'unknown';
-				if (!seenSources.has(sourceKey)) {
-					diverse.push(claim);
-					seenSources.add(sourceKey);
-				}
-				if (diverse.length >= topK) break;
-			}
-			if (diverse.length < topK) {
-				for (const claim of seedClaims) {
-					if (diverse.includes(claim)) continue;
-					diverse.push(claim);
-					if (diverse.length >= topK) break;
-				}
-			}
-			seedClaims = diverse.slice(0, topK);
+		if (hybridMode === 'dense_only') {
+			seedClaims = denseSeedClaims;
+			seedPoolCount = denseSeedClaims.length;
+		} else {
+			const fusion = fuseHybridCandidates({
+				dense: denseSeedClaims,
+				lexical: lexicalSeedClaims,
+				lexicalTerms,
+				poolSize: Math.max(topK * 4, topK),
+				corpusLevelQuery
+			});
+			seedClaims = fusion.ranked;
+			seedPoolCount = fusion.fusedCount;
 		}
 
-		const vettedSeeds: SeedRow[] = [];
-		for (const seed of seedClaims) {
+		if (!seedClaims || seedClaims.length === 0) {
+			console.log('[RETRIEVAL] Hybrid fusion returned no candidates');
+			return EMPTY_RESULT;
+		}
+
+		console.log(
+			`[RETRIEVAL] Candidate generation mode=${hybridMode} dense=${denseSeedClaims.length} lexical=${lexicalSeedClaims.length} fused=${seedPoolCount} corpusLevel=${corpusLevelQuery}`
+		);
+
+		const seedPool = [...seedClaims];
+		const vettedSeedPool: SeedRow[] = [];
+		for (const seed of seedPool) {
 			const sourceOk = await sourceHasPassageCoverage(seed.source_id);
 			if (!sourceOk) {
 				addRejectedClaim({
@@ -332,10 +403,9 @@ export async function retrieveContext(
 				});
 				continue;
 			}
-			vettedSeeds.push(seed);
+			vettedSeedPool.push(seed);
 		}
-		seedClaims = vettedSeeds;
-		if (seedClaims.length === 0) {
+		if (vettedSeedPool.length === 0) {
 			return {
 				...EMPTY_RESULT,
 				degraded: true,
@@ -343,12 +413,19 @@ export async function retrieveContext(
 			};
 		}
 
+		const seedSet = constructSeedSet({
+			candidates: vettedSeedPool,
+			topK,
+			queryEmbedding
+		});
+		seedClaims = seedSet.seeds;
+
 		console.log(`[RETRIEVAL] Found ${seedClaims.length} seed claims`);
 		const seedClaimIds = seedClaims.map((seed) =>
 			typeof seed.id === 'object' ? String(seed.id) : seed.id
 		);
 		const selectedSeedIds = new Set(seedClaimIds);
-		for (const candidate of seedPool) {
+		for (const candidate of vettedSeedPool) {
 			const candidateId = typeof candidate.id === 'object' ? String(candidate.id) : candidate.id;
 			if (selectedSeedIds.has(candidateId)) continue;
 			addRejectedClaim({
@@ -853,6 +930,12 @@ export async function retrieveContext(
 			trace: {
 				seed_pool_count: seedPoolCount,
 				selected_seed_count: seedClaimIds.length,
+				hybrid_mode: hybridMode,
+				dense_seed_count: denseSeedClaims.length,
+				lexical_seed_count: lexicalSeedClaims.length,
+				lexical_terms: lexicalTerms.slice(0, 8),
+				corpus_level_query: corpusLevelQuery,
+				seed_balance_stats: seedSet.stats,
 				traversed_claim_count: Math.max(claims.length - seedClaimIds.length, 0),
 				relation_candidate_count: relationCandidateCount,
 				relation_kept_count: relations.length,
