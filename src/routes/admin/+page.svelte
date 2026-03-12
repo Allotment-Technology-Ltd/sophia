@@ -70,12 +70,20 @@
 				<h1 class="text-3xl font-serif text-sophia-dark-text mb-1">SOPHIA Admin</h1>
 				<p class="text-sophia-dark-muted font-mono text-sm">Knowledge Base Dashboard</p>
 			</div>
-			<a 
-				href="/" 
-				class="px-4 py-2 bg-sophia-dark-surface-raised border border-sophia-dark-border rounded hover:bg-sophia-dark-surface transition-colors font-mono text-sm"
-			>
-				← Back to App
-			</a>
+			<div class="flex gap-3">
+				<a
+					href="/admin/review"
+					class="px-4 py-2 bg-sophia-dark-blue/10 border border-sophia-dark-blue/40 rounded hover:bg-sophia-dark-blue/20 transition-colors font-mono text-sm text-sophia-dark-blue"
+				>
+					Review Queue
+				</a>
+				<a 
+					href="/" 
+					class="px-4 py-2 bg-sophia-dark-surface-raised border border-sophia-dark-border rounded hover:bg-sophia-dark-surface transition-colors font-mono text-sm"
+				>
+					← Back to App
+				</a>
+			</div>
 		</div>
 
 		{#if data.error}

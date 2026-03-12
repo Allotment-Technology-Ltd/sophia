@@ -12,6 +12,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
 import { Surreal } from 'surrealdb';
+import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.js';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 const SURREAL_URL = process.env.SURREAL_URL || 'http://localhost:8000/rpc';
@@ -29,6 +30,8 @@ const RELATION_TABLES = [
 	'contradicts',
 	'depends_on',
 	'responds_to',
+	'defines',
+	'qualifies',
 	'refines',
 	'exemplifies'
 ] as const;
@@ -89,6 +92,22 @@ interface SpotCheckReport {
 	entries: SpotCheckEntry[];
 }
 
+function normalizeRecordId(value: unknown): string | null {
+	if (typeof value === 'string') return value;
+	if (!value || typeof value !== 'object') return null;
+
+	const record = value as { tb?: unknown; id?: unknown };
+	if (typeof record.tb === 'string' && record.id !== undefined) {
+		return `${record.tb}:${String(record.id)}`;
+	}
+	if (typeof record.id === 'string') {
+		return record.id;
+	}
+
+	const rendered = String(value);
+	return rendered && rendered !== '[object Object]' ? rendered : null;
+}
+
 // ─── DB Helpers ─────────────────────────────────────────────────────────────
 async function connectDB(): Promise<Surreal> {
 	const db = new Surreal();
@@ -131,7 +150,16 @@ async function getRelationsForClaims(
 				`SELECT in, out FROM ${table} WHERE in INSIDE $ids OR out INSIDE $ids`,
 				{ ids: claimIds }
 			);
-			map.set(table, Array.isArray(result?.[0]) ? result[0] : []);
+			const rows = Array.isArray(result?.[0]) ? result[0] : [];
+			map.set(
+				table,
+				rows
+					.map((row) => ({
+						in: normalizeRecordId(row.in),
+						out: normalizeRecordId(row.out)
+					}))
+					.filter((row): row is RelationEdge => Boolean(row.in && row.out))
+			);
 		} catch {
 			map.set(table, []);
 		}
@@ -153,7 +181,14 @@ async function getPartOfForClaims(db: Surreal, claimIds: string[]): Promise<Part
 		'SELECT in, out, role FROM part_of WHERE in INSIDE $ids',
 		{ ids: claimIds }
 	);
-	return Array.isArray(result?.[0]) ? result[0] : [];
+	const rows = Array.isArray(result?.[0]) ? result[0] : [];
+	return rows
+		.map((row) => ({
+			in: normalizeRecordId(row.in),
+			out: normalizeRecordId(row.out),
+			role: row.role
+		}))
+		.filter((row): row is PartOfRecord => Boolean(row.in && row.out && row.role));
 }
 
 // ─── Source Text Helpers ─────────────────────────────────────────────────────
@@ -166,11 +201,19 @@ function createSlug(text: string): string {
 }
 
 function findSlugForUrl(url: string): string | null {
+	const targetIdentity = canonicalizeAndHashSourceUrl(url);
+	if (!targetIdentity) return null;
 	if (!fs.existsSync(SOURCES_DIR)) return null;
 	for (const file of fs.readdirSync(SOURCES_DIR).filter((f) => f.endsWith('.meta.json'))) {
 		try {
-			const meta = JSON.parse(fs.readFileSync(path.join(SOURCES_DIR, file), 'utf-8'));
-			if (meta.url === url) return file.replace('.meta.json', '');
+			const meta = JSON.parse(fs.readFileSync(path.join(SOURCES_DIR, file), 'utf-8')) as {
+				url?: string;
+				canonical_url?: string;
+			};
+			const metaIdentity = canonicalizeAndHashSourceUrl(meta.canonical_url || meta.url || '');
+			if (metaIdentity?.canonicalUrlHash === targetIdentity.canonicalUrlHash) {
+				return file.replace('.meta.json', '');
+			}
 		} catch {
 			/* skip corrupt files */
 		}
@@ -244,6 +287,7 @@ function renderClaim(
 	sourceText: string,
 	totalClaims: number
 ): void {
+	const claimId = normalizeRecordId(claim.id) ?? String(claim.id);
 	const pos = claim.position_in_source ?? '?';
 	console.log(`\n${WIDE}`);
 	console.log(
@@ -259,8 +303,8 @@ function renderClaim(
 	const claimRels: RelEntry[] = [];
 	for (const [relType, edges] of Array.from(relations.entries())) {
 		for (const edge of edges) {
-			if (edge.in === claim.id) claimRels.push({ type: relType, dir: 'out', otherId: edge.out });
-			if (edge.out === claim.id) claimRels.push({ type: relType, dir: 'in', otherId: edge.in });
+			if (edge.in === claimId) claimRels.push({ type: relType, dir: 'out', otherId: edge.out });
+			if (edge.out === claimId) claimRels.push({ type: relType, dir: 'in', otherId: edge.in });
 		}
 	}
 
@@ -282,7 +326,7 @@ function renderClaim(
 	}
 
 	// Argument membership
-	const memberships = partOf.filter((po) => po.in === claim.id);
+	const memberships = partOf.filter((po) => po.in === claimId);
 	if (memberships.length > 0) {
 		console.log('\nARGUMENT MEMBERSHIP:');
 		for (const m of memberships) {
@@ -486,8 +530,12 @@ async function main() {
 	}
 
 	// Build lookup maps
-	const claimMap = new Map(allClaims.map((c) => [c.id, c]));
-	const argMap = new Map(args.map((a) => [a.id, a]));
+	const claimMap = new Map(
+		allClaims.map((c) => [normalizeRecordId(c.id) ?? String(c.id), c])
+	);
+	const argMap = new Map(
+		args.map((a) => [normalizeRecordId(a.id) ?? String(a.id), a])
+	);
 
 	// Sample
 	const sampleSize = Math.min(count, allClaims.length);
@@ -556,7 +604,7 @@ async function main() {
 
 		entries.push({
 			index: i + 1,
-			claim_id: claim.id,
+			claim_id: normalizeRecordId(claim.id) ?? String(claim.id),
 			claim_text: claim.text,
 			claim_type: claim.claim_type,
 			confidence: claim.confidence,

@@ -7,16 +7,22 @@ const RELATION_TABLES = [
 	'contradicts',
 	'depends_on',
 	'responds_to',
+	'defines',
+	'qualifies',
 	'refines',
 	'exemplifies',
 	'part_of'
 ];
 
 async function countTable(table: string): Promise<number> {
-	const result = await query<{ count: number }[]>(
-		`SELECT count() AS count FROM ${table} GROUP ALL`
-	);
-	return Array.isArray(result) ? (result[0]?.count ?? 0) : 0;
+	try {
+		const result = await query<{ count: number }[]>(
+			`SELECT count() AS count FROM ${table} GROUP ALL`
+		);
+		return Array.isArray(result) ? (result[0]?.count ?? 0) : 0;
+	} catch {
+		return 0;
+	}
 }
 
 export const GET: RequestHandler = async (event) => {

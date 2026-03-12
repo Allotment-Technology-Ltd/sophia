@@ -87,6 +87,8 @@ function mapRelationType(type: string): GraphEdge['type'] {
   if (type === 'contradicts') return 'contradicts';
   if (type === 'depends-on' || type === 'depends_on') return 'depends-on';
   if (type === 'responds-to' || type === 'responds_to') return 'responds-to';
+  if (type === 'defines') return 'defines';
+  if (type === 'qualifies') return 'qualifies';
   return 'supports';
 }
 

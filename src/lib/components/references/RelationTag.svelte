@@ -51,6 +51,16 @@
     background: var(--color-surface-raised);
   }
 
+  .defines {
+    color: var(--color-blue);
+    background: color-mix(in srgb, var(--color-blue-bg) 78%, white 22%);
+  }
+
+  .qualifies {
+    color: var(--color-amber);
+    background: color-mix(in srgb, var(--color-amber) 16%, white 84%);
+  }
+
   @keyframes relation-fade-in {
     from { opacity: 0; }
     to { opacity: 1; }

@@ -25,6 +25,8 @@ async function main() {
 		'contradicts',
 		'depends_on',
 		'responds_to',
+		'defines',
+		'qualifies',
 		'refines',
 		'exemplifies'
 	];

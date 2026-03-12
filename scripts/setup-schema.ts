@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { Surreal } from 'surrealdb';
 
 // Read environment variables
@@ -7,90 +8,153 @@ const SURREAL_PASS = process.env.SURREAL_PASS || 'root';
 const SURREAL_NAMESPACE = process.env.SURREAL_NAMESPACE || 'sophia';
 const SURREAL_DATABASE = process.env.SURREAL_DATABASE || 'sophia';
 
-async function setupSchema() {
-	const db = new Surreal();
+export async function setupSchema(existingDb?: Surreal) {
+	const db = existingDb ?? new Surreal();
+	const ownsConnection = !existingDb;
 
 	try {
-		console.log('[SETUP] Connecting to SurrealDB...');
-		await db.connect(SURREAL_URL);
-		console.log(`[SETUP] Connected to ${SURREAL_URL}`);
+		if (ownsConnection) {
+			console.log('[SETUP] Connecting to SurrealDB...');
+			await db.connect(SURREAL_URL);
+			console.log(`[SETUP] Connected to ${SURREAL_URL}`);
 
-		// Sign in
-		await db.signin({
-			username: SURREAL_USER,
-			password: SURREAL_PASS
-		} as any);
-		console.log('[SETUP] Authenticated successfully');
+			// Sign in
+			await db.signin({
+				username: SURREAL_USER,
+				password: SURREAL_PASS
+			} as any);
+			console.log('[SETUP] Authenticated successfully');
 
-		// Select namespace and database
-		await db.use({
-			namespace: SURREAL_NAMESPACE,
-			database: SURREAL_DATABASE
-		});
-		console.log(`[SETUP] Using namespace: ${SURREAL_NAMESPACE}, database: ${SURREAL_DATABASE}`);
+			// Select namespace and database
+			await db.use({
+				namespace: SURREAL_NAMESPACE,
+				database: SURREAL_DATABASE
+			});
+			console.log(`[SETUP] Using namespace: ${SURREAL_NAMESPACE}, database: ${SURREAL_DATABASE}`);
+		}
 
 		// Define tables
 		console.log('[SETUP] Creating schema...');
 
 		// 1. SOURCE TABLE
-			await db.query(`
-				DEFINE TABLE IF NOT EXISTS source SCHEMAFULL;
-				DEFINE FIELD IF NOT EXISTS title ON source TYPE string;
-				DEFINE FIELD IF NOT EXISTS author ON source TYPE array<string>;
-				DEFINE FIELD IF NOT EXISTS year ON source TYPE option<int>;
-				DEFINE FIELD IF NOT EXISTS source_type ON source TYPE string
-					ASSERT $value IN ['book', 'paper', 'sep_entry', 'iep_entry', 'article', 'institutional'];
-				DEFINE FIELD IF NOT EXISTS url ON source TYPE option<string>;
-				DEFINE FIELD IF NOT EXISTS visibility_scope ON source TYPE string
-					DEFAULT 'public_shared'
-					ASSERT $value IN ['public_shared', 'private_user_only'];
-				DEFINE FIELD IF NOT EXISTS owner_uid ON source TYPE option<string>;
-				DEFINE FIELD IF NOT EXISTS contributor_uid ON source TYPE option<string>;
-				DEFINE FIELD IF NOT EXISTS deletion_state ON source TYPE string
-					DEFAULT 'active'
-					ASSERT $value IN ['active', 'deleted'];
-				DEFINE FIELD IF NOT EXISTS ingested_at ON source TYPE datetime VALUE time::now();
-				DEFINE FIELD IF NOT EXISTS claim_count ON source TYPE option<int>;
-				DEFINE FIELD IF NOT EXISTS status ON source TYPE string
-					DEFAULT 'pending'
-					ASSERT $value IN ['pending', 'ingested', 'validated', 'quarantined'];
-			`);
-			console.log('[SETUP] ✓ Table: source');
-
-			await db.query(`
-				DEFINE INDEX IF NOT EXISTS source_visibility_scope ON source FIELDS visibility_scope;
-				DEFINE INDEX IF NOT EXISTS source_owner_uid ON source FIELDS owner_uid;
-				DEFINE INDEX IF NOT EXISTS source_contributor_uid ON source FIELDS contributor_uid;
-				DEFINE INDEX IF NOT EXISTS source_url_visibility_owner ON source FIELDS url, visibility_scope, owner_uid;
-			`);
-			console.log('[SETUP] ✓ Indexes: source (visibility_scope, owner_uid, contributor_uid, url_visibility_owner)');
-
-		// 2. CLAIM TABLE
 		await db.query(`
-			DEFINE TABLE IF NOT EXISTS claim SCHEMAFULL;
-			DEFINE FIELD IF NOT EXISTS text ON claim TYPE string;
+			DEFINE TABLE IF NOT EXISTS source SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS title ON source TYPE string;
+			DEFINE FIELD IF NOT EXISTS author ON source TYPE array<string>;
+			DEFINE FIELD IF NOT EXISTS year ON source TYPE option<int>;
+			DEFINE FIELD IF NOT EXISTS source_type ON source TYPE string
+				ASSERT $value IN ['book', 'paper', 'sep_entry', 'iep_entry', 'article', 'institutional'];
+			DEFINE FIELD IF NOT EXISTS url ON source TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS canonical_url ON source TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS canonical_url_hash ON source TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS visibility_scope ON source TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS deletion_state ON source TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS ingested_at ON source TYPE datetime VALUE time::now();
+			DEFINE FIELD IF NOT EXISTS claim_count ON source TYPE option<int>;
+			DEFINE FIELD IF NOT EXISTS status ON source TYPE string
+				DEFAULT 'pending'
+				ASSERT $value IN ['pending', 'ingested', 'validated', 'quarantined'];
+		`);
+		console.log('[SETUP] ✓ Table: source');
+
+		await db.query(`
+			DEFINE INDEX IF NOT EXISTS source_url ON source FIELDS url;
+			DEFINE INDEX IF NOT EXISTS source_canonical_url_hash ON source FIELDS canonical_url_hash;
+		`);
+		console.log('[SETUP] ✓ Indexes: source (url, canonical_url_hash)');
+
+			// 2. PASSAGE TABLE
+			await db.query(`
+				DEFINE TABLE IF NOT EXISTS passage SCHEMAFULL;
+				DEFINE FIELD IF NOT EXISTS source ON passage TYPE record<source>;
+				DEFINE FIELD IF NOT EXISTS text ON passage TYPE string;
+				DEFINE FIELD IF NOT EXISTS summary ON passage TYPE string;
+				DEFINE FIELD IF NOT EXISTS section_title ON passage TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS order_in_source ON passage TYPE int;
+				DEFINE FIELD IF NOT EXISTS span_start ON passage TYPE int;
+				DEFINE FIELD IF NOT EXISTS span_end ON passage TYPE int;
+				DEFINE FIELD IF NOT EXISTS role ON passage TYPE string
+					ASSERT $value IN ['thesis', 'premise', 'objection', 'reply', 'definition', 'distinction', 'example', 'interpretive_commentary'];
+				DEFINE FIELD IF NOT EXISTS role_confidence ON passage TYPE float DEFAULT 0.55;
+				DEFINE FIELD IF NOT EXISTS review_state ON passage TYPE string
+					DEFAULT 'candidate'
+					ASSERT $value IN ['candidate', 'accepted', 'rejected', 'merged', 'needs_review'];
+				DEFINE FIELD IF NOT EXISTS verification_state ON passage TYPE string
+					DEFAULT 'unverified'
+					ASSERT $value IN ['unverified', 'validated', 'flagged'];
+				DEFINE FIELD IF NOT EXISTS extractor_version ON passage TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS review_notes ON passage TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_by ON passage TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_at ON passage TYPE option<datetime>;
+			`);
+			console.log('[SETUP] ✓ Table: passage');
+
+			await db.query(`
+				DEFINE INDEX IF NOT EXISTS passage_source ON passage FIELDS source;
+				DEFINE INDEX IF NOT EXISTS passage_order ON passage FIELDS source, order_in_source UNIQUE;
+			`);
+			console.log('[SETUP] ✓ Indexes: passage (source, source+order)');
+
+			// 3. CLAIM TABLE
+			await db.query(`
+				DEFINE TABLE IF NOT EXISTS claim SCHEMAFULL;
+				DEFINE FIELD IF NOT EXISTS text ON claim TYPE string;
 			DEFINE FIELD IF NOT EXISTS claim_type ON claim TYPE string
 				ASSERT $value IN ['thesis', 'premise', 'objection', 'response', 'definition', 'thought_experiment', 'empirical', 'methodological'];
-			DEFINE FIELD IF NOT EXISTS domain ON claim TYPE string
-				ASSERT $value IN ['epistemology', 'metaphysics', 'ethics', 'philosophy_of_mind', 'political_philosophy', 'logic', 'aesthetics', 'philosophy_of_science', 'philosophy_of_language', 'applied_ethics', 'philosophy_of_ai'];
-			DEFINE FIELD IF NOT EXISTS source ON claim TYPE record<source>;
-			DEFINE FIELD IF NOT EXISTS section_context ON claim TYPE option<string>;
-			DEFINE FIELD IF NOT EXISTS position_in_source ON claim TYPE option<int>;
-			DEFINE FIELD IF NOT EXISTS confidence ON claim TYPE float DEFAULT 0.8;
-			DEFINE FIELD IF NOT EXISTS embedding ON claim TYPE option<array<float>>;
-			DEFINE FIELD IF NOT EXISTS validation_score ON claim TYPE option<float>;
-		`);
-		console.log('[SETUP] ✓ Table: claim');
+				DEFINE FIELD IF NOT EXISTS domain ON claim TYPE string
+					ASSERT $value IN ['epistemology', 'metaphysics', 'ethics', 'philosophy_of_mind', 'political_philosophy', 'logic', 'aesthetics', 'philosophy_of_science', 'philosophy_of_language', 'applied_ethics', 'philosophy_of_ai'];
+				DEFINE FIELD IF NOT EXISTS source ON claim TYPE record<source>;
+				DEFINE FIELD IF NOT EXISTS passage ON claim TYPE option<record<passage>>;
+				DEFINE FIELD IF NOT EXISTS passage_order ON claim TYPE option<int>;
+				DEFINE FIELD IF NOT EXISTS passage_role ON claim TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['thesis', 'premise', 'objection', 'reply', 'definition', 'distinction', 'example', 'interpretive_commentary'];
+				DEFINE FIELD IF NOT EXISTS section_context ON claim TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS position_in_source ON claim TYPE option<int>;
+				DEFINE FIELD IF NOT EXISTS source_span_start ON claim TYPE option<int>;
+				DEFINE FIELD IF NOT EXISTS source_span_end ON claim TYPE option<int>;
+				DEFINE FIELD IF NOT EXISTS confidence ON claim TYPE float DEFAULT 0.8;
+				DEFINE FIELD IF NOT EXISTS embedding ON claim TYPE option<array<float>>;
+				DEFINE FIELD IF NOT EXISTS validation_score ON claim TYPE option<float>;
+				DEFINE FIELD IF NOT EXISTS claim_origin ON claim TYPE string
+					DEFAULT 'source_grounded'
+					ASSERT $value IN ['source_grounded', 'interpretive', 'synthetic', 'user_generated'];
+				DEFINE FIELD IF NOT EXISTS subdomain ON claim TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS thinker ON claim TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS tradition ON claim TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS era ON claim TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS claim_scope ON claim TYPE string
+					DEFAULT 'descriptive'
+					ASSERT $value IN ['normative', 'descriptive', 'metaphilosophical', 'empirical'];
+				DEFINE FIELD IF NOT EXISTS attributed_to ON claim TYPE option<array<string>>;
+				DEFINE FIELD IF NOT EXISTS concept_tags ON claim TYPE option<array<string>>;
+				DEFINE FIELD IF NOT EXISTS review_state ON claim TYPE string
+					DEFAULT 'candidate'
+					ASSERT $value IN ['candidate', 'accepted', 'rejected', 'merged', 'needs_review'];
+				DEFINE FIELD IF NOT EXISTS verification_state ON claim TYPE string
+					DEFAULT 'unverified'
+					ASSERT $value IN ['unverified', 'validated', 'flagged'];
+				DEFINE FIELD IF NOT EXISTS extractor_version ON claim TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS contested_terms ON claim TYPE option<array<string>>;
+				DEFINE FIELD IF NOT EXISTS review_notes ON claim TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_by ON claim TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_at ON claim TYPE option<datetime>;
+				DEFINE FIELD IF NOT EXISTS merge_target ON claim TYPE option<record<claim>>;
+				DEFINE FIELD IF NOT EXISTS merge_classification ON claim TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['exact_duplicate', 'paraphrase_duplicate', 'broader_narrower', 'related_not_duplicate'];
+			`);
+			console.log('[SETUP] ✓ Table: claim');
 
 		// Create indexes for claim table
-		await db.query(`
-			DEFINE INDEX IF NOT EXISTS claim_embedding ON claim FIELDS embedding MTREE DIMENSION 768;
-			DEFINE INDEX IF NOT EXISTS claim_domain ON claim FIELDS domain;
-			DEFINE INDEX IF NOT EXISTS claim_source ON claim FIELDS source;
-		`);
-		console.log('[SETUP] ✓ Indexes: claim (embedding, domain, source)');
+			await db.query(`
+				DEFINE INDEX IF NOT EXISTS claim_embedding ON claim FIELDS embedding MTREE DIMENSION 768;
+				DEFINE INDEX IF NOT EXISTS claim_domain ON claim FIELDS domain;
+				DEFINE INDEX IF NOT EXISTS claim_source ON claim FIELDS source;
+				DEFINE INDEX IF NOT EXISTS claim_passage ON claim FIELDS passage;
+				DEFINE INDEX IF NOT EXISTS claim_source_position ON claim FIELDS source, position_in_source;
+			`);
+			console.log('[SETUP] ✓ Indexes: claim (embedding, domain, source, passage, source+position)');
 
-		// 3. ARGUMENT TABLE
+			// 4. ARGUMENT TABLE
 		await db.query(`
 			DEFINE TABLE IF NOT EXISTS argument SCHEMAFULL;
 			DEFINE FIELD IF NOT EXISTS name ON argument TYPE string;
@@ -102,55 +166,163 @@ async function setupSchema() {
 		`);
 		console.log('[SETUP] ✓ Table: argument');
 
-		// 4. RELATION: SUPPORTS
-		await db.query(`
-			DEFINE TABLE IF NOT EXISTS supports TYPE RELATION IN claim OUT claim SCHEMAFULL;
-			DEFINE FIELD IF NOT EXISTS strength ON supports TYPE string
-				ASSERT $value IN ['strong', 'moderate', 'weak'];
-			DEFINE FIELD IF NOT EXISTS note ON supports TYPE option<string>;
-		`);
-		console.log('[SETUP] ✓ Relation: supports');
+			// 5. RELATION: SUPPORTS
+			await db.query(`
+				DEFINE TABLE IF NOT EXISTS supports TYPE RELATION IN claim OUT claim SCHEMAFULL;
+				DEFINE FIELD IF NOT EXISTS strength ON supports TYPE string
+					ASSERT $value IN ['strong', 'moderate', 'weak'];
+				DEFINE FIELD IF NOT EXISTS note ON supports TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS evidence_passages ON supports TYPE option<array<record<passage>>>;
+				DEFINE FIELD IF NOT EXISTS relation_confidence ON supports TYPE option<float>;
+				DEFINE FIELD IF NOT EXISTS relation_inference_mode ON supports TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['explicit', 'inferred'];
+				DEFINE FIELD IF NOT EXISTS review_state ON supports TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['candidate', 'accepted', 'rejected', 'merged', 'needs_review'];
+				DEFINE FIELD IF NOT EXISTS verification_state ON supports TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['unverified', 'validated', 'flagged'];
+				DEFINE FIELD IF NOT EXISTS extractor_version ON supports TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS review_notes ON supports TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_by ON supports TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_at ON supports TYPE option<datetime>;
+			`);
+			console.log('[SETUP] ✓ Relation: supports');
 
-		// 5. RELATION: CONTRADICTS
-		await db.query(`
-			DEFINE TABLE IF NOT EXISTS contradicts TYPE RELATION IN claim OUT claim SCHEMAFULL;
-			DEFINE FIELD IF NOT EXISTS strength ON contradicts TYPE string
-				ASSERT $value IN ['strong', 'moderate', 'weak'];
-			DEFINE FIELD IF NOT EXISTS note ON contradicts TYPE option<string>;
-		`);
-		console.log('[SETUP] ✓ Relation: contradicts');
+			// 6. RELATION: CONTRADICTS
+			await db.query(`
+				DEFINE TABLE IF NOT EXISTS contradicts TYPE RELATION IN claim OUT claim SCHEMAFULL;
+				DEFINE FIELD IF NOT EXISTS strength ON contradicts TYPE string
+					ASSERT $value IN ['strong', 'moderate', 'weak'];
+				DEFINE FIELD IF NOT EXISTS note ON contradicts TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS evidence_passages ON contradicts TYPE option<array<record<passage>>>;
+				DEFINE FIELD IF NOT EXISTS relation_confidence ON contradicts TYPE option<float>;
+				DEFINE FIELD IF NOT EXISTS relation_inference_mode ON contradicts TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['explicit', 'inferred'];
+				DEFINE FIELD IF NOT EXISTS review_state ON contradicts TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['candidate', 'accepted', 'rejected', 'merged', 'needs_review'];
+				DEFINE FIELD IF NOT EXISTS verification_state ON contradicts TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['unverified', 'validated', 'flagged'];
+				DEFINE FIELD IF NOT EXISTS extractor_version ON contradicts TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS review_notes ON contradicts TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_by ON contradicts TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_at ON contradicts TYPE option<datetime>;
+			`);
+			console.log('[SETUP] ✓ Relation: contradicts');
 
-		// 6. RELATION: DEPENDS_ON
-		await db.query(`
-			DEFINE TABLE IF NOT EXISTS depends_on TYPE RELATION IN claim OUT claim SCHEMAFULL;
-			DEFINE FIELD IF NOT EXISTS necessity ON depends_on TYPE string
-				ASSERT $value IN ['essential', 'supporting', 'contextual'];
-		`);
-		console.log('[SETUP] ✓ Relation: depends_on');
+			// 7. RELATION: DEPENDS_ON
+			await db.query(`
+				DEFINE TABLE IF NOT EXISTS depends_on TYPE RELATION IN claim OUT claim SCHEMAFULL;
+				DEFINE FIELD IF NOT EXISTS necessity ON depends_on TYPE string
+					ASSERT $value IN ['essential', 'supporting', 'contextual'];
+				DEFINE FIELD IF NOT EXISTS evidence_passages ON depends_on TYPE option<array<record<passage>>>;
+				DEFINE FIELD IF NOT EXISTS relation_confidence ON depends_on TYPE option<float>;
+				DEFINE FIELD IF NOT EXISTS relation_inference_mode ON depends_on TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['explicit', 'inferred'];
+				DEFINE FIELD IF NOT EXISTS review_state ON depends_on TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['candidate', 'accepted', 'rejected', 'merged', 'needs_review'];
+				DEFINE FIELD IF NOT EXISTS verification_state ON depends_on TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['unverified', 'validated', 'flagged'];
+				DEFINE FIELD IF NOT EXISTS extractor_version ON depends_on TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS review_notes ON depends_on TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_by ON depends_on TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_at ON depends_on TYPE option<datetime>;
+			`);
+			console.log('[SETUP] ✓ Relation: depends_on');
 
-		// 7. RELATION: RESPONDS_TO
-		await db.query(`
-			DEFINE TABLE IF NOT EXISTS responds_to TYPE RELATION IN claim OUT claim SCHEMAFULL;
-			DEFINE FIELD IF NOT EXISTS response_type ON responds_to TYPE string
-				ASSERT $value IN ['direct_rebuttal', 'undermining', 'concession', 'refinement'];
-		`);
-		console.log('[SETUP] ✓ Relation: responds_to');
+			// 8. RELATION: RESPONDS_TO
+			await db.query(`
+				DEFINE TABLE IF NOT EXISTS responds_to TYPE RELATION IN claim OUT claim SCHEMAFULL;
+				DEFINE FIELD IF NOT EXISTS response_type ON responds_to TYPE string
+					ASSERT $value IN ['direct_rebuttal', 'undermining', 'concession', 'refinement'];
+				DEFINE FIELD IF NOT EXISTS evidence_passages ON responds_to TYPE option<array<record<passage>>>;
+				DEFINE FIELD IF NOT EXISTS relation_confidence ON responds_to TYPE option<float>;
+				DEFINE FIELD IF NOT EXISTS relation_inference_mode ON responds_to TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['explicit', 'inferred'];
+				DEFINE FIELD IF NOT EXISTS review_state ON responds_to TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['candidate', 'accepted', 'rejected', 'merged', 'needs_review'];
+				DEFINE FIELD IF NOT EXISTS verification_state ON responds_to TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['unverified', 'validated', 'flagged'];
+				DEFINE FIELD IF NOT EXISTS extractor_version ON responds_to TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS review_notes ON responds_to TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_by ON responds_to TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_at ON responds_to TYPE option<datetime>;
+			`);
+			console.log('[SETUP] ✓ Relation: responds_to');
 
-		// 8. RELATION: REFINES
-		await db.query(`
-			DEFINE TABLE IF NOT EXISTS refines TYPE RELATION IN claim OUT claim SCHEMAFULL;
-			DEFINE FIELD IF NOT EXISTS refinement_type ON refines TYPE string
-				ASSERT $value IN ['strengthens', 'qualifies', 'extends', 'clarifies'];
-		`);
-		console.log('[SETUP] ✓ Relation: refines');
+			// 9. RELATION: DEFINES
+			await db.query(`
+				DEFINE TABLE IF NOT EXISTS defines TYPE RELATION IN claim OUT claim SCHEMAFULL;
+				DEFINE FIELD IF NOT EXISTS note ON defines TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS evidence_passages ON defines TYPE option<array<record<passage>>>;
+				DEFINE FIELD IF NOT EXISTS relation_confidence ON defines TYPE option<float>;
+				DEFINE FIELD IF NOT EXISTS relation_inference_mode ON defines TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['explicit', 'inferred'];
+				DEFINE FIELD IF NOT EXISTS review_state ON defines TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['candidate', 'accepted', 'rejected', 'merged', 'needs_review'];
+				DEFINE FIELD IF NOT EXISTS verification_state ON defines TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['unverified', 'validated', 'flagged'];
+				DEFINE FIELD IF NOT EXISTS extractor_version ON defines TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS review_notes ON defines TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_by ON defines TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_at ON defines TYPE option<datetime>;
+			`);
+			console.log('[SETUP] ✓ Relation: defines');
 
-		// 9. RELATION: EXEMPLIFIES
-		await db.query(`
-			DEFINE TABLE IF NOT EXISTS exemplifies TYPE RELATION IN claim OUT claim SCHEMAFULL;
-		`);
-		console.log('[SETUP] ✓ Relation: exemplifies');
+			// 10. RELATION: QUALIFIES
+			await db.query(`
+				DEFINE TABLE IF NOT EXISTS qualifies TYPE RELATION IN claim OUT claim SCHEMAFULL;
+				DEFINE FIELD IF NOT EXISTS qualification_type ON qualifies TYPE string
+					ASSERT $value IN ['restrictive', 'conditional', 'clarifying'];
+				DEFINE FIELD IF NOT EXISTS note ON qualifies TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS evidence_passages ON qualifies TYPE option<array<record<passage>>>;
+				DEFINE FIELD IF NOT EXISTS relation_confidence ON qualifies TYPE option<float>;
+				DEFINE FIELD IF NOT EXISTS relation_inference_mode ON qualifies TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['explicit', 'inferred'];
+				DEFINE FIELD IF NOT EXISTS review_state ON qualifies TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['candidate', 'accepted', 'rejected', 'merged', 'needs_review'];
+				DEFINE FIELD IF NOT EXISTS verification_state ON qualifies TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['unverified', 'validated', 'flagged'];
+				DEFINE FIELD IF NOT EXISTS extractor_version ON qualifies TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS review_notes ON qualifies TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_by ON qualifies TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_at ON qualifies TYPE option<datetime>;
+			`);
+			console.log('[SETUP] ✓ Relation: qualifies');
 
-		// 10. RELATION: PART_OF
+			// 10b. LEGACY RELATIONS (READ-COMPATIBILITY ONLY)
+			await db.query(`
+				DEFINE TABLE IF NOT EXISTS refines TYPE RELATION IN claim OUT claim SCHEMAFULL;
+				DEFINE FIELD IF NOT EXISTS refinement_type ON refines TYPE string
+					ASSERT $value IN ['strengthens', 'qualifies', 'extends', 'clarifies'];
+				DEFINE FIELD IF NOT EXISTS evidence_passages ON refines TYPE option<array<record<passage>>>;
+				DEFINE FIELD IF NOT EXISTS relation_confidence ON refines TYPE option<float>;
+				DEFINE FIELD IF NOT EXISTS relation_inference_mode ON refines TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['explicit', 'inferred'];
+				DEFINE FIELD IF NOT EXISTS review_state ON refines TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['candidate', 'accepted', 'rejected', 'merged', 'needs_review'];
+				DEFINE FIELD IF NOT EXISTS verification_state ON refines TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['unverified', 'validated', 'flagged'];
+				DEFINE FIELD IF NOT EXISTS extractor_version ON refines TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS review_notes ON refines TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_by ON refines TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_at ON refines TYPE option<datetime>;
+
+				DEFINE TABLE IF NOT EXISTS exemplifies TYPE RELATION IN claim OUT claim SCHEMAFULL;
+				DEFINE FIELD IF NOT EXISTS evidence_passages ON exemplifies TYPE option<array<record<passage>>>;
+				DEFINE FIELD IF NOT EXISTS relation_confidence ON exemplifies TYPE option<float>;
+				DEFINE FIELD IF NOT EXISTS relation_inference_mode ON exemplifies TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['explicit', 'inferred'];
+				DEFINE FIELD IF NOT EXISTS review_state ON exemplifies TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['candidate', 'accepted', 'rejected', 'merged', 'needs_review'];
+				DEFINE FIELD IF NOT EXISTS verification_state ON exemplifies TYPE option<string>
+					ASSERT $value = NONE OR $value IN ['unverified', 'validated', 'flagged'];
+				DEFINE FIELD IF NOT EXISTS extractor_version ON exemplifies TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS review_notes ON exemplifies TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_by ON exemplifies TYPE option<string>;
+				DEFINE FIELD IF NOT EXISTS reviewed_at ON exemplifies TYPE option<datetime>;
+			`);
+			console.log('[SETUP] ✓ Legacy relations: refines, exemplifies');
+
+			// 11. RELATION: PART_OF
 		await db.query(`
 			DEFINE TABLE IF NOT EXISTS part_of TYPE RELATION IN claim OUT argument SCHEMAFULL;
 			DEFINE FIELD IF NOT EXISTS role ON part_of TYPE string
@@ -159,7 +331,39 @@ async function setupSchema() {
 		`);
 		console.log('[SETUP] ✓ Relation: part_of');
 
-		// 11. QUERY_CACHE TABLE (with 7-day TTL for automatic expiration)
+			// 12. REVIEW_AUDIT_LOG TABLE
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS review_audit_log SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS entity_kind ON review_audit_log TYPE string
+				ASSERT $value IN ['claim', 'relation', 'claim_pair'];
+			DEFINE FIELD IF NOT EXISTS entity_id ON review_audit_log TYPE string;
+			DEFINE FIELD IF NOT EXISTS entity_table ON review_audit_log TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS action ON review_audit_log TYPE string
+				ASSERT $value IN ['accept', 'reject', 'return_to_review', 'merge', 'classify_pair'];
+			DEFINE FIELD IF NOT EXISTS previous_state ON review_audit_log TYPE option<string>
+				ASSERT $value = NONE OR $value IN ['candidate', 'accepted', 'rejected', 'merged', 'needs_review'];
+			DEFINE FIELD IF NOT EXISTS next_state ON review_audit_log TYPE option<string>
+				ASSERT $value = NONE OR $value IN ['candidate', 'accepted', 'rejected', 'merged', 'needs_review'];
+			DEFINE FIELD IF NOT EXISTS reviewer_uid ON review_audit_log TYPE string;
+			DEFINE FIELD IF NOT EXISTS reviewer_email ON review_audit_log TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS source_id ON review_audit_log TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS source_title ON review_audit_log TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS merge_target_id ON review_audit_log TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS merge_classification ON review_audit_log TYPE option<string>
+				ASSERT $value = NONE OR $value IN ['exact_duplicate', 'paraphrase_duplicate', 'broader_narrower', 'related_not_duplicate'];
+			DEFINE FIELD IF NOT EXISTS notes ON review_audit_log TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS metadata ON review_audit_log TYPE option<object>;
+			DEFINE FIELD IF NOT EXISTS created_at ON review_audit_log TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Table: review_audit_log');
+
+		await db.query(`
+			DEFINE INDEX IF NOT EXISTS review_audit_entity ON review_audit_log FIELDS entity_kind, entity_id;
+			DEFINE INDEX IF NOT EXISTS review_audit_created_at ON review_audit_log FIELDS created_at;
+		`);
+		console.log('[SETUP] ✓ Indexes: review_audit_log (entity, created_at)');
+
+			// 13. QUERY_CACHE TABLE (with 7-day TTL for automatic expiration)
 		await db.query(`
 			DEFINE TABLE IF NOT EXISTS query_cache SCHEMAFULL;
 			DEFINE FIELD IF NOT EXISTS query_hash ON query_cache TYPE string;
@@ -178,23 +382,15 @@ async function setupSchema() {
 		`);
 		console.log('[SETUP] ✓ Index: query_cache_hash');
 
-		// 12. LINK_INGESTION_QUEUE TABLE (deferred nightly ingestion)
-			await db.query(`
-				DEFINE TABLE IF NOT EXISTS link_ingestion_queue SCHEMAFULL;
-				DEFINE FIELD IF NOT EXISTS canonical_url ON link_ingestion_queue TYPE string;
-				DEFINE FIELD IF NOT EXISTS canonical_url_hash ON link_ingestion_queue TYPE string;
-				DEFINE FIELD IF NOT EXISTS hostname ON link_ingestion_queue TYPE string;
-				DEFINE FIELD IF NOT EXISTS visibility_scope ON link_ingestion_queue TYPE string
-					DEFAULT 'public_shared'
-					ASSERT $value IN ['public_shared', 'private_user_only'];
-				DEFINE FIELD IF NOT EXISTS owner_uid ON link_ingestion_queue TYPE option<string>;
-				DEFINE FIELD IF NOT EXISTS contributor_uid ON link_ingestion_queue TYPE option<string>;
-				DEFINE FIELD IF NOT EXISTS deletion_state ON link_ingestion_queue TYPE string
-					DEFAULT 'active'
-					ASSERT $value IN ['active', 'deleted'];
-				DEFINE FIELD IF NOT EXISTS status ON link_ingestion_queue TYPE string
-					DEFAULT 'queued'
-					ASSERT $value IN ['queued', 'pending_review', 'approved', 'ingesting', 'ingested', 'failed', 'rejected'];
+			// 14. LINK_INGESTION_QUEUE TABLE (deferred nightly ingestion)
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS link_ingestion_queue SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS canonical_url ON link_ingestion_queue TYPE string;
+			DEFINE FIELD IF NOT EXISTS canonical_url_hash ON link_ingestion_queue TYPE string;
+			DEFINE FIELD IF NOT EXISTS hostname ON link_ingestion_queue TYPE string;
+			DEFINE FIELD IF NOT EXISTS status ON link_ingestion_queue TYPE string
+				DEFAULT 'queued'
+				ASSERT $value IN ['queued', 'pending_review', 'approved', 'ingesting', 'ingested', 'failed', 'rejected'];
 			DEFINE FIELD IF NOT EXISTS source_kinds ON link_ingestion_queue TYPE array<string>;
 			DEFINE FIELD IF NOT EXISTS query_run_ids ON link_ingestion_queue TYPE array<string>;
 			DEFINE FIELD IF NOT EXISTS latest_query_run_id ON link_ingestion_queue TYPE option<string>;
@@ -219,31 +415,29 @@ async function setupSchema() {
 		await db.query(`
 			DEFINE INDEX IF NOT EXISTS link_ingestion_queue_canonical_hash
 			ON link_ingestion_queue FIELDS canonical_url_hash UNIQUE;
-				DEFINE INDEX IF NOT EXISTS link_ingestion_queue_status
-				ON link_ingestion_queue FIELDS status;
-				DEFINE INDEX IF NOT EXISTS link_ingestion_queue_last_submitted_at
-				ON link_ingestion_queue FIELDS last_submitted_at;
-				DEFINE INDEX IF NOT EXISTS link_ingestion_queue_visibility_scope
-				ON link_ingestion_queue FIELDS visibility_scope;
-				DEFINE INDEX IF NOT EXISTS link_ingestion_queue_owner_uid
-				ON link_ingestion_queue FIELDS owner_uid;
-			`);
-			console.log('[SETUP] ✓ Indexes: link_ingestion_queue (canonical_hash, status, last_submitted_at, visibility_scope, owner_uid)');
+			DEFINE INDEX IF NOT EXISTS link_ingestion_queue_status
+			ON link_ingestion_queue FIELDS status;
+			DEFINE INDEX IF NOT EXISTS link_ingestion_queue_last_submitted_at
+			ON link_ingestion_queue FIELDS last_submitted_at;
+		`);
+		console.log('[SETUP] ✓ Indexes: link_ingestion_queue (canonical_hash, status, last_submitted_at)');
 
 		// Verify schema by querying table counts
 		console.log('\n[SETUP] Verifying schema...');
 
-		const tables = [
-			'source',
-			'claim',
-			'argument',
+			const tables = [
+				'source',
+				'passage',
+				'claim',
+				'argument',
 			'supports',
 			'contradicts',
 			'depends_on',
 			'responds_to',
-			'refines',
-			'exemplifies',
+			'defines',
+			'qualifies',
 			'part_of',
+			'review_audit_log',
 			'query_cache',
 			'link_ingestion_queue'
 		];
@@ -254,26 +448,37 @@ async function setupSchema() {
 		}
 
 		console.log('\n✅ Schema created successfully!\n');
-		console.log('Tables created:');
-		console.log('  • source (metadata for philosophical sources)');
+			console.log('Tables created:');
+			console.log('  • source (metadata for philosophical sources)');
+			console.log('  • passage (argument-native spans and role labels)');
 		console.log('  • claim (individual philosophical claims with embeddings)');
 		console.log('  • argument (philosophical arguments)');
+		console.log('  • review_audit_log (moderation and promotion audit trail)');
 		console.log('\nRelation tables created:');
 		console.log('  • supports (claim supports claim)');
 		console.log('  • contradicts (claim contradicts claim)');
 		console.log('  • depends_on (claim depends on claim)');
 		console.log('  • responds_to (claim responds to claim)');
-		console.log('  • refines (claim refines claim)');
-		console.log('  • exemplifies (claim exemplifies claim)');
+		console.log('  • defines (claim defines claim)');
+		console.log('  • qualifies (claim qualifies claim)');
 		console.log('  • part_of (claim is part of argument)\n');
 
-		await db.close();
-		process.exit(0);
+		if (ownsConnection) {
+			await db.close();
+		}
 	} catch (error) {
 		console.error('[SETUP] Error:', error);
-		await db.close();
-		process.exit(1);
+		if (ownsConnection) {
+			await db.close();
+		}
+		throw error;
 	}
 }
 
-setupSchema();
+const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+
+if (isDirectRun) {
+	setupSchema().catch(() => {
+		process.exit(1);
+	});
+}

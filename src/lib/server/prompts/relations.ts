@@ -7,8 +7,8 @@ RELATION TYPES:
 - contradicts: Claim A directly opposes or is logically incompatible with Claim B
 - depends_on: Claim A requires Claim B to be true in order for Claim A to hold (premise dependency)
 - responds_to: Claim A is a direct response or reply to the objection or challenge in Claim B
-- refines: Claim A modifies, qualifies, or extends Claim B
-- exemplifies: Claim A is a concrete instance or example of the general principle stated in Claim B
+- defines: Claim A states the meaning, criteria, or key distinction needed to understand Claim B
+- qualifies: Claim A narrows, limits, or adds conditions to Claim B
 
 FOR EACH RELATION, PROVIDE:
 - from_position: position_in_source of the source claim
@@ -35,8 +35,8 @@ const RELATION_TYPE_VALUES = [
 	'contradicts',
 	'depends_on',
 	'responds_to',
-	'refines',
-	'exemplifies'
+	'defines',
+	'qualifies'
 ] as const;
 
 const STRENGTH_VALUES = ['strong', 'moderate', 'weak'] as const;
@@ -64,9 +64,18 @@ function normalizeRelationType(value: unknown): unknown {
 		depends: 'depends_on',
 		responds_to: 'responds_to',
 		responds: 'responds_to',
-		refines: 'refines',
-		exemplifies: 'exemplifies',
-		example_of: 'exemplifies'
+		defines: 'defines',
+		define: 'defines',
+		definition_of: 'defines',
+		qualifies: 'qualifies',
+		qualify: 'qualifies',
+		qualified_by: 'qualifies',
+		refines: 'qualifies',
+		refine: 'qualifies',
+		clarifies: 'qualifies',
+		extends: 'qualifies',
+		exemplifies: 'supports',
+		example_of: 'supports'
 	};
 	return relationMap[normalized] ?? normalized;
 }

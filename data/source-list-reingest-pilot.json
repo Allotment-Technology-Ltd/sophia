@@ -1,0 +1,28 @@
+[
+  {
+    "id": 117,
+    "title": "Identity and Ethics",
+    "author": ["David Shoemaker"],
+    "year": null,
+    "url": "https://plato.stanford.edu/entries/identity-ethics/",
+    "source_type": "sep_entry",
+    "priority": "PILOT",
+    "subdomain": "personal-identity",
+    "wave": 2,
+    "domain": "philosophy_of_mind",
+    "notes": "SEP pilot for Phase 1 reingestion. Run this first under the frozen stage-model profile."
+  },
+  {
+    "id": 5,
+    "title": "Groundwork of the Metaphysics of Morals",
+    "author": ["Immanuel Kant"],
+    "year": 1785,
+    "url": "https://www.gutenberg.org/files/5682/5682-h/5682-h.htm",
+    "source_type": "book",
+    "priority": "PILOT",
+    "subdomain": "normative",
+    "wave": 1,
+    "domain": "ethics",
+    "notes": "Gutenberg pilot for Phase 1 reingestion. Run only after the SEP pilot has passed review."
+  }
+]

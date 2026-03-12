@@ -39,7 +39,7 @@ export interface Relation {
 	note?: string;
 	necessity?: string;
 	response_type?: string;
-	refinement_type?: string;
+	qualification_type?: string;
 }
 
 export interface BatchOptions {
@@ -207,9 +207,19 @@ export class BatchInserter {
 								vars.response_type = rel.response_type || 'refinement';
 								break;
 							}
-							case 'refines': {
-								relQuery += ` SET refinement_type = $refinement_type`;
-								vars.refinement_type = rel.refinement_type || 'clarifies';
+							case 'defines': {
+								if (rel.note) {
+									relQuery += ` SET note = $note`;
+									vars.note = rel.note;
+								}
+								break;
+							}
+							case 'qualifies': {
+								relQuery += rel.note
+									? ` SET qualification_type = $qualification_type, note = $note`
+									: ` SET qualification_type = $qualification_type`;
+								vars.qualification_type = rel.qualification_type || 'conditional';
+								if (rel.note) vars.note = rel.note;
 								break;
 							}
 						}

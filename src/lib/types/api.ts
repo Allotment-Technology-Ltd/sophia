@@ -182,7 +182,7 @@ export interface GraphNode {
 export interface GraphEdge {
   from: string;
   to: string;
-  type: 'contains' | 'supports' | 'contradicts' | 'responds-to' | 'depends-on' | 'qualifies' | 'assumes' | 'resolves';
+  type: 'contains' | 'supports' | 'contradicts' | 'responds-to' | 'depends-on' | 'defines' | 'qualifies' | 'assumes' | 'resolves';
   weight?: number;
   phaseOrigin?: 'retrieval' | 'analysis' | 'critique' | 'synthesis';
   depth_level?: number;
@@ -204,7 +204,8 @@ export type GraphRejectionReasonCode =
   | 'duplicate_traversal'
   | 'duplicate_relation'
   | 'missing_endpoint'
-  | 'confidence_gate';
+  | 'confidence_gate'
+  | 'source_integrity_gate';
 
 export interface GraphGhostNode {
   id: string;

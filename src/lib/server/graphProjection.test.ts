@@ -109,4 +109,25 @@ describe('projectRetrievalToGraph', () => {
     expect(ghostEdge?.type).toBe('contradicts');
     expect(ghostEdge?.reasonCode).toBe('duplicate_relation');
   });
+
+  it('maps conservative relation types into graph edges without legacy aliases', () => {
+    const retrieval: RetrievalResult = {
+      ...baseRetrieval,
+      relations: [
+        {
+          from_index: 0,
+          to_index: 1,
+          relation_type: 'defines',
+          strength: 'strong',
+          note: 'A defines B'
+        }
+      ]
+    };
+
+    const { edges, meta } = projectRetrievalToGraph(retrieval);
+    const logicalEdge = edges.find((edge) => edge.from === 'claim:a' && edge.to === 'claim:b');
+
+    expect(logicalEdge?.type).toBe('defines');
+    expect(meta.relationTypeCounts?.defines).toBe(1);
+  });
 });

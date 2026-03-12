@@ -745,18 +745,29 @@ function mapRelationsToExtracted(bundles: RelationBundle[]): ExtractedRelation[]
   const relations: ExtractedRelation[] = [];
   for (const bundle of bundles) {
     for (const relation of bundle.relations) {
-      const relationType =
-        relation.type === 'depends-on'
-          ? 'depends_on'
-          : relation.type === 'responds-to'
-            ? 'refines'
-            : relation.type === 'qualifies'
-              ? 'qualifies'
-              : relation.type === 'assumes'
-                ? 'assumes'
-                : relation.type === 'resolves'
-                  ? 'refines'
-                  : relation.type;
+      let relationType: ExtractedRelation['relation_type'];
+      switch (relation.type) {
+        case 'supports':
+        case 'contradicts':
+        case 'defines':
+        case 'qualifies':
+          relationType = relation.type;
+          break;
+        case 'depends-on':
+          relationType = 'depends_on';
+          break;
+        case 'responds-to':
+          relationType = 'responds_to';
+          break;
+        case 'assumes':
+          relationType = 'depends_on';
+          break;
+        case 'resolves':
+          relationType = 'qualifies';
+          break;
+        default:
+          relationType = 'supports';
+      }
 
       relations.push({
         from_claim_id: bundle.claimId.startsWith('claim:') ? bundle.claimId.slice(6) : bundle.claimId,

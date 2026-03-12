@@ -16,12 +16,14 @@ const RELATION_TABLES = [
 	'contradicts',
 	'depends_on',
 	'responds_to',
+	'defines',
+	'qualifies',
 	'refines',
 	'exemplifies',
 	'part_of'
 ];
 
-const DATA_TABLES = ['source', 'claim', 'argument'];
+const DATA_TABLES = ['source', 'passage', 'claim', 'argument', 'review_audit_log'];
 
 async function connect(): Promise<Surreal> {
 	const db = new Surreal();

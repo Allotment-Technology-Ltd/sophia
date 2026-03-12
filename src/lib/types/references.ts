@@ -8,6 +8,7 @@ export type RelationType =
   | 'contradicts'
   | 'responds-to'
   | 'depends-on'
+  | 'defines'
   | 'qualifies'
   | 'assumes'
   | 'resolves';

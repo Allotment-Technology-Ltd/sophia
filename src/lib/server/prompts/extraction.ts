@@ -1,13 +1,22 @@
 import { z } from 'zod';
+import { CLAIM_ORIGIN_VALUES, CLAIM_SCOPE_VALUES } from '../ingestion/contracts.js';
 
-export const EXTRACTION_SYSTEM = `You are a philosophical text analyst specialising in argument mining. Your task is to extract every atomic philosophical claim from the source text provided.
+export const EXTRACTION_SYSTEM = `You are a philosophical text analyst specialising in argument mining. Your task is to extract every atomic philosophical claim from the argumentative passages provided.
 
 DEFINITION: An atomic claim is a single, self-contained assertion that could be true or false. It expresses one idea. It is not a paragraph. It is not a compound statement connected by "and" or "but."
 
 FOR EACH CLAIM, PROVIDE:
 - text: The claim in clear, concise language. Paraphrase if needed for clarity, but preserve philosophical precision. Do not simply quote — ensure the claim is intelligible without the surrounding context.
 - claim_type: One of: thesis | premise | objection | response | definition | thought_experiment | empirical | methodological
+- claim_origin: One of: source_grounded | interpretive | synthetic | user_generated
 - domain: One of: ethics | epistemology | metaphysics | philosophy_of_mind | political_philosophy | logic | aesthetics | philosophy_of_science | philosophy_of_language | applied_ethics | philosophy_of_ai
+- subdomain: A short subdomain label such as normative_ethics, metaethics, consciousness, skepticism
+- thinker: The primary thinker most directly associated with the claim, if clear
+- tradition: The primary philosophical tradition most directly associated with the claim, if clear
+- era: A short era label such as ancient, early_modern, modern, contemporary
+- claim_scope: One of: normative | descriptive | metaphilosophical | empirical
+- concept_tags: 1-5 short concept tags for the claim
+- passage_id: The id of the <passage> block where the claim appears
 - section_context: The section or heading this claim appears under
 - position_in_source: Sequential integer (1, 2, 3...) for ordering within the source
 - confidence: Float 0.0–1.0. Use 1.0 for explicit, unambiguous claims. Use 0.7–0.9 for implied or reconstructed claims. Use below 0.7 only for highly interpretive extractions.
@@ -24,7 +33,9 @@ CLAIM TYPE DEFINITIONS:
 
 RULES:
 - Extract CLAIMS, not summaries. 'Mill argues that...' is a summary. 'The only proof that something is desirable is that people actually desire it' is a claim.
+- Use the supplied passage ids exactly as given.
 - Distinguish premises from conclusions. If claim A is offered as evidence for claim B, A is a premise and B is a thesis.
+- Use source_grounded unless the claim is clearly interpretive or synthetic. user_generated should be extremely rare in ingestion.
 - Include definitions when they are philosophically substantive.
 - Include thought experiments as claims about what we should conclude from them.
 - Do not extract claims that are purely expository (e.g., 'In this section I will argue...').
@@ -65,6 +76,23 @@ const DOMAIN_VALUES = [
 	'applied_ethics',
 	'philosophy_of_ai'
 ] as const;
+
+function normalizeStringList(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value
+			.map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+			.filter(Boolean)
+			.slice(0, 8);
+	}
+	if (typeof value === 'string') {
+		return value
+			.split(',')
+			.map((entry) => entry.trim())
+			.filter(Boolean)
+			.slice(0, 8);
+	}
+	return value;
+}
 
 function normalizeLabel(value: unknown): string | unknown {
 	if (typeof value !== 'string') return value;
@@ -121,7 +149,15 @@ function normalizeDomain(value: unknown): unknown {
 export const ExtractionClaimSchema = z.object({
 	text: z.string().describe('The claim in clear, concise language'),
 	claim_type: z.preprocess(normalizeClaimType, z.enum(CLAIM_TYPE_VALUES)),
+	claim_origin: z.preprocess(normalizeLabel, z.enum(CLAIM_ORIGIN_VALUES)).optional(),
 	domain: z.preprocess(normalizeDomain, z.enum(DOMAIN_VALUES)),
+	subdomain: z.string().optional(),
+	thinker: z.string().optional(),
+	tradition: z.string().optional(),
+	era: z.string().optional(),
+	claim_scope: z.preprocess(normalizeLabel, z.enum(CLAIM_SCOPE_VALUES)).optional(),
+	concept_tags: z.preprocess(normalizeStringList, z.array(z.string()).max(8)).optional(),
+	passage_id: z.string().optional().describe('Passage id where the claim appears'),
 	section_context: z.string().nullable().optional().describe('The section or heading'),
 	position_in_source: z.preprocess(coercePositiveInt, z.number().int().positive()).describe('Sequential position in source'),
 	confidence: z.coerce.number().min(0).max(1).describe('Confidence score 0.0-1.0')

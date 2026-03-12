@@ -17,7 +17,8 @@ Ship BYOK (Bring Your Own Key) so users provide their own model-provider credent
 1. **Phase 1** — BYOK foundation (Vertex + Anthropic)
 2. **Phase 1b** — OpenAI key + model expansion
 3. **Phase 1c** — Additional providers via plugin model (starting with Voyage and xAI/Grok)
-4. **Phase 2** — Monetization (deferred)
+4. **Phase 1d** — End-user model selection optimization (post-provider integration)
+5. **Phase 2** — Monetization (deferred)
 
 ---
 
@@ -90,6 +91,27 @@ Generalize BYOK support so new providers can be added without reworking core rou
 - At least two additional providers integrated using the plugin contract.
 - New provider onboarding requires no schema redesign.
 - Cross-provider error and status behavior remains consistent for users.
+
+---
+
+## Phase 1d — End-user model selection optimization (post-provider integration)
+
+### Objective
+
+Define and roll out a preset-based model selection strategy for end users after multi-provider BYOK integration is operational.
+
+### Deliverables
+
+- Tiered end-user presets (`balanced`, `quality`, `fast`) with ordered fallback chains.
+- Deterministic fallback policy for timeout/retryable provider failures.
+- Evaluation gates for quality, latency, cost, and reliability before default promotion.
+- Backlog strategy reference: [BYOK End-User Model Selection Plan](./byok-end-user-model-selection-plan.md).
+
+### Success gates
+
+- Preset defaults are benchmark-validated prior to production promotion.
+- Fallback behavior is observable and stable under load.
+- Existing runtime contracts remain backward compatible during rollout.
 
 ---
 

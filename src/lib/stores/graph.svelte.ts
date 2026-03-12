@@ -9,6 +9,7 @@ const ALL_RELATION_TYPES: GraphEdge['type'][] = [
   'contradicts',
   'responds-to',
   'depends-on',
+  'defines',
   'qualifies',
   'assumes',
   'resolves'

@@ -21,9 +21,9 @@ export const VerificationRelationTypeSchema = z.enum([
   'supports',
   'contradicts',
   'depends_on',
-  'refines',
+  'responds_to',
+  'defines',
   'qualifies',
-  'assumes'
 ]);
 
 export type VerificationRelationType = z.infer<typeof VerificationRelationTypeSchema>;

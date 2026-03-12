@@ -69,6 +69,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			'contradicts',
 			'depends_on',
 			'responds_to',
+			'defines',
+			'qualifies',
 			'refines',
 			'exemplifies'
 		];

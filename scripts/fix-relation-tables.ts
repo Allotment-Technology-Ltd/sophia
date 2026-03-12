@@ -21,6 +21,8 @@ async function run() {
 			'contradicts',
 			'depends_on',
 			'responds_to',
+			'defines',
+			'qualifies',
 			'refines',
 			'exemplifies',
 			'part_of'
@@ -66,16 +68,30 @@ async function run() {
 		console.log('[MIGRATE] Recreated relation table: responds_to');
 
 		await db.query(`
+			DEFINE TABLE defines TYPE RELATION IN claim OUT claim SCHEMAFULL;
+			DEFINE FIELD note ON defines TYPE option<string>;
+		`);
+		console.log('[MIGRATE] Recreated relation table: defines');
+
+		await db.query(`
+			DEFINE TABLE qualifies TYPE RELATION IN claim OUT claim SCHEMAFULL;
+			DEFINE FIELD qualification_type ON qualifies TYPE string
+				ASSERT $value IN ['restrictive', 'conditional', 'clarifying'];
+			DEFINE FIELD note ON qualifies TYPE option<string>;
+		`);
+		console.log('[MIGRATE] Recreated relation table: qualifies');
+
+		await db.query(`
 			DEFINE TABLE refines TYPE RELATION IN claim OUT claim SCHEMAFULL;
 			DEFINE FIELD refinement_type ON refines TYPE string
 				ASSERT $value IN ['strengthens', 'qualifies', 'extends', 'clarifies'];
 		`);
-		console.log('[MIGRATE] Recreated relation table: refines');
+		console.log('[MIGRATE] Recreated legacy relation table: refines');
 
 		await db.query(`
 			DEFINE TABLE exemplifies TYPE RELATION IN claim OUT claim SCHEMAFULL;
 		`);
-		console.log('[MIGRATE] Recreated relation table: exemplifies');
+		console.log('[MIGRATE] Recreated legacy relation table: exemplifies');
 
 		await db.query(`
 			DEFINE TABLE part_of TYPE RELATION IN claim OUT argument SCHEMAFULL;

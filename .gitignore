@@ -36,11 +36,14 @@ docs/design/MASTER-IMPLEMENTATION-GUIDE.md
 .env.paddle.generated.*
 
 # .env.example is intentionally tracked (contains placeholder values only)
+.env.paddle.generated
+.env.paddle.generated.production
 
 # Source texts and ingested data (copyrighted material — do not publish)
 data/sources/*.txt
 data/sources/*.meta.json
 data/ingested/*.json
+data/ingested/*.raw.txt
 
 # Database files
 *.db

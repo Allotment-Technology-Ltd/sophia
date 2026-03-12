@@ -1,0 +1,2291 @@
+{
+  "generated_at": "2026-03-12T08:28:01.627Z",
+  "generated_by": "scripts/build-reingestion-manifest.ts",
+  "db_enrichment": {
+    "connected": true
+  },
+  "sources_by_canonical_url_hash": {
+    "00fcec3c568ee0738f9399c9ece1b1c827a7348540669b7395fcce01a7cb175b": {
+      "canonical_url_hash": "00fcec3c568ee0738f9399c9ece1b1c827a7348540669b7395fcce01a7cb175b",
+      "canonical_url": "https://www.gutenberg.org/files/5682/5682-h/5682-h.htm",
+      "pilot_priority": "gutenberg_pilot",
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [],
+      "preferred_title": "Groundwork of the Metaphysics of Morals",
+      "preferred_author": [
+        "Immanuel Kant"
+      ],
+      "preferred_year": 1785,
+      "source_type": "book",
+      "primary_local_artifact": {
+        "canonical_url": "https://www.gutenberg.org/files/5682/5682-h/5682-h.htm",
+        "local_slug": "fundamental-principles-of-the-metaphysic-of-morals-00fcec3c56",
+        "meta_path": "data/sources/fundamental-principles-of-the-metaphysic-of-morals-00fcec3c56.meta.json",
+        "text_path": "data/sources/fundamental-principles-of-the-metaphysic-of-morals-00fcec3c56.txt",
+        "text_exists": true,
+        "text_bytes": 194979,
+        "title": "Groundwork of the Metaphysics of Morals",
+        "author": [
+          "Immanuel Kant"
+        ],
+        "year": 1785,
+        "source_type": "book",
+        "fetched_at": "2026-03-11T15:49:36.343Z",
+        "word_count": 30934,
+        "char_count": 194965,
+        "estimated_tokens": 40215
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://www.gutenberg.org/files/5682/5682-h/5682-h.htm",
+          "local_slug": "fundamental-principles-of-the-metaphysic-of-morals-00fcec3c56",
+          "meta_path": "data/sources/fundamental-principles-of-the-metaphysic-of-morals-00fcec3c56.meta.json",
+          "text_path": "data/sources/fundamental-principles-of-the-metaphysic-of-morals-00fcec3c56.txt",
+          "text_exists": true,
+          "text_bytes": 194979,
+          "title": "Groundwork of the Metaphysics of Morals",
+          "author": [
+            "Immanuel Kant"
+          ],
+          "year": 1785,
+          "source_type": "book",
+          "fetched_at": "2026-03-11T15:49:36.343Z",
+          "word_count": 30934,
+          "char_count": 194965,
+          "estimated_tokens": 40215
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-3a.json",
+          "id": 5,
+          "title": "Groundwork of the Metaphysics of Morals",
+          "author": [
+            "Immanuel Kant"
+          ],
+          "year": 1785,
+          "url": "https://www.gutenberg.org/files/5682/5682-h/5682-h.htm",
+          "source_type": "book",
+          "priority": "ESSENTIAL",
+          "subdomain": "normative",
+          "wave": 1,
+          "domain": null,
+          "notes": null
+        },
+        {
+          "source_list_file": "data/source-list-reingest-pilot.json",
+          "id": 5,
+          "title": "Groundwork of the Metaphysics of Morals",
+          "author": [
+            "Immanuel Kant"
+          ],
+          "year": 1785,
+          "url": "https://www.gutenberg.org/files/5682/5682-h/5682-h.htm",
+          "source_type": "book",
+          "priority": "PILOT",
+          "subdomain": "normative",
+          "wave": 1,
+          "domain": "ethics",
+          "notes": "Gutenberg pilot for Phase 1 reingestion. Run only after the SEP pilot has passed review."
+        }
+      ],
+      "db_source": {
+        "claim_count": 638,
+        "id": "source:j09x5w7q3ew95btra0ie",
+        "ingested_at": "2026-03-11T16:12:56.936210588Z",
+        "status": "ingested",
+        "title": "Fundamental Principles of the Metaphysic of Morals",
+        "url": "https://www.gutenberg.org/files/5682/5682-h/5682-h.htm"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 69,
+        "claims_extracted": 638,
+        "completed_at": "2026-03-11T16:12:56.993Z",
+        "cost_usd": 0.0499,
+        "relations_extracted": 375,
+        "source_title": "Fundamental Principles of the Metaphysic of Morals",
+        "source_url": "https://www.gutenberg.org/files/5682/5682-h/5682-h.htm",
+        "stage_completed": "storing",
+        "started_at": "2026-03-11T15:50:06.628954051Z",
+        "status": "complete"
+      }
+    },
+    "05ff17aad5351c03e97ef2658fe7a10d2e103a6915d2509f73781bddc3741c59": {
+      "canonical_url_hash": "05ff17aad5351c03e97ef2658fe7a10d2e103a6915d2509f73781bddc3741c59",
+      "canonical_url": "https://plato.stanford.edu/entries/identity-personal",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "author_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Personal Identity",
+      "preferred_author": [
+        "Harold W. Noonan",
+        "Ben Curtis"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/identity-personal",
+        "local_slug": "personal-identity",
+        "meta_path": "data/sources/personal-identity.meta.json",
+        "text_path": "data/sources/personal-identity.txt",
+        "text_exists": true,
+        "text_bytes": 51691,
+        "title": "Personal Identity",
+        "author": [
+          "Olson, Eric T."
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-10T07:56:47.952Z",
+        "word_count": 8641,
+        "char_count": 51241,
+        "estimated_tokens": 11234
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/identity-personal",
+          "local_slug": "personal-identity",
+          "meta_path": "data/sources/personal-identity.meta.json",
+          "text_path": "data/sources/personal-identity.txt",
+          "text_exists": true,
+          "text_bytes": 51691,
+          "title": "Personal Identity",
+          "author": [
+            "Olson, Eric T."
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-10T07:56:47.952Z",
+          "word_count": 8641,
+          "char_count": 51241,
+          "estimated_tokens": 11234
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 115,
+          "title": "Personal Identity",
+          "author": [
+            "Harold W. Noonan",
+            "Ben Curtis"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/identity-personal/",
+          "source_type": "sep_entry",
+          "priority": "ESSENTIAL",
+          "subdomain": "personal-identity",
+          "wave": 2,
+          "domain": "philosophy_of_mind",
+          "notes": "Canonical overview covering psychological and bodily continuity views."
+        }
+      ],
+      "db_source": {
+        "claim_count": 128,
+        "id": "source:kqkzk8rv2169ettaux06",
+        "ingested_at": "2026-03-10T08:45:40.166123921Z",
+        "status": "ingested",
+        "title": "Personal Identity",
+        "url": "https://plato.stanford.edu/entries/identity-personal/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 7,
+        "claims_extracted": 128,
+        "completed_at": "2026-03-10T08:45:40.186Z",
+        "cost_usd": 0,
+        "relations_extracted": 34,
+        "source_title": "Personal Identity",
+        "source_url": "https://plato.stanford.edu/entries/identity-personal/",
+        "stage_completed": "storing",
+        "started_at": "2026-03-10T07:58:00.152060876Z",
+        "status": "complete"
+      }
+    },
+    "114895144c9835cff08bc0acec5bff8177e55675347970fbb1c1d7a3d72b5951": {
+      "canonical_url_hash": "114895144c9835cff08bc0acec5bff8177e55675347970fbb1c1d7a3d72b5951",
+      "canonical_url": "https://plato.stanford.edu/entries/embodied-cognition",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "author_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Embodied Cognition",
+      "preferred_author": [
+        "Lawrence Shapiro"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/embodied-cognition",
+        "local_slug": "embodied-cognition",
+        "meta_path": "data/sources/embodied-cognition.meta.json",
+        "text_path": "data/sources/embodied-cognition.txt",
+        "text_exists": true,
+        "text_bytes": 83962,
+        "title": "Embodied Cognition",
+        "author": [
+          "Shapiro, Lawrence"
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-10T07:56:51.816Z",
+        "word_count": 12570,
+        "char_count": 83328,
+        "estimated_tokens": 16341
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/embodied-cognition",
+          "local_slug": "embodied-cognition",
+          "meta_path": "data/sources/embodied-cognition.meta.json",
+          "text_path": "data/sources/embodied-cognition.txt",
+          "text_exists": true,
+          "text_bytes": 83962,
+          "title": "Embodied Cognition",
+          "author": [
+            "Shapiro, Lawrence"
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-10T07:56:51.816Z",
+          "word_count": 12570,
+          "char_count": 83328,
+          "estimated_tokens": 16341
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 118,
+          "title": "Embodied Cognition",
+          "author": [
+            "Lawrence Shapiro"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/embodied-cognition/",
+          "source_type": "sep_entry",
+          "priority": "HIGH",
+          "subdomain": "extended-cognition",
+          "wave": 2,
+          "domain": "philosophy_of_mind",
+          "notes": "Context for anti-internalist models and situated cognition."
+        }
+      ],
+      "db_source": {
+        "claim_count": 211,
+        "id": "source:jwuueqli1liqqjv6zjz1",
+        "ingested_at": "2026-03-10T08:57:54.656374137Z",
+        "status": "ingested",
+        "title": "Embodied Cognition",
+        "url": "https://plato.stanford.edu/entries/embodied-cognition/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 19,
+        "claims_extracted": 211,
+        "completed_at": "2026-03-10T08:57:54.681Z",
+        "cost_usd": 0.0156,
+        "relations_extracted": 92,
+        "source_title": "Embodied Cognition",
+        "source_url": "https://plato.stanford.edu/entries/embodied-cognition/",
+        "stage_completed": "storing",
+        "started_at": "2026-03-10T08:05:12.548552756Z",
+        "status": "complete"
+      }
+    },
+    "179cad3f06cf1fe5ab2ff4acb58feee98779f13f10fd3a88d90503d720ac9467": {
+      "canonical_url_hash": "179cad3f06cf1fe5ab2ff4acb58feee98779f13f10fd3a88d90503d720ac9467",
+      "canonical_url": "https://www.cambridge.org/core/journals/behavioral-and-brain-sciences/article/minds-brains-and-programs/DC644B47A4299C637C89772FACC2706A",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [],
+      "preferred_title": "Minds, brains, and programs",
+      "preferred_author": [
+        "John R. Searle Affiliation: Department of Philosophy, University of California, Berkeley, Calif. 94720"
+      ],
+      "preferred_year": null,
+      "source_type": "paper",
+      "primary_local_artifact": {
+        "canonical_url": "https://www.cambridge.org/core/journals/behavioral-and-brain-sciences/article/minds-brains-and-programs/DC644B47A4299C637C89772FACC2706A",
+        "local_slug": "minds-brains-and-programs",
+        "meta_path": "data/sources/minds-brains-and-programs.meta.json",
+        "text_path": "data/sources/minds-brains-and-programs.txt",
+        "text_exists": true,
+        "text_bytes": 87,
+        "title": "Minds, brains, and programs",
+        "author": [
+          "John R. Searle Affiliation: Department of Philosophy, University of California, Berkeley, Calif. 94720"
+        ],
+        "year": null,
+        "source_type": "paper",
+        "fetched_at": "2026-03-08T12:04:40.984Z",
+        "word_count": 10,
+        "char_count": 87,
+        "estimated_tokens": 13
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://www.cambridge.org/core/journals/behavioral-and-brain-sciences/article/minds-brains-and-programs/DC644B47A4299C637C89772FACC2706A",
+          "local_slug": "minds-brains-and-programs",
+          "meta_path": "data/sources/minds-brains-and-programs.meta.json",
+          "text_path": "data/sources/minds-brains-and-programs.txt",
+          "text_exists": true,
+          "text_bytes": 87,
+          "title": "Minds, brains, and programs",
+          "author": [
+            "John R. Searle Affiliation: Department of Philosophy, University of California, Berkeley, Calif. 94720"
+          ],
+          "year": null,
+          "source_type": "paper",
+          "fetched_at": "2026-03-08T12:04:40.984Z",
+          "word_count": 10,
+          "char_count": 87,
+          "estimated_tokens": 13
+        }
+      ],
+      "source_list_entries": [],
+      "db_source": null,
+      "db_ingestion_log": null
+    },
+    "1dcac8d0e6d16b130d16634fb779de0827ca468498ca2ea5088bcafc3d71477c": {
+      "canonical_url_hash": "1dcac8d0e6d16b130d16634fb779de0827ca468498ca2ea5088bcafc3d71477c",
+      "canonical_url": "https://plato.stanford.edu/entries/identity-ethics",
+      "pilot_priority": "sep_pilot",
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [],
+      "preferred_title": "Identity and Ethics",
+      "preferred_author": [
+        "David Shoemaker"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/identity-ethics",
+        "local_slug": "personal-identity-and-ethics",
+        "meta_path": "data/sources/personal-identity-and-ethics.meta.json",
+        "text_path": "data/sources/personal-identity-and-ethics.txt",
+        "text_exists": true,
+        "text_bytes": 49348,
+        "title": "Identity and Ethics",
+        "author": [
+          "David Shoemaker"
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-10T07:56:50.425Z",
+        "word_count": 7726,
+        "char_count": 49171,
+        "estimated_tokens": 10044
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/identity-ethics",
+          "local_slug": "personal-identity-and-ethics",
+          "meta_path": "data/sources/personal-identity-and-ethics.meta.json",
+          "text_path": "data/sources/personal-identity-and-ethics.txt",
+          "text_exists": true,
+          "text_bytes": 49348,
+          "title": "Identity and Ethics",
+          "author": [
+            "David Shoemaker"
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-10T07:56:50.425Z",
+          "word_count": 7726,
+          "char_count": 49171,
+          "estimated_tokens": 10044
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 117,
+          "title": "Identity and Ethics",
+          "author": [
+            "David Shoemaker"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/identity-ethics/",
+          "source_type": "sep_entry",
+          "priority": "HIGH",
+          "subdomain": "personal-identity",
+          "wave": 2,
+          "domain": "philosophy_of_mind",
+          "notes": "SEP source covering Parfit-style links between personal identity and normative ethics."
+        },
+        {
+          "source_list_file": "data/source-list-reingest-pilot.json",
+          "id": 117,
+          "title": "Identity and Ethics",
+          "author": [
+            "David Shoemaker"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/identity-ethics/",
+          "source_type": "sep_entry",
+          "priority": "PILOT",
+          "subdomain": "personal-identity",
+          "wave": 2,
+          "domain": "philosophy_of_mind",
+          "notes": "SEP pilot for Phase 1 reingestion. Run this first under the frozen stage-model profile."
+        }
+      ],
+      "db_source": {
+        "claim_count": 159,
+        "id": "source:jk0j9sdokkzrspg5unov",
+        "ingested_at": "2026-03-10T08:50:32.262712209Z",
+        "status": "ingested",
+        "title": "Personal Identity and Ethics",
+        "url": "https://plato.stanford.edu/entries/identity-ethics/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 15,
+        "claims_extracted": 202,
+        "completed_at": "2026-03-12T08:27:45.932Z",
+        "cost_usd": 0.7535,
+        "relations_extracted": 186,
+        "source_title": "Personal Identity and Ethics",
+        "source_url": "https://plato.stanford.edu/entries/identity-ethics",
+        "stage_completed": "storing",
+        "started_at": "2026-03-10T08:01:10.672471131Z",
+        "status": "complete"
+      }
+    },
+    "2d167a5865c1be7d72042eee2772d096891a128e89965d7f0168d0607cf9e2ed": {
+      "canonical_url_hash": "2d167a5865c1be7d72042eee2772d096891a128e89965d7f0168d0607cf9e2ed",
+      "canonical_url": "https://www.gutenberg.org/files/11224/11224-h/11224-h.htm",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "title_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Utilitarianism",
+      "preferred_author": [
+        "John Stuart Mill"
+      ],
+      "preferred_year": 1863,
+      "source_type": "book",
+      "primary_local_artifact": {
+        "canonical_url": "https://www.gutenberg.org/files/11224/11224-h/11224-h.htm",
+        "local_slug": "utilitarianism-2d167a5865",
+        "meta_path": "data/sources/utilitarianism-2d167a5865.meta.json",
+        "text_path": "data/sources/utilitarianism-2d167a5865.txt",
+        "text_exists": true,
+        "text_bytes": 160859,
+        "title": "UTILITARIANISM",
+        "author": [
+          "John Stuart Mill"
+        ],
+        "year": 1863,
+        "source_type": "book",
+        "fetched_at": "2026-03-11T16:16:29.578Z",
+        "word_count": 27603,
+        "char_count": 160764,
+        "estimated_tokens": 35884
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://www.gutenberg.org/files/11224/11224-h/11224-h.htm",
+          "local_slug": "utilitarianism-2d167a5865",
+          "meta_path": "data/sources/utilitarianism-2d167a5865.meta.json",
+          "text_path": "data/sources/utilitarianism-2d167a5865.txt",
+          "text_exists": true,
+          "text_bytes": 160859,
+          "title": "UTILITARIANISM",
+          "author": [
+            "John Stuart Mill"
+          ],
+          "year": 1863,
+          "source_type": "book",
+          "fetched_at": "2026-03-11T16:16:29.578Z",
+          "word_count": 27603,
+          "char_count": 160764,
+          "estimated_tokens": 35884
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-3a.json",
+          "id": 2,
+          "title": "Utilitarianism",
+          "author": [
+            "John Stuart Mill"
+          ],
+          "year": 1863,
+          "url": "https://www.gutenberg.org/files/11224/11224-h/11224-h.htm",
+          "source_type": "book",
+          "priority": "ESSENTIAL",
+          "subdomain": "normative",
+          "wave": 1,
+          "domain": null,
+          "notes": null
+        }
+      ],
+      "db_source": {
+        "claim_count": 413,
+        "id": "source:ptx47qjffa9nucltig0k",
+        "ingested_at": "2026-03-11T16:24:03.954660133Z",
+        "status": "ingested",
+        "title": "UTILITARIANISM",
+        "url": "https://www.gutenberg.org/files/11224/11224-h/11224-h.htm"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 38,
+        "claims_extracted": 413,
+        "completed_at": "2026-03-11T16:24:03.999Z",
+        "cost_usd": 0.044,
+        "relations_extracted": 167,
+        "source_title": "UTILITARIANISM",
+        "source_url": "https://www.gutenberg.org/files/11224/11224-h/11224-h.htm",
+        "stage_completed": "storing",
+        "started_at": "2026-03-11T16:16:30.12463334Z",
+        "status": "complete"
+      }
+    },
+    "321582686742ef761ddadc4ed6585e6a2ca27fb4cf4232a2a78d5b2548cd957b": {
+      "canonical_url_hash": "321582686742ef761ddadc4ed6585e6a2ca27fb4cf4232a2a78d5b2548cd957b",
+      "canonical_url": "https://plato.stanford.edu/entries/physicalism",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "author_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Physicalism",
+      "preferred_author": [
+        "Daniel Stoljar"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/physicalism",
+        "local_slug": "physicalism",
+        "meta_path": "data/sources/physicalism.meta.json",
+        "text_path": "data/sources/physicalism.txt",
+        "text_exists": true,
+        "text_bytes": 98389,
+        "title": "Physicalism",
+        "author": [
+          "Stoljar, Daniel"
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-08T12:03:47.325Z",
+        "word_count": 15880,
+        "char_count": 97850,
+        "estimated_tokens": 20644
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/physicalism",
+          "local_slug": "physicalism",
+          "meta_path": "data/sources/physicalism.meta.json",
+          "text_path": "data/sources/physicalism.txt",
+          "text_exists": true,
+          "text_bytes": 98389,
+          "title": "Physicalism",
+          "author": [
+            "Stoljar, Daniel"
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-08T12:03:47.325Z",
+          "word_count": 15880,
+          "char_count": 97850,
+          "estimated_tokens": 20644
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 105,
+          "title": "Physicalism",
+          "author": [
+            "Daniel Stoljar"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/physicalism/",
+          "source_type": "sep_entry",
+          "priority": "HIGH",
+          "subdomain": "qualia",
+          "wave": 1,
+          "domain": "philosophy_of_mind",
+          "notes": "SEP entry on physicalism — covers deflationary and eliminativist responses to qualia arguments. Essential materialist counterpoint to Chalmers/Nagel. Replaces Dennett 'Quining Qualia' (Tufts link now dead/redirects to homepage)."
+        }
+      ],
+      "db_source": {
+        "claim_count": 375,
+        "id": "source:x5n3kaed9y3yak5dz30u",
+        "ingested_at": "2026-03-09T07:22:45.339769513Z",
+        "status": "ingested",
+        "title": "Physicalism",
+        "url": "https://plato.stanford.edu/entries/physicalism/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 29,
+        "claims_extracted": 375,
+        "completed_at": "2026-03-09T07:22:45.38Z",
+        "cost_usd": 1.4026,
+        "relations_extracted": 222,
+        "source_title": "Physicalism",
+        "source_url": "https://plato.stanford.edu/entries/physicalism/",
+        "stage_completed": "storing",
+        "started_at": "2026-03-09T07:09:02.96176784Z",
+        "status": "complete"
+      }
+    },
+    "406837e783ddddc96726b52651745e250a6f7169f55612d83e55565a69155309": {
+      "canonical_url_hash": "406837e783ddddc96726b52651745e250a6f7169f55612d83e55565a69155309",
+      "canonical_url": "https://www.givingwhatwecan.org/get-involved/videos-books-and-essays/famine-affluence-and-morality-peter-singer",
+      "pilot_priority": null,
+      "reingestion_status": "blocked",
+      "blocking_reasons": [
+        "missing_or_empty_local_text",
+        "insufficient_word_count"
+      ],
+      "notes": [
+        "title_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Famine, Affluence, and Morality",
+      "preferred_author": [
+        "Peter Singer"
+      ],
+      "preferred_year": 1972,
+      "source_type": "paper",
+      "primary_local_artifact": {
+        "canonical_url": "https://www.givingwhatwecan.org/get-involved/videos-books-and-essays/famine-affluence-and-morality-peter-singer",
+        "local_slug": "famine-affluence-and-morality-by-peter-singer",
+        "meta_path": "data/sources/famine-affluence-and-morality-by-peter-singer.meta.json",
+        "text_path": "data/sources/famine-affluence-and-morality-by-peter-singer.txt",
+        "text_exists": true,
+        "text_bytes": 0,
+        "title": "Famine, Affluence and Morality, by Peter Singer",
+        "author": [
+          "Peter Singer"
+        ],
+        "year": 1972,
+        "source_type": "paper",
+        "fetched_at": "2026-03-01T22:08:07.160Z",
+        "word_count": 1,
+        "char_count": 0,
+        "estimated_tokens": 2
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://www.givingwhatwecan.org/get-involved/videos-books-and-essays/famine-affluence-and-morality-peter-singer",
+          "local_slug": "famine-affluence-and-morality-by-peter-singer",
+          "meta_path": "data/sources/famine-affluence-and-morality-by-peter-singer.meta.json",
+          "text_path": "data/sources/famine-affluence-and-morality-by-peter-singer.txt",
+          "text_exists": true,
+          "text_bytes": 0,
+          "title": "Famine, Affluence and Morality, by Peter Singer",
+          "author": [
+            "Peter Singer"
+          ],
+          "year": 1972,
+          "source_type": "paper",
+          "fetched_at": "2026-03-01T22:08:07.160Z",
+          "word_count": 1,
+          "char_count": 0,
+          "estimated_tokens": 2
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-3a.json",
+          "id": 3,
+          "title": "Famine, Affluence, and Morality",
+          "author": [
+            "Peter Singer"
+          ],
+          "year": 1972,
+          "url": "https://www.givingwhatwecan.org/get-involved/videos-books-and-essays/famine-affluence-and-morality-peter-singer",
+          "source_type": "paper",
+          "priority": "ESSENTIAL",
+          "subdomain": "applied",
+          "wave": 1,
+          "domain": null,
+          "notes": null
+        }
+      ],
+      "db_source": null,
+      "db_ingestion_log": null
+    },
+    "5066312b820502939b2c68e656083008b05a4389f97c79b8f80283e90f22223f": {
+      "canonical_url_hash": "5066312b820502939b2c68e656083008b05a4389f97c79b8f80283e90f22223f",
+      "canonical_url": "https://iep.utm.edu/fodor",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "title_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Jerry Fodor",
+      "preferred_author": [
+        "Internet Encyclopedia of Philosophy"
+      ],
+      "preferred_year": null,
+      "source_type": "iep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://iep.utm.edu/fodor",
+        "local_slug": "internet-encyclopedia-of-philosophy",
+        "meta_path": "data/sources/internet-encyclopedia-of-philosophy.meta.json",
+        "text_path": "data/sources/internet-encyclopedia-of-philosophy.txt",
+        "text_exists": true,
+        "text_bytes": 86071,
+        "title": "Internet Encyclopedia of Philosophy",
+        "author": [
+          "Internet Encyclopedia of Philosophy"
+        ],
+        "year": null,
+        "source_type": "iep_entry",
+        "fetched_at": "2026-03-10T07:56:45.210Z",
+        "word_count": 12997,
+        "char_count": 84747,
+        "estimated_tokens": 16897
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://iep.utm.edu/fodor",
+          "local_slug": "internet-encyclopedia-of-philosophy",
+          "meta_path": "data/sources/internet-encyclopedia-of-philosophy.meta.json",
+          "text_path": "data/sources/internet-encyclopedia-of-philosophy.txt",
+          "text_exists": true,
+          "text_bytes": 86071,
+          "title": "Internet Encyclopedia of Philosophy",
+          "author": [
+            "Internet Encyclopedia of Philosophy"
+          ],
+          "year": null,
+          "source_type": "iep_entry",
+          "fetched_at": "2026-03-10T07:56:45.210Z",
+          "word_count": 12997,
+          "char_count": 84747,
+          "estimated_tokens": 16897
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 113,
+          "title": "Jerry Fodor",
+          "author": [
+            "Internet Encyclopedia of Philosophy"
+          ],
+          "year": null,
+          "url": "https://iep.utm.edu/fodor/",
+          "source_type": "iep_entry",
+          "priority": "HIGH",
+          "subdomain": "mind-body",
+          "wave": 2,
+          "domain": "philosophy_of_mind",
+          "notes": "Fodor's computational theory of mind and representational commitments."
+        }
+      ],
+      "db_source": {
+        "claim_count": 168,
+        "id": "source:9otqi0xflnpezh09wesx",
+        "ingested_at": "2026-03-10T08:28:29.781407917Z",
+        "status": "ingested",
+        "title": "Internet Encyclopedia of Philosophy",
+        "url": "https://iep.utm.edu/fodor/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 13,
+        "claims_extracted": 168,
+        "completed_at": "2026-03-10T08:28:29.806Z",
+        "cost_usd": 0,
+        "relations_extracted": 55,
+        "source_title": "Internet Encyclopedia of Philosophy",
+        "source_url": "https://iep.utm.edu/fodor/",
+        "stage_completed": "storing",
+        "started_at": "2026-03-10T07:56:45.804840175Z",
+        "status": "complete"
+      }
+    },
+    "60a07643a0ec1aaa90b80af26cf0a52ce7c8eeaa0803004cd624e60f6a6bbbed": {
+      "canonical_url_hash": "60a07643a0ec1aaa90b80af26cf0a52ce7c8eeaa0803004cd624e60f6a6bbbed",
+      "canonical_url": "https://plato.stanford.edu/entries/qualia",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "author_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Qualia",
+      "preferred_author": [
+        "Michael Tye"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/qualia",
+        "local_slug": "qualia",
+        "meta_path": "data/sources/qualia.meta.json",
+        "text_path": "data/sources/qualia.txt",
+        "text_exists": true,
+        "text_bytes": 69344,
+        "title": "Qualia",
+        "author": [
+          "Tye, Michael"
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-08T12:02:19.269Z",
+        "word_count": 11118,
+        "char_count": 69067,
+        "estimated_tokens": 14454
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/qualia",
+          "local_slug": "qualia",
+          "meta_path": "data/sources/qualia.meta.json",
+          "text_path": "data/sources/qualia.txt",
+          "text_exists": true,
+          "text_bytes": 69344,
+          "title": "Qualia",
+          "author": [
+            "Tye, Michael"
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-08T12:02:19.269Z",
+          "word_count": 11118,
+          "char_count": 69067,
+          "estimated_tokens": 14454
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 104,
+          "title": "Qualia",
+          "author": [
+            "Michael Tye"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/qualia/",
+          "source_type": "sep_entry",
+          "priority": "ESSENTIAL",
+          "subdomain": "qualia",
+          "wave": 1,
+          "domain": "philosophy_of_mind",
+          "notes": "SEP entry on qualia — covers the knowledge argument (Mary's Room / Jackson), inverted qualia, absent qualia, and major responses. Replaces direct paper URL for Jackson which was JSTOR-blocked."
+        }
+      ],
+      "db_source": {
+        "claim_count": 273,
+        "id": "source:z1r0zqhryoioo5dc21za",
+        "ingested_at": "2026-03-09T07:09:00.208452214Z",
+        "status": "ingested",
+        "title": "Qualia",
+        "url": "https://plato.stanford.edu/entries/qualia/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 27,
+        "claims_extracted": 273,
+        "completed_at": "2026-03-09T07:09:00.241Z",
+        "cost_usd": 1.0184,
+        "relations_extracted": 135,
+        "source_title": "Qualia",
+        "source_url": "https://plato.stanford.edu/entries/qualia/",
+        "stage_completed": "storing",
+        "started_at": "2026-03-09T06:58:29.336773214Z",
+        "status": "complete"
+      }
+    },
+    "6d28d8325cb0b7c613a4c22dc2b3b2fa2987a7a200d1adc6eda802f0fd6f8697": {
+      "canonical_url_hash": "6d28d8325cb0b7c613a4c22dc2b3b2fa2987a7a200d1adc6eda802f0fd6f8697",
+      "canonical_url": "https://plato.stanford.edu/entries/turing-test",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "author_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "The Turing Test",
+      "preferred_author": [
+        "Graham Oppy",
+        "David Dowe"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/turing-test",
+        "local_slug": "the-turing-test",
+        "meta_path": "data/sources/the-turing-test.meta.json",
+        "text_path": "data/sources/the-turing-test.txt",
+        "text_exists": true,
+        "text_bytes": 102427,
+        "title": "The Turing Test",
+        "author": [
+          "Oppy, Graham"
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-08T12:07:32.418Z",
+        "word_count": 16784,
+        "char_count": 101282,
+        "estimated_tokens": 21820
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/turing-test",
+          "local_slug": "the-turing-test",
+          "meta_path": "data/sources/the-turing-test.meta.json",
+          "text_path": "data/sources/the-turing-test.txt",
+          "text_exists": true,
+          "text_bytes": 102427,
+          "title": "The Turing Test",
+          "author": [
+            "Oppy, Graham"
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-08T12:07:32.418Z",
+          "word_count": 16784,
+          "char_count": 101282,
+          "estimated_tokens": 21820
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 110,
+          "title": "The Turing Test",
+          "author": [
+            "Graham Oppy",
+            "David Dowe"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/turing-test/",
+          "source_type": "sep_entry",
+          "priority": "HIGH",
+          "subdomain": "ai-minds",
+          "wave": 1,
+          "domain": "philosophy_of_mind",
+          "notes": "SEP entry on the Turing Test — covers Turing's original proposal, objections (Searle, Lady Lovelace, etc.), and contemporary debates about machine intelligence and consciousness. Replaces Chalmers arXiv 2303.07103 which only has a 560-word abstract page available."
+        }
+      ],
+      "db_source": {
+        "claim_count": 302,
+        "id": "source:35gt9u62rlv81evt67ik",
+        "ingested_at": "2026-03-09T08:27:49.234765625Z",
+        "status": "ingested",
+        "title": "The Turing Test",
+        "url": "https://plato.stanford.edu/entries/turing-test/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 33,
+        "claims_extracted": 302,
+        "completed_at": "2026-03-09T08:27:49.269Z",
+        "cost_usd": 1.307,
+        "relations_extracted": 223,
+        "source_title": "The Turing Test",
+        "source_url": "https://plato.stanford.edu/entries/turing-test/",
+        "stage_completed": "storing",
+        "started_at": "2026-03-09T08:14:46.703271638Z",
+        "status": "complete"
+      }
+    },
+    "6e40e0be24dbb4ef1116389dd4db0e5c80c29b5c88eccb26bdb7be907ef856e3": {
+      "canonical_url_hash": "6e40e0be24dbb4ef1116389dd4db0e5c80c29b5c88eccb26bdb7be907ef856e3",
+      "canonical_url": "https://plato.stanford.edu/entries/locke-personal-identity",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "author_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Locke on Personal Identity",
+      "preferred_author": [
+        "William Uzgalis"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/locke-personal-identity",
+        "local_slug": "locke-on-personal-identity",
+        "meta_path": "data/sources/locke-on-personal-identity.meta.json",
+        "text_path": "data/sources/locke-on-personal-identity.txt",
+        "text_exists": true,
+        "text_bytes": 55336,
+        "title": "Locke on Personal Identity",
+        "author": [
+          "Gordon-Roth, Jessica"
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-10T07:56:49.200Z",
+        "word_count": 9019,
+        "char_count": 54650,
+        "estimated_tokens": 11725
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/locke-personal-identity",
+          "local_slug": "locke-on-personal-identity",
+          "meta_path": "data/sources/locke-on-personal-identity.meta.json",
+          "text_path": "data/sources/locke-on-personal-identity.txt",
+          "text_exists": true,
+          "text_bytes": 55336,
+          "title": "Locke on Personal Identity",
+          "author": [
+            "Gordon-Roth, Jessica"
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-10T07:56:49.200Z",
+          "word_count": 9019,
+          "char_count": 54650,
+          "estimated_tokens": 11725
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 116,
+          "title": "Locke on Personal Identity",
+          "author": [
+            "William Uzgalis"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/locke-personal-identity/",
+          "source_type": "sep_entry",
+          "priority": "HIGH",
+          "subdomain": "personal-identity",
+          "wave": 2,
+          "domain": "philosophy_of_mind",
+          "notes": "Lockean memory criterion context for personal identity debates."
+        }
+      ],
+      "db_source": {
+        "claim_count": 120,
+        "id": "source:oo3bj8yw0e6we1iqn15s",
+        "ingested_at": "2026-03-10T08:47:56.735610054Z",
+        "status": "ingested",
+        "title": "Locke on Personal Identity",
+        "url": "https://plato.stanford.edu/entries/locke-personal-identity/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 5,
+        "claims_extracted": 120,
+        "completed_at": "2026-03-10T08:47:56.751Z",
+        "cost_usd": 0.012,
+        "relations_extracted": 41,
+        "source_title": "Locke on Personal Identity",
+        "source_url": "https://plato.stanford.edu/entries/locke-personal-identity/",
+        "stage_completed": "storing",
+        "started_at": "2026-03-10T08:00:53.028916595Z",
+        "status": "complete"
+      }
+    },
+    "701141d014674c12135a6b25692487d3a6eed6e93cc615437a9c4e106414ca02": {
+      "canonical_url_hash": "701141d014674c12135a6b25692487d3a6eed6e93cc615437a9c4e106414ca02",
+      "canonical_url": "https://plato.stanford.edu/entries/content-externalism",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "title_mismatch_between_source_list_and_local_meta",
+        "author_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Content Externalism",
+      "preferred_author": [
+        "Jessica Brown",
+        "Mikkel Gerken"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/content-externalism",
+        "local_slug": "externalism-about-the-mind",
+        "meta_path": "data/sources/externalism-about-the-mind.meta.json",
+        "text_path": "data/sources/externalism-about-the-mind.txt",
+        "text_exists": true,
+        "text_bytes": 60591,
+        "title": "Externalism About the Mind",
+        "author": [
+          "Rowlands, Mark"
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-10T07:59:52.585Z",
+        "word_count": 9397,
+        "char_count": 60221,
+        "estimated_tokens": 12217
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/content-externalism",
+          "local_slug": "externalism-about-the-mind",
+          "meta_path": "data/sources/externalism-about-the-mind.meta.json",
+          "text_path": "data/sources/externalism-about-the-mind.txt",
+          "text_exists": true,
+          "text_bytes": 60591,
+          "title": "Externalism About the Mind",
+          "author": [
+            "Rowlands, Mark"
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-10T07:59:52.585Z",
+          "word_count": 9397,
+          "char_count": 60221,
+          "estimated_tokens": 12217
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 119,
+          "title": "Content Externalism",
+          "author": [
+            "Jessica Brown",
+            "Mikkel Gerken"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/content-externalism/",
+          "source_type": "sep_entry",
+          "priority": "ESSENTIAL",
+          "subdomain": "extended-cognition",
+          "wave": 2,
+          "domain": "philosophy_of_mind",
+          "notes": "SEP source on externalist approaches relevant to extended-cognition framing."
+        }
+      ],
+      "db_source": {
+        "claim_count": 169,
+        "id": "source:n4kqcpjkgq6oiy1hpyxo",
+        "ingested_at": "2026-03-10T09:01:20.125143134Z",
+        "status": "ingested",
+        "title": "Externalism About the Mind",
+        "url": "https://plato.stanford.edu/entries/content-externalism/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 6,
+        "claims_extracted": 169,
+        "completed_at": "2026-03-10T09:01:20.146Z",
+        "cost_usd": 0.0167,
+        "relations_extracted": 93,
+        "source_title": "Externalism About the Mind",
+        "source_url": "https://plato.stanford.edu/entries/content-externalism/",
+        "stage_completed": "storing",
+        "started_at": "2026-03-10T08:57:58.805682555Z",
+        "status": "complete"
+      }
+    },
+    "7845b4e3da0e7a95ec0d856926988158eb6d09c2186e2004c58aa58e31ccbdc6": {
+      "canonical_url_hash": "7845b4e3da0e7a95ec0d856926988158eb6d09c2186e2004c58aa58e31ccbdc6",
+      "canonical_url": "https://plato.stanford.edu/entries/consciousness",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "author_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Consciousness",
+      "preferred_author": [
+        "Robert Van Gulick"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/consciousness",
+        "local_slug": "consciousness",
+        "meta_path": "data/sources/consciousness.meta.json",
+        "text_path": "data/sources/consciousness.txt",
+        "text_exists": true,
+        "text_bytes": 124593,
+        "title": "Consciousness",
+        "author": [
+          "Van Gulick, Robert"
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-08T12:01:15.621Z",
+        "word_count": 19097,
+        "char_count": 124249,
+        "estimated_tokens": 24827
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/consciousness",
+          "local_slug": "consciousness",
+          "meta_path": "data/sources/consciousness.meta.json",
+          "text_path": "data/sources/consciousness.txt",
+          "text_exists": true,
+          "text_bytes": 124593,
+          "title": "Consciousness",
+          "author": [
+            "Van Gulick, Robert"
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-08T12:01:15.621Z",
+          "word_count": 19097,
+          "char_count": 124249,
+          "estimated_tokens": 24827
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 102,
+          "title": "Consciousness",
+          "author": [
+            "Robert Van Gulick"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/consciousness/",
+          "source_type": "sep_entry",
+          "priority": "ESSENTIAL",
+          "subdomain": "consciousness",
+          "wave": 1,
+          "domain": "philosophy_of_mind",
+          "notes": "SEP overview — covers phenomenal vs access consciousness, the hard problem, and major positions."
+        }
+      ],
+      "db_source": {
+        "claim_count": 547,
+        "id": "source:sxbyqyafajcjxamb3q1h",
+        "ingested_at": "2026-03-09T06:47:31.53442184Z",
+        "status": "ingested",
+        "title": "Consciousness",
+        "url": "https://plato.stanford.edu/entries/consciousness/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 62,
+        "claims_extracted": 547,
+        "completed_at": "2026-03-09T06:47:31.592Z",
+        "cost_usd": 1.8802,
+        "relations_extracted": 153,
+        "source_title": "Consciousness",
+        "source_url": "https://plato.stanford.edu/entries/consciousness/",
+        "stage_completed": "storing",
+        "started_at": "2026-03-09T06:27:32.464246674Z",
+        "status": "complete"
+      }
+    },
+    "85d250a46412476da7d7ec2f9901376d58a88f0a2fd53fd5dd7e6177b90d4048": {
+      "canonical_url_hash": "85d250a46412476da7d7ec2f9901376d58a88f0a2fd53fd5dd7e6177b90d4048",
+      "canonical_url": "https://plato.stanford.edu/entries/descartes-epistemology",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "title_mismatch_between_source_list_and_local_meta",
+        "author_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Descartes' Epistemology",
+      "preferred_author": [
+        "Richard Francks"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/descartes-epistemology",
+        "local_slug": "descartes-epistemology",
+        "meta_path": "data/sources/descartes-epistemology.meta.json",
+        "text_path": "data/sources/descartes-epistemology.txt",
+        "text_exists": true,
+        "text_bytes": 178629,
+        "title": "Descartes’ Epistemology",
+        "author": [
+          "Newman, Lex"
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-10T07:56:42.904Z",
+        "word_count": 29206,
+        "char_count": 176592,
+        "estimated_tokens": 37968
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/descartes-epistemology",
+          "local_slug": "descartes-epistemology",
+          "meta_path": "data/sources/descartes-epistemology.meta.json",
+          "text_path": "data/sources/descartes-epistemology.txt",
+          "text_exists": true,
+          "text_bytes": 178629,
+          "title": "Descartes’ Epistemology",
+          "author": [
+            "Newman, Lex"
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-10T07:56:42.904Z",
+          "word_count": 29206,
+          "char_count": 176592,
+          "estimated_tokens": 37968
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 111,
+          "title": "Descartes' Epistemology",
+          "author": [
+            "Richard Francks"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/descartes-epistemology/",
+          "source_type": "sep_entry",
+          "priority": "HIGH",
+          "subdomain": "mind-body",
+          "wave": 2,
+          "domain": "philosophy_of_mind",
+          "notes": "Descartes background for substance dualism and mind-body framing."
+        }
+      ],
+      "db_source": null,
+      "db_ingestion_log": {
+        "cost_usd": 0.0023,
+        "source_title": "Descartes’ Epistemology",
+        "source_url": "https://plato.stanford.edu/entries/descartes-epistemology/",
+        "started_at": "2026-03-10T07:56:43.495408299Z",
+        "status": "extracting"
+      }
+    },
+    "860a4c5884791c4b7e5abb97998ad03bbdf74d5d6c2389c62e9b86d305f90284": {
+      "canonical_url_hash": "860a4c5884791c4b7e5abb97998ad03bbdf74d5d6c2389c62e9b86d305f90284",
+      "canonical_url": "https://consc.net/papers/facing.html",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "duplicate_local_artifacts:2"
+      ],
+      "preferred_title": "Facing Up to the Problem of Consciousness",
+      "preferred_author": [
+        "David Chalmers"
+      ],
+      "preferred_year": 1995,
+      "source_type": "paper",
+      "primary_local_artifact": {
+        "canonical_url": "https://consc.net/papers/facing.html",
+        "local_slug": "facing-up-to-the-problem-of-consciousness",
+        "meta_path": "data/sources/facing-up-to-the-problem-of-consciousness.meta.json",
+        "text_path": "data/sources/facing-up-to-the-problem-of-consciousness.txt",
+        "text_exists": true,
+        "text_bytes": 77023,
+        "title": "Facing Up to the Problem of Consciousness",
+        "author": [
+          "David Chalmers"
+        ],
+        "year": 1995,
+        "source_type": "paper",
+        "fetched_at": "2026-03-08T12:02:12.205Z",
+        "word_count": 12029,
+        "char_count": 77018,
+        "estimated_tokens": 15638
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://consc.net/papers/facing.html",
+          "local_slug": "facing-up-to-the-problem-of-consciousness",
+          "meta_path": "data/sources/facing-up-to-the-problem-of-consciousness.meta.json",
+          "text_path": "data/sources/facing-up-to-the-problem-of-consciousness.txt",
+          "text_exists": true,
+          "text_bytes": 77023,
+          "title": "Facing Up to the Problem of Consciousness",
+          "author": [
+            "David Chalmers"
+          ],
+          "year": 1995,
+          "source_type": "paper",
+          "fetched_at": "2026-03-08T12:02:12.205Z",
+          "word_count": 12029,
+          "char_count": 77018,
+          "estimated_tokens": 15638
+        },
+        {
+          "canonical_url": "https://consc.net/papers/facing.html",
+          "local_slug": "unknown-title",
+          "meta_path": "data/sources/unknown-title.meta.json",
+          "text_path": "data/sources/unknown-title.txt",
+          "text_exists": true,
+          "text_bytes": 77023,
+          "title": "Facing Up to the Problem of Consciousness",
+          "author": [
+            "David Chalmers"
+          ],
+          "year": 1995,
+          "source_type": "paper",
+          "fetched_at": "2026-03-08T12:02:00.197Z",
+          "word_count": 12029,
+          "char_count": 77018,
+          "estimated_tokens": 15638
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 103,
+          "title": "Facing Up to the Problem of Consciousness",
+          "author": [
+            "David Chalmers"
+          ],
+          "year": 1995,
+          "url": "https://consc.net/papers/facing.html",
+          "source_type": "paper",
+          "priority": "ESSENTIAL",
+          "subdomain": "consciousness",
+          "wave": 1,
+          "domain": "philosophy_of_mind",
+          "notes": "Introduces the hard problem / easy problems distinction. Chalmers' own hosted HTML version."
+        }
+      ],
+      "db_source": {
+        "claim_count": 336,
+        "id": "source:4od0u4e7mpy4ukz9fmiw",
+        "ingested_at": "2026-03-09T06:58:26.666308212Z",
+        "status": "ingested",
+        "title": "Facing Up to the Problem of Consciousness",
+        "url": "https://consc.net/papers/facing.html"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 12,
+        "claims_extracted": 336,
+        "completed_at": "2026-03-09T06:58:26.706Z",
+        "cost_usd": 1.0969,
+        "relations_extracted": 124,
+        "source_title": "Facing Up to the Problem of Consciousness",
+        "source_url": "https://consc.net/papers/facing.html",
+        "stage_completed": "storing",
+        "started_at": "2026-03-09T06:47:34.226960508Z",
+        "status": "complete"
+      }
+    },
+    "8e1c7cccff8dbcc976dc77d12f634daeffbade2323afcc5f147686c79df8cc79": {
+      "canonical_url_hash": "8e1c7cccff8dbcc976dc77d12f634daeffbade2323afcc5f147686c79df8cc79",
+      "canonical_url": "https://plato.stanford.edu/entries/mental-causation",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "author_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Mental Causation",
+      "preferred_author": [
+        "Katalin Farkas"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/mental-causation",
+        "local_slug": "mental-causation",
+        "meta_path": "data/sources/mental-causation.meta.json",
+        "text_path": "data/sources/mental-causation.txt",
+        "text_exists": true,
+        "text_bytes": 87151,
+        "title": "Mental Causation",
+        "author": [
+          "Robb, David"
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-10T07:56:46.697Z",
+        "word_count": 13585,
+        "char_count": 86235,
+        "estimated_tokens": 17661
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/mental-causation",
+          "local_slug": "mental-causation",
+          "meta_path": "data/sources/mental-causation.meta.json",
+          "text_path": "data/sources/mental-causation.txt",
+          "text_exists": true,
+          "text_bytes": 87151,
+          "title": "Mental Causation",
+          "author": [
+            "Robb, David"
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-10T07:56:46.697Z",
+          "word_count": 13585,
+          "char_count": 86235,
+          "estimated_tokens": 17661
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 114,
+          "title": "Mental Causation",
+          "author": [
+            "Katalin Farkas"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/mental-causation/",
+          "source_type": "sep_entry",
+          "priority": "ESSENTIAL",
+          "subdomain": "mind-body",
+          "wave": 2,
+          "domain": "philosophy_of_mind",
+          "notes": "Core source for Kim-style exclusion worries and non-reductive physicalism debates."
+        }
+      ],
+      "db_source": {
+        "claim_count": 181,
+        "id": "source:hjz4nhx5tzz7sppxps9z",
+        "ingested_at": "2026-03-10T08:45:26.060504471Z",
+        "status": "ingested",
+        "title": "Mental Causation",
+        "url": "https://plato.stanford.edu/entries/mental-causation/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 17,
+        "claims_extracted": 181,
+        "completed_at": "2026-03-10T08:45:26.081Z",
+        "cost_usd": 0.0208,
+        "relations_extracted": 82,
+        "source_title": "Mental Causation",
+        "source_url": "https://plato.stanford.edu/entries/mental-causation/",
+        "stage_completed": "storing",
+        "started_at": "2026-03-10T07:56:47.246353842Z",
+        "status": "complete"
+      }
+    },
+    "ac40cac8b859b56182313e2b44c377c8b145a9acce05e30a5a208a1a316db788": {
+      "canonical_url_hash": "ac40cac8b859b56182313e2b44c377c8b145a9acce05e30a5a208a1a316db788",
+      "canonical_url": "https://plato.stanford.edu/entries/functionalism",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "author_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Functionalism",
+      "preferred_author": [
+        "Janet Levin"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/functionalism",
+        "local_slug": "functionalism",
+        "meta_path": "data/sources/functionalism.meta.json",
+        "text_path": "data/sources/functionalism.txt",
+        "text_exists": true,
+        "text_bytes": 98906,
+        "title": "Functionalism",
+        "author": [
+          "Levin, Janet"
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-08T12:04:29.405Z",
+        "word_count": 14966,
+        "char_count": 97908,
+        "estimated_tokens": 19456
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/functionalism",
+          "local_slug": "functionalism",
+          "meta_path": "data/sources/functionalism.meta.json",
+          "text_path": "data/sources/functionalism.txt",
+          "text_exists": true,
+          "text_bytes": 98906,
+          "title": "Functionalism",
+          "author": [
+            "Levin, Janet"
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-08T12:04:29.405Z",
+          "word_count": 14966,
+          "char_count": 97908,
+          "estimated_tokens": 19456
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 106,
+          "title": "Functionalism",
+          "author": [
+            "Janet Levin"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/functionalism/",
+          "source_type": "sep_entry",
+          "priority": "HIGH",
+          "subdomain": "mind-body",
+          "wave": 1,
+          "domain": "philosophy_of_mind",
+          "notes": "SEP entry on functionalism — covers multiple realisability, machine functionalism, and objections. Bridge to AI minds."
+        }
+      ],
+      "db_source": {
+        "claim_count": 349,
+        "id": "source:9vfgp1ra2wlv57291ilb",
+        "ingested_at": "2026-03-09T07:36:31.708103923Z",
+        "status": "ingested",
+        "title": "Functionalism",
+        "url": "https://plato.stanford.edu/entries/functionalism/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 35,
+        "claims_extracted": 349,
+        "completed_at": "2026-03-09T07:36:31.747Z",
+        "cost_usd": 1.3479,
+        "relations_extracted": 192,
+        "source_title": "Functionalism",
+        "source_url": "https://plato.stanford.edu/entries/functionalism/",
+        "stage_completed": "storing",
+        "started_at": "2026-03-09T07:22:48.017280958Z",
+        "status": "complete"
+      }
+    },
+    "b9107f367762e951d004bca1ae329d3b8d1e6d8c68c2454c4dbd04b9be87d63e": {
+      "canonical_url_hash": "b9107f367762e951d004bca1ae329d3b8d1e6d8c68c2454c4dbd04b9be87d63e",
+      "canonical_url": "https://plato.stanford.edu/entries/artificial-intelligence",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "title_mismatch_between_source_list_and_local_meta",
+        "author_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Philosophy of Artificial Intelligence",
+      "preferred_author": [
+        "Selmer Bringsjord",
+        "Naveen Govindarajulu"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/artificial-intelligence",
+        "local_slug": "artificial-intelligence",
+        "meta_path": "data/sources/artificial-intelligence.meta.json",
+        "text_path": "data/sources/artificial-intelligence.txt",
+        "text_exists": true,
+        "text_bytes": 150012,
+        "title": "Artificial Intelligence",
+        "author": [
+          "Bringsjord, Selmer"
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-08T12:05:32.994Z",
+        "word_count": 23612,
+        "char_count": 149096,
+        "estimated_tokens": 30696
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/artificial-intelligence",
+          "local_slug": "artificial-intelligence",
+          "meta_path": "data/sources/artificial-intelligence.meta.json",
+          "text_path": "data/sources/artificial-intelligence.txt",
+          "text_exists": true,
+          "text_bytes": 150012,
+          "title": "Artificial Intelligence",
+          "author": [
+            "Bringsjord, Selmer"
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-08T12:05:32.994Z",
+          "word_count": 23612,
+          "char_count": 149096,
+          "estimated_tokens": 30696
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 109,
+          "title": "Philosophy of Artificial Intelligence",
+          "author": [
+            "Selmer Bringsjord",
+            "Naveen Govindarajulu"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/artificial-intelligence/",
+          "source_type": "sep_entry",
+          "priority": "HIGH",
+          "subdomain": "ai-minds",
+          "wave": 1,
+          "domain": "philosophy_of_mind",
+          "notes": "SEP entry covering machine consciousness, strong AI, symbol grounding, and current debates."
+        }
+      ],
+      "db_source": {
+        "claim_count": 477,
+        "id": "source:msickaei8yaza3bptmpw",
+        "ingested_at": "2026-03-09T08:30:43.65142197Z",
+        "status": "ingested",
+        "title": "Artificial Intelligence",
+        "url": "https://plato.stanford.edu/entries/artificial-intelligence/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 17,
+        "claims_extracted": 477,
+        "completed_at": "2026-03-09T08:30:43.696Z",
+        "cost_usd": 0.0014,
+        "relations_extracted": 158,
+        "source_title": "Artificial Intelligence",
+        "source_url": "https://plato.stanford.edu/entries/artificial-intelligence/",
+        "stage_completed": "storing",
+        "started_at": "2026-03-09T08:00:52.159876501Z",
+        "status": "complete"
+      }
+    },
+    "ca676e700ba4b462c65c4bacf081e8fbc3e9089919a420b64e6c5d46c032a939": {
+      "canonical_url_hash": "ca676e700ba4b462c65c4bacf081e8fbc3e9089919a420b64e6c5d46c032a939",
+      "canonical_url": "https://www.gutenberg.org/files/8438/8438-h/8438-h.htm",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "title_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Nicomachean Ethics",
+      "preferred_author": [
+        "Aristotle"
+      ],
+      "preferred_year": null,
+      "source_type": "book",
+      "primary_local_artifact": {
+        "canonical_url": "https://www.gutenberg.org/files/8438/8438-h/8438-h.htm",
+        "local_slug": "the-nicomachean-ethics-of-aristotle-ca676e700b",
+        "meta_path": "data/sources/the-nicomachean-ethics-of-aristotle-ca676e700b.meta.json",
+        "text_path": "data/sources/the-nicomachean-ethics-of-aristotle-ca676e700b.txt",
+        "text_exists": true,
+        "text_bytes": 640212,
+        "title": "The Nicomachean Ethics of Aristotle",
+        "author": [
+          "Aristotle"
+        ],
+        "year": null,
+        "source_type": "book",
+        "fetched_at": "2026-03-11T16:24:09.212Z",
+        "word_count": 113402,
+        "char_count": 637149,
+        "estimated_tokens": 147423
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://www.gutenberg.org/files/8438/8438-h/8438-h.htm",
+          "local_slug": "the-nicomachean-ethics-of-aristotle-ca676e700b",
+          "meta_path": "data/sources/the-nicomachean-ethics-of-aristotle-ca676e700b.meta.json",
+          "text_path": "data/sources/the-nicomachean-ethics-of-aristotle-ca676e700b.txt",
+          "text_exists": true,
+          "text_bytes": 640212,
+          "title": "The Nicomachean Ethics of Aristotle",
+          "author": [
+            "Aristotle"
+          ],
+          "year": null,
+          "source_type": "book",
+          "fetched_at": "2026-03-11T16:24:09.212Z",
+          "word_count": 113402,
+          "char_count": 637149,
+          "estimated_tokens": 147423
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-3a.json",
+          "id": 8,
+          "title": "Nicomachean Ethics",
+          "author": [
+            "Aristotle"
+          ],
+          "year": null,
+          "url": "https://www.gutenberg.org/files/8438/8438-h/8438-h.htm",
+          "source_type": "book",
+          "priority": "ESSENTIAL",
+          "subdomain": "normative",
+          "wave": 1,
+          "domain": null,
+          "notes": null
+        }
+      ],
+      "db_source": {
+        "claim_count": 3001,
+        "id": "source:mkyocvcxvlnp35qsvnjc",
+        "ingested_at": "2026-03-11T17:29:41.70547947Z",
+        "status": "ingested",
+        "title": "The Nicomachean Ethics of Aristotle",
+        "url": "https://www.gutenberg.org/files/8438/8438-h/8438-h.htm"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 344,
+        "claims_extracted": 3001,
+        "completed_at": "2026-03-11T17:29:42.024Z",
+        "cost_usd": 0.0067,
+        "relations_extracted": 1567,
+        "source_title": "The Nicomachean Ethics of Aristotle",
+        "source_url": "https://www.gutenberg.org/files/8438/8438-h/8438-h.htm",
+        "stage_completed": "storing",
+        "started_at": "2026-03-11T16:24:09.746860803Z",
+        "status": "complete"
+      }
+    },
+    "cbc5c18f20d469ac58ac0279f16f3ca50a3ee077f28990f43ad0a8f25773d9c6": {
+      "canonical_url_hash": "cbc5c18f20d469ac58ac0279f16f3ca50a3ee077f28990f43ad0a8f25773d9c6",
+      "canonical_url": "https://www.csee.umbc.edu/courses/471/papers/turing.html",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "title_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Computing Machinery and Intelligence",
+      "preferred_author": [
+        "Alan Turing"
+      ],
+      "preferred_year": 1950,
+      "source_type": "paper",
+      "primary_local_artifact": {
+        "canonical_url": "https://www.csee.umbc.edu/courses/471/papers/turing.html",
+        "local_slug": "computing-machinery-and-intelligence",
+        "meta_path": "data/sources/computing-machinery-and-intelligence.meta.json",
+        "text_path": "data/sources/computing-machinery-and-intelligence.txt",
+        "text_exists": true,
+        "text_bytes": 73263,
+        "title": "COMPUTING MACHINERY AND INTELLIGENCE",
+        "author": [
+          "Alan Turing"
+        ],
+        "year": 1950,
+        "source_type": "paper",
+        "fetched_at": "2026-03-08T12:04:35.467Z",
+        "word_count": 11757,
+        "char_count": 73257,
+        "estimated_tokens": 15285
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://www.csee.umbc.edu/courses/471/papers/turing.html",
+          "local_slug": "computing-machinery-and-intelligence",
+          "meta_path": "data/sources/computing-machinery-and-intelligence.meta.json",
+          "text_path": "data/sources/computing-machinery-and-intelligence.txt",
+          "text_exists": true,
+          "text_bytes": 73263,
+          "title": "COMPUTING MACHINERY AND INTELLIGENCE",
+          "author": [
+            "Alan Turing"
+          ],
+          "year": 1950,
+          "source_type": "paper",
+          "fetched_at": "2026-03-08T12:04:35.467Z",
+          "word_count": 11757,
+          "char_count": 73257,
+          "estimated_tokens": 15285
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 107,
+          "title": "Computing Machinery and Intelligence",
+          "author": [
+            "Alan Turing"
+          ],
+          "year": 1950,
+          "url": "https://www.csee.umbc.edu/courses/471/papers/turing.html",
+          "source_type": "paper",
+          "priority": "ESSENTIAL",
+          "subdomain": "ai-minds",
+          "wave": 1,
+          "domain": "philosophy_of_mind",
+          "notes": "The Turing Test paper. UMBC hosted HTML version — verified accessible."
+        }
+      ],
+      "db_source": {
+        "claim_count": 264,
+        "id": "source:uenb1hcozoconaqc7y0b",
+        "ingested_at": "2026-03-09T07:45:21.031266084Z",
+        "status": "ingested",
+        "title": "COMPUTING MACHINERY AND INTELLIGENCE",
+        "url": "https://www.csee.umbc.edu/courses/471/papers/turing.html"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 15,
+        "claims_extracted": 264,
+        "completed_at": "2026-03-09T07:45:21.062Z",
+        "cost_usd": 0.902,
+        "relations_extracted": 108,
+        "source_title": "COMPUTING MACHINERY AND INTELLIGENCE",
+        "source_url": "https://www.csee.umbc.edu/courses/471/papers/turing.html",
+        "stage_completed": "storing",
+        "started_at": "2026-03-09T07:36:34.453171216Z",
+        "status": "complete"
+      }
+    },
+    "df30720df075c8fb5675496182ba186e1834345f620c26dd96c84e075af88db7": {
+      "canonical_url_hash": "df30720df075c8fb5675496182ba186e1834345f620c26dd96c84e075af88db7",
+      "canonical_url": "https://arxiv.org/abs/2303.07103",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [],
+      "preferred_title": "Computer Science > Artificial Intelligence",
+      "preferred_author": [],
+      "preferred_year": null,
+      "source_type": "paper",
+      "primary_local_artifact": {
+        "canonical_url": "https://arxiv.org/abs/2303.07103",
+        "local_slug": "computer-science-artificial-intelligence",
+        "meta_path": "data/sources/computer-science-artificial-intelligence.meta.json",
+        "text_path": "data/sources/computer-science-artificial-intelligence.txt",
+        "text_exists": true,
+        "text_bytes": 7932,
+        "title": "Computer Science > Artificial Intelligence",
+        "author": [],
+        "year": null,
+        "source_type": "paper",
+        "fetched_at": "2026-03-08T12:05:37.569Z",
+        "word_count": 560,
+        "char_count": 7924,
+        "estimated_tokens": 728
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://arxiv.org/abs/2303.07103",
+          "local_slug": "computer-science-artificial-intelligence",
+          "meta_path": "data/sources/computer-science-artificial-intelligence.meta.json",
+          "text_path": "data/sources/computer-science-artificial-intelligence.txt",
+          "text_exists": true,
+          "text_bytes": 7932,
+          "title": "Computer Science > Artificial Intelligence",
+          "author": [],
+          "year": null,
+          "source_type": "paper",
+          "fetched_at": "2026-03-08T12:05:37.569Z",
+          "word_count": 560,
+          "char_count": 7924,
+          "estimated_tokens": 728
+        }
+      ],
+      "source_list_entries": [],
+      "db_source": null,
+      "db_ingestion_log": null
+    },
+    "e21e2399eff8dab69df91faad93088e1f1f4e4cc61580afb5d955ae137fc8dd6": {
+      "canonical_url_hash": "e21e2399eff8dab69df91faad93088e1f1f4e4cc61580afb5d955ae137fc8dd6",
+      "canonical_url": "https://iep.utm.edu/consciousness",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [],
+      "preferred_title": "Consciousness",
+      "preferred_author": [
+        "Internet Encyclopedia of Philosophy"
+      ],
+      "preferred_year": null,
+      "source_type": "iep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://iep.utm.edu/consciousness",
+        "local_slug": "consciousness-iep",
+        "meta_path": "data/sources/consciousness-iep.meta.json",
+        "text_path": "data/sources/consciousness-iep.txt",
+        "text_exists": true,
+        "text_bytes": 132469,
+        "title": "Consciousness",
+        "author": [
+          "Internet Encyclopedia of Philosophy"
+        ],
+        "year": null,
+        "source_type": "iep_entry",
+        "fetched_at": "2026-03-09T12:29:40.575Z",
+        "word_count": 20184,
+        "char_count": 130940,
+        "estimated_tokens": 32735
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://iep.utm.edu/consciousness",
+          "local_slug": "consciousness-iep",
+          "meta_path": "data/sources/consciousness-iep.meta.json",
+          "text_path": "data/sources/consciousness-iep.txt",
+          "text_exists": true,
+          "text_bytes": 132469,
+          "title": "Consciousness",
+          "author": [
+            "Internet Encyclopedia of Philosophy"
+          ],
+          "year": null,
+          "source_type": "iep_entry",
+          "fetched_at": "2026-03-09T12:29:40.575Z",
+          "word_count": 20184,
+          "char_count": 130940,
+          "estimated_tokens": 32735
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 101,
+          "title": "Consciousness",
+          "author": [
+            "Internet Encyclopedia of Philosophy"
+          ],
+          "year": null,
+          "url": "https://iep.utm.edu/consciousness/",
+          "source_type": "iep_entry",
+          "priority": "ESSENTIAL",
+          "subdomain": "consciousness",
+          "wave": 1,
+          "domain": "philosophy_of_mind",
+          "notes": "IEP entry on consciousness — covers Nagel's subjective character argument, the hard problem, phenomenal vs access consciousness, and major positions. SEP Nagel entry is 'Not Yet Available'."
+        }
+      ],
+      "db_source": null,
+      "db_ingestion_log": null
+    },
+    "e70281d458d7c72dae40fffe5fb5084e7039e53adf94bc250cd2410dfbf9db9a": {
+      "canonical_url_hash": "e70281d458d7c72dae40fffe5fb5084e7039e53adf94bc250cd2410dfbf9db9a",
+      "canonical_url": "https://plato.stanford.edu/entries/chinese-room",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "author_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "The Chinese Room Argument",
+      "preferred_author": [
+        "David Cole"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/chinese-room",
+        "local_slug": "the-chinese-room-argument",
+        "meta_path": "data/sources/the-chinese-room-argument.meta.json",
+        "text_path": "data/sources/the-chinese-room-argument.txt",
+        "text_exists": true,
+        "text_bytes": 133869,
+        "title": "The Chinese Room Argument",
+        "author": [
+          "Cole, David"
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-08T12:05:27.935Z",
+        "word_count": 20944,
+        "char_count": 132159,
+        "estimated_tokens": 27228
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/chinese-room",
+          "local_slug": "the-chinese-room-argument",
+          "meta_path": "data/sources/the-chinese-room-argument.meta.json",
+          "text_path": "data/sources/the-chinese-room-argument.txt",
+          "text_exists": true,
+          "text_bytes": 133869,
+          "title": "The Chinese Room Argument",
+          "author": [
+            "Cole, David"
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-08T12:05:27.935Z",
+          "word_count": 20944,
+          "char_count": 132159,
+          "estimated_tokens": 27228
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 108,
+          "title": "The Chinese Room Argument",
+          "author": [
+            "David Cole"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/chinese-room/",
+          "source_type": "sep_entry",
+          "priority": "ESSENTIAL",
+          "subdomain": "ai-minds",
+          "wave": 1,
+          "domain": "philosophy_of_mind",
+          "notes": "SEP entry on the Chinese Room — covers Searle's original 1980 argument, all major objections (systems reply, robot reply, brain simulator reply) and responses. Replaces direct Cambridge URL for Searle 1980 which is login-gated despite claiming open-access."
+        }
+      ],
+      "db_source": {
+        "claim_count": 495,
+        "id": "source:agl7jdgis6vxs9uddlmk",
+        "ingested_at": "2026-03-09T08:00:49.480861083Z",
+        "status": "ingested",
+        "title": "The Chinese Room Argument",
+        "url": "https://plato.stanford.edu/entries/chinese-room/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 25,
+        "claims_extracted": 495,
+        "completed_at": "2026-03-09T08:00:49.533Z",
+        "cost_usd": 1.5206,
+        "relations_extracted": 128,
+        "source_title": "The Chinese Room Argument",
+        "source_url": "https://plato.stanford.edu/entries/chinese-room/",
+        "stage_completed": "storing",
+        "started_at": "2026-03-09T07:45:23.686037502Z",
+        "status": "complete"
+      }
+    },
+    "f089fa759a34520481c49dbec737a9b6ade594c9cb259f6b986d945cd0cbc359": {
+      "canonical_url_hash": "f089fa759a34520481c49dbec737a9b6ade594c9cb259f6b986d945cd0cbc359",
+      "canonical_url": "https://plato.stanford.edu/entries/mind-identity",
+      "pilot_priority": null,
+      "reingestion_status": "ready_for_reingest",
+      "blocking_reasons": [],
+      "notes": [
+        "title_mismatch_between_source_list_and_local_meta",
+        "author_mismatch_between_source_list_and_local_meta"
+      ],
+      "preferred_title": "Mind Identity Theory",
+      "preferred_author": [
+        "Paul M. Churchland"
+      ],
+      "preferred_year": null,
+      "source_type": "sep_entry",
+      "primary_local_artifact": {
+        "canonical_url": "https://plato.stanford.edu/entries/mind-identity",
+        "local_slug": "the-mind-brain-identity-theory",
+        "meta_path": "data/sources/the-mind-brain-identity-theory.meta.json",
+        "text_path": "data/sources/the-mind-brain-identity-theory.txt",
+        "text_exists": true,
+        "text_bytes": 44184,
+        "title": "The Mind/Brain Identity Theory",
+        "author": [
+          "Smart, J. J. C."
+        ],
+        "year": null,
+        "source_type": "sep_entry",
+        "fetched_at": "2026-03-10T07:56:44.140Z",
+        "word_count": 7178,
+        "char_count": 43610,
+        "estimated_tokens": 9332
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://plato.stanford.edu/entries/mind-identity",
+          "local_slug": "the-mind-brain-identity-theory",
+          "meta_path": "data/sources/the-mind-brain-identity-theory.meta.json",
+          "text_path": "data/sources/the-mind-brain-identity-theory.txt",
+          "text_exists": true,
+          "text_bytes": 44184,
+          "title": "The Mind/Brain Identity Theory",
+          "author": [
+            "Smart, J. J. C."
+          ],
+          "year": null,
+          "source_type": "sep_entry",
+          "fetched_at": "2026-03-10T07:56:44.140Z",
+          "word_count": 7178,
+          "char_count": 43610,
+          "estimated_tokens": 9332
+        }
+      ],
+      "source_list_entries": [
+        {
+          "source_list_file": "data/source-list-pom.json",
+          "id": 112,
+          "title": "Mind Identity Theory",
+          "author": [
+            "Paul M. Churchland"
+          ],
+          "year": null,
+          "url": "https://plato.stanford.edu/entries/mind-identity/",
+          "source_type": "sep_entry",
+          "priority": "ESSENTIAL",
+          "subdomain": "mind-body",
+          "wave": 2,
+          "domain": "philosophy_of_mind",
+          "notes": "Covers Smart-style identity theory and major objections."
+        }
+      ],
+      "db_source": {
+        "claim_count": 59,
+        "id": "source:ja41vqh7klnblgs89pug",
+        "ingested_at": "2026-03-10T08:23:17.456287967Z",
+        "status": "validated",
+        "title": "The Mind/Brain Identity Theory",
+        "url": "https://plato.stanford.edu/entries/mind-identity/"
+      },
+      "db_ingestion_log": {
+        "arguments_grouped": 10,
+        "claims_extracted": 59,
+        "completed_at": "2026-03-10T08:23:17.473Z",
+        "cost_usd": 0,
+        "relations_extracted": 31,
+        "source_title": "The Mind/Brain Identity Theory",
+        "source_url": "https://plato.stanford.edu/entries/mind-identity/",
+        "stage_completed": "storing",
+        "started_at": "2026-03-10T07:56:44.715873883Z",
+        "status": "complete"
+      }
+    },
+    "f9255c88903eb4b6e8360be1005ac3f5374bd691427f6ae39013797471ec9d2f": {
+      "canonical_url_hash": "f9255c88903eb4b6e8360be1005ac3f5374bd691427f6ae39013797471ec9d2f",
+      "canonical_url": "https://ase.tufts.edu/cogstud/dennett/papers/quinqua.htm",
+      "pilot_priority": null,
+      "reingestion_status": "blocked",
+      "blocking_reasons": [
+        "insufficient_word_count"
+      ],
+      "notes": [],
+      "preferred_title": "Visit Campus",
+      "preferred_author": [],
+      "preferred_year": null,
+      "source_type": "paper",
+      "primary_local_artifact": {
+        "canonical_url": "https://ase.tufts.edu/cogstud/dennett/papers/quinqua.htm",
+        "local_slug": "visit-campus",
+        "meta_path": "data/sources/visit-campus.meta.json",
+        "text_path": "data/sources/visit-campus.txt",
+        "text_exists": true,
+        "text_bytes": 5,
+        "title": "Visit Campus",
+        "author": [],
+        "year": null,
+        "source_type": "paper",
+        "fetched_at": "2026-03-08T12:02:25.319Z",
+        "word_count": 1,
+        "char_count": 5,
+        "estimated_tokens": 2
+      },
+      "local_artifacts": [
+        {
+          "canonical_url": "https://ase.tufts.edu/cogstud/dennett/papers/quinqua.htm",
+          "local_slug": "visit-campus",
+          "meta_path": "data/sources/visit-campus.meta.json",
+          "text_path": "data/sources/visit-campus.txt",
+          "text_exists": true,
+          "text_bytes": 5,
+          "title": "Visit Campus",
+          "author": [],
+          "year": null,
+          "source_type": "paper",
+          "fetched_at": "2026-03-08T12:02:25.319Z",
+          "word_count": 1,
+          "char_count": 5,
+          "estimated_tokens": 2
+        }
+      ],
+      "source_list_entries": [],
+      "db_source": null,
+      "db_ingestion_log": null
+    }
+  }
+}

@@ -24,6 +24,8 @@ const RELATION_TABLES = [
 	'contradicts',
 	'depends_on',
 	'responds_to',
+	'defines',
+	'qualifies',
 	'refines',
 	'exemplifies'
 ] as const;
@@ -82,6 +84,22 @@ interface SourceData {
 	log: IngestionLogRecord | null;
 }
 
+function normalizeRecordId(value: unknown): string | null {
+	if (typeof value === 'string') return value;
+	if (!value || typeof value !== 'object') return null;
+
+	const record = value as { tb?: unknown; id?: unknown };
+	if (typeof record.tb === 'string' && record.id !== undefined) {
+		return `${record.tb}:${String(record.id)}`;
+	}
+	if (typeof record.id === 'string') {
+		return record.id;
+	}
+
+	const rendered = String(value);
+	return rendered && rendered !== '[object Object]' ? rendered : null;
+}
+
 // ─── DB Helpers ─────────────────────────────────────────────────────────────
 async function connectDB(): Promise<Surreal> {
 	const db = new Surreal();
@@ -132,7 +150,16 @@ async function getRelationsForClaims(
 				`SELECT in, out FROM ${table} WHERE in INSIDE $ids OR out INSIDE $ids`,
 				{ ids: claimIds }
 			);
-			map.set(table, Array.isArray(result?.[0]) ? result[0] : []);
+			const rows = Array.isArray(result?.[0]) ? result[0] : [];
+			map.set(
+				table,
+				rows
+					.map((row) => ({
+						in: normalizeRecordId(row.in),
+						out: normalizeRecordId(row.out)
+					}))
+					.filter((row): row is RelationEdge => Boolean(row.in && row.out))
+			);
 		} catch {
 			map.set(table, []);
 		}
@@ -155,7 +182,14 @@ async function getPartOfForClaims(db: Surreal, claimIds: string[]): Promise<Part
 		'SELECT in, out, role FROM part_of WHERE in INSIDE $ids',
 		{ ids: claimIds }
 	);
-	return Array.isArray(result?.[0]) ? result[0] : [];
+	const rows = Array.isArray(result?.[0]) ? result[0] : [];
+	return rows
+		.map((row) => ({
+			in: normalizeRecordId(row.in),
+			out: normalizeRecordId(row.out),
+			role: row.role
+		}))
+		.filter((row): row is PartOfRecord => Boolean(row.in && row.out && row.role));
 }
 
 async function getIngestionLog(
@@ -221,7 +255,10 @@ function detectOrphans(
 	}
 	for (const po of partOf) connectedIds.add(po.in);
 
-	return claims.filter((c) => !connectedIds.has(c.id));
+	return claims.filter((c) => {
+		const claimId = normalizeRecordId(c.id);
+		return !claimId || !connectedIds.has(claimId);
+	});
 }
 
 function countByKey<T>(items: T[], key: keyof T): Record<string, number> {
@@ -313,7 +350,7 @@ function formatSourceSection(data: SourceData): string {
 		lines.push('#### Arguments');
 		lines.push('');
 		for (const arg of args) {
-			const count = claimsPerArg.get(arg.id) ?? 0;
+			const count = claimsPerArg.get(normalizeRecordId(arg.id) ?? '') ?? 0;
 			lines.push(`- **${arg.name}** (${count} claim${count === 1 ? '' : 's'})`);
 			lines.push(`  *${arg.summary}*`);
 		}
@@ -341,12 +378,12 @@ function formatSourceSection(data: SourceData): string {
 	// 2. Thin arguments
 	const claimsPerArg = new Map<string, number>();
 	for (const po of partOf) claimsPerArg.set(po.out, (claimsPerArg.get(po.out) ?? 0) + 1);
-	const thinArgs = args.filter((a) => (claimsPerArg.get(a.id) ?? 0) <= 2);
+	const thinArgs = args.filter((a) => (claimsPerArg.get(normalizeRecordId(a.id) ?? '') ?? 0) <= 2);
 	if (thinArgs.length > 0) {
 		lines.push(`#### ⚠ Thin Arguments (≤ 2 claims) — ${thinArgs.length} found`);
 		lines.push('');
 		for (const a of thinArgs) {
-			const n = claimsPerArg.get(a.id) ?? 0;
+			const n = claimsPerArg.get(normalizeRecordId(a.id) ?? '') ?? 0;
 			lines.push(`- **${a.name}** (${n} claim${n === 1 ? '' : 's'})`);
 		}
 	} else if (args.length > 0) {

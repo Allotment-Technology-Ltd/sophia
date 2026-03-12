@@ -63,7 +63,9 @@
 			'supports': 'supports',
 			'contradicts': 'contradicts',
 			'responds-to': 'responds to',
-			'depends-on': 'depends on'
+			'depends-on': 'depends on',
+			'defines': 'defines',
+			'qualifies': 'qualifies'
 		};
 		return labels[type] || type;
 	}

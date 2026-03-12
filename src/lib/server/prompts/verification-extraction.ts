@@ -18,7 +18,7 @@ The sophia-meta block must contain valid JSON with this shape:
   "relations": [{
     "from_claim_id": "claim_001",
     "to_claim_id": "claim_002",
-    "relation_type": "supports|contradicts|depends_on|refines|qualifies|assumes",
+    "relation_type": "supports|contradicts|depends_on|responds_to|defines|qualifies",
     "confidence": 0.0,
     "rationale": "..."
   }]

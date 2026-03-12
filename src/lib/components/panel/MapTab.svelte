@@ -52,6 +52,7 @@
     'contradicts',
     'responds-to',
     'depends-on',
+    'defines',
     'qualifies',
     'assumes',
     'resolves'
@@ -65,6 +66,7 @@
     contradicts: 'Contradicts',
     'responds-to': 'Responds To',
     'depends-on': 'Depends On',
+    defines: 'Defines',
     qualifies: 'Qualifies',
     assumes: 'Assumes',
     resolves: 'Resolves'
@@ -76,6 +78,7 @@
     contradicts: 'Claims that directly conflict with a target claim.',
     'responds-to': 'Rebuttals or replies that engage another claim.',
     'depends-on': 'Claims that require another claim to hold.',
+    defines: 'Definitions and distinctions that establish the meaning of a claim.',
     qualifies: 'Scope-limiting relations that narrow when a claim applies.',
     assumes: 'Implicit premises required by a claim.',
     resolves: 'Relations that reduce or settle a contradiction.'
@@ -227,6 +230,7 @@
       'contradicts',
       'responds-to',
       'depends-on',
+      'defines',
       'qualifies',
       'assumes',
       'resolves'
@@ -243,6 +247,7 @@
         contradicts: 0,
         'responds-to': 0,
         'depends-on': 0,
+        defines: 0,
         qualifies: 0,
         assumes: 0,
         resolves: 0

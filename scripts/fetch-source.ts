@@ -1,13 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { parse as parseHTML } from 'node-html-parser';
-import {
-	deriveCanonicalSourceIdentity,
-	isUnknownTitle,
-	normalizeSourceType,
-	VALID_SOURCE_TYPES
-} from './source-identity.js';
+import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.js';
 
+const VALID_SOURCE_TYPES = ['sep_entry', 'iep_entry', 'book', 'paper', 'institutional'];
 const DATA_SOURCES_DIR = './data/sources';
 
 /**
@@ -320,10 +316,9 @@ async function main() {
 	}
 
 	const [url, sourceType] = args;
-	const normalizedSourceType = normalizeSourceType(sourceType);
 
 	// Validate source type
-	if (!VALID_SOURCE_TYPES.includes(normalizedSourceType as (typeof VALID_SOURCE_TYPES)[number])) {
+	if (!VALID_SOURCE_TYPES.includes(sourceType)) {
 		console.error(`Invalid source type: ${sourceType}`);
 		console.error(`Valid types: ${VALID_SOURCE_TYPES.join(', ')}`);
 		process.exit(1);
@@ -336,28 +331,24 @@ async function main() {
 	}
 
 	try {
+		const sourceIdentity = canonicalizeAndHashSourceUrl(url);
+		if (!sourceIdentity) {
+			throw new Error(`Unsupported or invalid source URL: ${url}`);
+		}
+
 		// Fetch the URL
-		const html = await fetchUrl(url);
+		const html = await fetchUrl(sourceIdentity.canonicalUrl);
 
 		// Clean and extract
-		const { text, title, author } = cleanSourceText(html, normalizedSourceType);
-		if (isUnknownTitle(title)) {
-			throw new Error(
-				`Extracted title is empty/unknown ("${title}"). Source metadata gate blocked this fetch.`
-			);
-		}
-		const identity = deriveCanonicalSourceIdentity(url);
-		if (!identity) {
-			throw new Error(`Cannot derive canonical identity for URL: ${url}`);
-		}
+		const { text, title, author } = cleanSourceText(html, sourceType);
 
 		// Calculate metrics
 		const wordCount = text.trim().split(/\s+/).length;
 		const charCount = text.length;
 		const estimatedTokens = estimateTokens(text);
 
-		// Create deterministic slug keyed by canonical identity.
-		const slug = `${createSlug(title)}-${identity.canonicalUrlHash.slice(0, 10)}`;
+		// Create slug
+		const slug = createSlug(title);
 
 		// Save cleaned text
 		const textPath = path.join(DATA_SOURCES_DIR, `${slug}.txt`);
@@ -365,20 +356,21 @@ async function main() {
 		console.log(`[SAVE] Cleaned text: ${textPath}`);
 
 		// Save metadata
-			const metadata = {
-				title,
-				author,
-				source_type: normalizedSourceType,
-				url,
-				canonical_url: identity.canonicalUrl,
-				canonical_url_hash: identity.canonicalUrlHash,
-				visibility_scope: 'public_shared',
-				deletion_state: 'active',
-				fetched_at: new Date().toISOString(),
-				word_count: wordCount,
-				char_count: charCount,
-				estimated_tokens: estimatedTokens
-			};
+		const metadata = {
+			title,
+			author,
+			source_type: sourceType,
+			url: sourceIdentity.canonicalUrl,
+			canonical_url: sourceIdentity.canonicalUrl,
+			canonical_url_hash: sourceIdentity.canonicalUrlHash,
+			visibility_scope: 'public_shared',
+			deletion_state: 'active',
+			fetched_at: new Date().toISOString(),
+			word_count: wordCount,
+			char_count: charCount,
+			estimated_tokens: estimatedTokens,
+			local_slug: slug
+		};
 
 		const metaPath = path.join(DATA_SOURCES_DIR, `${slug}.meta.json`);
 		fs.writeFileSync(metaPath, JSON.stringify(metadata, null, 2), 'utf-8');
@@ -390,10 +382,8 @@ async function main() {
 		if (author.length > 0) {
 			console.log(`Author(s): ${author.join(', ')}`);
 		}
-		console.log(`Source Type: ${normalizedSourceType}`);
-		console.log(`URL: ${url}`);
-		console.log(`Canonical URL: ${identity.canonicalUrl}`);
-		console.log(`Canonical Hash: ${identity.canonicalUrlHash}`);
+		console.log(`Source Type: ${sourceType}`);
+		console.log(`URL: ${sourceIdentity.canonicalUrl}`);
 		console.log(`Word Count: ${wordCount.toLocaleString()}`);
 		console.log(`Character Count: ${charCount.toLocaleString()}`);
 		console.log(`Estimated Tokens: ${estimatedTokens.toLocaleString()}`);

@@ -17,19 +17,14 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import {
-	deriveCanonicalSourceIdentity,
-	isUnknownTitle,
-	normalizeSourceType
-} from './source-identity.js';
+import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.js';
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 export const SOURCE_LIST_PATH = './data/source-list-3a.json';
 const SOURCES_DIR = './data/sources';
 
 // Must stay in sync with ingest.ts
-const MAX_TOKENS_PER_SECTION = 5_000;
-const BOOK_MAX_TOKENS_PER_SECTION = Number(process.env.BOOK_MAX_TOKENS_PER_SECTION || '3_000');
+const MAX_TOKENS_PER_SECTION = 10_000;
 // Warn if a section's estimated token count exceeds this factor × threshold
 const WARN_FACTOR = 1.5;
 // Warn if total source tokens exceed this value
@@ -114,12 +109,6 @@ export interface ScanResult {
 	error?: string;
 }
 
-function getSectionTokenLimit(sourceType: string): number {
-	return normalizeSourceType(sourceType) === 'book'
-		? BOOK_MAX_TOKENS_PER_SECTION
-		: MAX_TOKENS_PER_SECTION;
-}
-
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function estimateSourceCost(totalTokens: number, sectionCount: number, withValidation = false): SourceCostEstimate {
@@ -168,7 +157,8 @@ function estimateTokens(text: string): number {
 }
 
 function findFetchedSlug(url: string): string | null {
-	const identity = deriveCanonicalSourceIdentity(url);
+	const targetIdentity = canonicalizeAndHashSourceUrl(url);
+	if (!targetIdentity) return null;
 	try {
 		const files = fs.readdirSync(SOURCES_DIR);
 		for (const file of files) {
@@ -177,16 +167,12 @@ function findFetchedSlug(url: string): string | null {
 			try {
 				const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as {
 					url?: string;
-					canonical_url_hash?: string;
+					canonical_url?: string;
 				};
-				if (
-					identity &&
-					meta.canonical_url_hash &&
-					meta.canonical_url_hash === identity.canonicalUrlHash
-				) {
+				const metaIdentity = canonicalizeAndHashSourceUrl(meta.canonical_url || meta.url || '');
+				if (metaIdentity?.canonicalUrlHash === targetIdentity.canonicalUrlHash) {
 					return file.replace('.meta.json', '');
 				}
-				if (meta.url === url) return file.replace('.meta.json', '');
 			} catch {
 				// skip unreadable meta files
 			}
@@ -201,10 +187,7 @@ function findFetchedSlug(url: string): string | null {
  * Estimate section split — mirrors splitIntoSections() in ingest.ts exactly.
  * Returns the number of sections and the max token count per section.
  */
-function estimateSections(
-	text: string,
-	maxTokensPerSection: number
-): {
+function estimateSections(text: string): {
 	count: number;
 	maxTokens: number;
 	tokenCounts: number[];
@@ -248,7 +231,7 @@ function estimateSections(
 		let buffer = '';
 		for (const section of rawSections) {
 			if (
-				estimateTokens(buffer + '\n\n' + section) > maxTokensPerSection &&
+				estimateTokens(buffer + '\n\n' + section) > MAX_TOKENS_PER_SECTION &&
 				buffer.length > 0
 			) {
 				merged.push(buffer.trim());
@@ -261,9 +244,9 @@ function estimateSections(
 
 		// ── Step 4: sub-split oversized chunks ────────────────────────────
 		sections = [];
-		const charChunkSize = maxTokensPerSection * 4;
+		const charChunkSize = MAX_TOKENS_PER_SECTION * 4;
 		for (const chunk of merged) {
-			if (estimateTokens(chunk) > maxTokensPerSection) {
+			if (estimateTokens(chunk) > MAX_TOKENS_PER_SECTION) {
 				for (let i = 0; i < chunk.length; i += charChunkSize) {
 					const sub = chunk.substring(i, i + charChunkSize).trim();
 					if (sub.length > 100) sections.push(sub);
@@ -330,18 +313,9 @@ async function scanSource(source: SourceEntry): Promise<ScanResult> {
 	if (fetchedSlug) {
 		// ── Source is cached locally — analyse the text ──────────────────
 		const txtPath = path.join(SOURCES_DIR, `${fetchedSlug}.txt`);
-		const metaPath = path.join(SOURCES_DIR, `${fetchedSlug}.meta.json`);
 		let text: string;
-		let meta: {
-			title?: string;
-			url?: string;
-			canonical_url?: string;
-			canonical_url_hash?: string;
-			source_type?: string;
-		} = {};
 		try {
 			text = fs.readFileSync(txtPath, 'utf-8');
-			meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
 		} catch (err) {
 			return {
 				id: source.id,
@@ -355,59 +329,17 @@ async function scanSource(source: SourceEntry): Promise<ScanResult> {
 				error: `Cannot read cached file: ${err instanceof Error ? err.message : err}`
 			};
 		}
-		if (isUnknownTitle(meta.title)) {
-			return {
-				id: source.id,
-				title: source.title,
-				wave: source.wave,
-				priority: source.priority,
-				url: source.url,
-				cached: true,
-				slug: fetchedSlug,
-				warnings,
-				error: 'Metadata title is empty/unknown'
-			};
-		}
-		const expectedIdentity = deriveCanonicalSourceIdentity(source.url);
-		const metaIdentity = deriveCanonicalSourceIdentity(meta.url ?? '');
-		if (!expectedIdentity || !metaIdentity || expectedIdentity.canonicalUrlHash !== metaIdentity.canonicalUrlHash) {
-			return {
-				id: source.id,
-				title: source.title,
-				wave: source.wave,
-				priority: source.priority,
-				url: source.url,
-				cached: true,
-				slug: fetchedSlug,
-				warnings,
-				error: 'Metadata mismatch (URL/hash) between source list and fetched metadata'
-			};
-		}
-		if (normalizeSourceType(meta.source_type) !== normalizeSourceType(source.source_type)) {
-			return {
-				id: source.id,
-				title: source.title,
-				wave: source.wave,
-				priority: source.priority,
-				url: source.url,
-				cached: true,
-				slug: fetchedSlug,
-				warnings,
-				error: `Metadata mismatch (source_type): expected ${source.source_type}, got ${meta.source_type ?? 'missing'}`
-			};
-		}
 
 		const totalTokens = estimateTokens(text);
-		const sectionTokenLimit = getSectionTokenLimit(source.source_type);
-		const { count, maxTokens, tokenCounts } = estimateSections(text, sectionTokenLimit);
+		const { count, maxTokens, tokenCounts } = estimateSections(text);
 		const costEstimate = estimateSourceCost(totalTokens, count);
 
 		// Check for sections that are still larger than threshold (auto-split will handle them,
 		// but it's useful to know in advance)
-		const oversizedSections = tokenCounts.filter((t) => t > sectionTokenLimit * WARN_FACTOR);
+		const oversizedSections = tokenCounts.filter((t) => t > MAX_TOKENS_PER_SECTION * WARN_FACTOR);
 		if (oversizedSections.length > 0) {
 			warnings.push(
-				`${oversizedSections.length} section(s) exceed ${sectionTokenLimit * WARN_FACTOR} tokens ` +
+				`${oversizedSections.length} section(s) exceed ${MAX_TOKENS_PER_SECTION * WARN_FACTOR} tokens ` +
 					`(max: ${maxTokens.toLocaleString()}) — auto-split will activate`
 			);
 		}
@@ -425,10 +357,6 @@ async function scanSource(source: SourceEntry): Promise<ScanResult> {
 		const costError = costEstimate.exceedsCeiling
 			? `Estimated cost $${costEstimate.totalCostUsd.toFixed(2)} exceeds per-source ceiling $${PER_SOURCE_COST_CEILING_USD.toFixed(2)}`
 			: undefined;
-		const invalidCostError =
-			!Number.isFinite(costEstimate.totalCostUsd) || costEstimate.totalCostUsd < 0
-				? `Invalid/non-finite cost estimate generated (${costEstimate.totalCostUsd})`
-				: undefined;
 
 		return {
 			id: source.id,
@@ -443,7 +371,7 @@ async function scanSource(source: SourceEntry): Promise<ScanResult> {
 			maxSectionTokens: maxTokens,
 			costEstimate,
 			warnings,
-			error: invalidCostError ?? costError
+			error: costError
 		};
 	} else {
 		// ── Source not cached — check URL reachability ───────────────────

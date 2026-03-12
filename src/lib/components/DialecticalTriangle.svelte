@@ -44,27 +44,25 @@
 
   const isQuickDepth = $derived(depthMode === 'quick');
 
-  // Edge highlights are gated on completed transitions.
+  // Keep the active branch visible while each pass is running so loading
+  // reads as an active dialectical process rather than a static scaffold.
+  const showFullTriangle = $derived(mode === 'complete' && !isQuickDepth);
   const showAC = $derived(
-    mode === 'logo' ||
-    (!isQuickDepth && (
-      mode === 'complete' ||
-      isAnalysisDone ||
-      currentPass === 'critique' ||
-      currentPass === 'synthesis'
-    ))
+    mode === 'logo' || isAnalysisActive || isAnalysisDone || showFullTriangle
   );
   const showCS = $derived(
-    mode === 'logo' ||
-    (!isQuickDepth && (mode === 'complete' || isCritiqueDone))
+    mode === 'logo' || isCritiqueActive || isCritiqueDone || showFullTriangle
   );
   const showSA = $derived(
-    mode === 'logo' ||
-    (!isQuickDepth && (mode === 'complete' || isSynthesisDone))
+    mode === 'logo' || isSynthesisActive || isSynthesisDone || showFullTriangle
   );
-  const showAO = $derived(mode === 'logo' || mode === 'complete' || isAnalysisDone);
-  const showCO = $derived(mode === 'logo' || mode === 'complete' || isCritiqueDone);
-  const showSO = $derived(mode === 'logo' || mode === 'complete' || isSynthesisDone);
+  const showAO = $derived(mode === 'logo' || mode === 'complete' || isAnalysisActive || isAnalysisDone);
+  const showCO = $derived(mode === 'logo' || isCritiqueActive || isCritiqueDone || showFullTriangle);
+  const showSO = $derived(mode === 'logo' || isSynthesisActive || isSynthesisDone || showFullTriangle);
+
+  const isAnalysisEdgeActive = $derived(mode === 'loading' && isAnalysisActive);
+  const isCritiqueEdgeActive = $derived(mode === 'loading' && isCritiqueActive);
+  const isSynthesisEdgeActive = $derived(mode === 'loading' && isSynthesisActive);
 
   // Edge offsets: length = hidden, 0 = fully drawn
   const edgeACOffset = $derived(showAC ? 0 : LEN_AC);
@@ -224,11 +222,12 @@
       stroke-linecap="round"
     />
 
-    <!-- ── Colored edges draw in when each pass completes ─────────────────── -->
+    <!-- ── Colored branches stay active while each pass runs ──────────────── -->
 
     <!-- A→C (sage / analysis) -->
     <line
       class="edge"
+      class:edge-active={isAnalysisEdgeActive}
       x1="0" y1="-45" x2="39" y2="22"
       stroke="var(--color-sage)"
       stroke-width="0.8"
@@ -240,6 +239,7 @@
     <!-- C→S (copper / critique) -->
     <line
       class="edge"
+      class:edge-active={isCritiqueEdgeActive}
       x1="39" y1="22" x2="-39" y2="22"
       stroke="var(--color-copper)"
       stroke-width="0.8"
@@ -251,6 +251,7 @@
     <!-- S→A (blue / synthesis) -->
     <line
       class="edge"
+      class:edge-active={isSynthesisEdgeActive}
       x1="-39" y1="22" x2="0" y2="-45"
       stroke="var(--color-blue)"
       stroke-width="0.8"
@@ -262,6 +263,7 @@
     <!-- A→O / C→O / S→O colored draws -->
     <line
       class="edge edge-inner"
+      class:edge-active={isAnalysisEdgeActive}
       x1="0" y1="-45" x2="0" y2="0"
       stroke="var(--color-sage)"
       stroke-width="0.6"
@@ -271,6 +273,7 @@
     />
     <line
       class="edge edge-inner"
+      class:edge-active={isCritiqueEdgeActive}
       x1="39" y1="22" x2="0" y2="0"
       stroke="var(--color-copper)"
       stroke-width="0.6"
@@ -280,6 +283,7 @@
     />
     <line
       class="edge edge-inner"
+      class:edge-active={isSynthesisEdgeActive}
       x1="-39" y1="22" x2="0" y2="0"
       stroke="var(--color-blue)"
       stroke-width="0.6"
@@ -383,6 +387,10 @@
     opacity: 0.85;
   }
 
+  .edge-active {
+    animation: edgePulse 1.8s ease-in-out infinite;
+  }
+
   /* Hover wobble on edges in complete mode */
   .tri-svg.is-complete:hover .edge {
     animation: edgeWobble 2s ease-in-out infinite;
@@ -446,8 +454,14 @@
     50% { opacity: 0.78; }
   }
 
+  @keyframes edgePulse {
+    0%, 100% { opacity: 0.95; }
+    50% { opacity: 0.62; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .edge                              { transition: none; }
+    .edge-active                       { animation: none; }
     .node-active                       { animation: none; }
     .centre-dot                        { animation: none; }
     .tri-svg.is-complete:hover .edge   { animation: none; }

@@ -28,17 +28,10 @@ async function main() {
 
 		await db.query(`
 			DEFINE TABLE IF NOT EXISTS ingestion_log SCHEMAFULL;
-			DEFINE FIELD IF NOT EXISTS canonical_url_hash ON ingestion_log TYPE string;
-			DEFINE FIELD IF NOT EXISTS canonical_url ON ingestion_log TYPE option<string>;
 			DEFINE FIELD IF NOT EXISTS source_url ON ingestion_log TYPE string;
+			DEFINE FIELD IF NOT EXISTS canonical_url ON ingestion_log TYPE string;
+			DEFINE FIELD IF NOT EXISTS canonical_url_hash ON ingestion_log TYPE string;
 			DEFINE FIELD IF NOT EXISTS source_title ON ingestion_log TYPE string;
-			DEFINE FIELD IF NOT EXISTS ingest_provider ON ingestion_log TYPE option<string>;
-			DEFINE FIELD IF NOT EXISTS run_attempt_count ON ingestion_log TYPE option<int>;
-			DEFINE FIELD IF NOT EXISTS retry_count_total ON ingestion_log TYPE option<int>;
-			DEFINE FIELD IF NOT EXISTS parse_repair_attempts_total ON ingestion_log TYPE option<int>;
-			DEFINE FIELD IF NOT EXISTS stage_telemetry ON ingestion_log TYPE option<object>;
-			DEFINE FIELD IF NOT EXISTS stage_timings_ms ON ingestion_log TYPE option<object>;
-			DEFINE FIELD IF NOT EXISTS cost_breakdown ON ingestion_log TYPE option<object>;
 			DEFINE FIELD IF NOT EXISTS status ON ingestion_log TYPE string
 				ASSERT $value IN ['fetching', 'extracting', 'relating', 'grouping', 'embedding', 'validating', 'storing', 'complete', 'failed'];
 			DEFINE FIELD IF NOT EXISTS stage_completed ON ingestion_log TYPE option<string>;
@@ -50,9 +43,8 @@ async function main() {
 			DEFINE FIELD IF NOT EXISTS cost_usd ON ingestion_log TYPE option<float>;
 			DEFINE FIELD IF NOT EXISTS started_at ON ingestion_log TYPE datetime DEFAULT time::now();
 			DEFINE FIELD IF NOT EXISTS completed_at ON ingestion_log TYPE option<datetime>;
-			DEFINE INDEX IF NOT EXISTS ingestion_log_canonical_hash ON ingestion_log FIELDS canonical_url_hash UNIQUE;
-			DEFINE INDEX IF NOT EXISTS ingestion_log_url ON ingestion_log FIELDS source_url;
-			DEFINE INDEX IF NOT EXISTS ingestion_log_status ON ingestion_log FIELDS status;
+			DEFINE INDEX IF NOT EXISTS ingestion_log_url ON ingestion_log FIELDS source_url UNIQUE;
+			DEFINE INDEX IF NOT EXISTS ingestion_log_canonical_hash ON ingestion_log FIELDS canonical_url_hash;
 		`);
 
 		console.log('[SETUP] ✓ Table: ingestion_log');
