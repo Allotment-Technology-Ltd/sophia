@@ -12,6 +12,10 @@ import { loadServerEnv } from './env';
 
 export const EMBEDDING_MODEL = 'text-embedding-005';
 export const EMBEDDING_DIMENSIONS = 768; // text-embedding-005 native dimension
+const EMBED_BATCH_SIZE = Number(process.env.VERTEX_EMBED_BATCH_SIZE || '250');
+const EMBED_BATCH_DELAY_MS = Number(process.env.VERTEX_EMBED_BATCH_DELAY_MS || '250');
+const EMBED_MAX_RETRIES = Number(process.env.VERTEX_EMBED_MAX_RETRIES || '6');
+const EMBED_RETRY_BASE_MS = Number(process.env.VERTEX_EMBED_RETRY_BASE_MS || '1500');
 
 function projectId(): string | undefined {
 	loadServerEnv();
@@ -59,6 +63,24 @@ interface VertexEmbeddingResponse {
 			token_count?: number;
 		};
 	}>;
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableEmbeddingError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+	return (
+		message.includes('429') ||
+		message.includes('resource_exhausted') ||
+		message.includes('rate') ||
+		message.includes('503') ||
+		message.includes('502') ||
+		message.includes('500') ||
+		message.includes('temporarily unavailable') ||
+		message.includes('timeout')
+	);
 }
 
 /**
@@ -163,7 +185,7 @@ export async function embedText(text: string): Promise<number[]> {
  * Automatically chunks larger arrays
  */
 export async function embedTexts(texts: string[]): Promise<number[][]> {
-	const BATCH_SIZE = 250;
+	const BATCH_SIZE = Math.max(1, EMBED_BATCH_SIZE);
 	const embeddings: number[][] = [];
 
 	try {
@@ -175,12 +197,41 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
 			const batchNum = Math.floor(i / BATCH_SIZE) + 1;
 			console.log(`[EMBED] Batch ${batchNum}: embedding ${batch.length} texts`);
 
-			const batchEmbeddings = await callVertexEmbedding(batch, 'RETRIEVAL_DOCUMENT');
+			let batchEmbeddings: number[][] | null = null;
+			let lastError: unknown = null;
+			for (let attempt = 1; attempt <= EMBED_MAX_RETRIES; attempt++) {
+				try {
+					batchEmbeddings = await callVertexEmbedding(batch, 'RETRIEVAL_DOCUMENT');
+					break;
+				} catch (error) {
+					lastError = error;
+					if (attempt >= EMBED_MAX_RETRIES || !isRetryableEmbeddingError(error)) {
+						throw error;
+					}
+					const waitMs = EMBED_RETRY_BASE_MS * Math.pow(2, attempt - 1);
+					console.warn(
+						`[EMBED] Batch ${batchNum} retry ${attempt}/${EMBED_MAX_RETRIES} after ${waitMs}ms: ${
+							error instanceof Error ? error.message : String(error)
+						}`
+					);
+					await sleep(waitMs);
+				}
+			}
+			if (!batchEmbeddings) {
+				throw new Error(
+					`Embedding batch ${batchNum} failed after retries: ${lastError instanceof Error ? lastError.message : String(lastError)}`
+				);
+			}
+
 			embeddings.push(...batchEmbeddings);
 
 			console.log(
 				`[EMBED] Batch ${batchNum} complete (session total: ${totalTokensUsed} tokens)`
 			);
+
+			if (EMBED_BATCH_DELAY_MS > 0 && i + BATCH_SIZE < texts.length) {
+				await sleep(EMBED_BATCH_DELAY_MS);
+			}
 		}
 
 		if (embeddings.length !== texts.length) {
