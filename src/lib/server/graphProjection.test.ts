@@ -12,14 +12,7 @@ const baseRetrieval: RetrievalResult = {
       source_title: 'Source A',
       source_author: ['Author A'],
       confidence: 0.82,
-      position_in_source: 1,
-      provenance: {
-        bibliographic_identity: {
-          title: 'Source A',
-          author: ['Author A']
-        },
-        ingest_version: 'test-v1'
-      }
+      position_in_source: 1
     },
     {
       id: 'b',
@@ -29,14 +22,7 @@ const baseRetrieval: RetrievalResult = {
       source_title: 'Source B',
       source_author: ['Author B'],
       confidence: 0.76,
-      position_in_source: 2,
-      provenance: {
-        bibliographic_identity: {
-          title: 'Source B',
-          author: ['Author B']
-        },
-        ingest_version: 'test-v1'
-      }
+      position_in_source: 2
     }
   ],
   relations: [
@@ -45,18 +31,7 @@ const baseRetrieval: RetrievalResult = {
       to_index: 1,
       relation_type: 'supports',
       strength: 'strong',
-      note: 'A supports B',
-      confidence_weight: 1,
-      weighted_score: 0.82,
-      provenance: {
-        edge_type: 'supports',
-        from_claim_id: 'a',
-        to_claim_id: 'b',
-        edge_prior: 1,
-        edge_confidence_weight: 1,
-        hop_decay_factor: 1,
-        ingest_version: 'test-v1'
-      }
+      note: 'A supports B'
     }
   ],
   arguments: [],

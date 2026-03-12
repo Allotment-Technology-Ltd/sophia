@@ -109,6 +109,8 @@ export interface RetrievalOptions {
 	maxHops?: number;
 	/** Optional cap on total claims returned after traversal */
 	maxClaims?: number;
+	/** Optional viewer context for trace/audit routing */
+	viewerUid?: string | null;
 }
 
 const EMPTY_RESULT: RetrievalResult = {
