@@ -21,6 +21,7 @@
 | --- | --- |
 | [runbooks/domain-expansion-runbook.md](runbooks/domain-expansion-runbook.md) | End-to-end guide for adding a new philosophical domain |
 | [runbooks/vertex-ingestion-cutover-wave2.md](runbooks/vertex-ingestion-cutover-wave2.md) | Operational runbook for Vertex ingestion cutover validation using PoM Wave 2 cost comparison vs PoM Wave 1 |
+| [runbooks/gutenberg-groundwork-pilot.md](runbooks/gutenberg-groundwork-pilot.md) | Phase 2 Gutenberg pilot runbook and mandatory long-text ingestion profile |
 | [runbooks/zuplo-phase1-runbook.md](runbooks/zuplo-phase1-runbook.md) | Phase 1 setup for Zuplo gateway + PostHog analytics |
 | [runbooks/nightly-link-ingestion-runbook.md](runbooks/nightly-link-ingestion-runbook.md) | Proposed operations guide for nightly deferred link ingestion |
 
