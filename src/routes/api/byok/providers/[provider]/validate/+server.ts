@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { BYOK_PROVIDERS, parseByokProvider } from '$lib/server/byok/types';
+import { parseByokProvider } from '$lib/server/byok/types';
+import { getEnabledByokProviders, isByokProviderEnabled } from '$lib/server/byok/config';
 import {
   getByokProviderApiKey,
   listByokProviderStatuses,
@@ -23,11 +24,21 @@ export const POST: RequestHandler = async ({ locals, request, params }) => {
   }
 
   const provider = parseByokProvider(params.provider);
+  const enabledProviders = getEnabledByokProviders();
   if (!provider) {
     return problemJson({
       status: 400,
       title: 'Invalid provider',
-      detail: `provider must be one of: ${BYOK_PROVIDERS.join(', ')}`,
+      detail: `provider must be one of: ${enabledProviders.join(', ')}`,
+      requestId
+    });
+  }
+
+  if (!isByokProviderEnabled(provider)) {
+    return problemJson({
+      status: 404,
+      title: 'Not found',
+      detail: `BYOK provider ${provider} is not enabled in this environment.`,
       requestId
     });
   }

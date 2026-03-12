@@ -164,7 +164,7 @@ export const POST: RequestHandler = async ({ request }) => {
       const response = buildVerificationResult(
         requestId,
         processingTimeMs,
-        process.env.GEMINI_REASONING_MODEL || 'gemini-2.0-flash',
+        process.env.GEMINI_REASONING_MODEL || 'gemini-2.5-flash',
         pipeline
       );
 
@@ -294,7 +294,7 @@ export const POST: RequestHandler = async ({ request }) => {
         const result = buildVerificationResult(
           requestId,
           processingTimeMs,
-          process.env.GEMINI_REASONING_MODEL || 'gemini-2.0-flash',
+          process.env.GEMINI_REASONING_MODEL || 'gemini-2.5-flash',
           pipeline
         );
         send({ type: 'verification_complete', result });

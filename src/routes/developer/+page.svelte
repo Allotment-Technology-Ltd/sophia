@@ -165,22 +165,6 @@
     usage = body as UsageResponse;
   }
 
-  function defaultByokStatus(provider: ByokProvider): ByokProviderStatus {
-    return {
-      provider,
-      configured: false,
-      status: 'not_configured',
-      fingerprint_last8: null,
-      validated_at: null,
-      updated_at: null,
-      last_error: null
-    };
-  }
-
-  function getByokStatus(provider: ByokProvider): ByokProviderStatus {
-    return byokProviders.find((item) => item.provider === provider) ?? defaultByokStatus(provider);
-  }
-
   function getByokStatusLabel(status: ByokProviderStatus['status']): string {
     if (status === 'active') return 'Active';
     if (status === 'pending_validation') return 'Pending validation';
@@ -193,9 +177,7 @@
     const response = await fetchWithFirebase('/api/byok/providers', { method: 'GET' });
     const body = await parseResponseOrThrow(response);
     const providers = Array.isArray(body.providers) ? body.providers as ByokProviderStatus[] : [];
-    byokProviders = BYOK_PROVIDER_ORDER.map((provider) => {
-      return providers.find((item) => item.provider === provider) ?? defaultByokStatus(provider);
-    });
+    byokProviders = providers;
   }
 
   function setByokSaving(provider: ByokProvider, saving: boolean): void {
@@ -514,10 +496,14 @@
         </p>
       {:else if loadingAccountData && byokProviders.length === 0}
         <p class="mt-4 font-mono text-sm text-sophia-dark-muted">Loading BYOK providers...</p>
+      {:else if byokProviders.length === 0}
+        <p class="mt-4 rounded border border-sophia-dark-border bg-sophia-dark-bg p-3 font-mono text-sm text-sophia-dark-muted">
+          No BYOK providers are enabled in this environment.
+        </p>
       {:else}
         <div class="mt-5 grid gap-4">
-          {#each BYOK_PROVIDER_ORDER as provider}
-            {@const status = getByokStatus(provider)}
+          {#each byokProviders as status (status.provider)}
+            {@const provider = status.provider}
             <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div>

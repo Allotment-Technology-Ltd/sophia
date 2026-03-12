@@ -180,6 +180,34 @@ function withPassTimeout<T>(promise: Promise<T>, timeoutMs: number, label: strin
   });
 }
 
+function toError(value: unknown): Error {
+  if (value instanceof Error) return value;
+  if (typeof value === 'string') return new Error(value);
+  try {
+    return new Error(JSON.stringify(value));
+  } catch {
+    return new Error(String(value));
+  }
+}
+
+function isNoOutputGeneratedError(error: Error): boolean {
+  return /No output generated/i.test(error.message);
+}
+
+function resolveStreamFailure(caught: unknown, streamFailure: unknown): Error {
+  const caughtError = toError(caught);
+  if (!streamFailure) return caughtError;
+
+  const streamError = toError(streamFailure);
+  if (isNoOutputGeneratedError(caughtError) && !isNoOutputGeneratedError(streamError)) {
+    return streamError;
+  }
+  if (!isNoOutputGeneratedError(streamError)) {
+    return streamError;
+  }
+  return caughtError;
+}
+
 const DEFAULT_INPUT_COST_PER_MILLION = Number.parseFloat(
   process.env.MODEL_COST_DEFAULT_INPUT_PER_MILLION ?? '3'
 );
@@ -272,6 +300,7 @@ async function streamPassWithContinuation(
 
   while (continuationRound <= maxContinuationRounds) {
     let segmentOutput = '';
+    let streamFailure: unknown = null;
 
     const stream = streamText({
       model: modelRoute.model as any,
@@ -286,18 +315,28 @@ async function streamPassWithContinuation(
           }
         : {}),
       onError: ({ error }) => {
+        if (!streamFailure) {
+          streamFailure = error;
+        }
         console.error(`[ENGINE] streamText error (${pass} round=${continuationRound}):`, error instanceof Error ? error.stack : String(error));
       }
     });
 
-    for await (const delta of stream.textStream) {
-      segmentOutput += delta;
-      output += delta;
-      callbacks.onPassChunk(pass, delta);
+    let usage: Awaited<typeof stream.totalUsage>;
+    let finishReason: Awaited<typeof stream.finishReason>;
+    try {
+      for await (const delta of stream.textStream) {
+        segmentOutput += delta;
+        output += delta;
+        callbacks.onPassChunk(pass, delta);
+      }
+
+      usage = await stream.totalUsage;
+      finishReason = await stream.finishReason;
+    } catch (err) {
+      throw resolveStreamFailure(err, streamFailure);
     }
 
-    const usage = await stream.totalUsage;
-    const finishReason = await stream.finishReason;
     const inputTokens = usage.inputTokens ?? 0;
     const outputTokens = usage.outputTokens ?? 0;
     totalInputTokens += inputTokens;
@@ -710,6 +749,7 @@ export async function runDialecticalEngine(
 
       while (continuationRound <= analysisMaxContinuationRounds) {
         let segmentOutput = '';
+        let streamFailure: unknown = null;
 
         const stream = streamText({
           model: analysisModelRoute.model as any,
@@ -724,40 +764,50 @@ export async function runDialecticalEngine(
               }
             : {}),
           onError: ({ error }) => {
+            if (!streamFailure) {
+              streamFailure = error;
+            }
             console.error(`[ENGINE] streamText error (analysis round=${continuationRound}):`, error instanceof Error ? error.stack : String(error));
           }
         });
 
-        for await (const delta of stream.textStream) {
-          segmentOutput += delta;
-          output += delta;
-          callbacks.onPassChunk('analysis', delta);
+        let usage: Awaited<typeof stream.totalUsage>;
+        let finishReason: Awaited<typeof stream.finishReason>;
+        try {
+          for await (const delta of stream.textStream) {
+            segmentOutput += delta;
+            output += delta;
+            callbacks.onPassChunk('analysis', delta);
 
-          // Trigger critique when analysis reaches threshold (if not already started)
-          if (depthMode !== 'quick' && allowParallelCritique && !critiqueStarted && output.length >= critiqueStartThreshold) {
-            critiqueStarted = true;
-            console.log(`[ENGINE] Analysis reached ${critiqueStartThreshold} chars, starting Critique in parallel (round=${continuationRound})`);
-            callbacks.onPassStart('critique', {
-              provider: critiqueModelRoute.provider,
-              modelId: critiqueModelRoute.modelId
-            });
-            
-            critiquePromise = streamPassWithContinuation(
-              'critique',
-              critiqueSystem,
-              isAgnosticMode
-                ? buildReasoningCritiqueUserPrompt(query, `${output}\n[Analysis in progress...]`)
-                : buildCritiqueUserPrompt(query, `${output}\n[Analysis in progress...]`),
-              callbacks,
-              critiqueModelRoute,
-              depthMode === 'deep' ? 5200 : 4096,
-              depthMode === 'deep' ? 8 : 6
-            );
+            // Trigger critique when analysis reaches threshold (if not already started)
+            if (depthMode !== 'quick' && allowParallelCritique && !critiqueStarted && output.length >= critiqueStartThreshold) {
+              critiqueStarted = true;
+              console.log(`[ENGINE] Analysis reached ${critiqueStartThreshold} chars, starting Critique in parallel (round=${continuationRound})`);
+              callbacks.onPassStart('critique', {
+                provider: critiqueModelRoute.provider,
+                modelId: critiqueModelRoute.modelId
+              });
+              
+              critiquePromise = streamPassWithContinuation(
+                'critique',
+                critiqueSystem,
+                isAgnosticMode
+                  ? buildReasoningCritiqueUserPrompt(query, `${output}\n[Analysis in progress...]`)
+                  : buildCritiqueUserPrompt(query, `${output}\n[Analysis in progress...]`),
+                callbacks,
+                critiqueModelRoute,
+                depthMode === 'deep' ? 5200 : 4096,
+                depthMode === 'deep' ? 8 : 6
+              );
+            }
           }
+
+          usage = await stream.totalUsage;
+          finishReason = await stream.finishReason;
+        } catch (err) {
+          throw resolveStreamFailure(err, streamFailure);
         }
 
-        const usage = await stream.totalUsage;
-        const finishReason = await stream.finishReason;
         const inputTokens = usage.inputTokens ?? 0;
         const outputTokens = usage.outputTokens ?? 0;
         totalInputTokens += inputTokens;
@@ -1066,6 +1116,7 @@ export async function runVerificationPass(
   let output = '';
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
+  let streamFailure: unknown = null;
   const verificationModelRoute = getReasoningModelRoute({
     pass: 'verification',
     depthMode: options?.depthMode ?? 'standard',
@@ -1079,16 +1130,25 @@ export async function runVerificationPass(
     system: VERIFICATION_SYSTEM,
     prompt: buildVerificationUserPrompt(claims, synthesisText),
     onError: ({ error }) => {
+      if (!streamFailure) {
+        streamFailure = error;
+      }
       console.error('[ENGINE] streamText error (verification):', error instanceof Error ? error.stack : String(error));
     }
   });
 
-  for await (const delta of stream.textStream) {
-    output += delta;
-    callbacks.onPassChunk('verification', delta);
+  let usage: Awaited<typeof stream.totalUsage>;
+  try {
+    for await (const delta of stream.textStream) {
+      output += delta;
+      callbacks.onPassChunk('verification', delta);
+    }
+
+    usage = await stream.totalUsage;
+  } catch (err) {
+    throw resolveStreamFailure(err, streamFailure);
   }
 
-  const usage = await stream.totalUsage;
   const inputTokens = usage.inputTokens ?? 0;
   const outputTokens = usage.outputTokens ?? 0;
   totalInputTokens += inputTokens;

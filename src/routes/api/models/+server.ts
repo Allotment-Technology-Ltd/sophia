@@ -4,6 +4,7 @@ import { getAvailableReasoningModels } from '$lib/server/vertex';
 import { loadByokProviderApiKeys } from '$lib/server/byok/store';
 import type { ByokProvider, ProviderApiKeys } from '$lib/server/byok/types';
 import { isReasoningProvider, parseByokProvider, type ReasoningProvider } from '$lib/types/providers';
+import { getEnabledReasoningProviders, isByokProviderEnabled } from '$lib/server/byok/config';
 
 function toEffectiveProviderKeys(
   allByokKeys: ProviderApiKeys,
@@ -41,13 +42,27 @@ export const GET: RequestHandler = async ({ locals, url }) => {
         ? 'byok'
         : 'auto';
   const byokProvider = parseByokProvider(byokProviderParam) as ByokProvider | undefined;
+  const enabledReasoningProviders = getEnabledReasoningProviders();
+  if (credentialMode === 'byok' && byokProvider && !isByokProviderEnabled(byokProvider)) {
+    return json(
+      {
+        defaults: {
+          mode: 'auto'
+        },
+        models: []
+      },
+      { status: 400 }
+    );
+  }
 
   const effectiveProviderKeys = toEffectiveProviderKeys(providerApiKeys, credentialMode, byokProvider);
   const includePlatformProviders = credentialMode !== 'byok';
   const allowedProviders: ReasoningProvider[] | undefined =
     credentialMode === 'byok' && byokProvider
       ? (isReasoningProvider(byokProvider) ? [byokProvider] : [])
-      : undefined;
+      : credentialMode === 'byok'
+        ? enabledReasoningProviders
+        : undefined;
   const models = getAvailableReasoningModels({
     providerApiKeys: effectiveProviderKeys,
     includePlatformProviders,

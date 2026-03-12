@@ -48,7 +48,6 @@
   import {
     DEFAULT_MODEL_CATALOG,
     PROVIDER_UI_META,
-    REASONING_PROVIDER_ORDER,
     getModelProviderLabel,
     isReasoningProvider,
     parseReasoningProvider,
@@ -113,7 +112,6 @@
   let customModelId = $state('');
   let previousKeySource: QueryKeySource = 'platform';
   const FALLBACK_MODELS = DEFAULT_MODEL_CATALOG;
-  const QUERY_KEY_PROVIDER_ORDER = REASONING_PROVIDER_ORDER;
   let selectedDepth = $state<'quick' | 'standard' | 'deep'>('standard');
   let userLinksInput = $state('');
   let ingestSelections = $state<Record<string, boolean>>({});
@@ -254,7 +252,7 @@
       ];
     }
 
-    const byokOnlyProviderRows = QUERY_KEY_PROVIDER_ORDER
+    const byokOnlyProviderRows = queryKeyProviderOrder
       .filter((provider) => provider !== 'vertex')
       .map((provider) => ({
         provider,
@@ -427,6 +425,11 @@
       .map((provider) => provider.provider)
       .filter((provider): provider is ReasoningProvider => isReasoningProvider(provider))
   );
+  const queryKeyProviderOrder = $derived.by(() =>
+    byokProviders
+      .map((provider) => provider.provider)
+      .filter((provider): provider is ReasoningProvider => isReasoningProvider(provider))
+  );
 
   const hasAnyActiveByok = $derived(activeByokProviders.length > 0);
 
@@ -447,6 +450,10 @@
 
   $effect(() => {
     if (keySource === 'platform') return;
+    if (!queryKeyProviderOrder.includes(keySource)) {
+      keySource = 'platform';
+      return;
+    }
     if (activeByokProviders.includes(keySource)) return;
     keySource = 'platform';
   });
@@ -1693,7 +1700,7 @@
                       <label for="key-source-select">Choose your key</label>
                       <select id="key-source-select" bind:value={keySource}>
                         <option value="platform">Platform key (limited)</option>
-                        {#each QUERY_KEY_PROVIDER_ORDER as provider}
+                        {#each queryKeyProviderOrder as provider}
                           <option value={provider} disabled={!activeByokProviders.includes(provider)}>
                             My {PROVIDER_UI_META[provider].label} key {!activeByokProviders.includes(provider) ? '(not active)' : ''}
                           </option>
@@ -2191,7 +2198,7 @@
                   <label for="rerun-key-source">Key source</label>
                   <select id="rerun-key-source" bind:value={keySource} disabled={conversation.isLoading}>
                     <option value="platform">Platform key (limited)</option>
-                    {#each QUERY_KEY_PROVIDER_ORDER as provider}
+                    {#each queryKeyProviderOrder as provider}
                       <option value={provider} disabled={!activeByokProviders.includes(provider)}>
                         My {PROVIDER_UI_META[provider].label} key {!activeByokProviders.includes(provider) ? '(not active)' : ''}
                       </option>

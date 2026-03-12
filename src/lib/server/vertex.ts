@@ -140,9 +140,9 @@ function envModelId(provider: Exclude<ReasoningProvider, 'vertex'>, kind: 'REASO
 
 function getRuntimeRoutingConfig(): RuntimeRoutingConfig {
   loadServerEnv();
-  const reasoningModelId = process.env.GEMINI_REASONING_MODEL || 'gemini-2.0-flash';
-  const extractionModelId = process.env.GEMINI_EXTRACTION_MODEL || 'gemini-2.0-flash';
-  const deepReasoningModelId = process.env.GEMINI_DEEP_REASONING_MODEL || reasoningModelId;
+  const reasoningModelId = process.env.GEMINI_REASONING_MODEL || 'gemini-2.5-flash';
+  const extractionModelId = process.env.GEMINI_EXTRACTION_MODEL || 'gemini-2.5-flash';
+  const deepReasoningModelId = process.env.GEMINI_DEEP_REASONING_MODEL || 'gemini-2.5-pro';
   const deepAnalysisModelId = process.env.GEMINI_DEEP_ANALYSIS_MODEL || deepReasoningModelId;
   const deepCritiqueModelId = process.env.GEMINI_DEEP_CRITIQUE_MODEL || deepReasoningModelId;
   const deepSynthesisModelId = process.env.GEMINI_DEEP_SYNTHESIS_MODEL || deepReasoningModelId;

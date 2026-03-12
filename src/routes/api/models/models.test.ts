@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockLoadByokProviderApiKeys, mockGetAvailableReasoningModels } = vi.hoisted(() => ({
   mockLoadByokProviderApiKeys: vi.fn(),
@@ -15,6 +15,7 @@ vi.mock('$lib/server/vertex', () => ({
 
 describe('/api/models', () => {
   beforeEach(() => {
+    vi.stubEnv('BYOK_ENABLED_PROVIDERS', 'vertex,anthropic,openai,voyage');
     vi.clearAllMocks();
     mockLoadByokProviderApiKeys.mockResolvedValue({
       vertex: 'AIza-vertex',
@@ -29,6 +30,10 @@ describe('/api/models', () => {
         description: 'User BYOK OpenAI model'
       }
     ]);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('accepts byok_provider=openai and scopes model options to OpenAI', async () => {
@@ -84,5 +89,18 @@ describe('/api/models', () => {
       includePlatformProviders: false,
       allowedProviders: []
     });
+  });
+
+  it('rejects BYOK providers that are disabled by rollout gates', async () => {
+    vi.stubEnv('BYOK_ENABLED_PROVIDERS', 'vertex,anthropic');
+
+    const { GET } = await import('./+server');
+    const response = await GET({
+      locals: { user: { uid: 'user:openai-disabled' } },
+      url: new URL('http://localhost/api/models?credential_mode=byok&byok_provider=openai')
+    } as any);
+
+    expect(response.status).toBe(400);
+    expect(mockGetAvailableReasoningModels).not.toHaveBeenCalled();
   });
 });

@@ -125,22 +125,6 @@
   let { initialSettingsTab = 'general' }: Props = $props();
   let activeSettingsTab = $state<SettingsSubTab>('general');
 
-  function defaultByokStatus(provider: ByokProvider): ByokProviderStatus {
-    return {
-      provider,
-      configured: false,
-      status: 'not_configured',
-      fingerprint_last8: null,
-      validated_at: null,
-      updated_at: null,
-      last_error: null
-    };
-  }
-
-  function byokStatus(provider: ByokProvider): ByokProviderStatus {
-    return byokProviders.find((item) => item.provider === provider) ?? defaultByokStatus(provider);
-  }
-
   function statusLabel(status: ByokProviderStatus['status']): string {
     if (status === 'active') return 'Active';
     if (status === 'pending_validation') return 'Pending validation';
@@ -216,9 +200,7 @@
       const response = await fetchWithFirebase('/api/byok/providers', { method: 'GET' });
       const body = await parseResponseOrThrow(response);
       const incoming = Array.isArray(body.providers) ? body.providers as ByokProviderStatus[] : [];
-      byokProviders = BYOK_PROVIDER_ORDER.map((provider) => {
-        return incoming.find((item) => item.provider === provider) ?? defaultByokStatus(provider);
-      });
+      byokProviders = incoming;
     } catch (err) {
       byokError = err instanceof Error ? err.message : String(err);
     } finally {
@@ -684,9 +666,16 @@
           <span class="setting-name">Loading provider status...</span>
         </div>
       </div>
+    {:else if byokProviders.length === 0}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">No BYOK providers enabled</span>
+          <span class="setting-desc">Set `BYOK_ENABLED_PROVIDERS` to enable provider rollout in this environment.</span>
+        </div>
+      </div>
     {:else}
-      {#each BYOK_PROVIDER_ORDER as provider}
-        {@const status = byokStatus(provider)}
+      {#each byokProviders as status (status.provider)}
+        {@const provider = status.provider}
         <div class="byok-card">
           <div class="byok-head">
             <div class="setting-info">

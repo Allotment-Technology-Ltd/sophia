@@ -1,13 +1,8 @@
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from '$lib/server/firebase-admin';
 import { decryptByokSecret, encryptByokSecret, type EncryptedSecret } from './crypto';
-import {
-  BYOK_PROVIDERS,
-  type ByokCredentialStatus,
-  type ByokProvider,
-  type ByokProviderStatus,
-  type ProviderApiKeys
-} from './types';
+import { type ByokCredentialStatus, type ByokProvider, type ByokProviderStatus, type ProviderApiKeys } from './types';
+import { getEnabledByokProviders } from './config';
 
 interface ByokSecretPayload {
   api_key: string;
@@ -44,7 +39,7 @@ export async function listByokProviderStatuses(uid: string): Promise<ByokProvide
     byProvider.set(doc.id, doc.data() as ByokProviderRecord);
   }
 
-  return BYOK_PROVIDERS.map((provider) => {
+  return getEnabledByokProviders().map((provider) => {
     const record = byProvider.get(provider);
     if (!record) {
       return {
@@ -170,7 +165,7 @@ export async function getByokProviderApiKey(
 export async function loadByokProviderApiKeys(uid: string): Promise<ProviderApiKeys> {
   const result: ProviderApiKeys = {};
   const keys = await Promise.all(
-    BYOK_PROVIDERS.map(async (provider) => ({
+    getEnabledByokProviders().map(async (provider) => ({
       provider,
       key: await getByokProviderApiKey(uid, provider)
     }))

@@ -17,6 +17,7 @@ import { evaluateConstitutionWithTelemetry } from '$lib/server/constitution/eval
 import { getAvailableReasoningModels } from '$lib/server/vertex';
 import { loadByokProviderApiKeys } from '$lib/server/byok/store';
 import type { ByokProvider, ProviderApiKeys } from '$lib/server/byok/types';
+import { isByokProviderEnabled, isReasoningProviderEnabled } from '$lib/server/byok/config';
 import {
   REASONING_PROVIDER_ORDER,
   getModelProviderLabel,
@@ -881,6 +882,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const reuse = body.reuse;
   const effectiveProviderApiKeys = selectEffectiveProviderApiKeys(providerApiKeys, credentialMode, byokProvider);
   const usingByok = Object.keys(effectiveProviderApiKeys).some((provider) => isReasoningProvider(provider));
+  if (credentialMode === 'byok' && byokProvider && !isByokProviderEnabled(byokProvider)) {
+    return json({ error: `${byokProvider} BYOK is not enabled in this environment.` }, { status: 400 });
+  }
+  if (credentialMode === 'byok' && modelProvider !== 'auto' && !isReasoningProviderEnabled(modelProvider)) {
+    return json({ error: `${modelProvider} BYOK is not enabled in this environment.` }, { status: 400 });
+  }
   const domainOverrideEnabled =
     process.env.ENABLE_DOMAIN_OVERRIDE_UI?.toLowerCase() !== 'false';
 

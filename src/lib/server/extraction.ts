@@ -57,7 +57,7 @@ export async function extractClaims(
         relations: metaBlock.relations,
         metadata: {
           source_length: sourceText.length,
-          extraction_model: process.env.GEMINI_EXTRACTION_MODEL || 'gemini-2.0-flash',
+          extraction_model: process.env.GEMINI_EXTRACTION_MODEL || 'gemini-2.5-flash',
           extraction_duration_ms: Date.now() - startedAt,
           tokens_used: {
             input: inputTokens,
