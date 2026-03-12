@@ -96,6 +96,7 @@
   let lastSyncedUrl = $state<string | null>(null);
   let didAutoHydrateFromReferences = false;
   let lastDegradedReason = $state<string | null>(null);
+  let showTraceDebug = $state(false);
 
   let viewMode = $state<ViewMode>('structure');
   let lensMode = $state<LensMode>('all');
@@ -221,6 +222,53 @@
       degraded: meta?.retrievalDegraded ?? false,
       degradedReason: meta?.retrievalDegradedReason ?? '',
       trace: meta?.retrievalTrace
+    };
+  });
+
+  const provenanceConfidence = $derived.by(() => {
+    const claimNodes = graphStore.rawNodes.filter((node) => node.type === 'claim');
+    const total = claimNodes.length;
+    const high = claimNodes.filter((node) => node.confidenceBand === 'high').length;
+    const medium = claimNodes.filter((node) => node.confidenceBand === 'medium').length;
+    const low = claimNodes.filter((node) => node.confidenceBand === 'low').length;
+    const withProvenance = claimNodes.filter((node) => Boolean(node.sourceTitle || node.provenance_id)).length;
+    const evidenceValues = claimNodes
+      .map((node) => node.evidence_strength)
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+    const avgEvidence = evidenceValues.length > 0
+      ? evidenceValues.reduce((sum, value) => sum + value, 0) / evidenceValues.length
+      : null;
+    return {
+      total,
+      high,
+      medium,
+      low,
+      withProvenance,
+      avgEvidence,
+      provenanceCoveragePct: total > 0 ? (withProvenance / total) * 100 : 0
+    };
+  });
+
+  const traceExplainability = $derived.by(() => {
+    const trace = retrievalExplainability.trace;
+    if (!trace) return null;
+
+    const edgePriorRows = Object.entries(trace.traversalEdgePriors ?? {})
+      .filter((entry): entry is [string, number] => typeof entry[1] === 'number')
+      .sort((a, b) => b[1] - a[1]);
+    const claimPruningRows = trace.pruningSummary
+      ? Object.entries(trace.pruningSummary.claimsByReason).sort((a, b) => b[1] - a[1])
+      : [];
+    const relationPruningRows = trace.pruningSummary
+      ? Object.entries(trace.pruningSummary.relationsByReason).sort((a, b) => b[1] - a[1])
+      : [];
+
+    return {
+      ...trace,
+      edgePriorRows,
+      claimPruningRows,
+      relationPruningRows,
+      seedRows: trace.seedClaims ?? []
     };
   });
 
@@ -1228,6 +1276,11 @@
       <p class="insight-row">Context sufficiency: {retrievalExplainability.contextSufficiency}</p>
       <p class="insight-row">Ideas withheld for low confidence: {rejectedGhostNodes.length}</p>
       <p class="insight-row">Rejected edges (gated): {rejectedGhostEdges.length}</p>
+      <p class="insight-subtitle">Provenance confidence</p>
+      <p class="insight-row">Claims with provenance: {provenanceConfidence.withProvenance}/{provenanceConfidence.total} ({provenanceConfidence.provenanceCoveragePct.toFixed(0)}%)</p>
+      <p class="insight-row">Confidence bands: high {provenanceConfidence.high} · medium {provenanceConfidence.medium} · low {provenanceConfidence.low}</p>
+      <p class="insight-row">Average evidence strength: {provenanceConfidence.avgEvidence === null ? 'n/a' : provenanceConfidence.avgEvidence.toFixed(2)}</p>
+
       <p class="insight-subtitle">Relation telemetry (this run)</p>
       {#if relationTelemetry.hasSignal}
         {#each relationTelemetry.rows as row}
@@ -1242,17 +1295,94 @@
         <p class="insight-row warning">No logical relation edges were produced in this run.</p>
         <p class="insight-row">If this persists, check retrieval trace and DB/env health.</p>
       {/if}
-      {#if retrievalExplainability.trace}
-        <p class="insight-subtitle">Traversal ledger</p>
-        <p class="insight-row">Seed pool examined: {retrievalExplainability.trace.seedPoolCount}</p>
-        <p class="insight-row">Seeds selected: {retrievalExplainability.trace.selectedSeedCount}</p>
-        <p class="insight-row">Claims discovered by traversal: {retrievalExplainability.trace.traversedClaimCount}</p>
-        <p class="insight-row">Relation candidates checked: {retrievalExplainability.trace.relationCandidateCount}</p>
-        <p class="insight-row">Relations retained: {retrievalExplainability.trace.relationKeptCount}</p>
-        <p class="insight-row">Arguments checked: {retrievalExplainability.trace.argumentCandidateCount}</p>
-        <p class="insight-row">Arguments retained: {retrievalExplainability.trace.argumentKeptCount}</p>
-        <p class="insight-row">Rejected claim candidates: {retrievalExplainability.trace.rejectedClaimCount ?? 0}</p>
-        <p class="insight-row">Rejected relation candidates: {retrievalExplainability.trace.rejectedRelationCount ?? 0}</p>
+
+      {#if traceExplainability}
+        <div class="insight-actions">
+          <button class="mini-btn" type="button" onclick={() => showTraceDebug = !showTraceDebug}>
+            {showTraceDebug ? 'Hide Debug Trace' : 'Show Debug Trace'}
+          </button>
+        </div>
+
+        <p class="insight-subtitle">Query decomposition</p>
+        {#if traceExplainability.queryDecomposition}
+          <p class="insight-row">Focus mode: {traceExplainability.queryDecomposition.focusMode}</p>
+          <p class="insight-row">Domain filter: {traceExplainability.queryDecomposition.domainFilter ?? 'none'}</p>
+          <p class="insight-row">Hybrid mode: {traceExplainability.queryDecomposition.hybridMode}</p>
+          <p class="insight-row">Corpus-level query: {traceExplainability.queryDecomposition.corpusLevelQuery ? 'yes' : 'no'}</p>
+          <p class="insight-row">Exact-term extraction: {traceExplainability.queryDecomposition.lexicalTermCount} terms</p>
+          {#if traceExplainability.queryDecomposition.lexicalTerms.length > 0}
+            <p class="insight-row">Terms: {traceExplainability.queryDecomposition.lexicalTerms.join(', ')}</p>
+          {/if}
+        {:else}
+          <p class="insight-row">Query decomposition trace unavailable.</p>
+        {/if}
+
+        <p class="insight-subtitle">Seeds chosen</p>
+        <p class="insight-row">Seed pool examined: {traceExplainability.seedPoolCount}</p>
+        <p class="insight-row">Seeds selected: {traceExplainability.selectedSeedCount}</p>
+        {#if traceExplainability.seedRows.length > 0}
+          {#each traceExplainability.seedRows.slice(0, 6) as seed}
+            <p class="insight-row">{seed.id} · {seed.claimType} · {seed.sourceTitle} · conf {seed.confidence.toFixed(2)}</p>
+          {/each}
+        {/if}
+
+        <p class="insight-subtitle">Expansions used</p>
+        <p class="insight-row">Traversal mode: {traceExplainability.traversalMode ?? 'n/a'}</p>
+        <p class="insight-row">Trusted edges only: {traceExplainability.traversalTrustedEdgesOnly ? 'yes' : 'no'}</p>
+        <p class="insight-row">Domain-aware expansion: {traceExplainability.traversalDomainAware ? 'yes' : 'no'}</p>
+        <p class="insight-row">Max hops: {traceExplainability.traversalMaxHops ?? 'n/a'} · Hop decay: {traceExplainability.traversalHopDecay ?? 'n/a'}</p>
+        <p class="insight-row">Base confidence threshold: {traceExplainability.traversalBaseConfidenceThreshold ?? 'n/a'}</p>
+        {#if traceExplainability.traversalConfidenceThresholds && traceExplainability.traversalConfidenceThresholds.length > 0}
+          <p class="insight-row">Per-hop thresholds: {traceExplainability.traversalConfidenceThresholds.map((v) => v.toFixed(2)).join(' -> ')}</p>
+        {/if}
+        {#if traceExplainability.edgePriorRows.length > 0}
+          <p class="insight-row">Edge priors: {traceExplainability.edgePriorRows.map(([k, v]) => `${k}=${v.toFixed(2)}`).join(', ')}</p>
+        {/if}
+        <p class="insight-row">Claims discovered by traversal: {traceExplainability.traversedClaimCount}</p>
+        <p class="insight-row">Relation candidates checked: {traceExplainability.relationCandidateCount} · retained {traceExplainability.relationKeptCount}</p>
+        <p class="insight-row">Arguments checked: {traceExplainability.argumentCandidateCount} · retained {traceExplainability.argumentKeptCount}</p>
+
+        <p class="insight-subtitle">Pruning decisions</p>
+        <p class="insight-row">Rejected claim candidates: {traceExplainability.rejectedClaimCount ?? 0}</p>
+        <p class="insight-row">Rejected relation candidates: {traceExplainability.rejectedRelationCount ?? 0}</p>
+        {#if traceExplainability.claimPruningRows.length > 0}
+          {#each traceExplainability.claimPruningRows as [reason, count]}
+            <p class="insight-row">Claims pruned ({formatTraceTag(reason)}): {count}</p>
+          {/each}
+        {/if}
+        {#if traceExplainability.relationPruningRows.length > 0}
+          {#each traceExplainability.relationPruningRows as [reason, count]}
+            <p class="insight-row">Relations pruned ({formatTraceTag(reason)}): {count}</p>
+          {/each}
+        {/if}
+
+        <p class="insight-subtitle">Balance stats</p>
+        {#if traceExplainability.seedBalanceStats}
+          <p class="insight-row">Selection strategy: {traceExplainability.seedBalanceStats.selectionStrategy} (lambda {traceExplainability.seedBalanceStats.mmrLambda.toFixed(2)})</p>
+          <p class="insight-row">Pool roles: support {traceExplainability.seedBalanceStats.roleCountsPool.support} · objection {traceExplainability.seedBalanceStats.roleCountsPool.objection} · reply {traceExplainability.seedBalanceStats.roleCountsPool.reply} · definition {traceExplainability.seedBalanceStats.roleCountsPool.definitionDistinction}</p>
+          <p class="insight-row">Selected roles: support {traceExplainability.seedBalanceStats.roleCountsSelected.support} · objection {traceExplainability.seedBalanceStats.roleCountsSelected.objection} · reply {traceExplainability.seedBalanceStats.roleCountsSelected.reply} · definition {traceExplainability.seedBalanceStats.roleCountsSelected.definitionDistinction}</p>
+          <p class="insight-row">Objection/reply presence before: {traceExplainability.seedBalanceStats.objectionReplyPresenceBefore ? 'yes' : 'no'} · after: {traceExplainability.seedBalanceStats.objectionReplyPresenceAfter ? 'yes' : 'no'}</p>
+          <p class="insight-row">Mono-perspective before: {traceExplainability.seedBalanceStats.monoPerspectiveBefore ? 'yes' : 'no'} · after: {traceExplainability.seedBalanceStats.monoPerspectiveAfter ? 'yes' : 'no'}</p>
+        {:else}
+          <p class="insight-row">Seed balance stats unavailable.</p>
+        {/if}
+
+        <p class="insight-subtitle">Closure stats</p>
+        {#if traceExplainability.closureStats}
+          <p class="insight-row">Major theses: {traceExplainability.closureStats.majorThesisCount}</p>
+          <p class="insight-row">Closure units attempted: {traceExplainability.closureStats.unitsAttempted} · completed: {traceExplainability.closureStats.unitsCompleted}</p>
+          <p class="insight-row">Claims added for closure: {traceExplainability.closureStats.claimsAddedForClosure} (objections {traceExplainability.closureStats.objectionsAdded}, replies {traceExplainability.closureStats.repliesAdded})</p>
+          <p class="insight-row">Units blocked by traversal cap: {traceExplainability.closureStats.capLimitedUnits}</p>
+        {:else}
+          <p class="insight-row">Closure stats unavailable for this run.</p>
+        {/if}
+
+        {#if showTraceDebug}
+          <p class="insight-subtitle">Debug quick checks</p>
+          <p class="insight-row">If relation candidates are 0, check edge ingestion and relation review_state promotion.</p>
+          <p class="insight-row">If rejected claims spike on source integrity, verify passage coverage and source linkage.</p>
+          <p class="insight-row">If closure completion is low, inspect contradiction/responds_to availability for thesis anchors.</p>
+        {/if}
       {/if}
       {#if rejectedReasonSummary.length > 0}
         <p class="insight-subtitle">Top rejection reasons</p>

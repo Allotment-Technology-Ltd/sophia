@@ -39,11 +39,66 @@ const baseRetrieval: RetrievalResult = {
   trace: {
     seed_pool_count: 5,
     selected_seed_count: 1,
+    traversal_mode: 'beam_trusted_v1',
+    traversal_max_hops: 2,
+    traversal_hop_decay: 0.78,
+    traversal_base_confidence_threshold: 0.38,
+    traversal_confidence_thresholds: [0.38, 0.46],
+    traversal_domain_aware: true,
+    traversal_trusted_edges_only: true,
+    traversal_edge_priors: { supports: 1.04, contradicts: 1.16 },
+    query_decomposition: {
+      focus_mode: 'focused',
+      domain_filter: 'ethics',
+      hybrid_mode: 'auto',
+      corpus_level_query: false,
+      lexical_terms: ['public reason'],
+      lexical_term_count: 1
+    },
+    seed_claims: [
+      {
+        id: 'a',
+        claim_type: 'thesis',
+        domain: 'ethics',
+        source_title: 'Source A',
+        confidence: 0.82
+      }
+    ],
+    pruning_summary: {
+      claims_by_reason: {
+        seed_pool_pruned: 1,
+        duplicate_traversal: 0,
+        confidence_gate: 0,
+        source_integrity_gate: 0
+      },
+      relations_by_reason: {
+        duplicate_relation: 1,
+        missing_endpoint: 0
+      }
+    },
     traversed_claim_count: 1,
     relation_candidate_count: 2,
     relation_kept_count: 1,
     argument_candidate_count: 0,
     argument_kept_count: 0,
+    closure_stats: {
+      major_thesis_count: 1,
+      units_attempted: 1,
+      units_completed: 1,
+      claims_added_for_closure: 1,
+      objections_added: 1,
+      replies_added: 0,
+      cap_limited_units: 0,
+      units: [
+        {
+          thesis_claim_id: 'a',
+          objection_claim_id: 'b',
+          objection_found: true,
+          reply_found: true,
+          unit_complete: true
+        }
+      ]
+    },
     rejected_claims: [
       {
         id: 'c',
@@ -104,5 +159,17 @@ describe('projectRetrievalToGraph', () => {
 
     expect(logicalEdge?.type).toBe('defines');
     expect(meta.relationTypeCounts?.defines).toBe(1);
+  });
+
+  it('maps closure telemetry into snapshot retrieval trace metadata', () => {
+    const { meta } = projectRetrievalToGraph(baseRetrieval);
+    expect(meta.retrievalTrace?.traversalMode).toBe('beam_trusted_v1');
+    expect(meta.retrievalTrace?.traversalTrustedEdgesOnly).toBe(true);
+    expect(meta.retrievalTrace?.queryDecomposition?.domainFilter).toBe('ethics');
+    expect(meta.retrievalTrace?.seedClaims?.length).toBe(1);
+    expect(meta.retrievalTrace?.pruningSummary?.claimsByReason.seed_pool_pruned).toBe(1);
+    expect(meta.retrievalTrace?.closureStats?.majorThesisCount).toBe(1);
+    expect(meta.retrievalTrace?.closureStats?.unitsCompleted).toBe(1);
+    expect(meta.retrievalTrace?.closureStats?.claimsAddedForClosure).toBe(1);
   });
 });

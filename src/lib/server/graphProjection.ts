@@ -219,6 +219,39 @@ export function projectRetrievalToGraph(retrieval: RetrievalResult): {
             lexicalSeedCount: retrieval.trace.lexical_seed_count,
             lexicalTerms: retrieval.trace.lexical_terms,
             corpusLevelQuery: retrieval.trace.corpus_level_query,
+            traversalMode: retrieval.trace.traversal_mode,
+            traversalMaxHops: retrieval.trace.traversal_max_hops,
+            traversalHopDecay: retrieval.trace.traversal_hop_decay,
+            traversalBaseConfidenceThreshold:
+              retrieval.trace.traversal_base_confidence_threshold,
+            traversalConfidenceThresholds:
+              retrieval.trace.traversal_confidence_thresholds,
+            traversalDomainAware: retrieval.trace.traversal_domain_aware,
+            traversalTrustedEdgesOnly: retrieval.trace.traversal_trusted_edges_only,
+            traversalEdgePriors: retrieval.trace.traversal_edge_priors,
+            queryDecomposition: retrieval.trace.query_decomposition
+              ? {
+                  focusMode: retrieval.trace.query_decomposition.focus_mode,
+                  domainFilter: retrieval.trace.query_decomposition.domain_filter,
+                  hybridMode: retrieval.trace.query_decomposition.hybrid_mode,
+                  corpusLevelQuery: retrieval.trace.query_decomposition.corpus_level_query,
+                  lexicalTerms: retrieval.trace.query_decomposition.lexical_terms,
+                  lexicalTermCount: retrieval.trace.query_decomposition.lexical_term_count
+                }
+              : undefined,
+            seedClaims: retrieval.trace.seed_claims?.map((seed) => ({
+              id: seed.id,
+              claimType: seed.claim_type,
+              domain: seed.domain,
+              sourceTitle: seed.source_title,
+              confidence: seed.confidence
+            })),
+            pruningSummary: retrieval.trace.pruning_summary
+              ? {
+                  claimsByReason: retrieval.trace.pruning_summary.claims_by_reason,
+                  relationsByReason: retrieval.trace.pruning_summary.relations_by_reason
+                }
+              : undefined,
             seedBalanceStats: retrieval.trace.seed_balance_stats
               ? {
                   selectionStrategy: retrieval.trace.seed_balance_stats.selection_strategy,
@@ -262,6 +295,17 @@ export function projectRetrievalToGraph(retrieval: RetrievalResult): {
             relationKeptCount: retrieval.trace.relation_kept_count,
             argumentCandidateCount: retrieval.trace.argument_candidate_count,
             argumentKeptCount: retrieval.trace.argument_kept_count,
+            closureStats: retrieval.trace.closure_stats
+              ? {
+                  majorThesisCount: retrieval.trace.closure_stats.major_thesis_count,
+                  unitsAttempted: retrieval.trace.closure_stats.units_attempted,
+                  unitsCompleted: retrieval.trace.closure_stats.units_completed,
+                  claimsAddedForClosure: retrieval.trace.closure_stats.claims_added_for_closure,
+                  objectionsAdded: retrieval.trace.closure_stats.objections_added,
+                  repliesAdded: retrieval.trace.closure_stats.replies_added,
+                  capLimitedUnits: retrieval.trace.closure_stats.cap_limited_units
+                }
+              : undefined,
             rejectedClaimCount: retrieval.trace.rejected_claims?.length ?? 0,
             rejectedRelationCount: retrieval.trace.rejected_relations?.length ?? 0
           }
