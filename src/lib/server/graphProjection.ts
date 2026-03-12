@@ -214,6 +214,49 @@ export function projectRetrievalToGraph(retrieval: RetrievalResult): {
         ? {
             seedPoolCount: retrieval.trace.seed_pool_count,
             selectedSeedCount: retrieval.trace.selected_seed_count,
+            hybridMode: retrieval.trace.hybrid_mode,
+            denseSeedCount: retrieval.trace.dense_seed_count,
+            lexicalSeedCount: retrieval.trace.lexical_seed_count,
+            lexicalTerms: retrieval.trace.lexical_terms,
+            corpusLevelQuery: retrieval.trace.corpus_level_query,
+            seedBalanceStats: retrieval.trace.seed_balance_stats
+              ? {
+                  selectionStrategy: retrieval.trace.seed_balance_stats.selection_strategy,
+                  mmrLambda: retrieval.trace.seed_balance_stats.mmr_lambda,
+                  roleCountsPool: {
+                    support: retrieval.trace.seed_balance_stats.role_counts_pool.support,
+                    objection: retrieval.trace.seed_balance_stats.role_counts_pool.objection,
+                    reply: retrieval.trace.seed_balance_stats.role_counts_pool.reply,
+                    definitionDistinction:
+                      retrieval.trace.seed_balance_stats.role_counts_pool.definition_distinction
+                  },
+                  roleCountsSelected: {
+                    support: retrieval.trace.seed_balance_stats.role_counts_selected.support,
+                    objection: retrieval.trace.seed_balance_stats.role_counts_selected.objection,
+                    reply: retrieval.trace.seed_balance_stats.role_counts_selected.reply,
+                    definitionDistinction:
+                      retrieval.trace.seed_balance_stats.role_counts_selected.definition_distinction
+                  },
+                  roleQuotas: {
+                    support: retrieval.trace.seed_balance_stats.role_quotas.support,
+                    objection: retrieval.trace.seed_balance_stats.role_quotas.objection,
+                    reply: retrieval.trace.seed_balance_stats.role_quotas.reply,
+                    definitionDistinction:
+                      retrieval.trace.seed_balance_stats.role_quotas.definition_distinction
+                  },
+                  quotaSatisfiedRoles: retrieval.trace.seed_balance_stats.quota_satisfied_roles,
+                  avgPairwiseSimilarityBefore:
+                    retrieval.trace.seed_balance_stats.avg_pairwise_similarity_before,
+                  avgPairwiseSimilarityAfter:
+                    retrieval.trace.seed_balance_stats.avg_pairwise_similarity_after,
+                  objectionReplyPresenceBefore:
+                    retrieval.trace.seed_balance_stats.objection_reply_presence_before,
+                  objectionReplyPresenceAfter:
+                    retrieval.trace.seed_balance_stats.objection_reply_presence_after,
+                  monoPerspectiveBefore: retrieval.trace.seed_balance_stats.mono_perspective_before,
+                  monoPerspectiveAfter: retrieval.trace.seed_balance_stats.mono_perspective_after
+                }
+              : undefined,
             traversedClaimCount: retrieval.trace.traversed_claim_count,
             relationCandidateCount: retrieval.trace.relation_candidate_count,
             relationKeptCount: retrieval.trace.relation_kept_count,

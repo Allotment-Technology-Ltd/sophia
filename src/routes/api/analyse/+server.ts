@@ -1246,6 +1246,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         | {
             claims_retrieved?: number;
             retrieval_degraded?: boolean;
+            context_pack_stats?: import('$lib/types/api').MetadataEvent['context_pack_stats'];
           }
         | undefined;
       const nightlyIngestionEnabled =
@@ -1351,7 +1352,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             latestRetrievalMeta = retrieval
               ? {
                   claims_retrieved: retrieval.claims_retrieved,
-                  retrieval_degraded: retrieval.retrieval_degraded
+                  retrieval_degraded: retrieval.retrieval_degraded,
+                  context_pack_stats: retrieval.context_pack_stats
                 }
               : undefined;
             latestModelCostBreakdown = modelCostBreakdown
@@ -1384,7 +1386,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
                     detected_domain: retrieval.detected_domain,
                     domain_confidence: retrieval.domain_confidence,
                     selected_domain_mode: retrieval.selected_domain_mode,
-                    selected_domain: retrieval.selected_domain
+                    selected_domain: retrieval.selected_domain,
+                    context_pack_stats: retrieval.context_pack_stats
                   }
                 : {})
               ,

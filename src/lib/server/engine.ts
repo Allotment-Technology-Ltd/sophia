@@ -25,7 +25,8 @@ import {
 } from './prompts/reasoning-synthesis';
 import { VERIFICATION_SYSTEM, buildVerificationUserPrompt } from './prompts/verification';
 import { ensureHarvardReferencesSection } from './citations/harvard';
-import { retrieveContext, buildContextBlock } from './retrieval';
+import { retrieveContext } from './retrieval';
+import { buildPassSpecificContextPacks, type ContextPackStats } from './contextPacks';
 import { classifyQueryDomain, getRetrievalDomain } from './domainClassifier';
 import type { PassType } from '$lib/types/passes';
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
@@ -124,6 +125,11 @@ export interface EngineCallbacks {
       domain_confidence?: 'high' | 'medium' | 'low';
       selected_domain_mode?: 'auto' | 'manual';
       selected_domain?: 'ethics' | 'philosophy_of_mind';
+      context_pack_stats?: {
+        analysis: ContextPackStats;
+        critique: ContextPackStats;
+        synthesis: ContextPackStats;
+      };
     },
     modelCostBreakdown?: {
       total_estimated_cost_usd: number;
@@ -512,7 +518,22 @@ export async function runDialecticalEngine(
   // ── Retrieve argument-graph context ─────────────────────────────────────
   // Domain filter applied when classifier is high-confidence and domain has graph data.
   // Falls back to cross-domain search for uncertain or uningested domains.
-  let contextBlock = '';
+  let contextBlockByPass: {
+    analysis: string;
+    critique: string;
+    synthesis: string;
+  } = {
+    analysis: '',
+    critique: '',
+    synthesis: ''
+  };
+  let contextPackStats:
+    | {
+        analysis: ContextPackStats;
+        critique: ContextPackStats;
+        synthesis: ContextPackStats;
+      }
+    | undefined;
   let claimsRetrieved = 0;
   let argumentsRetrieved = 0;
   let retrievalDegraded = false;
@@ -530,7 +551,17 @@ export async function runDialecticalEngine(
       maxClaims: retrievalMaxClaims,
       viewerUid: options?.viewerUid ?? null
     });
-    contextBlock = buildContextBlock(retrievalResult);
+    const packs = buildPassSpecificContextPacks(retrievalResult, { depthMode });
+    contextBlockByPass = {
+      analysis: packs.analysis.block,
+      critique: packs.critique.block,
+      synthesis: packs.synthesis.block
+    };
+    contextPackStats = {
+      analysis: packs.analysis.stats,
+      critique: packs.critique.stats,
+      synthesis: packs.synthesis.stats
+    };
     claimsRetrieved = retrievalResult.claims.length;
     argumentsRetrieved = retrievalResult.arguments.length;
     retrievalDegraded = retrievalResult.degraded;
@@ -538,6 +569,16 @@ export async function runDialecticalEngine(
     console.log(
       `[ENGINE] Retrieval done in ${Date.now() - t0}ms — topK=${retrievalTopK} hops=${retrievalMaxHops} claims=${claimsRetrieved} arguments=${argumentsRetrieved}`
     );
+    console.log('[ENGINE] Context packs built', {
+      analysis_tokens: contextPackStats.analysis.estimated_tokens,
+      critique_tokens: contextPackStats.critique.estimated_tokens,
+      synthesis_tokens: contextPackStats.synthesis.estimated_tokens,
+      analysis_claims: contextPackStats.analysis.claim_count,
+      critique_claims: contextPackStats.critique.claim_count,
+      synthesis_claims: contextPackStats.synthesis.claim_count,
+      synthesis_reply_chains: contextPackStats.synthesis.reply_chain_count,
+      synthesis_unresolved_tensions: contextPackStats.synthesis.unresolved_tension_count
+    });
     if (retrievalDegraded) {
       console.warn('[ENGINE] Retrieval degraded mode active', { reason: retrievalDegradedReason });
     }
@@ -601,19 +642,23 @@ export async function runDialecticalEngine(
     }
   } catch (err) {
     console.error('[ENGINE] Retrieval failed (continuing without graph context):', err instanceof Error ? err.message : err);
-    contextBlock = '';
+    contextBlockByPass = {
+      analysis: '',
+      critique: '',
+      synthesis: ''
+    };
   }
 
   // Build system prompts with contextual knowledge injected
   const analysisSystem = isAgnosticMode
-    ? getReasoningAnalysisSystemPrompt(contextBlock)
-    : getAnalysisSystemPrompt(contextBlock);
+    ? getReasoningAnalysisSystemPrompt(contextBlockByPass.analysis)
+    : getAnalysisSystemPrompt(contextBlockByPass.analysis);
   const critiqueSystem = isAgnosticMode
-    ? getReasoningCritiqueSystemPrompt(contextBlock)
-    : getCritiqueSystemPrompt(contextBlock);
+    ? getReasoningCritiqueSystemPrompt(contextBlockByPass.critique)
+    : getCritiqueSystemPrompt(contextBlockByPass.critique);
   const synthesisSystem = isAgnosticMode
-    ? getReasoningSynthesisSystemPrompt(contextBlock)
-    : getSynthesisSystemPrompt(contextBlock);
+    ? getReasoningSynthesisSystemPrompt(contextBlockByPass.synthesis)
+    : getSynthesisSystemPrompt(contextBlockByPass.synthesis);
 
   // ── HYBRID PARALLELISM: Analysis → Critique (when Analysis ~30% done) → Synthesis ──
   let analysisOutput = '';
@@ -814,7 +859,8 @@ export async function runDialecticalEngine(
       detected_domain: domainClassification.domain ?? undefined,
       domain_confidence: domainClassification.domain ? domainClassification.confidence : undefined,
       selected_domain_mode: selectedDomainMode,
-      selected_domain: selectedDomainMode === 'manual' ? selectedDomain : undefined
+      selected_domain: selectedDomainMode === 'manual' ? selectedDomain : undefined,
+      context_pack_stats: contextPackStats
     }, buildModelCostBreakdown());
     return;
   }
@@ -998,7 +1044,8 @@ export async function runDialecticalEngine(
     detected_domain: domainClassification.domain ?? undefined,
     domain_confidence: domainClassification.domain ? domainClassification.confidence : undefined,
     selected_domain_mode: selectedDomainMode,
-    selected_domain: selectedDomainMode === 'manual' ? selectedDomain : undefined
+    selected_domain: selectedDomainMode === 'manual' ? selectedDomain : undefined,
+    context_pack_stats: contextPackStats
   }, buildModelCostBreakdown());
 }
 
