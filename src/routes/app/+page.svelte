@@ -1945,13 +1945,22 @@
       {#if isResultsState}
         {@const passes = displayedPasses}
         {#if simpleLayer !== 'scholar'}
-          <section class="simple-results" data-testid="simple-results">
-            {#if simpleLayer === 'synthesis'}
-              <article class="simple-card" data-testid="simple-synthesis-card" in:fade={{ duration: 220 }}>
-                {#if !simpleSynthesisReady}
-                  <h2>Working on your synthesis…</h2>
-                  <p class="simple-caption">{loadingStatusText}</p>
-                {:else}
+          {#if simpleLayer === 'synthesis' && !simpleSynthesisReady}
+            <Loading
+              currentPass={conversation.currentPass ?? ''}
+              statusText={loadingStatusText}
+              {completedPasses}
+              depthMode={selectedDepth}
+              completionReady={false}
+              passLabel={loadingPassLabel}
+              depthLabel={loadingDepthLabel}
+              modelLabel={loadingModelLabel}
+              workingLines={loadingWorkingLines}
+            />
+          {:else}
+            <section class="simple-results" data-testid="simple-results">
+              {#if simpleLayer === 'synthesis'}
+                <article class="simple-card" data-testid="simple-synthesis-card" in:fade={{ duration: 220 }}>
                   <h2>Your Question</h2>
                   <p class="simple-question">— "{currentQuery}"</p>
                   <h3>{simplePrimaryHeading}</h3>
@@ -1989,32 +1998,32 @@
                   {#if quoteCardError}
                     <p class="simple-note error">{quoteCardError}</p>
                   {/if}
-                {/if}
-              </article>
-            {:else if simpleLayer === 'overview'}
-              <article class="simple-card" data-testid="simple-overview-card" in:fade={{ duration: 220 }}>
-                <h2>Reasoning Overview</h2>
-                <p class="simple-caption">A three-layer dialectic.</p>
-                <div class="simple-summary-block">
-                  <h3>Analysis (summary)</h3>
-                  <p>{simpleOverviewSummaries.analysis}</p>
-                </div>
-                <div class="simple-summary-block">
-                  <h3>Critique (summary)</h3>
-                  <p>{simpleOverviewSummaries.critique}</p>
-                </div>
-                <div class="simple-summary-block">
-                  <h3>Synthesis (summary)</h3>
-                  <p>{simpleOverviewSummaries.synthesis}</p>
-                </div>
-                <div class="simple-actions">
-                  <button type="button" class="simple-link-btn" data-testid="open-scholar-btn" onclick={openScholarView}>
-                    Open full scholar view →
-                  </button>
-                </div>
-              </article>
-            {/if}
-          </section>
+                </article>
+              {:else if simpleLayer === 'overview'}
+                <article class="simple-card" data-testid="simple-overview-card" in:fade={{ duration: 220 }}>
+                  <h2>Reasoning Overview</h2>
+                  <p class="simple-caption">A three-layer dialectic.</p>
+                  <div class="simple-summary-block">
+                    <h3>Analysis (summary)</h3>
+                    <p>{simpleOverviewSummaries.analysis}</p>
+                  </div>
+                  <div class="simple-summary-block">
+                    <h3>Critique (summary)</h3>
+                    <p>{simpleOverviewSummaries.critique}</p>
+                  </div>
+                  <div class="simple-summary-block">
+                    <h3>Synthesis (summary)</h3>
+                    <p>{simpleOverviewSummaries.synthesis}</p>
+                  </div>
+                  <div class="simple-actions">
+                    <button type="button" class="simple-link-btn" data-testid="open-scholar-btn" onclick={openScholarView}>
+                      Open full scholar view →
+                    </button>
+                  </div>
+                </article>
+              {/if}
+            </section>
+          {/if}
         {:else}
         <div class="results-layout" in:fly={{ y: 24, duration: 500, delay: 100, easing: quintOut }}>
           <aside class="pass-nav-col">
