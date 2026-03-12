@@ -9,6 +9,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Surreal } from 'surrealdb';
+import { sourceIdentityFromUrl } from './source-identity.js';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 const SURREAL_URL = process.env.SURREAL_URL || 'http://localhost:8000/rpc';
@@ -196,9 +197,10 @@ async function getIngestionLog(
 	db: Surreal,
 	url: string
 ): Promise<IngestionLogRecord | null> {
+	const hash = sourceIdentityFromUrl(url).canonicalUrlHash;
 	const result = await db.query<IngestionLogRecord[][]>(
-		'SELECT validation_score, cost_usd, status, claims_extracted FROM ingestion_log WHERE source_url = $url LIMIT 1',
-		{ url }
+		'SELECT validation_score, cost_usd, status, claims_extracted FROM ingestion_log WHERE canonical_url_hash = $hash OR source_url = $url LIMIT 1',
+		{ hash, url }
 	);
 	const rows = Array.isArray(result?.[0]) ? result[0] : [];
 	return rows.length > 0 ? rows[0] : null;
