@@ -1,0 +1,68 @@
+name: Restormel Extraction Task
+description: Track extraction/migration work from SOPHIA to Restormel modules.
+title: "extract: "
+labels:
+  - restormel
+  - extraction
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      placeholder: Extract graph projection into @restormel/graph-core.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Include current source locations and migration constraints.
+    validations:
+      required: true
+
+  - type: textarea
+    id: linked_docs
+    attributes:
+      label: Linked Docs
+      placeholder: |
+        - docs/restormel/02-architecture/15-first-extraction-backlog-by-file-module.md
+        - docs/restormel/04-delivery/20-engineering-backlog-by-epic.md
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      placeholder: |
+        In scope:
+        - package move(s)
+        - import rewires
+
+        Out of scope:
+        - UI redesign
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance Criteria
+      placeholder: |
+        - [ ] Package API is defined
+        - [ ] Existing app behavior still passes
+        - [ ] Docs updated with migration notes
+    validations:
+      required: true
+
+  - type: textarea
+    id: affected_areas
+    attributes:
+      label: Affected Areas / Packages
+      placeholder: |
+        - src/lib/... 
+        - packages/... 
+        - tests/...
+    validations:
+      required: true

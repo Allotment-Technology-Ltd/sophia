@@ -1,0 +1,16 @@
+# Canonical milestone list expected in delivery sync.
+# Keep names aligned with 19-milestone-plan-with-exit-criteria.md.
+
+version: 1
+milestones:
+  - "0 - Foundation Locked"
+  - "1 - Monorepo and Contracts Extraction"
+  - "2 - Graph and Observability Core Extracted"
+  - "3 - Restormel Graph MVP in Private Beta"
+  - "4 - GraphRAG Core Extracted"
+  - "5 - Hosted GraphRAG Beta"
+  - "6 - Reasoning Core and Hosted Alpha"
+  - "7 - Providers and BYOK Productized"
+  - "8 - SOPHIA Rebuilt on Platform Modules"
+  - "9 - Restormel Platform Public Launch"
+  - "10 - Marketplace and Enterprise Readiness"

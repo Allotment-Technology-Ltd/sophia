@@ -1,0 +1,72 @@
+name: Restormel Feature
+description: Track implementation work tied to Restormel delivery docs.
+title: "feat: "
+labels:
+  - restormel
+  - feature
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What outcome should this feature produce?
+      placeholder: Ship X so that Y can happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why now, and what constraints matter?
+      placeholder: Include milestones, business constraints, and technical context.
+    validations:
+      required: true
+
+  - type: textarea
+    id: linked_docs
+    attributes:
+      label: Linked Docs
+      description: Absolute or repo-relative links to Restormel source-of-truth docs.
+      placeholder: |
+        - docs/restormel/04-delivery/19-milestone-plan-with-exit-criteria.md
+        - docs/restormel/04-delivery/20-engineering-backlog-by-epic.md
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Explicit in-scope and out-of-scope details.
+      placeholder: |
+        In scope:
+        - ...
+
+        Out of scope:
+        - ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance Criteria
+      description: Verifiable checklist for done state.
+      placeholder: |
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+
+  - type: textarea
+    id: affected_areas
+    attributes:
+      label: Affected Areas / Packages
+      description: List packages, apps, scripts, docs, and workflows touched.
+      placeholder: |
+        - src/... 
+        - scripts/restormel/...
+        - docs/restormel/...
+    validations:
+      required: true

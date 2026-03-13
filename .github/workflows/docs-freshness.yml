@@ -1,0 +1,32 @@
+name: Restormel Docs Freshness
+
+on:
+  schedule:
+    - cron: "20 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Stale threshold in days"
+        required: false
+        default: "60"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  docs-freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Evaluate stale docs
+        run: |
+          DAYS="${{ github.event.inputs.days || '60' }}"
+          python3 scripts/restormel/stale_docs.py --days "$DAYS" --format text --github-summary
