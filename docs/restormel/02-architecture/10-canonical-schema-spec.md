@@ -1,12 +1,3 @@
----
-status: active
-owner: adam
-source_of_truth: true
-last_reviewed: 2026-03-13
----
-
-> Active Restormel platform source of truth for this topic.
-
 # Restormel Canonical Schema Specification
 
 ## Purpose

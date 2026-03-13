@@ -1,12 +1,3 @@
----
-status: reference
-owner: adam
-source_of_truth: false
-last_reviewed: 2026-03-13
----
-
-> Supporting assessment only. Use docs/sophia/current-state.md for the active SOPHIA summary.
-
 # SOPHIA Repo Assessment — Production Grade vs Prototype Grade
 
 ## Scope

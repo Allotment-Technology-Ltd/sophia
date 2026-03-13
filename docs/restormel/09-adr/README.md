@@ -1,12 +1,3 @@
----
-status: reference
-owner: adam
-source_of_truth: false
-last_reviewed: 2026-03-13
----
-
-> Supporting ADR reference.
-
 # Architecture Decision Records
 
 Suggested starter ADR files:

@@ -10,19 +10,13 @@ sync_to_linear: false
 # Restormel GitHub and Linear Automation Operations
 
 ## Purpose
-This automation layer keeps repository documentation governable and mirrors actionable platform delivery items into Linear.
+This automation layer keeps `docs/restormel` as source of truth and mirrors actionable delivery items into Linear.
 
 Direction is one-way only:
 - GitHub docs -> Linear
 - no reverse sync from Linear -> docs
 
-For delivery sync, `docs/restormel` remains the Linear-facing source of truth.
-
-For documentation maintenance and freshness, automation should consider the full docs tree:
-- `docs/sophia`
-- `docs/restormel`
-- `docs/reference`
-- `docs/archive`
+Note: scripts resolve either `docs/restormel` or `docs/Restormel` so this works during path-case transitions.
 
 ## What Was Added
 - `scripts/restormel/docs_lint.py`
@@ -114,14 +108,3 @@ When an item already exists in `linear-map.yml`, sync will not create a duplicat
 - Avoid changing heading text casually; heading text is part of identity keys.
 - If a heading must change, review `linear-map.yml` impact in the same PR.
 - Do not add autonomous AI rewriting workflows for delivery docs.
-
-## Documentation Maintenance Rule
-
-Any automation that checks documentation freshness, metadata, or navigability should include all maintained documentation, not just `docs/restormel`.
-
-Minimum scope:
-- active SOPHIA docs
-- active Restormel docs
-- reference docs
-
-Archive docs may be linted for metadata and broken links, but should not be surfaced as current operational guidance by default.
