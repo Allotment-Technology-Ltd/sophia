@@ -1,3 +1,12 @@
+---
+status: reference
+owner: adam
+source_of_truth: false
+last_reviewed: 2026-03-13
+---
+
+> Supporting operational index only.
+
 # Runbooks & shortcuts — sophia
 
 ## Quick commands

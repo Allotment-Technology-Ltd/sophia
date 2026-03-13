@@ -1,3 +1,12 @@
+---
+status: reference
+owner: adam
+source_of_truth: false
+last_reviewed: 2026-03-13
+---
+
+> Supporting reference only. Use docs/sophia/ for current SOPHIA source-of-truth guidance.
+
 # SOPHIA Accessibility Rules
 
 ## Color and Contrast

@@ -1,3 +1,12 @@
+---
+status: reference
+owner: adam
+source_of_truth: false
+last_reviewed: 2026-03-13
+---
+
+> Supporting schema reference only. Use docs/sophia/architecture.md for the live architecture summary.
+
 # SOPHIA — Argument Graph Schema
 
 ## Why a Graph, Not a Vector Store?

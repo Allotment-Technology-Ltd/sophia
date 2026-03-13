@@ -1,55 +1,49 @@
-# SOPHIA — Documentation Index
-
+---
+status: active
+owner: adam
+source_of_truth: false
+last_reviewed: 2026-03-13
 ---
 
-## Core references
+# Documentation Index
 
-| Document | Purpose |
-| --- | --- |
-| [architecture.md](architecture.md) | System diagram, components, SSE contract, deployment, design decisions |
-| [argument-graph.md](argument-graph.md) | SurrealDB schema reference — tables, relation types, SurrealQL examples |
-| [three-pass-engine.md](three-pass-engine.md) | Engine rationale, per-pass contract, example output |
-| [evaluation-methodology.md](evaluation-methodology.md) | Evaluation rubric, Phase 1 results, limitations, planned formal study |
-| [prompts-reference.md](prompts-reference.md) | All LLM prompt templates, organised by pass |
-| [references/essay-writing-basics-summary.md](references/essay-writing-basics-summary.md) | North-star academic writing rubric distilled from *The Basics of Essay Writing* and applied to all three passes |
-| [api-development-portal-roadmap.md](api-development-portal-roadmap.md) | Phased API developer portal roadmap (MVP → Gold-Plated) |
-| [phased-resource-expansion-nightly-ingestion-plan.md](phased-resource-expansion-nightly-ingestion-plan.md) | Proposed phased plan: fast runtime link intake + nightly full ingestion + Harvard references |
+This directory is now organised around three surfaces:
 
-## Operations
+## Active SOPHIA docs
 
-| Document | Purpose |
-| --- | --- |
-| [runbooks/domain-expansion-runbook.md](runbooks/domain-expansion-runbook.md) | End-to-end guide for adding a new philosophical domain |
-| [runbooks/vertex-ingestion-cutover-wave2.md](runbooks/vertex-ingestion-cutover-wave2.md) | Operational runbook for Vertex ingestion cutover validation using PoM Wave 2 cost comparison vs PoM Wave 1 |
-| [runbooks/gutenberg-groundwork-pilot.md](runbooks/gutenberg-groundwork-pilot.md) | Phase 2 Gutenberg pilot runbook and mandatory long-text ingestion profile |
-| [runbooks/zuplo-phase1-runbook.md](runbooks/zuplo-phase1-runbook.md) | Phase 1 setup for Zuplo gateway + PostHog analytics |
-| [runbooks/nightly-link-ingestion-runbook.md](runbooks/nightly-link-ingestion-runbook.md) | Proposed operations guide for nightly deferred link ingestion |
+These are the current source-of-truth documents for SOPHIA as the showcase/reference application.
 
-## API Contracts
+- [docs/sophia/README.md](sophia/README.md)
+- [docs/sophia/current-state.md](sophia/current-state.md)
+- [docs/sophia/architecture.md](sophia/architecture.md)
+- [docs/sophia/product-role.md](sophia/product-role.md)
+- [docs/sophia/roadmap.md](sophia/roadmap.md)
+- [docs/sophia/domain-expansion.md](sophia/domain-expansion.md)
+- [docs/sophia/changelog.md](sophia/changelog.md)
+- [docs/sophia/documentation-governance.md](sophia/documentation-governance.md)
 
-| Document | Purpose |
-| --- | --- |
-| [openapi/sophia-v1.yaml](openapi/sophia-v1.yaml) | OpenAPI 3.1 contract for `POST /api/v1/verify` (Zuplo import) |
+## Active Restormel platform docs
 
-## Planning and Strategy
+Use the Restormel pack for platform strategy, architecture, delivery, marketplace, and monetisation guidance.
 
-| Document | Purpose |
-| --- | --- |
-| [byok-rollout-plan.md](byok-rollout-plan.md) | Canonical BYOK (Bring Your Own Key) rollout plan: Phase 1, Phase 1b, Phase 1c, and deferred Phase 2 monetization |
-| [byok-end-user-model-selection-plan.md](byok-end-user-model-selection-plan.md) | Backlog strategy for end-user BYOK model presets, fallback policy, rollout gates, and promotion criteria |
-| [argument-map-gold-standard-plan.md](argument-map-gold-standard-plan.md) | Gold-standard delivery plan for the Phase 9 argument map experience |
+- [docs/restormel/00-overview/00-master-index.md](restormel/00-overview/00-master-index.md)
 
-## Archive
+## Supporting reference docs
 
-`docs/archive/` contains historical planning documents, completed-phase checklists, implementation guides, and internal operational notes from earlier phases. These are kept for reference but are not maintained.
+These remain useful, but they are not the primary SOPHIA source-of-truth set.
 
----
+- [docs/api-v1.md](api-v1.md)
+- [docs/argument-graph.md](argument-graph.md)
+- [docs/prompts-reference.md](prompts-reference.md)
+- [docs/runbooks.md](runbooks.md)
+- [docs/runbooks/](runbooks/)
+- [docs/references/essay-writing-basics-summary.md](references/essay-writing-basics-summary.md)
+- [docs/accessibility-rules.md](accessibility-rules.md)
+- [docs/copy-dictionary.md](copy-dictionary.md)
+- [docs/Learn Module/](Learn%20Module/)
 
-## Root-level documents
+## Historical material
 
-| Document | Purpose |
-| --- | --- |
-| [ROADMAP.md](../ROADMAP.md) | Development phases and priorities |
-| [STATUS.md](../STATUS.md) | Deployment health and feature status |
-| [CONTRIBUTING.md](../CONTRIBUTING.md) | How to contribute |
-| [CHANGELOG.md](../CHANGELOG.md) | Version history |
+Superseded plans, old strategy docs, delivery checkpoints, and implementation notes now live under the archive.
+
+- [docs/archive/README.md](archive/README.md)

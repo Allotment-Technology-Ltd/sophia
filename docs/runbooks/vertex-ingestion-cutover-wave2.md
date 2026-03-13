@@ -1,3 +1,12 @@
+---
+status: reference
+owner: adam
+source_of_truth: false
+last_reviewed: 2026-03-13
+---
+
+> Supporting operational reference only.
+
 # Vertex Ingestion Cutover Runbook (PoM Wave 2 Cost Validation)
 
 **Version:** 1.0.0  

@@ -1,3 +1,12 @@
+---
+status: reference
+owner: adam
+source_of_truth: false
+last_reviewed: 2026-03-13
+---
+
+> Supporting reference only. Use docs/sophia/roadmap.md for the active SOPHIA roadmap.
+
 # API Development Portal Roadmap (Zuplo + PostHog)
 
 ## Summary

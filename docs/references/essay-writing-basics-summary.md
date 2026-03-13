@@ -1,3 +1,12 @@
+---
+status: reference
+owner: adam
+source_of_truth: false
+last_reviewed: 2026-03-13
+---
+
+> Supporting writing-quality reference only.
+
 # Essay Writing North-Star (Ingested Reference)
 
 Source: `The Basics of Essay Writing` (Nigel Warburton), extracted from:

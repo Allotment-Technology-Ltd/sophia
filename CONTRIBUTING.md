@@ -1,3 +1,12 @@
+---
+status: reference
+owner: adam
+source_of_truth: false
+last_reviewed: 2026-03-13
+---
+
+> Contribution guidance only. Current product and architecture truth lives under docs/sophia/ and docs/restormel/.
+
 # Contributing to SOPHIA
 
 SOPHIA is an open-source research project. Contributions are welcome across three tracks: the reasoning engine, the knowledge graph, and the application layer. This document explains how to set up a local environment and how each contribution track works.

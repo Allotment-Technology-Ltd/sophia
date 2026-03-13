@@ -1,3 +1,12 @@
+---
+status: reference
+owner: adam
+source_of_truth: false
+last_reviewed: 2026-03-13
+---
+
+> Supporting operational reference only.
+
 # Domain Expansion Runbook
 
 **Version:** 0.4.0

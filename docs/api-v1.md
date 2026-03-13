@@ -1,3 +1,12 @@
+---
+status: reference
+owner: adam
+source_of_truth: false
+last_reviewed: 2026-03-13
+---
+
+> Supporting API reference only.
+
 # SOPHIA Reasoning API v1
 
 ## Developer portal

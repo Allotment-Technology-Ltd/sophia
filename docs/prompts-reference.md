@@ -1,3 +1,12 @@
+---
+status: reference
+owner: adam
+source_of_truth: false
+last_reviewed: 2026-03-13
+---
+
+> Supporting prompt reference only.
+
 # SOPHIA — Prompts Reference
 
 All LLM prompt templates used across the ingestion pipeline and the three-pass reasoning engine. Updated: 2 March 2026.
