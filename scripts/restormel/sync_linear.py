@@ -670,7 +670,7 @@ class LinearClient:
           }
         }
         """
-        payload: dict[str, Any] = {"teamId": team_id, "name": name}
+        payload: dict[str, Any] = {"teamIds": [team_id], "name": name}
         if description:
             payload["description"] = description
 
