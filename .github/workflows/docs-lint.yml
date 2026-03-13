@@ -1,0 +1,29 @@
+name: Restormel Docs Lint
+
+on:
+  pull_request:
+    paths:
+      - "docs/restormel/**"
+      - "docs/Restormel/**"
+      - "scripts/restormel/**"
+      - ".github/workflows/docs-lint.yml"
+      - ".github/workflows/docs-freshness.yml"
+      - ".github/workflows/linear-sync.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  docs-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run docs lint
+        run: python3 scripts/restormel/docs_lint.py --check-links

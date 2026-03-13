@@ -1,0 +1,69 @@
+name: Restormel Linear Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Sync mode"
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - create
+          - update
+          - create-update
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/restormel/04-delivery/19-milestone-plan-with-exit-criteria.md"
+      - "docs/restormel/04-delivery/20-engineering-backlog-by-epic.md"
+      - "docs/restormel/05-design/21-design-backlog-by-surface.md"
+      - "docs/restormel/meta/**"
+      - "docs/Restormel/04-delivery/19-milestone-plan-with-exit-criteria.md"
+      - "docs/Restormel/04-delivery/20-engineering-backlog-by-epic.md"
+      - "docs/Restormel/05-design/21-design-backlog-by-surface.md"
+      - "docs/Restormel/meta/**"
+      - "scripts/restormel/sync_linear.py"
+      - ".github/workflows/linear-sync.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  sync-linear:
+    runs-on: ubuntu-latest
+    env:
+      # Required for all modes (env var takes precedence over config fallback).
+      LINEAR_TEAM_ID: ${{ secrets.LINEAR_TEAM_ID }}
+      # Required for non-dry-run modes.
+      LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+      # Optional config knobs.
+      LINEAR_DEFAULT_ASSIGNEE: ${{ secrets.LINEAR_DEFAULT_ASSIGNEE }}
+      LINEAR_PROJECT_PREFIX: ${{ vars.LINEAR_PROJECT_PREFIX }}
+      LINEAR_PROJECT_ID: ${{ secrets.LINEAR_PROJECT_ID }}
+      LINEAR_LABELS: ${{ vars.LINEAR_LABELS }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "value=dry-run" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run sync
+        run: |
+          python3 scripts/restormel/sync_linear.py \
+            --mode "${{ steps.mode.outputs.value }}" \
+            --github-summary

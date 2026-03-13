@@ -1,0 +1,70 @@
+name: Restormel Docs Task
+description: Track deterministic updates to Restormel planning/delivery docs.
+title: "docs(restormel): "
+labels:
+  - restormel
+  - documentation
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What doc outcome is needed?
+      placeholder: Clarify milestone exit criteria for hosted GraphRAG beta.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why this documentation change is needed.
+      placeholder: Include impacted team, decision window, and known constraints.
+    validations:
+      required: true
+
+  - type: textarea
+    id: linked_docs
+    attributes:
+      label: Linked Docs
+      description: Docs to update and related references.
+      placeholder: |
+        - docs/restormel/04-delivery/20-engineering-backlog-by-epic.md
+        - docs/restormel/10-reference/github-linear-automation.md
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Keep this explicit to prevent uncontrolled rewrites.
+      placeholder: |
+        In scope:
+        - Update front matter
+        - Refine epic headings
+
+        Out of scope:
+        - Rewriting full strategy narrative
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance Criteria
+      placeholder: |
+        - [ ] Metadata and headings are parseable
+        - [ ] Existing meaning remains unchanged
+    validations:
+      required: true
+
+  - type: textarea
+    id: affected_areas
+    attributes:
+      label: Affected Areas / Packages
+      placeholder: |
+        - docs/restormel/04-delivery
+        - scripts/restormel/docs_lint.py
+    validations:
+      required: true
