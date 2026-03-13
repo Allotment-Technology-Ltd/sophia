@@ -3,16 +3,11 @@ name: Restormel Linear Sync
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: "Sync mode"
+      apply:
+        description: "Run in apply mode (create/update) instead of dry-run"
         required: true
-        default: dry-run
-        type: choice
-        options:
-          - dry-run
-          - create
-          - update
-          - create-update
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -59,7 +54,11 @@ jobs:
           if [ "${{ github.event_name }}" = "push" ]; then
             echo "value=dry-run" >> "$GITHUB_OUTPUT"
           else
-            echo "value=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
+            if [ "${{ github.event.inputs.apply }}" = "true" ]; then
+              echo "value=create-update" >> "$GITHUB_OUTPUT"
+            else
+              echo "value=dry-run" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Run sync

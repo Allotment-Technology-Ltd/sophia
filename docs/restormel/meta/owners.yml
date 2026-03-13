@@ -7,6 +7,7 @@ linear_defaults:
   # LINEAR_TEAM_ID from env still takes precedence.
   team_id: "RES"
   project_prefix: "Restormel"
+  default_assignee: ""
   labels:
     - "restormel"
     - "delivery"

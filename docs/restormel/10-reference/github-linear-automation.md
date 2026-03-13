@@ -26,6 +26,7 @@ Note: scripts resolve either `docs/restormel` or `docs/Restormel` so this works 
 - `.github/workflows/docs-freshness.yml`
 - `.github/workflows/linear-sync.yml`
 - `docs/restormel/meta/linear-map.yml`
+- `docs/restormel/meta/linear-config.yml`
 - `docs/restormel/meta/owners.yml`
 - `docs/restormel/meta/milestones.yml`
 - `.github/ISSUE_TEMPLATE/*` forms and `.github/pull_request_template.md`
@@ -93,6 +94,9 @@ python3 scripts/restormel/sync_linear.py --mode create
 python3 scripts/restormel/sync_linear.py --mode create-update
 ```
 
+## GitHub Action
+`Restormel Linear Sync` exposes an `apply` boolean input. Set it to `true` to run `create-update`; leave it `false` to stay in `dry-run`.
+
 ## How Duplicate Prevention Works
 `docs/restormel/meta/linear-map.yml` stores stable identity keys for synced items.
 
@@ -101,6 +105,9 @@ Identity format:
 
 When an item already exists in `linear-map.yml`, sync will not create a duplicate.
 - `--mode update` or `--mode create-update` can update mapped issues.
+
+## Backlog Seeding Reference
+For a detailed walkthrough of project seeding, milestone creation, backlog prioritization, environment variables, and manual follow-ups, see `docs/restormel/10-reference/github-linear-backlog-seeding.md`.
 
 ## Contributor Rules for Sync-Compatible Docs
 - Keep delivery headings parseable (`Milestone`, `Epic`, `Surface` patterns).
