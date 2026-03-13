@@ -29,35 +29,35 @@ Notes:
 | Path | Title | Topic | Proposed classification | Recommended action | Replacement doc |
 | --- | --- | --- | --- | --- | --- |
 | `docs/README.md` | SOPHIA — Documentation Index | Repo docs landing page | active | Rewrite as neutral index that points to `docs/sophia`, `docs/restormel`, reference docs, and archive. | — |
-| `docs/architecture.md` | Architecture | SOPHIA architecture | superseded | Keep as redirect only. | `docs/sophia/architecture.md` |
-| `docs/accessibility-rules.md` | SOPHIA Accessibility Rules | Accessibility reference | reference | Keep in place as supporting reference. | — |
-| `docs/api-development-portal-roadmap.md` | API Development Portal Roadmap (Zuplo + PostHog) | API/product delivery plan | reference | Keep in place with metadata; supporting plan, not primary roadmap truth. | — |
-| `docs/api-v1.md` | SOPHIA Reasoning API v1 | API reference | reference | Keep in place with metadata. | — |
-| `docs/argument-graph.md` | SOPHIA — Argument Graph Schema | Graph/schema reference | reference | Keep in place with metadata. | — |
-| `docs/copy-dictionary.md` | SOPHIA Copy Dictionary | Product language reference | reference | Keep in place with metadata. | — |
-| `docs/prompts-reference.md` | SOPHIA — Prompts Reference | Prompt reference | reference | Keep in place with metadata. | — |
-| `docs/runbooks.md` | Runbooks & shortcuts — sophia | Runbook index | reference | Keep in place with metadata. | — |
-| `docs/references/essay-writing-basics-summary.md` | Essay writing basics summary | Writing quality reference | reference | Keep in place with metadata. | — |
-| `docs/openapi/sophia-v1.yaml` | SOPHIA Reasoning API v1 OpenAPI spec | API contract | reference | Leave in place; mention from API docs. | — |
+| `docs/reference/architecture/legacy-architecture.md` | Architecture | SOPHIA architecture | superseded | Preserve as redirect/reference only. | `docs/sophia/architecture.md` |
+| `docs/reference/product/accessibility-rules.md` | SOPHIA Accessibility Rules | Accessibility reference | reference | Keep in reference structure. | — |
+| `docs/reference/api/api-development-portal-roadmap.md` | API Development Portal Roadmap (Zuplo + PostHog) | API/product delivery plan | reference | Keep in reference structure; supporting plan, not primary roadmap truth. | — |
+| `docs/reference/api/api-v1.md` | SOPHIA Reasoning API v1 | API reference | reference | Keep in reference structure. | — |
+| `docs/reference/architecture/argument-graph.md` | SOPHIA — Argument Graph Schema | Graph/schema reference | reference | Keep in reference structure. | — |
+| `docs/reference/product/copy-dictionary.md` | SOPHIA Copy Dictionary | Product language reference | reference | Keep in reference structure. | — |
+| `docs/reference/architecture/prompts-reference.md` | SOPHIA — Prompts Reference | Prompt reference | reference | Keep in reference structure. | — |
+| `docs/reference/operations/runbooks.md` | Runbooks & shortcuts — sophia | Runbook index | reference | Keep in reference structure. | — |
+| `docs/reference/product/references/essay-writing-basics-summary.md` | Essay writing basics summary | Writing quality reference | reference | Keep in reference structure. | — |
+| `docs/reference/api/openapi/sophia-v1.yaml` | SOPHIA Reasoning API v1 OpenAPI spec | API contract | reference | Leave in reference structure; mention from API docs. | — |
 
 ## Runbooks
 
 | Path | Title | Topic | Proposed classification | Recommended action | Replacement doc |
 | --- | --- | --- | --- | --- | --- |
-| `docs/runbooks/constitution-dogfood-rollout.md` | Constitution Dogfood Rollout | Ops runbook | reference | Keep in place with metadata. | — |
-| `docs/runbooks/domain-expansion-runbook.md` | Domain Expansion Runbook | Ops runbook | reference | Keep in place; linked from active domain-expansion doc. | `docs/sophia/domain-expansion.md` |
-| `docs/runbooks/gutenberg-groundwork-pilot.md` | Gutenberg Pilot Runbook (Kant Groundwork) | Ops runbook | reference | Keep in place with metadata. | — |
-| `docs/runbooks/ingestion-execution-policy.md` | Ingestion Execution Policy | Ops policy | reference | Keep in place with metadata. | — |
-| `docs/runbooks/nightly-link-ingestion-runbook.md` | Nightly Link Ingestion Runbook | Ops runbook | reference | Keep in place with metadata. | — |
-| `docs/runbooks/vertex-ingestion-cutover-wave2.md` | Vertex Ingestion Cutover Runbook (PoM Wave 2 Cost Validation) | Ops runbook | reference | Keep in place with metadata. | — |
-| `docs/runbooks/zuplo-phase1-runbook.md` | Zuplo + PostHog Phase 1 Runbook | Ops runbook | reference | Keep in place with metadata. | — |
+| `docs/reference/operations/runbooks/constitution-dogfood-rollout.md` | Constitution Dogfood Rollout | Ops runbook | reference | Keep in reference structure. | — |
+| `docs/reference/operations/runbooks/domain-expansion-runbook.md` | Domain Expansion Runbook | Ops runbook | reference | Keep in reference structure; linked from active domain-expansion doc. | `docs/sophia/domain-expansion.md` |
+| `docs/reference/operations/runbooks/gutenberg-groundwork-pilot.md` | Gutenberg Pilot Runbook (Kant Groundwork) | Ops runbook | reference | Keep in reference structure. | — |
+| `docs/reference/operations/runbooks/ingestion-execution-policy.md` | Ingestion Execution Policy | Ops policy | reference | Keep in reference structure. | — |
+| `docs/reference/operations/runbooks/nightly-link-ingestion-runbook.md` | Nightly Link Ingestion Runbook | Ops runbook | reference | Keep in reference structure. | — |
+| `docs/reference/operations/runbooks/vertex-ingestion-cutover-wave2.md` | Vertex Ingestion Cutover Runbook (PoM Wave 2 Cost Validation) | Ops runbook | reference | Keep in reference structure. | — |
+| `docs/reference/operations/runbooks/zuplo-phase1-runbook.md` | Zuplo + PostHog Phase 1 Runbook | Ops runbook | reference | Keep in reference structure. | — |
 
 ## Learn-module docs
 
 | Path | Title | Topic | Proposed classification | Recommended action | Replacement doc |
 | --- | --- | --- | --- | --- | --- |
-| `docs/Learn Module/daily-drills-pedagogy-v2.md` | SOPHIA Daily Drills v2 Pedagogy Notes | Learn pedagogy | reference | Leave in place with metadata; useful supporting context, but not part of the core active source-of-truth set. | — |
-| `docs/Learn Module/learn-pedagogy-framework.md` | SOPHIA Learn Pedagogy Framework | Learn pedagogy | reference | Leave in place with metadata; useful supporting context, but outside the minimal active set. | — |
+| `docs/reference/learning/learn-module/daily-drills-pedagogy-v2.md` | SOPHIA Daily Drills v2 Pedagogy Notes | Learn pedagogy | reference | Keep in reference structure; useful supporting context, but not part of the core active source-of-truth set. | — |
+| `docs/reference/learning/learn-module/learn-pedagogy-framework.md` | SOPHIA Learn Pedagogy Framework | Learn pedagogy | reference | Keep in reference structure; useful supporting context, but outside the minimal active set. | — |
 
 ## Restormel platform docs
 
@@ -148,6 +148,6 @@ These docs are active platform guidance unless marked otherwise. Paths were norm
 
 | Path | Reason for ambiguity | Current action |
 | --- | --- | --- |
-| `docs/Learn Module/*.md` | The repo has an active learn surface, but these docs are more detailed pedagogy references than core product source-of-truth docs. | Keep in place as `reference`; review later if the learn surface gets its own active documentation set. |
+| `docs/reference/learning/learn-module/*.md` | The repo has an active learn surface, but these docs are more detailed pedagogy references than core product source-of-truth docs. | Keep in `reference`; review later if the learn surface gets its own active documentation set. |
 | `docs/api-development-portal-roadmap.md` | Still useful as a focused reference plan, but too detailed and specific to remain a top-level active roadmap. | Keep in place as `reference`. |
-| `docs/openapi/sophia-v1.yaml` | Non-Markdown reference artifact; important, but not part of the active narrative docs set. | Keep in place as `reference` via surrounding docs. |
+| `docs/reference/api/openapi/sophia-v1.yaml` | Non-Markdown reference artifact; important, but not part of the active narrative docs set. | Keep in `reference` via surrounding docs. |

@@ -42,5 +42,5 @@ A domain should not move to `active` until all of the following are true:
 
 ## Reference material
 
-- Operational runbook: [../runbooks/domain-expansion-runbook.md](../runbooks/domain-expansion-runbook.md)
+- Operational runbook: [../reference/operations/runbooks/domain-expansion-runbook.md](../reference/operations/runbooks/domain-expansion-runbook.md)
 - Historical expansion plans: [../archive/delivery/](../archive/delivery/) and [../archive/architecture/](../archive/architecture/)

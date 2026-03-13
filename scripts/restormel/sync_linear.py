@@ -39,17 +39,20 @@ META_ROOT = DOCS_ROOT / "meta"
 LINEAR_MAP_PATH = META_ROOT / "linear-map.yml"
 OWNERS_PATH = META_ROOT / "owners.yml"
 MILESTONES_PATH = META_ROOT / "milestones.yml"
+LINEAR_CONFIG_PATH = META_ROOT / "linear-config.yml"
 
 DELIVERY_DOCS = {
     "milestone": DOCS_ROOT / "04-delivery/19-milestone-plan-with-exit-criteria.md",
     "epic": DOCS_ROOT / "04-delivery/20-engineering-backlog-by-epic.md",
     "surface": DOCS_ROOT / "05-design/21-design-backlog-by-surface.md",
+    "stage": DOCS_ROOT / "04-delivery/18-concrete-launch-sequence-restormel-dev.md",
 }
 
 HEADING_PATTERNS = {
     "milestone": re.compile(r"^##\s+Milestone:\s*(.+?)\s*$"),
     "epic": re.compile(r"^##\s+Epic:\s*(.+?)\s*$"),
     "surface": re.compile(r"^##\s+Surface:\s*(.+?)\s*$"),
+    "stage": re.compile(r"^##\s+Stage\s+(\d+):\s*(.+?)\s*$"),
 }
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
@@ -66,6 +69,31 @@ class BacklogItem:
     source_doc: str
     source_heading: str
     owner_key: str
+    doc_type: str
+    parent_key: str | None = None
+    stage_number: int | None = None
+
+
+@dataclass
+class ProjectDefinition:
+    key: str
+    name: str
+    description: str
+    priority: int
+    doc_paths: list[str]
+    kinds: list[str]
+    keywords: list[str]
+
+
+@dataclass
+class LinearConfig:
+    default_project: str
+    priority_default: int
+    task_limit: int
+    doc_type_project_map: dict[str, str]
+    stage_project_map: dict[int, str]
+    milestone_project_map: dict[str, str]
+    projects: list[ProjectDefinition]
 
 
 class SimpleYaml:
@@ -190,34 +218,82 @@ def slugify(value: str) -> str:
     return slug or "item"
 
 
-def extract_items(kind: str, path: Path) -> list[BacklogItem]:
+def extract_items(kind: str, path: Path, task_limit: int) -> list[BacklogItem]:
     metadata, body = parse_front_matter(path)
     sync_to_linear = str(metadata.get("sync_to_linear", "false")).lower() == "true"
     if not sync_to_linear:
         return []
 
     owner_key = metadata.get("owner", "")
+    doc_type = metadata.get("doc_type", "")
     heading_re = HEADING_PATTERNS[kind]
     rel_doc = str(path.relative_to(DOCS_ROOT))
 
     items: list[BacklogItem] = []
-    for line in body.splitlines():
-        match = heading_re.match(line.strip())
-        if not match:
-            continue
+    current_item: BacklogItem | None = None
+    child_counts: dict[str, int] = {}
+    last_subheading = ""
 
-        title = match.group(1).strip()
-        identity = f"{kind}:{rel_doc}#{slugify(title)}"
-        items.append(
-            BacklogItem(
+    for raw_line in body.splitlines():
+        stripped = raw_line.strip()
+        match = heading_re.match(stripped)
+        if match:
+            if kind == "stage":
+                stage_num = int(match.group(1))
+                title = match.group(2).strip()
+            else:
+                stage_num = None
+                title = match.group(1).strip()
+
+            identity = f"{kind}:{rel_doc}#{slugify(title)}"
+            current_item = BacklogItem(
                 key=identity,
                 kind=kind,
                 title=title,
                 source_doc=rel_doc,
-                source_heading=line.strip(),
+                source_heading=stripped,
                 owner_key=owner_key,
+                doc_type=doc_type,
+                stage_number=stage_num,
             )
+            items.append(current_item)
+            child_counts[current_item.key] = 0
+            last_subheading = stripped
+            continue
+
+        if stripped.startswith("###"):
+            last_subheading = stripped
+            continue
+
+        if not current_item:
+            continue
+
+        bullet_match = re.match(r"^[-+*]\s+(.*)", stripped)
+        if not bullet_match:
+            continue
+
+        if child_counts.get(current_item.key, 0) >= task_limit:
+            continue
+
+        task_text = bullet_match.group(1).strip()
+        if not task_text:
+            continue
+
+        task_key = f"task:{rel_doc}#{slugify(task_text)}"
+        heading_context = last_subheading or current_item.source_heading
+        task_item = BacklogItem(
+            key=task_key,
+            kind="task",
+            title=task_text,
+            source_doc=current_item.source_doc,
+            source_heading=heading_context,
+            owner_key=owner_key,
+            doc_type=doc_type,
+            parent_key=current_item.key,
+            stage_number=current_item.stage_number,
         )
+        items.append(task_item)
+        child_counts[current_item.key] = child_counts.get(current_item.key, 0) + 1
 
     return items
 
@@ -229,6 +305,94 @@ def read_yaml(path: Path) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise SyncError(f"{path}: expected top-level YAML mapping")
     return parsed
+
+def _coerce_str_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def load_linear_config() -> LinearConfig:
+    if not LINEAR_CONFIG_PATH.exists():
+        raise SyncError(f"Missing linear config at {LINEAR_CONFIG_PATH}")
+
+    raw = read_yaml(LINEAR_CONFIG_PATH)
+    if not raw:
+        raise SyncError(f"{LINEAR_CONFIG_PATH} is empty or invalid")
+
+    default_project = str(raw.get("default_project", "")).strip()
+    if not default_project:
+        raise SyncError("linear-config.yml must declare a default_project")
+
+    priority_default = int(raw.get("priority_default", 3))
+    task_limits = raw.get("task_limits", {})
+    task_limit = int(task_limits.get("max_children_per_item", 3)) if isinstance(task_limits, dict) else 3
+    if task_limit < 1:
+        task_limit = 3
+
+    doc_type_project_map = {}
+    for doc_type, project_key in (raw.get("doc_type_project_map") or {}).items():
+        if not doc_type:
+            continue
+        doc_type_project_map[str(doc_type).strip()] = str(project_key).strip()
+
+    stage_project_map_raw = raw.get("stage_project_map", {})
+    stage_project_map: dict[int, str] = {}
+    if isinstance(stage_project_map_raw, dict):
+        for stage_key, project_key in stage_project_map_raw.items():
+            try:
+                stage_number = int(stage_key)
+            except (TypeError, ValueError):
+                continue
+            if not project_key:
+                continue
+            stage_project_map[stage_number] = str(project_key).strip()
+
+    milestone_project_map = {}
+    for milestone, project_key in (raw.get("milestone_project_map") or {}).items():
+        if not milestone or not project_key:
+            continue
+        milestone_project_map[str(milestone).strip()] = str(project_key).strip()
+
+    project_defs: list[ProjectDefinition] = []
+    for entry in raw.get("projects", []):
+        if not isinstance(entry, dict):
+            continue
+        key = str(entry.get("key", "")).strip()
+        name = str(entry.get("name", "")).strip()
+        description = str(entry.get("description", "")).strip()
+        priority = int(entry.get("priority", priority_default))
+        doc_paths = _coerce_str_list(entry.get("doc_paths"))
+        kinds = [k.strip().lower() for k in _coerce_str_list(entry.get("kinds"))]
+        keywords = [k.strip().lower() for k in _coerce_str_list(entry.get("keywords"))]
+        if not key or not name:
+            continue
+        project_defs.append(
+            ProjectDefinition(
+                key=key,
+                name=name,
+                description=description,
+                priority=priority,
+                doc_paths=doc_paths,
+                kinds=kinds,
+                keywords=keywords,
+            )
+        )
+
+    if not any(defn.key == default_project for defn in project_defs):
+        raise SyncError(f"default_project '{default_project}' is not declared in linear-config.yml projects")
+
+    return LinearConfig(
+        default_project=default_project,
+        priority_default=priority_default,
+        task_limit=task_limit,
+        doc_type_project_map=doc_type_project_map,
+        stage_project_map=stage_project_map,
+        milestone_project_map=milestone_project_map,
+        projects=project_defs,
+    )
 
 
 def dump_linear_map(data: dict[str, Any]) -> str:
@@ -269,6 +433,51 @@ def dump_linear_map(data: dict[str, Any]) -> str:
             out.append(f"    {field}: \"{value}\"")
 
     return "\n".join(out) + "\n"
+
+
+def determine_project_for_item(item: BacklogItem, config: LinearConfig) -> str:
+    lower_doc = item.source_doc.lower()
+    lower_title = item.title.lower()
+
+    if item.kind == "stage" and item.stage_number is not None:
+        stage_project = config.stage_project_map.get(item.stage_number)
+        if stage_project:
+            return stage_project
+
+    by_doc_type = config.doc_type_project_map.get(item.doc_type)
+    if by_doc_type:
+        return by_doc_type
+
+    for project in config.projects:
+        if project.kinds and item.kind not in project.kinds:
+            continue
+
+        for doc_path in project.doc_paths:
+            normalized = doc_path.strip().lower()
+            if not normalized:
+                continue
+            if lower_doc == normalized or lower_doc.startswith(normalized):
+                return project.key
+
+        for keyword in project.keywords:
+            if not keyword:
+                continue
+            if keyword in lower_title or keyword in lower_doc:
+                return project.key
+
+    return config.default_project
+
+
+def assign_projects_to_items(items: list[BacklogItem], config: LinearConfig) -> dict[str, str]:
+    assignment: dict[str, str] = {}
+    for item in items:
+        if item.kind == "task" and item.parent_key:
+            parent_project = assignment.get(item.parent_key)
+            if parent_project:
+                assignment[item.key] = parent_project
+                continue
+        assignment[item.key] = determine_project_for_item(item, config)
+    return assignment
 
 
 class LinearClient:
@@ -367,6 +576,126 @@ class LinearClient:
             "Provide a UUID team ID or a valid team key/name visible to the API token."
         )
 
+    def list_projects(self, team_id: str) -> list[dict[str, str]]:
+        query = """
+        query TeamProjects($teamId: String!) {
+          team(id: $teamId) {
+            projects(first: 250) {
+              nodes {
+                id
+                name
+                description
+                url
+              }
+            }
+          }
+        }
+        """
+        data = self.query(query, {"teamId": team_id})
+        nodes = (
+            data.get("team", {})
+            .get("projects", {})
+            .get("nodes", [])
+        )
+        return [
+            {
+                "id": str(node.get("id", "")),
+                "name": str(node.get("name", "")),
+                "description": str(node.get("description", "")),
+                "url": str(node.get("url", "")),
+            }
+            for node in nodes
+            if isinstance(node, dict) and node.get("id")
+        ]
+
+    def create_project(self, *, team_id: str, name: str, description: str | None = None) -> dict[str, str]:
+        mutation = """
+        mutation CreateProject($input: ProjectCreateInput!) {
+          projectCreate(input: $input) {
+            success
+            project {
+              id
+              name
+              url
+            }
+          }
+        }
+        """
+        payload: dict[str, Any] = {"teamId": team_id, "name": name}
+        if description:
+            payload["description"] = description
+
+        data = self.query(mutation, {"input": payload})
+        created = data.get("projectCreate", {}).get("project", {})
+        project_id = str(created.get("id", ""))
+        if not project_id:
+            raise SyncError(f"Linear projectCreate returned no project for '{name}'")
+        return {
+            "project_id": project_id,
+            "name": str(created.get("name", "")),
+            "url": str(created.get("url", "")),
+        }
+
+    def list_project_milestones(self, project_id: str) -> list[dict[str, str]]:
+        query = """
+        query ProjectMilestones($projectId: String!, $first: Int!) {
+          project(id: $projectId) {
+            projectMilestones(first: $first) {
+              nodes {
+                id
+                name
+              }
+            }
+          }
+        }
+        """
+        data = self.query(query, {"projectId": project_id, "first": 100})
+        nodes = (
+            data.get("project", {})
+            .get("projectMilestones", {})
+            .get("nodes", [])
+        )
+        return [
+            {
+                "id": str(node.get("id", "")),
+                "name": str(node.get("name", "")),
+            }
+            for node in nodes
+            if isinstance(node, dict) and node.get("id")
+        ]
+
+    def create_project_milestone(
+        self,
+        *,
+        project_id: str,
+        name: str,
+        description: str | None = None,
+    ) -> dict[str, str]:
+        mutation = """
+        mutation CreateProjectMilestone($input: ProjectMilestoneCreateInput!) {
+          projectMilestoneCreate(input: $input) {
+            success
+            projectMilestone {
+              id
+              name
+            }
+          }
+        }
+        """
+        payload: dict[str, Any] = {"projectId": project_id, "name": name}
+        if description:
+            payload["description"] = description
+
+        data = self.query(mutation, {"input": payload})
+        created = data.get("projectMilestoneCreate", {}).get("projectMilestone", {})
+        milestone_id = str(created.get("id", ""))
+        if not milestone_id:
+            raise SyncError(f"Linear projectMilestoneCreate returned no milestone for '{name}'")
+        return {
+            "project_milestone_id": milestone_id,
+            "name": str(created.get("name", "")),
+        }
+
     def create_issue(
         self,
         *,
@@ -376,6 +705,7 @@ class LinearClient:
         assignee_id: str | None,
         label_ids: list[str],
         project_id: str | None,
+        priority: int | None = None,
     ) -> dict[str, str]:
         mutation = """
         mutation CreateIssue($input: IssueCreateInput!) {
@@ -401,6 +731,8 @@ class LinearClient:
             issue_input["labelIds"] = label_ids
         if project_id:
             issue_input["projectId"] = project_id
+        if priority is not None:
+            issue_input["priority"] = priority
 
         data = self.query(mutation, {"input": issue_input})
         created = data.get("issueCreate", {}).get("issue", {})
@@ -420,6 +752,7 @@ class LinearClient:
         description: str,
         assignee_id: str | None,
         project_id: str | None,
+        priority: int | None = None,
     ) -> None:
         mutation = """
         mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
@@ -437,20 +770,31 @@ class LinearClient:
             issue_input["assigneeId"] = assignee_id
         if project_id:
             issue_input["projectId"] = project_id
+        if priority is not None:
+            issue_input["priority"] = priority
 
         self.query(mutation, {"id": issue_id, "input": issue_input})
 
 
-def build_description(item: BacklogItem) -> str:
-    return "\n".join(
-        [
-            f"Synced from Restormel docs (`{item.kind}`).",
-            "",
-            f"- Source doc: `docs/restormel/{item.source_doc}`",
-            f"- Source heading: `{item.source_heading}`",
-            "- Direction: GitHub docs -> Linear (one-way)",
-        ]
-    )
+def build_description(item: BacklogItem, parent_entry: dict[str, Any] | None = None) -> str:
+    lines = [
+        f"Synced from Restormel docs (`{item.kind}`).",
+        "",
+        f"- Source doc: `docs/restormel/{item.source_doc}`",
+        f"- Source heading: `{item.source_heading}`",
+        "- Direction: GitHub docs -> Linear (one-way)",
+    ]
+    if parent_entry:
+        _append_parent_context(lines, parent_entry)
+    return "\n".join(lines)
+
+
+def _append_parent_context(lines: list[str], parent_entry: dict[str, Any]) -> None:
+    parent_title = parent_entry.get("title")
+    parent_url = parent_entry.get("issue_url")
+    if parent_title and parent_url:
+        lines.append(f"- Parent issue: `{parent_title}`")
+        lines.append(f"- Parent link: {parent_url}")
 
 
 def build_issue_title(item: BacklogItem, project_prefix: str) -> str:
@@ -458,7 +802,9 @@ def build_issue_title(item: BacklogItem, project_prefix: str) -> str:
         "milestone": "Milestone",
         "epic": "Epic",
         "surface": "Design Surface",
-    }[item.kind]
+        "stage": "Launch Stage",
+        "task": "Task",
+    }.get(item.kind, item.kind.capitalize())
     title = f"[{kind_label}] {item.title}"
     if project_prefix:
         return f"{project_prefix} | {title}"

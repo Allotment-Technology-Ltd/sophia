@@ -14,7 +14,7 @@ last_reviewed: 2026-03-13
 - `GET /developer` — public docs + authenticated key/usage tooling + live playground
 - `GET /api-access` — legacy waitlist page
 - Hosted gateway portal (recommended for external users): Zuplo developer portal (see runbook)
-- OpenAPI contract for gateway import: `docs/openapi/sophia-v1.yaml`
+- OpenAPI contract for gateway import: `docs/reference/api/openapi/sophia-v1.yaml`
 
 ## Authentication model
 

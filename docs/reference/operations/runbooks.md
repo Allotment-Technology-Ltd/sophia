@@ -30,7 +30,7 @@ last_reviewed: 2026-03-13
 - Cloud Run nightly deferred link ingestion operations:
   - `gcloud run jobs execute sophia-nightly-link-ingest --region europe-west2`
   - `gcloud scheduler jobs describe sophia-nightly-link-ingest-0200 --location=europe-west2`
-  - See `docs/runbooks/nightly-link-ingestion-runbook.md`
+  - See `docs/reference/operations/runbooks/nightly-link-ingestion-runbook.md`
 
 ## Health checks
 - Health endpoint (if deployed): `curl -s --max-time 30 https://usesophia.app/api/health | jq .`

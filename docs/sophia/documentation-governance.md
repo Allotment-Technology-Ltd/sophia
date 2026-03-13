@@ -61,6 +61,13 @@ Use `docs/sophia/` for:
 - the active SOPHIA roadmap
 - current domain status in SOPHIA itself
 
+Use `docs/reference/` for:
+- supporting API, schema, prompt, runbook, copy, accessibility, and pedagogy references
+- implementation detail that should remain maintained but should not compete with active source-of-truth docs
+
+Use `docs/archive/` for:
+- historical material that should be preserved without staying operationally active
+
 ## Update rule during pivots
 
 When SOPHIA changes role, architecture, or domain scope:
@@ -78,3 +85,19 @@ The governance goal is therefore practical:
 - keep the active set small
 - make replacement paths explicit
 - preserve history without letting history look operational
+
+## Automation and freshness scope
+
+Documentation automation should treat the full documentation tree as in scope:
+- `docs/sophia/`
+- `docs/restormel/`
+- `docs/reference/`
+- `docs/archive/`
+
+Expected automation behaviour:
+- lint front matter and required metadata for maintained docs
+- report stale docs across active and reference surfaces
+- avoid treating archived docs as current source-of-truth guidance
+- ensure documentation changes consider active, reference, and archive cross-links when moving files
+
+If automation syncs work into external systems such as Linear, it must not ignore the rest of the documentation tree. Active and reference docs should both be considered during freshness checks, while archive docs should be excluded from “current guidance” outputs unless explicitly requested.

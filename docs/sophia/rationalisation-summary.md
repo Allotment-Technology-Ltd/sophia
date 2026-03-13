@@ -33,6 +33,14 @@ last_reviewed: 2026-03-13
 - `docs/archive/product/`
 - `docs/archive/experiments/`
 
+### Reference structure
+
+- `docs/reference/api/`
+- `docs/reference/architecture/`
+- `docs/reference/operations/`
+- `docs/reference/product/`
+- `docs/reference/learning/`
+
 ## What was rewritten or clarified
 
 - Root repo docs were aligned to the new model:
@@ -41,11 +49,20 @@ last_reviewed: 2026-03-13
   - `STATUS.md` redirected to `docs/sophia/current-state.md`
   - `CHANGELOG.md` redirected to `docs/sophia/changelog.md`
 - `docs/README.md` was rewritten as a neutral documentation index.
+- `docs/reference/README.md` was added as the reference-docs front door.
 - `docs/architecture.md` was converted into a superseded redirect.
 - `docs/archive/README.md` was rewritten as the archive front door.
 - `docs/restormel/00-overview/00-master-index.md` was rewritten with real repo-relative links and active metadata.
 
 ## What was moved
+
+### Into `docs/reference/`
+
+- API reference and OpenAPI artifacts
+- schema and prompt references
+- runbooks and operational notes
+- copy, accessibility, and writing references
+- learn-pedagogy references
 
 ### Into `docs/archive/architecture/`
 

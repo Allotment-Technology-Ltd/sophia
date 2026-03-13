@@ -7,7 +7,7 @@ last_reviewed: 2026-03-13
 
 # Documentation Index
 
-This directory is now organised around three surfaces:
+This directory is now organised around four surfaces:
 
 ## Active SOPHIA docs
 
@@ -32,15 +32,7 @@ Use the Restormel pack for platform strategy, architecture, delivery, marketplac
 
 These remain useful, but they are not the primary SOPHIA source-of-truth set.
 
-- [docs/api-v1.md](api-v1.md)
-- [docs/argument-graph.md](argument-graph.md)
-- [docs/prompts-reference.md](prompts-reference.md)
-- [docs/runbooks.md](runbooks.md)
-- [docs/runbooks/](runbooks/)
-- [docs/references/essay-writing-basics-summary.md](references/essay-writing-basics-summary.md)
-- [docs/accessibility-rules.md](accessibility-rules.md)
-- [docs/copy-dictionary.md](copy-dictionary.md)
-- [docs/Learn Module/](Learn%20Module/)
+- [docs/reference/README.md](reference/README.md)
 
 ## Historical material
 
