@@ -6,7 +6,8 @@ task_limits:
 doc_type_project_map:
   launch_sequence: restormel-dev
 projects:
-  - key: platform-extraction
+  -
+    key: platform-extraction
     name: Platform Extraction
     description: "Platform package extraction, contracts, and infrastructure epics/stages."
     priority: 1
@@ -24,7 +25,8 @@ projects:
       - observability
       - graph core
       - trace
-  - key: restormel-graph-mvp
+  -
+    key: restormel-graph-mvp
     name: Restormel Graph MVP
     description: "Restormel Graph MVP epics, launch stages, and surfaces."
     priority: 2
@@ -43,7 +45,8 @@ projects:
       - trace
       - inspector
       - "graph viewer"
-  - key: graphrag-mvp
+  -
+    key: graphrag-mvp
     name: GraphRAG MVP
     description: "GraphRAG and reasoning core extraction, hosted flows, and supporting launch stages."
     priority: 2
@@ -62,7 +65,8 @@ projects:
       - retrieval
       - hosted
       - reasoning
-  - key: restormel-dev
+  -
+    key: restormel-dev
     name: restormel.dev
     description: "restormel.dev product site, console, docs, and supporting launch experiences."
     priority: 3
@@ -82,7 +86,8 @@ projects:
       - "product landing"
       - pricing
       - "restormel.dev"
-  - key: sophia-migration
+  -
+    key: sophia-migration
     name: SOPHIA Migration
     description: "Migration of SOPHIA into the platform modules."
     priority: 2
@@ -94,7 +99,8 @@ projects:
     keywords:
       - sophia
       - migration
-  - key: docs-rationalisation
+  -
+    key: docs-rationalisation
     name: Documentation Rationalisation
     description: "Documentation, diagrams, and system thinking work in support of launch."
     priority: 3

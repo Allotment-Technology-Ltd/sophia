@@ -128,12 +128,12 @@ class SimpleYaml:
 
             token = clean[indent:]
 
-            if token.startswith("- "):
+            if token == "-" or token.startswith("- "):
                 if container is None:
                     container = []
                 if not isinstance(container, list):
                     raise SyncError(f"Mixed list/dict YAML structure near line: {raw}")
-                value_text = token[2:].strip()
+                value_text = token[2:].strip() if token.startswith("- ") else ""
                 if value_text:
                     container.append(SimpleYaml._parse_scalar(value_text))
                     idx += 1
@@ -154,6 +154,8 @@ class SimpleYaml:
 
             key, rest = token.split(":", 1)
             key = key.strip()
+            if len(key) >= 2 and key[0] in ("'", '"') and key[-1] == key[0]:
+                key = key[1:-1]
             rest = rest.strip()
 
             if not rest:
@@ -411,26 +413,73 @@ def dump_linear_map(data: dict[str, Any]) -> str:
 
     if not items:
         out.append("items: {}")
-        return "\n".join(out) + "\n"
+    else:
+        out.append("items:")
+        for key in sorted(items.keys()):
+            entry = items[key]
+            if not isinstance(entry, dict):
+                continue
+            out.append(f"  {key}:")
+            for field in (
+                "issue_id",
+                "issue_identifier",
+                "issue_url",
+                "kind",
+                "title",
+                "source_doc",
+                "source_heading",
+                "parent_key",
+                "project_key",
+                "priority",
+                "updated_at",
+            ):
+                value = str(entry.get(field, "")).replace('"', "'")
+                out.append(f"    {field}: \"{value}\"")
 
-    out.append("items:")
-    for key in sorted(items.keys()):
-        entry = items[key]
-        if not isinstance(entry, dict):
-            continue
-        out.append(f"  {key}:")
-        for field in (
-            "issue_id",
-            "issue_identifier",
-            "issue_url",
-            "kind",
-            "title",
-            "source_doc",
-            "source_heading",
-            "updated_at",
-        ):
-            value = str(entry.get(field, "")).replace('"', "'")
-            out.append(f"    {field}: \"{value}\"")
+    out.append("")
+    projects = data.get("projects", {})
+    if not isinstance(projects, dict) or not projects:
+        out.append("projects: {}")
+    else:
+        out.append("projects:")
+        for key in sorted(projects.keys()):
+            entry = projects[key]
+            if not isinstance(entry, dict):
+                continue
+            out.append(f"  {key}:")
+            for field in (
+                "project_id",
+                "project_name",
+                "project_url",
+                "project_description",
+                "priority",
+                "source",
+                "updated_at",
+            ):
+                value = str(entry.get(field, "")).replace('"', "'")
+                out.append(f"    {field}: \"{value}\"")
+
+    out.append("")
+    milestones = data.get("project_milestones", {})
+    if not isinstance(milestones, dict) or not milestones:
+        out.append("project_milestones: {}")
+    else:
+        out.append("project_milestones:")
+        for key in sorted(milestones.keys()):
+            entry = milestones[key]
+            if not isinstance(entry, dict):
+                continue
+            out.append(f"  {key}:")
+            for field in (
+                "project_milestone_id",
+                "project_key",
+                "title",
+                "source_doc",
+                "source_heading",
+                "updated_at",
+            ):
+                value = str(entry.get(field, "")).replace('"', "'")
+                out.append(f"    {field}: \"{value}\"")
 
     return "\n".join(out) + "\n"
 
@@ -846,7 +895,19 @@ def main() -> int:
 
     owners_cfg = read_yaml(OWNERS_PATH)
     milestones_cfg = read_yaml(MILESTONES_PATH)
+    linear_config = load_linear_config()
     linear_map = read_yaml(LINEAR_MAP_PATH)
+
+    linear_map.setdefault("version", 1)
+    linear_map.setdefault("items", {})
+    linear_map.setdefault("projects", {})
+    linear_map.setdefault("project_milestones", {})
+    if not isinstance(linear_map["items"], dict):
+        raise SyncError(f"{LINEAR_MAP_PATH}: items must be a mapping")
+    if not isinstance(linear_map["projects"], dict):
+        linear_map["projects"] = {}
+    if not isinstance(linear_map["project_milestones"], dict):
+        linear_map["project_milestones"] = {}
 
     linear_defaults = owners_cfg.get("linear_defaults", {})
     if not isinstance(linear_defaults, dict):
@@ -856,30 +917,27 @@ def main() -> int:
     if not isinstance(owners_map, dict):
         owners_map = {}
 
-    linear_map.setdefault("version", 1)
-    linear_map.setdefault("items", {})
-    if not isinstance(linear_map["items"], dict):
-        raise SyncError(f"{LINEAR_MAP_PATH}: items must be a mapping")
-
     team_id = required_env("LINEAR_TEAM_ID", str(linear_defaults.get("team_id", "")))
     project_prefix = os.getenv("LINEAR_PROJECT_PREFIX", "").strip() or str(
         linear_defaults.get("project_prefix", "")
     ).strip()
-    project_id = os.getenv("LINEAR_PROJECT_ID", "").strip() or None
+    project_id_override = os.getenv("LINEAR_PROJECT_ID", "").strip() or None
     default_assignee = os.getenv("LINEAR_DEFAULT_ASSIGNEE", "").strip() or None
 
     labels_raw = os.getenv("LINEAR_LABELS", "").strip()
     if labels_raw:
         label_names = [name.strip() for name in labels_raw.split(",") if name.strip()]
     else:
+        label_names = []
         default_labels = linear_defaults.get("labels", [])
-        label_names = [str(x).strip() for x in default_labels if str(x).strip()] if isinstance(default_labels, list) else []
+        if isinstance(default_labels, list):
+            label_names = [str(x).strip() for x in default_labels if str(x).strip()]
 
     items: list[BacklogItem] = []
     for kind, path in DELIVERY_DOCS.items():
         if not path.exists():
             raise SyncError(f"Expected delivery doc not found: {path}")
-        items.extend(extract_items(kind, path))
+        items.extend(extract_items(kind, path, linear_config.task_limit))
 
     canonical_milestones = milestones_cfg.get("milestones", [])
     if isinstance(canonical_milestones, list):
@@ -895,9 +953,14 @@ def main() -> int:
         print("No syncable items found. Check sync_to_linear front matter and heading format.")
         return 0
 
+    project_assignments = assign_projects_to_items(items, linear_config)
+    project_by_key = {defn.key: defn for defn in linear_config.projects}
+    project_priority_map = {defn.key: defn.priority for defn in linear_config.projects}
+
     apply_mode = args.mode != "dry-run"
     client: LinearClient | None = None
     label_ids: list[str] = []
+    available_projects: list[dict[str, str]] = []
 
     if apply_mode:
         api_key = os.getenv("LINEAR_API_KEY", "").strip()
@@ -912,20 +975,198 @@ def main() -> int:
         except SyncError as err:
             print(f"Warning: label resolution skipped ({err})")
             label_ids = []
+        available_projects = client.list_projects(team_id)
+
+    project_entries = linear_map["projects"]
+    milestone_entries = linear_map["project_milestones"]
+
+    project_ids_by_key: dict[str, str | None] = {}
+    project_plan: list[str] = []
+    project_created: list[str] = []
+    project_existing: list[str] = []
+    map_dirty = False
+    today = dt.date.today().isoformat()
+
+    if project_id_override:
+        for defn in linear_config.projects:
+            project_ids_by_key[defn.key] = project_id_override
+    else:
+        available_by_name = {
+            proj["name"].strip().lower(): proj for proj in available_projects if proj.get("name")
+        }
+        for defn in linear_config.projects:
+            entry_key = f"project:{defn.key}"
+            entry = project_entries.get(entry_key, {})
+            project_id = entry.get("project_id")
+            changed = False
+
+            if not project_id:
+                candidate = available_by_name.get(defn.name.lower())
+                if candidate:
+                    project_id = candidate["id"]
+                    entry.update(
+                        project_id=project_id,
+                        project_name=candidate["name"],
+                        project_url=candidate["url"],
+                    )
+                    changed = True
+
+            if project_id:
+                project_existing.append(defn.name)
+            else:
+                if apply_mode:
+                    assert client is not None
+                    created = client.create_project(
+                        team_id=team_id, name=defn.name, description=defn.description or None
+                    )
+                    project_id = created["project_id"]
+                    entry.update(
+                        project_id=project_id,
+                        project_name=created["name"],
+                        project_url=created["url"],
+                        project_description=defn.description,
+                    )
+                    project_created.append(defn.name)
+                    print(f"CREATED project {defn.name} -> {project_id}")
+                    changed = True
+                else:
+                    project_plan.append(defn.name)
+                    print(f"PLAN project {defn.name}")
+
+            project_ids_by_key[defn.key] = project_id
+
+            if apply_mode and project_id:
+                entry.setdefault("source", "linear-config.yml")
+                entry["priority"] = defn.priority
+                entry["updated_at"] = today
+                project_entries[entry_key] = entry
+                if changed:
+                    map_dirty = True
+
+    milestone_items = {item.title: item for item in items if item.kind == "milestone"}
+    milestone_plan: list[str] = []
+    milestone_created: list[str] = []
+    milestone_existing: list[str] = []
+    project_milestone_cache: dict[str, dict[str, str]] = {}
+
+    def _format_milestone_description(milestone_title: str, item: BacklogItem | None) -> str:
+        lines = [f"Mirrors milestone `{milestone_title}` from Restormel docs.", ""]
+        if item:
+            lines.append(f"- Source doc: `docs/restormel/{item.source_doc}`")
+            lines.append(f"- Source heading: `{item.source_heading}`")
+        else:
+            lines.append("- Source doc: milestone plan")
+            lines.append("- Source heading: milestone plan")
+        lines.append("- Direction: GitHub docs -> Linear (one-way)")
+        return "\n".join(lines)
+
+    def _get_project_milestones(project_id: str) -> dict[str, str]:
+        cached = project_milestone_cache.get(project_id)
+        if cached is not None:
+            return cached
+        if client:
+            nodes = client.list_project_milestones(project_id)
+            cached = {
+                str(node.get("name", "")).strip().lower(): str(node.get("id", ""))
+                for node in nodes
+                if node.get("name") and node.get("id")
+            }
+        else:
+            cached = {}
+        project_milestone_cache[project_id] = cached
+        return cached
+
+    for milestone_title in canonical_milestones if isinstance(canonical_milestones, list) else []:
+        item = milestone_items.get(milestone_title)
+        map_key = item.key if item else f"milestone:{slugify(milestone_title)}"
+        entry = milestone_entries.get(map_key, {})
+        project_key = linear_config.milestone_project_map.get(
+            milestone_title, linear_config.default_project
+        )
+        project_id = project_id_override or project_ids_by_key.get(project_key)
+        if not project_id:
+            milestone_plan.append(milestone_title)
+            if apply_mode:
+                print(
+                    f"SKIP milestone {milestone_title}: no project ID available for '{project_key}' mapping"
+                )
+            else:
+                print(f"PLAN milestone {milestone_title} (project: {project_key})")
+            continue
+
+        milestone_id = entry.get("project_milestone_id")
+        if not milestone_id and apply_mode and client:
+            existing = _get_project_milestones(project_id)
+            milestone_id = existing.get(milestone_title.lower())
+            if milestone_id:
+                entry.update(
+                    project_milestone_id=milestone_id,
+                    project_key=project_key,
+                    title=milestone_title,
+                    source_doc=item.source_doc if item else "",
+                    source_heading=item.source_heading if item else "",
+                    updated_at=today,
+                )
+                milestone_existing.append(milestone_title)
+                milestone_entries[map_key] = entry
+                map_dirty = True
+                continue
+
+        if milestone_id:
+            milestone_existing.append(milestone_title)
+            continue
+
+        if apply_mode:
+            assert client is not None
+            description = _format_milestone_description(milestone_title, item)
+            created = client.create_project_milestone(
+                project_id=project_id,
+                name=milestone_title,
+                description=description,
+            )
+            milestone_id = created["project_milestone_id"]
+            entry.update(
+                project_milestone_id=milestone_id,
+                project_key=project_key,
+                title=milestone_title,
+                source_doc=item.source_doc if item else "",
+                source_heading=item.source_heading if item else "",
+                updated_at=today,
+            )
+            milestone_created.append(milestone_title)
+            milestone_entries[map_key] = entry
+            map_dirty = True
+            print(f"CREATED milestone {milestone_title} -> {milestone_id}")
+        else:
+            milestone_plan.append(milestone_title)
+            print(f"PLAN milestone {milestone_title}")
+
+    needed_project_keys = {project_assignments[item.key] for item in items}
+    if apply_mode and not project_id_override:
+        missing_keys = [
+            key for key in needed_project_keys if not project_ids_by_key.get(key)
+        ]
+        if missing_keys:
+            missing_names = ", ".join(
+                f"`{project_by_key.get(key).name or key}`"
+                if project_by_key.get(key)
+                else f"`{key}`"
+                for key in missing_keys
+            )
+            raise SyncError(
+                f"Missing Linear project IDs for {missing_names}. Create the projects or set LINEAR_PROJECT_ID."
+            )
+
+    issue_map = linear_map["items"]
 
     created_count = 0
     updated_count = 0
     unchanged_count = 0
 
-    summary_lines = [
-        "## Linear Sync",
-        "",
-        f"Mode: `{args.mode}`",
-        f"Items parsed: `{len(items)}`",
-        "",
-    ]
-
     for item in items:
+        project_key = project_assignments.get(item.key, linear_config.default_project)
+        project_id = project_id_override or project_ids_by_key.get(project_key)
+        priority_value = project_priority_map.get(project_key, linear_config.priority_default)
         assignee_id = None
         owner_assignee = str(owners_map.get(item.owner_key, "")).strip()
         if owner_assignee and not owner_assignee.startswith("TODO_"):
@@ -934,13 +1175,18 @@ def main() -> int:
             assignee_id = default_assignee
 
         title = build_issue_title(item, project_prefix)
-        description = build_description(item)
+        parent_entry = issue_map.get(item.parent_key) if item.parent_key else None
+        description = build_description(item, parent_entry)
 
-        mapped = linear_map["items"].get(item.key, {})
-        mapped_issue_id = str(mapped.get("issue_id", "")).strip() if isinstance(mapped, dict) else ""
+        mapped_entry = issue_map.get(item.key, {})
+        mapped_issue_id = str(mapped_entry.get("issue_id", "")).strip()
 
         if mapped_issue_id:
             if args.mode in ("update", "create-update"):
+                if not project_id and apply_mode and not project_id_override:
+                    raise SyncError(
+                        f"Cannot update {item.key} because project '{project_key}' has no Linear project ID."
+                    )
                 assert client is not None
                 client.update_issue(
                     issue_id=mapped_issue_id,
@@ -948,21 +1194,35 @@ def main() -> int:
                     description=description,
                     assignee_id=assignee_id,
                     project_id=project_id,
+                    priority=priority_value,
                 )
                 updated_count += 1
+                mapped_entry.update(
+                    kind=item.kind,
+                    title=item.title,
+                    source_doc=item.source_doc,
+                    source_heading=item.source_heading,
+                    parent_key=item.parent_key or "",
+                    project_key=project_key,
+                    priority=priority_value,
+                    updated_at=today,
+                )
+                issue_map[item.key] = mapped_entry
+                map_dirty = True
                 print(f"UPDATED {item.key} -> {mapped_issue_id}")
-                summary_lines.append(f"- Updated `{item.key}`")
             else:
                 unchanged_count += 1
                 print(f"SKIP(existing) {item.key} -> {mapped_issue_id}")
-                summary_lines.append(f"- Kept existing `{item.key}`")
             continue
 
         if args.mode not in ("create", "create-update"):
             print(f"PLAN(create) {item.key} title='{title}'")
-            summary_lines.append(f"- Plan create `{item.key}`")
             continue
 
+        if apply_mode and not project_id and not project_id_override:
+            raise SyncError(
+                f"Cannot create {item.key} because project '{project_key}' lacks a Linear project ID."
+            )
         assert client is not None
         created = client.create_issue(
             team_id=team_id,
@@ -971,9 +1231,10 @@ def main() -> int:
             assignee_id=assignee_id,
             label_ids=label_ids,
             project_id=project_id,
+            priority=priority_value,
         )
-
-        linear_map["items"][item.key] = {
+        created_count += 1
+        issue_map[item.key] = {
             "issue_id": created["issue_id"],
             "issue_identifier": created["issue_identifier"],
             "issue_url": created["issue_url"],
@@ -981,32 +1242,69 @@ def main() -> int:
             "title": item.title,
             "source_doc": item.source_doc,
             "source_heading": item.source_heading,
-            "updated_at": dt.date.today().isoformat(),
+            "parent_key": item.parent_key or "",
+            "project_key": project_key,
+            "priority": priority_value,
+            "updated_at": today,
         }
-        created_count += 1
-        print(f"CREATED {item.key} -> {created['issue_identifier']} ({created['issue_url']})")
-        summary_lines.append(f"- Created `{item.key}` as `{created['issue_identifier']}`")
+        map_dirty = True
+        print(
+            f"CREATED {item.key} -> {created['issue_identifier']} ({created['issue_url']})"
+        )
 
-    if apply_mode and created_count > 0:
-        LINEAR_MAP_PATH.write_text(dump_linear_map(linear_map), encoding="utf-8")
-        print(f"Updated mapping file: {LINEAR_MAP_PATH}")
+    def format_name_list(values: list[str]) -> str:
+        if not values:
+            return "`none`"
+        return ", ".join(f"`{value}`" for value in values)
+
+    summary_lines = [
+        "## Linear Sync",
+        "",
+        f"Mode: `{args.mode}`",
+        f"Items parsed: `{len(items)}`",
+        "",
+        "### Projects",
+        f"- Planned to create: {format_name_list(project_plan)}",
+        f"- Created: {format_name_list(project_created)}",
+        f"- Previously available: {format_name_list(project_existing)}",
+    ]
+    if project_id_override:
+        summary_lines.append(f"- Project override: `{project_id_override}` (all items)")
 
     summary_lines.extend(
         [
             "",
-            f"Created: `{created_count}`",
-            f"Updated: `{updated_count}`",
-            f"Unchanged: `{unchanged_count}`",
+            "### Milestones",
+            f"- Planned to create: {format_name_list(milestone_plan)}",
+            f"- Created: {format_name_list(milestone_created)}",
+            f"- Already present: {format_name_list(milestone_existing)}",
+            "",
+            "### Issues",
+            f"- Created: `{created_count}`",
+            f"- Updated: `{updated_count}`",
+            f"- Unchanged: `{unchanged_count}`",
         ]
     )
 
     if args.github_summary:
         write_summary(summary_lines)
 
-    print("\nSync summary")
+    print("\nProject summary")
+    print(f"  planned:   {len(project_plan)}")
+    print(f"  created:   {len(project_created)}")
+    print(f"  existing:  {len(project_existing)}")
+    print("\nMilestone summary")
+    print(f"  planned:   {len(milestone_plan)}")
+    print(f"  created:   {len(milestone_created)}")
+    print(f"  existing:  {len(milestone_existing)}")
+    print("\nIssue summary")
     print(f"  created:   {created_count}")
     print(f"  updated:   {updated_count}")
     print(f"  unchanged: {unchanged_count}")
+
+    if apply_mode and map_dirty:
+        LINEAR_MAP_PATH.write_text(dump_linear_map(linear_map), encoding="utf-8")
+        print(f"Updated mapping file: {LINEAR_MAP_PATH}")
 
     return 0
 
