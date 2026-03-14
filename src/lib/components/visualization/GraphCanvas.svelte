@@ -2,6 +2,11 @@
 	import type { GraphNode, GraphEdge, GraphGhostNode, GraphGhostEdge } from '$lib/types/api';
 	import { computeLayout, type LayoutPosition } from '$lib/utils/graphLayout';
 	import { formatTraceTag, getNodeTraceLabel } from '$lib/utils/graphTrace';
+	import {
+		graphCanvasEdgeKey,
+		type GraphCanvasEdgeSemanticStyle,
+		type GraphCanvasNodeSemanticStyle
+	} from './semanticStyles';
 	import NodeDetail from './NodeDetail.svelte';
 
 	interface Props {
@@ -10,6 +15,12 @@
 		ghostNodes?: GraphGhostNode[];
 		ghostEdges?: GraphGhostEdge[];
 		showGhostLayer?: boolean;
+		showInlineDetail?: boolean;
+		showStatusChip?: boolean;
+		showViewportControls?: boolean;
+		viewportCommand?: { type: 'fit' | 'reset-layout'; nonce: number } | null;
+		nodeSemanticStyles?: Record<string, GraphCanvasNodeSemanticStyle>;
+		edgeSemanticStyles?: Record<string, GraphCanvasEdgeSemanticStyle>;
 		width?: number;
 		height?: number;
 		isFullscreen?: boolean;
@@ -17,6 +28,11 @@
 		pinnedNodeIds?: string[];
 		pathNodeIds?: string[];
 		pathEdges?: Array<{ from: string; to: string }>;
+		focusNodeIds?: string[];
+		focusEdgeIds?: string[];
+		dimOutOfScope?: boolean;
+		selectedNodeId?: string | null;
+		onSelectedNodeChange?: (nodeId: string | null) => void;
 		onNodeSelect?: (nodeId: string) => void;
 		onJumpToReferences?: (nodeId: string) => void;
 	}
@@ -27,6 +43,12 @@
 		ghostNodes = [],
 		ghostEdges = [],
 		showGhostLayer = true,
+		showInlineDetail = true,
+		showStatusChip = true,
+		showViewportControls = true,
+		viewportCommand = null,
+		nodeSemanticStyles = {},
+		edgeSemanticStyles = {},
 		width = 800,
 		height = 600,
 		isFullscreen = false,
@@ -34,6 +56,11 @@
 		pinnedNodeIds = [],
 		pathNodeIds = [],
 		pathEdges = [],
+		focusNodeIds = [],
+		focusEdgeIds = [],
+		dimOutOfScope = false,
+		selectedNodeId: selectedNodeIdProp = undefined,
+		onSelectedNodeChange,
 		onNodeSelect,
 		onJumpToReferences
 	}: Props = $props();
@@ -43,7 +70,7 @@
 
 	let highlightedNodeId = $state<string | null>(null);
 	let highlightedGhostNodeId = $state<string | null>(null);
-	let selectedNodeId = $state<string | null>(null);
+	let localSelectedNodeId = $state<string | null>(null);
 	let focusedNodeId = $state<string | null>(null);
 	type EdgeSelection = { edge: GraphEdge | GraphGhostEdge; isGhost: boolean };
 	let hoveredEdge = $state<EdgeSelection | null>(null);
@@ -109,6 +136,10 @@
 
 		positions = nextPositions;
 	});
+
+	const selectedNodeId = $derived(
+		selectedNodeIdProp !== undefined ? selectedNodeIdProp : localSelectedNodeId
+	);
 
 	const selectedNode = $derived(
 		selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : null
@@ -182,10 +213,12 @@
 	}
 
 	function getNodeRadius(node: GraphNode): number {
-		return node.type === 'source' ? 20 : 12;
+		return nodeSemanticStyles[node.id]?.radius ?? (node.type === 'source' ? 20 : 12);
 	}
 
 	function getNodeColor(node: GraphNode): string {
+		const semanticStyle = nodeSemanticStyles[node.id];
+		if (semanticStyle) return semanticStyle.fill;
 		if (node.type === 'source') {
 			return 'var(--color-sage)';
 		}
@@ -199,9 +232,138 @@
 	}
 
 	function getNodeStrokeColor(node: GraphNode): string {
-		if (selectedNodeId === node.id) return 'var(--color-sage)';
-		if (highlightedNodeId === node.id) return 'var(--color-sage)';
-		return getNodeColor(node);
+		const semanticStyle = nodeSemanticStyles[node.id];
+		if (selectedNodeId === node.id) return 'var(--color-blue)';
+		if (highlightedNodeId === node.id) return 'var(--color-blue)';
+		if (pathNodeIds.includes(node.id)) return 'var(--color-blue)';
+		if (semanticStyle?.state === 'verified') return 'var(--color-teal)';
+		if (semanticStyle?.state === 'unresolved') return 'var(--color-amber)';
+		if (semanticStyle?.state === 'contradicted') return 'var(--color-coral)';
+		if (semanticStyle?.state === 'synthesis') return 'var(--color-purple)';
+		return semanticStyle?.stroke ?? getNodeColor(node);
+	}
+
+	function getNodeSemanticShape(node: GraphNode): GraphCanvasNodeSemanticStyle['shape'] {
+		return nodeSemanticStyles[node.id]?.shape ?? 'circle';
+	}
+
+	function getNodeGlyph(node: GraphNode): string | null {
+		return nodeSemanticStyles[node.id]?.glyph ?? null;
+	}
+
+	function shouldDimNode(nodeId: string): boolean {
+		if (dimOutOfScope && focusNodeIds.length > 0) return !focusNodeIds.includes(nodeId);
+		if (pathNodeIds.length > 0) return !pathNodeIds.includes(nodeId);
+		if (!selectedNodeId) return false;
+		return !isNodeHighlighted(nodeId);
+	}
+
+	function getNodeOpacity(nodeId: string): number {
+		if (shouldDimNode(nodeId)) return 0.24;
+		if (selectedNodeId === nodeId) return 1;
+		if (highlightedNodeId === nodeId) return 0.98;
+		if (pathNodeIds.includes(nodeId)) return 1;
+		return 0.88;
+	}
+
+	function getNodeRingColor(node: GraphNode): string {
+		if (pathNodeIds.includes(node.id)) return 'var(--color-blue)';
+		if (selectedNodeId === node.id) return 'var(--color-blue)';
+		return getNodeStrokeColor(node);
+	}
+
+	function getEdgeSemanticStyle(edge: GraphEdge): GraphCanvasEdgeSemanticStyle | null {
+		return edgeSemanticStyles[graphCanvasEdgeKey(edge)] ?? null;
+	}
+
+	function getGhostEdgeMarker(edge: GraphGhostEdge): string | undefined {
+		if (selectedNodeId && (edge.from === selectedNodeId || edge.to === selectedNodeId)) {
+			return 'url(#arrowblue)';
+		}
+		return undefined;
+	}
+
+	function getEdgeStroke(edge: GraphEdge): string {
+		const semanticStyle = getEdgeSemanticStyle(edge);
+		if (isEdgeSelected(edge) || isEdgeHighlighted(edge)) return 'var(--color-blue)';
+		if (
+			pathEdges.some(
+				(pathEdge) =>
+					(pathEdge.from === edge.from && pathEdge.to === edge.to) ||
+					(pathEdge.from === edge.to && pathEdge.to === edge.from)
+			)
+		) {
+			return 'var(--color-blue)';
+		}
+		return semanticStyle?.stroke ?? 'var(--color-dim)';
+	}
+
+	function getEdgeStrokeWidth(edge: GraphEdge): number {
+		const semanticStyle = getEdgeSemanticStyle(edge);
+		if (isEdgeSelected(edge)) return 2.4;
+		if (isEdgeHighlighted(edge)) return 2;
+		if (
+			pathEdges.some(
+				(pathEdge) =>
+					(pathEdge.from === edge.from && pathEdge.to === edge.to) ||
+					(pathEdge.from === edge.to && pathEdge.to === edge.from)
+			)
+		) {
+			return 2.2;
+		}
+		return semanticStyle?.strokeWidth ?? 1;
+	}
+
+	function getEdgeDasharray(edge: GraphEdge): string | undefined {
+		return getEdgeSemanticStyle(edge)?.dasharray;
+	}
+
+	function getEdgeMarker(edge: GraphEdge): string | undefined {
+		const semanticStyle = getEdgeSemanticStyle(edge);
+		if (isEdgeSelected(edge) || isEdgeHighlighted(edge)) return 'url(#arrow-blue)';
+		if (
+			pathEdges.some(
+				(pathEdge) =>
+					(pathEdge.from === edge.from && pathEdge.to === edge.to) ||
+					(pathEdge.from === edge.to && pathEdge.to === edge.from)
+			)
+		) {
+			return 'url(#arrow-blue)';
+		}
+		if (!semanticStyle?.marker || semanticStyle.marker === 'none') return undefined;
+		return `url(#${semanticStyle.marker.replace('-', '')})`;
+	}
+
+	function shouldDimEdge(edge: GraphEdge): boolean {
+		if (dimOutOfScope && focusEdgeIds.length > 0) {
+			return !focusEdgeIds.includes(graphCanvasEdgeKey(edge));
+		}
+		if (pathEdges.length > 0) {
+			return !pathEdges.some(
+				(pathEdge) =>
+					(pathEdge.from === edge.from && pathEdge.to === edge.to) ||
+					(pathEdge.from === edge.to && pathEdge.to === edge.from)
+			);
+		}
+		if (!selectedNodeId) return false;
+		return !(edge.from === selectedNodeId || edge.to === selectedNodeId);
+	}
+
+	function getEdgeOpacity(edge: GraphEdge): number {
+		if (shouldDimEdge(edge)) return 0.12;
+		if (isEdgeSelected(edge)) return 0.96;
+		if (isEdgeHighlighted(edge)) return 0.86;
+		return 0.58;
+	}
+
+	function getDiamondPoints(radius: number): string {
+		return `0,-${radius} ${radius},0 0,${radius} -${radius},0`;
+	}
+
+	function getHexagonPoints(radius: number): string {
+		const x = radius * 0.9;
+		const y = radius * 0.52;
+		return `${-x},0 ${-radius * 0.45},-${radius} ${radius * 0.45},-${radius} ${x},0 ${radius * 0.45},${radius} ${-radius * 0.45},${radius}`;
 	}
 
 	function isNodeHighlighted(nodeId: string): boolean {
@@ -272,6 +434,16 @@
 		selectedEdge = { edge, isGhost };
 	}
 
+	function setSelectedNodeId(nextNodeId: string | null): void {
+		if (selectedNodeIdProp === undefined) {
+			localSelectedNodeId = nextNodeId;
+		}
+		onSelectedNodeChange?.(nextNodeId);
+		if (nextNodeId) {
+			onNodeSelect?.(nextNodeId);
+		}
+	}
+
 	function handleEdgeKeyDown(event: KeyboardEvent, edge: GraphEdge | GraphGhostEdge, isGhost: boolean): void {
 		if (event.key === 'Enter' || event.key === ' ') {
 			event.preventDefault();
@@ -313,8 +485,7 @@
 	function handleNodeClick(nodeId: string) {
 		if (selectedNodeId === nodeId) return;
 		selectedEdge = null;
-		selectedNodeId = nodeId;
-		onNodeSelect?.(nodeId);
+		setSelectedNodeId(nodeId);
 	}
 
 	function handleNodeMouseEnter(nodeId: string) {
@@ -330,7 +501,7 @@
 			e.preventDefault();
 			handleNodeClick(nodeId);
 		} else if (e.key === 'Escape') {
-			selectedNodeId = null;
+			setSelectedNodeId(null);
 			highlightedNodeId = null;
 			selectedEdge = null;
 		}
@@ -349,7 +520,7 @@
 	}
 
 	function handleCloseDetail() {
-		selectedNodeId = null;
+		setSelectedNodeId(null);
 	}
 
 	function handleJumpToReferences() {
@@ -422,7 +593,7 @@
 
 	function resetLayout(): void {
 		positions = computeLayout(nodes, edges, width, height);
-		selectedNodeId = null;
+		setSelectedNodeId(null);
 		highlightedNodeId = null;
 		focusedNodeId = null;
 		hasUserAdjustedView = false;
@@ -496,13 +667,24 @@
 		if (typeof window === 'undefined') return;
 		const onWindowKeyDown = (event: KeyboardEvent) => {
 			if (event.key === 'Escape') {
-				selectedNodeId = null;
+				setSelectedNodeId(null);
 				highlightedNodeId = null;
 				selectedEdge = null;
 			}
 		};
 		window.addEventListener('keydown', onWindowKeyDown);
 		return () => window.removeEventListener('keydown', onWindowKeyDown);
+	});
+
+	$effect(() => {
+		if (!viewportCommand) return;
+		if (viewportCommand.type === 'fit') {
+			resetView();
+			return;
+		}
+		if (viewportCommand.type === 'reset-layout') {
+			resetLayout();
+		}
 	});
 </script>
 
@@ -511,21 +693,25 @@
 		role="application"
 		aria-label="Argument graph visualization"
 	>
-		<div class="graph-status-chip" aria-live="polite" aria-atomic="true">
-			Zoom {Math.round(zoom * 100)}%
-		</div>
-
-		<div class="graph-controls" role="toolbar" aria-label="Graph viewport controls">
-			<button type="button" class="graph-control-btn" onclick={zoomIn} aria-label="Zoom in">+</button>
-			<button type="button" class="graph-control-btn" onclick={zoomOut} aria-label="Zoom out">-</button>
-			<button type="button" class="graph-control-btn" onclick={resetView}>Fit</button>
-			<button type="button" class="graph-control-btn" onclick={resetLayout}>Reset Layout</button>
-			{#if onToggleFullscreen}
-				<button type="button" class="graph-control-btn" onclick={onToggleFullscreen}>
-					{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
-			</button>
+		{#if showStatusChip}
+			<div class="graph-status-chip" aria-live="polite" aria-atomic="true">
+				Zoom {Math.round(zoom * 100)}%
+			</div>
 		{/if}
-	</div>
+
+		{#if showViewportControls}
+			<div class="graph-controls" role="toolbar" aria-label="Graph viewport controls">
+				<button type="button" class="graph-control-btn" onclick={zoomIn} aria-label="Zoom in">+</button>
+				<button type="button" class="graph-control-btn" onclick={zoomOut} aria-label="Zoom out">-</button>
+				<button type="button" class="graph-control-btn" onclick={resetView}>Fit</button>
+				<button type="button" class="graph-control-btn" onclick={resetLayout}>Reset Layout</button>
+				{#if onToggleFullscreen}
+					<button type="button" class="graph-control-btn" onclick={onToggleFullscreen}>
+						{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+					</button>
+				{/if}
+			</div>
+		{/if}
 
 	<svg
 		bind:this={svgEl}
@@ -545,6 +731,24 @@
 			A visualization of {nodes.length} nodes and {edges.length} edges representing sources and claims.
 			Use tab to navigate between nodes, enter to select, and escape to deselect.
 		</desc>
+
+		<defs>
+			<marker id="arrowblue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+				<path d="M0,0 L8,4 L0,8 Z" fill="var(--color-blue)" />
+			</marker>
+			<marker id="arrowteal" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+				<path d="M0,0 L8,4 L0,8 Z" fill="var(--color-teal)" />
+			</marker>
+			<marker id="arrowcoral" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+				<path d="M0,0 L8,4 L0,8 Z" fill="var(--color-coral)" />
+			</marker>
+			<marker id="arrowamber" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+				<path d="M0,0 L8,4 L0,8 Z" fill="var(--color-amber)" />
+			</marker>
+			<marker id="arrowpurple" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+				<path d="M0,0 L8,4 L0,8 Z" fill="var(--color-purple)" />
+			</marker>
+		</defs>
 
 		<rect width={width} height={height} fill="var(--color-bg)" />
 
@@ -571,6 +775,7 @@
 								stroke-width={isHighlighted ? 1.8 : 1.1}
 								opacity={isHighlighted ? 0.52 : 0.22}
 								stroke-dasharray="6 5"
+								marker-end={getGhostEdgeMarker(edge)}
 								aria-label="{edge.type} rejected relation ({edge.reasonCode})"
 								role="button"
 								tabindex="0"
@@ -600,9 +805,11 @@
 							class="graph-edge"
 							class:highlighted={isHighlighted}
 							class:selected={isSelected}
-							stroke={isSelected ? 'var(--color-sage)' : 'var(--color-dim)'}
-							stroke-width={isSelected ? 2 : 1}
-							opacity={isHighlighted || isSelected ? 0.8 : 0.3}
+							stroke={getEdgeStroke(edge)}
+							stroke-width={getEdgeStrokeWidth(edge)}
+							stroke-dasharray={getEdgeDasharray(edge)}
+							marker-end={getEdgeMarker(edge)}
+							opacity={getEdgeOpacity(edge)}
 							aria-label="{edge.type} relation"
 							role="button"
 							tabindex="0"
@@ -672,6 +879,8 @@
 					{#if positions.has(node.id)}
 						{@const pos = positions.get(node.id)!}
 						{@const radius = getNodeRadius(node)}
+						{@const shape = getNodeSemanticShape(node)}
+						{@const glyph = getNodeGlyph(node)}
 						{@const isHighlighted = isNodeHighlighted(node.id)}
 						{@const isSelected = selectedNodeId === node.id}
 						{@const isPinned = pinnedNodeIds.includes(node.id)}
@@ -688,7 +897,7 @@
 									class="node-ring"
 									r={radius + 6}
 									fill="none"
-									stroke="var(--color-sage)"
+									stroke={getNodeRingColor(node)}
 									stroke-width="2"
 									opacity="0.6"
 								/>
@@ -699,7 +908,7 @@
 									class="node-highlight-ring"
 									r={radius + 4}
 									fill="none"
-									stroke="var(--color-sage)"
+									stroke="var(--color-blue)"
 									stroke-width="1.5"
 									opacity="0.5"
 								/>
@@ -716,24 +925,124 @@
 								/>
 							{/if}
 
-							<circle
-								r={radius}
-								fill={getNodeColor(node)}
-								stroke={getNodeStrokeColor(node)}
-								stroke-width="2"
-								opacity={isHighlighted ? 1 : 0.85}
-								tabindex="0"
-								role="button"
-								aria-label={getNodeAriaLabel(node)}
-								aria-pressed={isSelected}
-								onclick={() => handleNodeClick(node.id)}
-								onmouseenter={() => handleNodeMouseEnter(node.id)}
-								onmouseleave={handleNodeMouseLeave}
-								onkeydown={(e) => handleNodeKeyDown(e, node.id)}
-								onfocus={() => handleNodeFocus(node.id)}
-								onblur={handleNodeBlur}
-								style:cursor="pointer"
-							/>
+							{#if shape === 'circle'}
+								<circle
+									r={radius}
+									fill={getNodeColor(node)}
+									stroke={getNodeStrokeColor(node)}
+									stroke-width="2"
+									opacity={getNodeOpacity(node.id)}
+									tabindex="0"
+									role="button"
+									aria-label={getNodeAriaLabel(node)}
+									aria-pressed={isSelected}
+									onclick={() => handleNodeClick(node.id)}
+									onmouseenter={() => handleNodeMouseEnter(node.id)}
+									onmouseleave={handleNodeMouseLeave}
+									onkeydown={(e) => handleNodeKeyDown(e, node.id)}
+									onfocus={() => handleNodeFocus(node.id)}
+									onblur={handleNodeBlur}
+									style:cursor="pointer"
+								/>
+							{:else if shape === 'square'}
+								<rect
+									x={-radius}
+									y={-radius}
+									width={radius * 2}
+									height={radius * 2}
+									fill={getNodeColor(node)}
+									stroke={getNodeStrokeColor(node)}
+									stroke-width="2"
+									opacity={getNodeOpacity(node.id)}
+									tabindex="0"
+									role="button"
+									aria-label={getNodeAriaLabel(node)}
+									aria-pressed={isSelected}
+									onclick={() => handleNodeClick(node.id)}
+									onmouseenter={() => handleNodeMouseEnter(node.id)}
+									onmouseleave={handleNodeMouseLeave}
+									onkeydown={(e) => handleNodeKeyDown(e, node.id)}
+									onfocus={() => handleNodeFocus(node.id)}
+									onblur={handleNodeBlur}
+									style:cursor="pointer"
+								/>
+							{:else if shape === 'diamond'}
+								<polygon
+									points={getDiamondPoints(radius)}
+									fill={getNodeColor(node)}
+									stroke={getNodeStrokeColor(node)}
+									stroke-width="2"
+									opacity={getNodeOpacity(node.id)}
+									tabindex="0"
+									role="button"
+									aria-label={getNodeAriaLabel(node)}
+									aria-pressed={isSelected}
+									onclick={() => handleNodeClick(node.id)}
+									onmouseenter={() => handleNodeMouseEnter(node.id)}
+									onmouseleave={handleNodeMouseLeave}
+									onkeydown={(e) => handleNodeKeyDown(e, node.id)}
+									onfocus={() => handleNodeFocus(node.id)}
+									onblur={handleNodeBlur}
+									style:cursor="pointer"
+								/>
+							{:else if shape === 'hexagon'}
+								<polygon
+									points={getHexagonPoints(radius)}
+									fill={getNodeColor(node)}
+									stroke={getNodeStrokeColor(node)}
+									stroke-width="2"
+									opacity={getNodeOpacity(node.id)}
+									tabindex="0"
+									role="button"
+									aria-label={getNodeAriaLabel(node)}
+									aria-pressed={isSelected}
+									onclick={() => handleNodeClick(node.id)}
+									onmouseenter={() => handleNodeMouseEnter(node.id)}
+									onmouseleave={handleNodeMouseLeave}
+									onkeydown={(e) => handleNodeKeyDown(e, node.id)}
+									onfocus={() => handleNodeFocus(node.id)}
+									onblur={handleNodeBlur}
+									style:cursor="pointer"
+								/>
+							{:else}
+								<rect
+									x={-(radius * 1.3)}
+									y={-(radius * 0.82)}
+									width={radius * 2.6}
+									height={radius * 1.64}
+									rx={Math.max(6, radius * 0.42)}
+									ry={Math.max(6, radius * 0.42)}
+									fill={getNodeColor(node)}
+									stroke={getNodeStrokeColor(node)}
+									stroke-width="2"
+									opacity={getNodeOpacity(node.id)}
+									tabindex="0"
+									role="button"
+									aria-label={getNodeAriaLabel(node)}
+									aria-pressed={isSelected}
+									onclick={() => handleNodeClick(node.id)}
+									onmouseenter={() => handleNodeMouseEnter(node.id)}
+									onmouseleave={handleNodeMouseLeave}
+									onkeydown={(e) => handleNodeKeyDown(e, node.id)}
+									onfocus={() => handleNodeFocus(node.id)}
+									onblur={handleNodeBlur}
+									style:cursor="pointer"
+								/>
+							{/if}
+
+							{#if glyph}
+								<text
+									y="4"
+									class="node-glyph"
+									text-anchor="middle"
+									font-family="var(--font-ui)"
+									font-size={glyph.length > 1 ? 8 : 10}
+									fill="var(--color-text)"
+									pointer-events="none"
+								>
+									{glyph}
+								</text>
+							{/if}
 
 							<text
 								y={radius + 18}
@@ -767,7 +1076,7 @@
 		</g>
 	</svg>
 
-	{#if selectedNode && detailPosition}
+	{#if showInlineDetail && selectedNode && detailPosition}
 		<div class="detail-backdrop" onclick={handleCloseDetail} aria-hidden="true"></div>
 		<NodeDetail
 			node={selectedNode}
@@ -881,7 +1190,8 @@
 	.graph-edge,
 	.ghost-edge {
 		cursor: pointer;
-		transition: opacity 120ms ease, stroke-width 120ms ease;
+		transition: opacity 120ms ease, stroke-width 120ms ease, stroke 120ms ease;
+		stroke-linecap: round;
 	}
 
 	.ghost-edge {
@@ -908,6 +1218,15 @@
 		stroke-width: 3px;
 		font-weight: 500;
 		letter-spacing: 0.02em;
+	}
+
+	.node-glyph {
+		font-weight: 600;
+		letter-spacing: 0.02em;
+		paint-order: stroke;
+		stroke: rgba(7, 8, 10, 0.9);
+		stroke-width: 2px;
+		text-transform: uppercase;
 	}
 
 	.node-label.is-visible {

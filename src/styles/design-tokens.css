@@ -34,6 +34,21 @@
   --color-blue-bg:        rgba(111, 163, 212, 0.10);
   --color-blue-border:    rgba(111, 163, 212, 0.25);
 
+  /* ── Accent: Teal (Support, Verification) ── */
+  --color-teal:           #5FAE9D;
+  --color-teal-bg:        rgba(95, 174, 157, 0.12);
+  --color-teal-border:    rgba(95, 174, 157, 0.28);
+
+  /* ── Accent: Coral (Contradiction, Error) ── */
+  --color-coral:          #E27D6F;
+  --color-coral-bg:       rgba(226, 125, 111, 0.12);
+  --color-coral-border:   rgba(226, 125, 111, 0.28);
+
+  /* ── Accent: Purple (Synthesis, Meta-Reasoning) ── */
+  --color-purple:         #9C84D8;
+  --color-purple-bg:      rgba(156, 132, 216, 0.12);
+  --color-purple-border:  rgba(156, 132, 216, 0.28);
+
   /* ── Accent: Amber (Phase 4 — search pass) ── */
   --color-amber:          #C4A882;
   --color-amber-bg:       rgba(196, 168, 130, 0.10);

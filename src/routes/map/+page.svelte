@@ -20,15 +20,22 @@
     }
     void goto(url.toString(), { replaceState: false, noScroll: false, keepFocus: true, invalidateAll: false });
   }
+
+  function openGraphWorkspace(): void {
+    void goto('/map/workspace', { replaceState: false, noScroll: false, keepFocus: true, invalidateAll: false });
+  }
 </script>
 
 <section class="map-page" aria-label="Full page argument map">
   <header class="map-page-header">
     <div>
-      <h1>Argument Map</h1>
-      <p>Full-page exploration mode for structure, reasoning flow, and trust overlays.</p>
+      <h1>Reasoning Workspace</h1>
+      <p>Full-page Graph Kit surface for inspecting structure, evidence, trace state, and compare scaffolding.</p>
     </div>
-    <button type="button" class="back-btn" onclick={backToWorkspace}>Back To Workspace</button>
+    <div class="header-actions">
+      <button type="button" class="back-btn" onclick={openGraphWorkspace}>Standalone Workspace</button>
+      <button type="button" class="back-btn" onclick={backToWorkspace}>Back To Workspace</button>
+    </div>
   </header>
 
   <div class="map-page-shell">
@@ -81,6 +88,12 @@
     white-space: nowrap;
   }
 
+  .header-actions {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
   .map-page-shell {
     flex: 1;
     min-height: 0;
@@ -94,6 +107,10 @@
     .map-page-header {
       flex-direction: column;
       align-items: stretch;
+    }
+
+    .header-actions {
+      width: 100%;
     }
   }
 </style>
