@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { GraphNode, GraphEdge, GraphGhostNode, GraphGhostEdge } from '$lib/types/api';
-	import { computeLayout, type LayoutPosition } from '$lib/utils/graphLayout';
-	import { formatTraceTag, getNodeTraceLabel } from '$lib/utils/graphTrace';
+	import type { GraphNode, GraphEdge, GraphGhostNode, GraphGhostEdge } from '@restormel/contracts/api';
+	import { computeLayout, type LayoutPosition } from '@restormel/graph-core/layout';
+	import { formatTraceTag, getNodeTraceLabel } from '@restormel/graph-core/trace';
 	import {
 		graphCanvasEdgeKey,
 		type GraphCanvasEdgeSemanticStyle,
@@ -86,6 +86,7 @@
 	let panStartY = 0;
 	let panBaseX = 0;
 	let panBaseY = 0;
+	let handledViewportCommandNonce = $state<number | null>(null);
 
 	$effect(() => {
 		if (nodes.length === 0) {
@@ -678,6 +679,8 @@
 
 	$effect(() => {
 		if (!viewportCommand) return;
+		if (viewportCommand.nonce === handledViewportCommandNonce) return;
+		handledViewportCommandNonce = viewportCommand.nonce;
 		if (viewportCommand.type === 'fit') {
 			resetView();
 			return;

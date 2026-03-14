@@ -2,11 +2,17 @@
   import { goto } from '$app/navigation';
   import GraphWorkspace from '$lib/graph-kit/components/GraphWorkspace.svelte';
   import GraphComparePanel from '$lib/graph-kit/components/GraphComparePanel.svelte';
+  import ReasoningLineagePanel from '$lib/graph-kit/components/ReasoningLineagePanel.svelte';
   import {
-    buildSophiaWorkspaceFromCachedResult,
-    buildSophiaWorkspaceFromCurrentSession
+    buildSophiaWorkspaceBundleFromCachedResult,
+    buildSophiaWorkspaceBundleFromCurrentSession
   } from '$lib/graph-kit/adapters/sophiaWorkspaceBuilder';
   import { buildWorkspaceCompareResult } from '$lib/graph-kit/state/compare';
+  import { diffReasoningSnapshots } from '@restormel/graph-core/compare';
+  import {
+    buildReasoningLineageReport,
+    renderReasoningLineageMarkdown
+  } from '@restormel/graph-core/lineage';
   import { conversation } from '$lib/stores/conversation.svelte';
   import { comparisonStore } from '$lib/stores/comparison.svelte';
   import { graphStore } from '$lib/stores/graph.svelte';
@@ -29,8 +35,8 @@
     [...conversation.messages].reverse().find((message) => message.role === 'assistant') ?? null
   );
 
-  const workspace = $derived.by(() =>
-    buildSophiaWorkspaceFromCurrentSession({
+  const workspaceBundle = $derived.by(() =>
+    buildSophiaWorkspaceBundleFromCurrentSession({
       nodes: graphStore.rawNodes,
       edges: graphStore.rawEdges,
       meta: graphStore.snapshotMeta,
@@ -42,15 +48,20 @@
     })
   );
 
+  const workspace = $derived(workspaceBundle.workspace);
+
   const baselineOptions = $derived.by(() =>
     historyStore.cachedResults.filter((entry) => entry.graphSnapshot || entry.claimsByPass.length > 0)
   );
 
+  const baselineBundle = $derived.by(() => {
+    const baseline = comparisonStore.baseline;
+    return baseline ? buildSophiaWorkspaceBundleFromCachedResult(baseline.cached) : null;
+  });
+
   const compareResult = $derived.by(() => {
     const baseline = comparisonStore.baseline;
-    if (!baseline) return null;
-
-    const baselineWorkspace = buildSophiaWorkspaceFromCachedResult(baseline.cached);
+    if (!baseline || !baselineBundle) return null;
     return buildWorkspaceCompareResult(
       {
         label: baseline.label,
@@ -58,7 +69,7 @@
         queryRunId: baseline.cached.metadata.query_run_id,
         timestamp: baseline.cached.cachedAt,
         meta: baseline.cached.graphSnapshot?.meta,
-        workspace: baselineWorkspace
+        snapshot: baselineBundle.snapshot
       },
       {
         label: 'Current session',
@@ -66,10 +77,28 @@
         queryRunId: graphStore.snapshotMeta?.query_run_id ?? latestAssistantMessage?.metadata?.query_run_id,
         timestamp: latestAssistantMessage?.timestamp?.toISOString?.() ?? graphStore.snapshotMeta?.retrievalTimestamp,
         meta: graphStore.snapshotMeta,
-        workspace
+        snapshot: workspaceBundle.snapshot
       }
     );
   });
+
+  const lineageReport = $derived.by(() => {
+    const baseline = comparisonStore.baseline;
+    const compareDiff = baseline
+      ? diffReasoningSnapshots(
+          baselineBundle!.snapshot,
+          workspaceBundle.snapshot
+        )
+      : undefined;
+
+    return buildReasoningLineageReport({
+      snapshot: workspaceBundle.snapshot,
+      compareDiff,
+      title: 'Restormel decision-lineage report'
+    });
+  });
+
+  const lineageMarkdown = $derived(renderReasoningLineageMarkdown(lineageReport));
 
   async function openStandaloneWorkspace(): Promise<void> {
     await goto('/map/workspace', {
@@ -111,7 +140,7 @@
       <p class="eyebrow">Restormel Graph Kit v1</p>
       <h2>Reasoning workspace</h2>
       <p class="lede">
-        The legacy SOPHIA map surface has been replaced here by the Graph Kit workspace. Compare mode is scaffolded below using cached runs as baselines.
+        The legacy SOPHIA map surface has been replaced here by the Graph Kit workspace. Compare mode below now diffs reasoning states, not just graph surface churn, using cached runs as baselines.
       </p>
     </div>
 
@@ -142,6 +171,12 @@
     onBaselineChange={handleBaselineChange}
     onClearBaseline={handleClearBaseline}
     onSelectNode={(nodeId) => selectedNodeId = nodeId}
+  />
+
+  <ReasoningLineagePanel
+    report={lineageReport}
+    markdown={lineageMarkdown}
+    title="Decision-lineage report"
   />
 </section>
 

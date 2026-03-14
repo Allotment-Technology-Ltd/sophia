@@ -19,7 +19,7 @@
 
 import { isDatabaseUnavailable, query } from './db';
 import { embedQuery } from './embeddings';
-import type { PhilosophicalDomain } from './types';
+import type { PhilosophicalDomain } from '@restormel/contracts/domains';
 import {
 	detectCorpusLevelQuery,
 	extractLexicalTerms,

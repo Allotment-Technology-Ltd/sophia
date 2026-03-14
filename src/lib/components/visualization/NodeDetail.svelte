@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { GraphNode, GraphEdge } from '$lib/types/api';
-	import { formatTraceTag, getNodeTraceTags } from '$lib/utils/graphTrace';
+	import type { GraphNode, GraphEdge } from '@restormel/contracts/api';
+	import { formatTraceTag, getNodeTraceTags } from '@restormel/graph-core/trace';
 
 	interface Props {
 		node: GraphNode;

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ReasoningEvaluation } from '$lib/types/verification';
+  import type { ReasoningEvaluation } from '@restormel/contracts/verification';
   import { fade } from 'svelte/transition';
 
   interface Props {

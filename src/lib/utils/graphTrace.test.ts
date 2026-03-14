@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { formatTraceTag, getNodeTraceLabel, getNodeTraceTags } from './graphTrace';
-import type { GraphNode } from '$lib/types/api';
+import type { GraphNode } from '@restormel/contracts/api';
 
 function makeNode(overrides: Partial<GraphNode> = {}): GraphNode {
   return {

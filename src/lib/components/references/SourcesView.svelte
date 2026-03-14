@@ -1,6 +1,6 @@
 <script lang="ts">
   import { referencesStore } from '$lib/stores/references.svelte';
-  import type { PassType } from '$lib/types/passes';
+  import type { PassType } from '@restormel/contracts/passes';
 
   function getPassLabel(pass: PassType): string {
     switch (pass) {

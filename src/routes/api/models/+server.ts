@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types';
 import { getAvailableReasoningModels } from '$lib/server/vertex';
 import { loadByokProviderApiKeys } from '$lib/server/byok/store';
 import type { ByokProvider, ProviderApiKeys } from '$lib/server/byok/types';
-import { isReasoningProvider, parseByokProvider, type ReasoningProvider } from '$lib/types/providers';
+import { isReasoningProvider, parseByokProvider, type ReasoningProvider } from '@restormel/contracts/providers';
 import { getEnabledReasoningProviders, isByokProviderEnabled } from '$lib/server/byok/config';
 
 function toEffectiveProviderKeys(

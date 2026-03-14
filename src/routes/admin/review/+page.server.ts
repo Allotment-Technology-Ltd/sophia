@@ -10,7 +10,7 @@ import {
 	type DuplicateClassification,
 	type ReviewableRelationTable
 } from '$lib/server/review/workflow';
-import type { ReviewState } from '$lib/server/ingestion/contracts';
+import type { ReviewState } from '@restormel/contracts/ingestion';
 
 const REVIEW_STATE_OPTIONS: Exclude<ReviewState, 'merged'>[] = [
 	'accepted',

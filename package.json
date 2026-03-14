@@ -1,7 +1,13 @@
 {
   "name": "sophia",
   "version": "0.3.0",
+  "private": true,
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "infra"
+  ],
   "scripts": {
     "dev": "vite dev",
     "dev:prod-db": "bash scripts/dev-prod-db.sh",

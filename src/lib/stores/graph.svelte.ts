@@ -1,5 +1,5 @@
-import type { EnrichmentStatusEvent, GraphNode, GraphEdge, GraphSnapshotMeta } from '$lib/types/api';
-import type { AnalysisPhase, Claim, RelationBundle } from '$lib/types/references';
+import type { EnrichmentStatusEvent, GraphNode, GraphEdge, GraphSnapshotMeta } from '@restormel/contracts/api';
+import type { AnalysisPhase, Claim, RelationBundle } from '@restormel/contracts/references';
 
 type GraphLifecycle = 'idle' | 'loading' | 'ready' | 'degraded' | 'error';
 
