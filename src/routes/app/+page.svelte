@@ -617,6 +617,11 @@
       pass === 'analysis' || pass === 'critique' || pass === 'synthesis'
     );
   });
+  let startedPasses = $derived.by(() => {
+    return conversation.startedPasses.filter((pass) =>
+      pass === 'analysis' || pass === 'critique' || pass === 'synthesis'
+    );
+  });
   let completionReadyForDepth = $derived.by(() => {
     const required = requiredPassesByDepth[selectedDepth];
     return required.every((pass) => completedPasses.includes(pass));
@@ -1934,6 +1939,7 @@
         <div out:fly={{ y: -30, duration: 400, easing: quintOut }}>
           <Loading
             currentPass={conversation.currentPass ?? ''}
+            {startedPasses}
             statusText={loadingStatusText}
             {completedPasses}
             depthMode={selectedDepth}
@@ -1955,6 +1961,7 @@
           {#if simpleLayer === 'synthesis' && !simpleSynthesisReady}
             <Loading
               currentPass={conversation.currentPass ?? ''}
+              {startedPasses}
               statusText={loadingStatusText}
               {completedPasses}
               depthMode={selectedDepth}
@@ -2105,6 +2112,7 @@
                   <DialecticalTriangle
                     mode="loading"
                     currentPass={conversation.currentPass}
+                    {startedPasses}
                     {completedPasses}
                     depthMode={selectedDepth}
                     size={200}

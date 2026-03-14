@@ -4,8 +4,10 @@ import type {
   GraphGhostEdge,
   GraphGhostNode,
   GraphNode,
-  GraphSnapshotMeta
+  GraphSnapshotMeta,
+  GroundingSource
 } from '@restormel/contracts/api';
+import type { SourceReference } from '@restormel/contracts/references';
 import type { ReasoningEvent, RunTrace } from '@restormel/contracts/trace';
 import type { NormalizedRunTrace } from '@restormel/contracts/trace-ingestion';
 import type { ReasoningEvaluation } from '@restormel/contracts/verification';
@@ -41,6 +43,8 @@ export interface SophiaReasoningObjectContext {
   queryText?: string | null;
   finalOutputText?: string | null;
   reasoningQuality?: ReasoningEvaluation | null;
+  sources?: SourceReference[] | null;
+  groundingSources?: GroundingSource[] | null;
   reasoningEvents?: ReasoningEvent[] | null;
   runTrace?: RunTrace | null;
   normalizedTrace?: NormalizedRunTrace | null;
@@ -71,6 +75,36 @@ function normalize(value: string): string {
 
 function clip(value: string, max = 120): string {
   return value.trim().length > max ? value.trim().slice(0, max) : value.trim();
+}
+
+function artifactToken(...parts: Array<string | number | null | undefined>): string {
+  const token = parts
+    .map((part) => normalize(String(part ?? '')))
+    .filter(Boolean)
+    .join('-')
+    .slice(0, 96);
+  return token || 'item';
+}
+
+function artifactId(prefix: string, ...parts: Array<string | number | null | undefined>): string {
+  return `${prefix}:${artifactToken(...parts)}`;
+}
+
+function toReasoningPhase(
+  phase?: 'analysis' | 'critique' | 'synthesis' | 'retrieval' | 'verification' | null
+): ReasoningObjectPhase | undefined {
+  if (!phase) return undefined;
+  if (phase === 'verification') return 'synthesis';
+  return phase;
+}
+
+function describeExternalResource(title: string | undefined, url: string): string {
+  if (title?.trim()) return title.trim();
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return clip(url, 72);
+  }
 }
 
 function nodeCompareKey(kind: ReasoningObjectKind, title: string): string {
@@ -342,9 +376,629 @@ function adaptEdges(
   });
 }
 
+function makeSyntheticNode(params: {
+  id: string;
+  kind: ReasoningObjectKind;
+  title: string;
+  preview?: string;
+  phase?: ReasoningObjectPhase;
+  status?: ReasoningObjectStatus;
+  confidence?: number;
+  sourceLabel?: string;
+  searchParts?: Array<string | undefined>;
+  classification: {
+    confidence: ReasoningClassificationConfidence;
+    reason: string;
+    missingSignals?: string[];
+  };
+  metadata?: Record<string, unknown>;
+  provenance?: ReasoningObjectProvenanceItem[];
+  evidence?: ReasoningObjectEvidenceItem[];
+}): ReasoningObjectNode {
+  return {
+    id: params.id,
+    kind: params.kind,
+    title: params.title,
+    preview: params.preview ?? params.title,
+    phase: params.phase,
+    status: params.status ?? 'default',
+    confidence: params.confidence,
+    sourceLabel: params.sourceLabel,
+    tags: ['synthetic-artifact'],
+    searchText: [
+      params.title,
+      params.preview,
+      ...(params.searchParts ?? [])
+    ]
+      .filter(Boolean)
+      .join(' '),
+    classification: {
+      kind: params.kind,
+      confidence: params.classification.confidence,
+      reason: params.classification.reason,
+      missingSignals: params.classification.missingSignals ?? []
+    },
+    metadata: {
+      rawType: 'synthetic-artifact',
+      derivedFromIds: [],
+      compareKey: nodeCompareKey(params.kind, params.title),
+      extra: {
+        syntheticArtifact: true,
+        ...(params.metadata ?? {})
+      }
+    },
+    provenance: params.provenance ?? [],
+    evidence: params.evidence ?? []
+  };
+}
+
+function makeSyntheticEdge(params: {
+  id: string;
+  from: string;
+  to: string;
+  kind: ReasoningObjectEdge['kind'];
+  phase?: ReasoningObjectPhase;
+  status?: ReasoningObjectStatus;
+  confidence?: number;
+  rationale?: string;
+  evidenceSources?: string[];
+}): ReasoningObjectEdge {
+  return {
+    id: params.id,
+    from: params.from,
+    to: params.to,
+    kind: params.kind,
+    phase: params.phase,
+    status: params.status ?? 'default',
+    confidence: params.confidence,
+    rationale: params.rationale,
+    metadata: {
+      derivedFromIds: [],
+      evidenceSources: params.evidenceSources ?? [],
+      compareKey: edgeCompareKey(params.kind, params.from, params.to),
+      extra: {
+        syntheticArtifact: true
+      }
+    },
+    provenance: [],
+    evidence: (params.evidenceSources ?? []).map((source, index) => ({
+      id: `${params.id}:source:${index}`,
+      kind: 'trace',
+      label: 'Attributed source',
+      summary: source,
+      confidence: params.confidence
+    }))
+  };
+}
+
+function buildSyntheticArtifacts(params: {
+  graph: ReasoningObjectSnapshot['graph'];
+  meta: GraphSnapshotMeta | null;
+  traceContext: SophiaReasoningObjectContext;
+}): {
+  nodes: ReasoningObjectNode[];
+  edges: ReasoningObjectEdge[];
+  notes: string[];
+} {
+  const nodes: ReasoningObjectNode[] = [];
+  const edges: ReasoningObjectEdge[] = [];
+  const notes: string[] = [];
+  const nodeIds = new Set(params.graph.nodes.map((node) => node.id));
+  const edgeIds = new Set(params.graph.edges.map((edge) => edge.id));
+
+  const addNode = (node: ReasoningObjectNode): void => {
+    if (nodeIds.has(node.id)) return;
+    nodeIds.add(node.id);
+    nodes.push(node);
+  };
+
+  const addEdge = (edge: ReasoningObjectEdge): void => {
+    if (edgeIds.has(edge.id)) return;
+    edgeIds.add(edge.id);
+    edges.push(edge);
+  };
+
+  const graphNodes = [...params.graph.nodes];
+  const synthesisNodeIds = graphNodes
+    .filter((node) => node.phase === 'synthesis' && node.kind !== 'source')
+    .map((node) => node.id);
+  const retrievalNodeIds = graphNodes
+    .filter((node) => node.phase === 'retrieval' && node.kind !== 'source')
+    .map((node) => node.id);
+  const claimNodeIdsByPhase = {
+    analysis: graphNodes
+      .filter((node) => node.phase === 'analysis' && node.kind !== 'source')
+      .map((node) => node.id),
+    critique: graphNodes
+      .filter((node) => node.phase === 'critique' && node.kind !== 'source')
+      .map((node) => node.id),
+    synthesis: synthesisNodeIds
+  };
+
+  let queryNodeId: string | null = null;
+  if (params.traceContext.queryText?.trim() || params.meta?.query_run_id) {
+    queryNodeId = artifactId('query', params.meta?.query_run_id ?? params.traceContext.queryText);
+    addNode(
+      makeSyntheticNode({
+        id: queryNodeId,
+        kind: 'query',
+        title: 'User query',
+        preview: params.traceContext.queryText?.trim()
+          ? clip(params.traceContext.queryText.trim(), 140)
+          : 'Current workspace query context',
+        phase: 'retrieval',
+        classification: {
+          confidence: params.traceContext.queryText?.trim() ? 'high' : 'medium',
+          reason: 'Derived directly from run query context carried into the Graph Kit workspace.',
+          missingSignals: params.traceContext.queryText?.trim()
+            ? []
+            : ['The full query text is missing; only query-run context is available.']
+        },
+        metadata: {
+          queryRunId: params.meta?.query_run_id,
+          queryLength: params.traceContext.queryText?.trim().length ?? 0
+        },
+        provenance: params.meta?.query_run_id
+          ? [
+              {
+                id: artifactId('prov', params.meta.query_run_id, 'query'),
+                kind: 'provenance-id-only',
+                label: 'Query run',
+                value: params.meta.query_run_id,
+                queryRunId: params.meta.query_run_id,
+                sourceRefs: [{ kind: 'provenance-id-only', value: params.meta.query_run_id }]
+              }
+            ]
+          : [],
+        searchParts: [params.traceContext.queryText ?? undefined]
+      })
+    );
+  }
+
+  let retrievalNodeId: string | null = null;
+  if (params.meta?.retrievalTrace) {
+    const trace = params.meta.retrievalTrace;
+    retrievalNodeId = artifactId('inference', params.meta.query_run_id ?? 'current', 'retrieval');
+    addNode(
+      makeSyntheticNode({
+        id: retrievalNodeId,
+        kind: 'inference',
+        title: 'Retrieval compilation',
+        preview: 'Query decomposition, seed selection, and traversal parameters compiled into the retrieval context.',
+        phase: 'retrieval',
+        status: params.meta.retrievalDegraded ? 'unresolved' : 'verified',
+        confidence: trace.selectedSeedCount > 0 ? 0.78 : 0.5,
+        classification: {
+          confidence: 'high',
+          reason: 'Derived from retrieval-trace metadata already present on the SOPHIA graph snapshot.'
+        },
+        metadata: {
+          queryRunId: params.meta.query_run_id,
+          selectedSeedCount: trace.selectedSeedCount,
+          seedPoolCount: trace.seedPoolCount,
+          traversalMode: trace.traversalMode ?? 'n/a',
+          traversalMaxHops: trace.traversalMaxHops ?? null,
+          contextSufficiency: params.meta.contextSufficiency ?? 'unknown'
+        },
+        evidence: [
+          {
+            id: `${retrievalNodeId}:seed-pool`,
+            kind: 'trace',
+            label: 'Seed selection',
+            summary: `${trace.selectedSeedCount} of ${trace.seedPoolCount} seed candidates selected.`,
+            confidence: 0.78
+          },
+          {
+            id: `${retrievalNodeId}:traversal`,
+            kind: 'trace',
+            label: 'Traversal',
+            summary: `${trace.relationKeptCount}/${trace.relationCandidateCount} relations kept across ${trace.traversedClaimCount} traversed claims.`,
+            confidence: 0.74
+          }
+        ]
+      })
+    );
+
+    if (queryNodeId) {
+      addEdge(
+        makeSyntheticEdge({
+          id: artifactId('edge', queryNodeId, retrievalNodeId, 'responds-to'),
+          from: queryNodeId,
+          to: retrievalNodeId,
+          kind: 'responds-to',
+          phase: 'retrieval',
+          confidence: 0.82,
+          rationale: 'The retrieval compilation node summarizes how SOPHIA framed and expanded the user query.'
+        })
+      );
+    }
+
+    if (retrievalNodeIds.length > 0) {
+      addEdge(
+        makeSyntheticEdge({
+          id: artifactId('edge', retrievalNodeId, retrievalNodeIds[0], 'supports'),
+          from: retrievalNodeId,
+          to: retrievalNodeIds[0],
+          kind: 'supports',
+          phase: 'retrieval',
+          confidence: 0.7,
+          rationale: 'This retrieval compilation state produced the current retrieval-layer graph neighborhood.'
+        })
+      );
+    }
+  }
+
+  let closureNodeId: string | null = null;
+  if (params.meta?.retrievalTrace?.closureStats) {
+    const closure = params.meta.retrievalTrace.closureStats;
+    closureNodeId = artifactId('inference', params.meta.query_run_id ?? 'current', 'closure');
+    addNode(
+      makeSyntheticNode({
+        id: closureNodeId,
+        kind: 'inference',
+        title: 'Closure synthesis',
+        preview: 'Closure units and thesis construction prepared synthesis-stage reasoning.',
+        phase: 'synthesis',
+        status: closure.capLimitedUnits > 0 ? 'unresolved' : 'default',
+        confidence: closure.unitsCompleted > 0 ? 0.76 : 0.58,
+        classification: {
+          confidence: 'medium',
+          reason: 'Derived from closure stats in retrieval trace metadata, which are a real precursor to synthesis.'
+        },
+        metadata: {
+          unitsAttempted: closure.unitsAttempted,
+          unitsCompleted: closure.unitsCompleted,
+          claimsAddedForClosure: closure.claimsAddedForClosure,
+          objectionsAdded: closure.objectionsAdded,
+          repliesAdded: closure.repliesAdded,
+          capLimitedUnits: closure.capLimitedUnits
+        }
+      })
+    );
+
+    if (retrievalNodeId) {
+      addEdge(
+        makeSyntheticEdge({
+          id: artifactId('edge', retrievalNodeId, closureNodeId, 'inferred-by'),
+          from: retrievalNodeId,
+          to: closureNodeId,
+          kind: 'inferred-by',
+          phase: 'synthesis',
+          confidence: 0.72,
+          rationale: 'Closure synthesis was produced from the compiled retrieval context.'
+        })
+      );
+    }
+
+    for (const nodeId of synthesisNodeIds.slice(0, 8)) {
+      addEdge(
+        makeSyntheticEdge({
+          id: artifactId('edge', closureNodeId, nodeId, 'supports'),
+          from: closureNodeId,
+          to: nodeId,
+          kind: 'supports',
+          phase: 'synthesis',
+          confidence: 0.68,
+          rationale: 'Closure synthesis contributes to the current synthesis-layer reasoning nodes.'
+        })
+      );
+    }
+  }
+
+  let conclusionNodeId: string | null = null;
+  if (params.traceContext.finalOutputText?.trim()) {
+    const overallScore = params.traceContext.reasoningQuality?.overall_score;
+    conclusionNodeId = artifactId('conclusion', params.meta?.query_run_id ?? params.traceContext.finalOutputText);
+    addNode(
+      makeSyntheticNode({
+        id: conclusionNodeId,
+        kind: 'conclusion',
+        title: 'Final conclusion',
+        preview: clip(params.traceContext.finalOutputText.trim(), 180),
+        phase: 'synthesis',
+        status:
+          typeof overallScore === 'number' && overallScore >= 0.82
+            ? 'verified'
+            : typeof overallScore === 'number' && overallScore < 0.58
+              ? 'unresolved'
+              : 'default',
+        confidence: overallScore,
+        classification: {
+          confidence: params.traceContext.finalOutputText.trim() ? 'high' : 'medium',
+          reason: 'Derived from the final answer text captured for the run, separate from intermediate synthesis claims.',
+          missingSignals: [
+            'This conclusion node is compiled from the final output text because SOPHIA does not yet emit a first-class conclusion node.'
+          ]
+        },
+        metadata: {
+          outputLength: params.traceContext.finalOutputText.trim().length,
+          queryRunId: params.meta?.query_run_id
+        },
+        provenance: params.meta?.query_run_id
+          ? [
+              {
+                id: artifactId('prov', params.meta.query_run_id, 'conclusion'),
+                kind: 'provenance-id-only',
+                label: 'Run conclusion',
+                value: params.meta.query_run_id,
+                queryRunId: params.meta.query_run_id,
+                sourceRefs: [{ kind: 'provenance-id-only', value: params.meta.query_run_id }]
+              }
+            ]
+          : []
+      })
+    );
+
+    for (const nodeId of synthesisNodeIds.slice(0, 8)) {
+      addEdge(
+        makeSyntheticEdge({
+          id: artifactId('edge', nodeId, conclusionNodeId, 'supports'),
+          from: nodeId,
+          to: conclusionNodeId,
+          kind: 'supports',
+          phase: 'synthesis',
+          confidence: 0.74,
+          rationale: 'Synthesis-stage graph nodes feed into the captured final conclusion.'
+        })
+      );
+    }
+
+    if (!synthesisNodeIds.length && queryNodeId) {
+      addEdge(
+        makeSyntheticEdge({
+          id: artifactId('edge', queryNodeId, conclusionNodeId, 'responds-to'),
+          from: queryNodeId,
+          to: conclusionNodeId,
+          kind: 'responds-to',
+          phase: 'synthesis',
+          confidence: 0.66,
+          rationale: 'The final conclusion is the direct output currently retained for the run.'
+        })
+      );
+    }
+  }
+
+  const groundingByPass = new Map<string, GroundingSource[]>();
+  for (const source of params.traceContext.groundingSources ?? []) {
+    const passSources = groundingByPass.get(source.pass) ?? [];
+    if (!passSources.some((existing) => existing.url === source.url && existing.pass === source.pass)) {
+      passSources.push(source);
+      groundingByPass.set(source.pass, passSources);
+    }
+  }
+
+  for (const [pass, sources] of groundingByPass) {
+    const phase = toReasoningPhase(pass as 'analysis' | 'critique' | 'synthesis' | 'verification');
+    if (!phase) continue;
+
+    const hubId =
+      pass === 'verification'
+        ? artifactId('inference', params.meta?.query_run_id ?? 'current', 'validation-review')
+        : artifactId('inference', params.meta?.query_run_id ?? 'current', `${pass}-grounding`);
+    const title = pass === 'verification' ? 'Validation review' : `${pass[0].toUpperCase()}${pass.slice(1)} evidence`;
+    const overallScore = params.traceContext.reasoningQuality?.overall_score;
+
+    addNode(
+      makeSyntheticNode({
+        id: hubId,
+        kind: 'inference',
+        title,
+        preview:
+          pass === 'verification'
+            ? 'Verification and evaluation artefacts attached to the run.'
+            : `Grounding sources captured for the ${pass} pass.`,
+        phase,
+        status:
+          pass === 'verification'
+            ? typeof overallScore === 'number' && overallScore >= 0.82
+              ? 'verified'
+              : 'unresolved'
+            : 'default',
+        confidence: pass === 'verification' ? overallScore : 0.72,
+        classification: {
+          confidence: 'medium',
+          reason:
+            pass === 'verification'
+              ? 'Compiled from pass-level verification artefacts and reasoning-quality signals already stored by SOPHIA.'
+              : 'Compiled from pass-level grounding source URLs captured during the run.'
+        },
+        metadata: {
+          pass,
+          groundingSourceCount: sources.length
+        },
+        evidence: sources.slice(0, 12).map((source, index) => ({
+          id: `${hubId}:grounding:${index}`,
+          kind: 'trace',
+          label: 'Grounding source',
+          summary: source.url,
+          sourceTitle: source.title
+        }))
+      })
+    );
+
+    const targetNodeIds =
+      pass === 'verification'
+        ? conclusionNodeId
+          ? [conclusionNodeId]
+          : synthesisNodeIds
+        : claimNodeIdsByPhase[phase as 'analysis' | 'critique' | 'synthesis'];
+
+    for (const nodeId of targetNodeIds.slice(0, 8)) {
+      addEdge(
+        makeSyntheticEdge({
+          id: artifactId('edge', hubId, nodeId, pass === 'verification' ? 'qualifies' : 'supports'),
+          from: hubId,
+          to: nodeId,
+          kind: pass === 'verification' ? 'qualifies' : 'supports',
+          phase,
+          confidence: pass === 'verification' ? overallScore : 0.69,
+          rationale:
+            pass === 'verification'
+              ? 'Verification artefacts qualify the confidence of the run output at pass level rather than claim-by-claim.'
+              : `This hub represents pass-level grounding sources for ${pass}. It should not be read as claim-level citation certainty.`
+        })
+      );
+    }
+
+    if (!targetNodeIds.length && queryNodeId) {
+      addEdge(
+        makeSyntheticEdge({
+          id: artifactId('edge', queryNodeId, hubId, 'responds-to'),
+          from: queryNodeId,
+          to: hubId,
+          kind: 'responds-to',
+          phase,
+          confidence: 0.64,
+          rationale: `The ${pass} artefact was captured as part of answering the current query.`
+        })
+      );
+    }
+
+    for (const source of sources.slice(0, 12)) {
+      const evidenceNodeId = artifactId('evidence', pass, source.url);
+      addNode(
+        makeSyntheticNode({
+          id: evidenceNodeId,
+          kind: 'evidence',
+          title: describeExternalResource(source.title, source.url),
+          preview: source.url,
+          phase,
+          sourceLabel: source.title,
+          classification: {
+            confidence: 'high',
+            reason: 'Derived from grounding source URLs explicitly captured during the SOPHIA run.',
+            missingSignals: [
+              'Grounding sources are currently attributed at pass level, not mapped to individual claims.'
+            ]
+          },
+          metadata: {
+            pass,
+            url: source.url,
+            title: source.title ?? null
+          },
+          provenance: [
+            {
+              id: `${evidenceNodeId}:url`,
+              kind: 'url',
+              label: 'Grounding URL',
+              value: source.url,
+              pass: phase,
+              queryRunId: params.meta?.query_run_id,
+              sourceRefs: [{ kind: 'url', value: source.url }]
+            }
+          ],
+          evidence: [
+            {
+              id: `${evidenceNodeId}:summary`,
+              kind: 'quote',
+              label: 'Grounding record',
+              summary: source.url,
+              sourceTitle: source.title
+            }
+          ],
+          searchParts: [source.title, source.url]
+        })
+      );
+
+      addEdge(
+        makeSyntheticEdge({
+          id: artifactId('edge', evidenceNodeId, hubId, 'cites'),
+          from: evidenceNodeId,
+          to: hubId,
+          kind: 'cites',
+          phase,
+          confidence: 0.85,
+          rationale:
+            pass === 'verification'
+              ? 'This external grounding source informed the verification surface for the run.'
+              : `This external grounding source was captured during the ${pass} pass.`,
+          evidenceSources: [source.url]
+        })
+      );
+    }
+
+    if (sources.length > 12) {
+      notes.push(
+        `${sources.length - 12} additional ${pass} grounding sources are retained in SOPHIA data but omitted from the canvas to keep the workspace usable.`
+      );
+    }
+  }
+
+  if ((params.traceContext.sources?.length ?? 0) > 0) {
+    const existingSourceTitles = new Set(
+      [...graphNodes, ...nodes]
+        .filter((node) => node.kind === 'source')
+        .map((node) => normalize(node.title))
+    );
+
+    for (const source of (params.traceContext.sources ?? []).slice(0, 8)) {
+      const normalizedTitle = normalize(source.title);
+      if (existingSourceTitles.has(normalizedTitle)) continue;
+      existingSourceTitles.add(normalizedTitle);
+
+      const sourceNodeId = artifactId('source', source.id, source.title);
+      addNode(
+        makeSyntheticNode({
+          id: sourceNodeId,
+          kind: 'source',
+          title: source.title,
+          preview: `${source.author.join(', ') || 'Unknown author'} • ${source.claimCount} claims`,
+          status: source.groundingConfidence?.score && source.groundingConfidence.score >= 0.8 ? 'verified' : 'default',
+          confidence: source.groundingConfidence?.score,
+          classification: {
+            confidence: 'high',
+            reason: 'Derived from the source-reference bundle already held in SOPHIA for the current run.'
+          },
+          metadata: {
+            sourceId: source.id,
+            claimCount: source.claimCount,
+            authors: source.author,
+            supportingUris: source.groundingConfidence?.supportingUris ?? []
+          },
+          provenance: [
+            {
+              id: `${sourceNodeId}:record`,
+              kind: 'source-record',
+              label: 'Source record',
+              value: source.id,
+              queryRunId: params.meta?.query_run_id,
+              sourceRefs: [{ kind: 'source-record', value: source.id }]
+            }
+          ],
+          evidence: (source.groundingConfidence?.supportingUris ?? []).slice(0, 4).map((uri, index) => ({
+            id: `${sourceNodeId}:uri:${index}`,
+            kind: 'source',
+            label: 'Supporting URI',
+            summary: uri,
+            sourceTitle: source.title,
+            confidence: source.groundingConfidence?.score
+          }))
+        })
+      );
+
+      if (queryNodeId) {
+        addEdge(
+          makeSyntheticEdge({
+            id: artifactId('edge', sourceNodeId, queryNodeId, 'retrieved-from'),
+            from: sourceNodeId,
+            to: queryNodeId,
+            kind: 'retrieved-from',
+            phase: 'retrieval',
+            confidence: source.groundingConfidence?.score,
+            rationale: 'This source record was part of the run-level reference bundle available to the workspace.'
+          })
+        );
+      }
+    }
+  }
+
+  return { nodes, edges, notes };
+}
+
 function buildMissingDataNotes(
   nodes: ReasoningObjectNode[],
-  meta: GraphSnapshotMeta | null
+  meta: GraphSnapshotMeta | null,
+  extraNotes: string[] = []
 ): string[] {
   const notes = new Set<string>();
 
@@ -366,6 +1020,7 @@ function buildMissingDataNotes(
   if (!meta?.query_run_id) {
     notes.add('Graph snapshots currently omit query-run context in most dogfood flows, limiting compare and playback fidelity.');
   }
+  for (const note of extraNotes) notes.add(note);
 
   return [...notes];
 }
@@ -873,10 +1528,31 @@ export function adaptSophiaReasoningObjectBundle(params: {
   const nodes = params.nodes.map(adaptNode);
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
   const edges = adaptEdges(params.edges, nodesById);
+  const syntheticArtifacts = buildSyntheticArtifacts({
+    graph: { nodes, edges, missingData: [] },
+    meta,
+    traceContext
+  });
+  const compiledNodes = [...nodes, ...syntheticArtifacts.nodes];
+  const compiledNodesById = new Map(compiledNodes.map((node) => [node.id, node]));
+  const compiledEdges = [
+    ...edges,
+    ...syntheticArtifacts.edges.map((edge) => ({
+      ...edge,
+      metadata: {
+        ...edge.metadata,
+        compareKey: edgeCompareKey(
+          edge.kind,
+          compiledNodesById.get(edge.from)?.title ?? edge.from,
+          compiledNodesById.get(edge.to)?.title ?? edge.to
+        )
+      }
+    }))
+  ];
   const graph = {
-    nodes,
-    edges,
-    missingData: buildMissingDataNotes(nodes, meta)
+    nodes: compiledNodes,
+    edges: compiledEdges,
+    missingData: buildMissingDataNotes(compiledNodes, meta, syntheticArtifacts.notes)
   };
   const trace = buildTraceEvents(graph, meta, enrichmentStatus, traceContext);
   const validation = buildValidationEvaluation(

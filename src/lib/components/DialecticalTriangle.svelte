@@ -2,6 +2,7 @@
   interface Props {
     mode: 'logo' | 'loading' | 'complete';
     currentPass?: string | null;
+    startedPasses?: string[];
     completedPasses?: string[];
     depthMode?: 'quick' | 'standard' | 'deep';
     completionReady?: boolean;
@@ -12,6 +13,7 @@
   let {
     mode,
     currentPass = null,
+    startedPasses = [],
     completedPasses = [],
     depthMode = 'standard',
     completionReady = false,
@@ -41,6 +43,9 @@
   const isAnalysisDone  = $derived(completedPasses.includes('analysis'));
   const isCritiqueDone  = $derived(completedPasses.includes('critique'));
   const isSynthesisDone = $derived(completedPasses.includes('synthesis'));
+  const isAnalysisStarted = $derived(startedPasses.includes('analysis'));
+  const isCritiqueStarted = $derived(startedPasses.includes('critique'));
+  const isSynthesisStarted = $derived(startedPasses.includes('synthesis'));
 
   const isQuickDepth = $derived(depthMode === 'quick');
 
@@ -48,17 +53,17 @@
   // reads as an active dialectical process rather than a static scaffold.
   const showFullTriangle = $derived(mode === 'complete' && !isQuickDepth);
   const showAC = $derived(
-    mode === 'logo' || isAnalysisActive || isAnalysisDone || showFullTriangle
+    mode === 'logo' || isAnalysisActive || isAnalysisStarted || isAnalysisDone || showFullTriangle
   );
   const showCS = $derived(
-    mode === 'logo' || isCritiqueActive || isCritiqueDone || showFullTriangle
+    mode === 'logo' || isCritiqueActive || isCritiqueStarted || isCritiqueDone || showFullTriangle
   );
   const showSA = $derived(
-    mode === 'logo' || isSynthesisActive || isSynthesisDone || showFullTriangle
+    mode === 'logo' || isSynthesisActive || isSynthesisStarted || isSynthesisDone || showFullTriangle
   );
-  const showAO = $derived(mode === 'logo' || mode === 'complete' || isAnalysisActive || isAnalysisDone);
-  const showCO = $derived(mode === 'logo' || isCritiqueActive || isCritiqueDone || showFullTriangle);
-  const showSO = $derived(mode === 'logo' || isSynthesisActive || isSynthesisDone || showFullTriangle);
+  const showAO = $derived(mode === 'logo' || mode === 'complete' || isAnalysisActive || isAnalysisStarted || isAnalysisDone);
+  const showCO = $derived(mode === 'logo' || isCritiqueActive || isCritiqueStarted || isCritiqueDone || showFullTriangle);
+  const showSO = $derived(mode === 'logo' || isSynthesisActive || isSynthesisStarted || isSynthesisDone || showFullTriangle);
 
   const isAnalysisEdgeActive = $derived(mode === 'loading' && isAnalysisActive);
   const isCritiqueEdgeActive = $derived(mode === 'loading' && isCritiqueActive);

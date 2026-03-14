@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { extractSophiaMetaBlock, aggregateConfidenceMetrics, SophiaMetaClaimSchema } from './engine';
+import {
+  extractSophiaMetaBlock,
+  aggregateConfidenceMetrics,
+  SophiaMetaBlockSchema,
+  SophiaMetaClaimSchema
+} from './engine';
 import type { Claim } from '$lib/types/references';
 
 // ─── extractSophiaMetaBlock ────────────────────────────────────────────────
@@ -109,6 +114,68 @@ describe('extractSophiaMetaBlock', () => {
     expect(metaBlock).not.toBeNull();
     expect(metaBlock!.sections).toEqual([]);
     expect(metaBlock!.claims).toEqual([]);
+    expect(metaBlock!.relations).toEqual([]);
+  });
+
+  it('accepts claim back references and relation bundles', () => {
+    const metaWithRelations = JSON.stringify({
+      sections: [{ id: 'summary', heading: 'Summary', content: 'Summary content.' }],
+      claims: [
+        {
+          id: 'c1',
+          text: 'A foundational claim.',
+          badge: 'premise',
+          source: 'SEP',
+          tradition: 'Analytic',
+          confidence: 0.8,
+          backRefIds: ['claim:seed-1']
+        },
+        {
+          id: 'c2',
+          text: 'A conclusion.',
+          badge: 'thesis',
+          source: 'SEP',
+          tradition: 'Analytic',
+          confidence: 0.75
+        }
+      ],
+      relations: [
+        {
+          claimId: 'c1',
+          relations: [{ type: 'supports', target: 'c2', label: 'grounds the conclusion' }]
+        }
+      ]
+    });
+    const text = `Content.\n\`\`\`sophia-meta\n${metaWithRelations}\n\`\`\``;
+    const { metaBlock } = extractSophiaMetaBlock(text);
+    expect(metaBlock).not.toBeNull();
+    expect(metaBlock!.claims[0].backRefIds).toEqual(['claim:seed-1']);
+    expect(metaBlock!.relations).toHaveLength(1);
+    expect(metaBlock!.relations[0].relations[0].type).toBe('supports');
+  });
+});
+
+// ─── SophiaMetaBlockSchema ────────────────────────────────────────────────
+
+describe('SophiaMetaBlockSchema', () => {
+  it('defaults missing relations and claim backRefIds', () => {
+    const result = SophiaMetaBlockSchema.safeParse({
+      claims: [
+        {
+          id: 'c1',
+          text: 'Claim text.',
+          badge: 'premise',
+          source: 'SEP',
+          tradition: 'Analytic',
+          confidence: 0.8
+        }
+      ]
+    });
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.relations).toEqual([]);
+    expect(result.data.claims[0].backRefIds).toEqual([]);
   });
 });
 

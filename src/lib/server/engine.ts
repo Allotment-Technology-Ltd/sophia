@@ -30,6 +30,7 @@ import { buildPassSpecificContextPacks, type ContextPackStats } from './contextP
 import { classifyQueryDomain, getRetrievalDomain } from './domainClassifier';
 import type { PassType } from '@restormel/contracts/passes';
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '@restormel/contracts/references';
+import { RelationBundleSchema } from '@restormel/contracts/references';
 import type {
   PassSection,
   GraphNode,
@@ -56,12 +57,14 @@ const SophiaMetaClaimSchema = z.object({
   source: z.string(),
   tradition: z.string(),
   confidence: z.number().min(0).max(1),
-  sourceUrl: z.string().url().optional()
+  sourceUrl: z.string().url().optional(),
+  backRefIds: z.array(z.string()).default([])
 });
 
 const SophiaMetaBlockSchema = z.object({
   sections: z.array(SophiaMetaSectionSchema).default([]),
-  claims: z.array(SophiaMetaClaimSchema).default([])
+  claims: z.array(SophiaMetaClaimSchema).default([]),
+  relations: z.array(RelationBundleSchema).default([])
 });
 
 export { SophiaMetaBlockSchema, SophiaMetaClaimSchema };
@@ -269,7 +272,7 @@ function emitReusedPass(
       phase,
       detail: c.text
     }));
-    callbacks.onClaims(phase, claims, []);
+    callbacks.onClaims(phase, claims, metaBlock.relations);
   } else {
     const heading = pass === 'analysis' ? 'Analysis' : 'Critique';
     callbacks.onPassStructured(pass, [{ id: 'content', heading, content: cleanedText }], cleanedText.split(/\s+/).length);
@@ -883,7 +886,7 @@ export async function runDialecticalEngine(
         phase: 'analysis' as const,
         detail: c.text // Use the claim text as detail since sophia-meta doesn't include a separate detail field
       }));
-      callbacks.onClaims('analysis', claims, []);
+      callbacks.onClaims('analysis', claims, analysisMeta.relations);
     } else {
       // Fallback: emit generic structured output without claims
       console.warn('[ENGINE] No sophia-meta block found in analysis output');
@@ -983,7 +986,7 @@ export async function runDialecticalEngine(
           phase: 'critique' as const,
           detail: c.text // Use the claim text as detail since sophia-meta doesn't include a separate detail field
         }));
-        callbacks.onClaims('critique', claims, []);
+        callbacks.onClaims('critique', claims, critiqueMeta.relations);
       } else {
         // Fallback: emit generic structured output without claims
         console.warn('[ENGINE] No sophia-meta block found in critique output');
@@ -1063,7 +1066,7 @@ export async function runDialecticalEngine(
         phase: 'synthesis' as const,
         detail: c.text // Use the claim text as detail since sophia-meta doesn't include a separate detail field
       }));
-      callbacks.onClaims('synthesis', synthesisAllClaims, []);
+      callbacks.onClaims('synthesis', synthesisAllClaims, synthesisMeta.relations);
     } else {
       // Fallback: emit generic structured output without claims
       console.warn('[ENGINE] No sophia-meta block found in synthesis output');

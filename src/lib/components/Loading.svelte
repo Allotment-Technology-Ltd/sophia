@@ -3,6 +3,7 @@
 
   interface Props {
     currentPass?: string;
+    startedPasses?: string[];
     statusText?: string;
     completedPasses?: string[];
     depthMode?: 'quick' | 'standard' | 'deep';
@@ -16,6 +17,7 @@
 
   let {
     currentPass = '',
+    startedPasses = [],
     statusText = 'Thinking…',
     completedPasses = [],
     depthMode = 'standard',
@@ -32,6 +34,7 @@
   <DialecticalTriangle
     mode={completionReady ? 'complete' : 'loading'}
     {currentPass}
+    {startedPasses}
     {completedPasses}
     {depthMode}
     {completionReady}

@@ -21,6 +21,12 @@ const PHASE_DEPTH_LEVEL: Record<AnalysisPhase, number> = {
   synthesis: 3
 };
 
+const GENERIC_SOURCE_NAMES = new Set(['Analysis', 'Critique', 'Synthesis', 'Verification', '']);
+
+function sourceNodeId(source: string): string {
+  return `source:${source}`;
+}
+
 function createGraphStore() {
   let lifecycle = $state<GraphLifecycle>('idle');
   let error = $state<string | null>(null);
@@ -162,10 +168,70 @@ function createGraphStore() {
         conflict_status: phase === 'critique' ? 'contested' : 'none'
       });
       existingNodeIds.add(claim.id);
+
+      const normalizedSource = (claim.source ?? '').trim();
+      if (!GENERIC_SOURCE_NAMES.has(normalizedSource)) {
+        const sourceId = sourceNodeId(normalizedSource);
+        if (!existingNodeIds.has(sourceId)) {
+          nextNodes.push({
+            id: sourceId,
+            type: 'source',
+            label: normalizedSource,
+            phase,
+            pass_origin: phase,
+            depth_level: 0,
+            evidence_strength: 1,
+            sourceTitle: normalizedSource,
+            conflict_status: 'none'
+          });
+          existingNodeIds.add(sourceId);
+        }
+      }
     }
 
     const nextEdges = [...rawEdges];
     const edgeKeys = new Set(nextEdges.map((edge) => `${edge.from}|${edge.to}|${edge.type}`));
+
+    for (const claim of newClaims) {
+      const normalizedSource = (claim.source ?? '').trim();
+      if (!GENERIC_SOURCE_NAMES.has(normalizedSource)) {
+        const sourceId = sourceNodeId(normalizedSource);
+        const sourceEdgeKey = `${sourceId}|${claim.id}|contains`;
+        if (!edgeKeys.has(sourceEdgeKey)) {
+          nextEdges.push({
+            from: sourceId,
+            to: claim.id,
+            type: 'contains',
+            phaseOrigin: phase,
+            pass_origin: phase,
+            depth_level: 0,
+            evidence_strength: claim.confidence ?? 0.75,
+            conflict_status: 'none',
+            evidence_sources: claim.sourceUrl ? [claim.sourceUrl] : undefined
+          });
+          edgeKeys.add(sourceEdgeKey);
+        }
+      }
+
+      for (const backRefId of claim.backRefIds ?? []) {
+        if (!existingNodeIds.has(backRefId)) continue;
+        const backRefKey = `${backRefId}|${claim.id}|depends-on`;
+        if (edgeKeys.has(backRefKey)) continue;
+        nextEdges.push({
+          from: backRefId,
+          to: claim.id,
+          type: 'depends-on',
+          phaseOrigin: phase,
+          pass_origin: phase,
+          depth_level: PHASE_DEPTH_LEVEL[phase],
+          evidence_strength: claim.confidence ?? 0.65,
+          conflict_status: 'none',
+          relation_rationale: 'Claim references earlier graph material via backRefIds.',
+          evidence_sources: claim.sourceUrl ? [claim.sourceUrl] : undefined
+        });
+        edgeKeys.add(backRefKey);
+      }
+    }
 
     for (const bundle of newRelations) {
       for (const rel of bundle.relations) {

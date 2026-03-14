@@ -6,10 +6,11 @@ import type { GraphKitWorkspaceData } from '$lib/graph-kit/types';
 import type { CachedQueryResult } from '$lib/stores/history.svelte';
 import type { Message } from '$lib/stores/conversation.svelte';
 import type { EnrichmentStatusEvent, GraphEdge, GraphNode, GraphSnapshotMeta } from '@restormel/contracts/api';
-import type { Claim, RelationBundle } from '@restormel/contracts/references';
+import type { Claim, RelationBundle, SourceReference } from '@restormel/contracts/references';
 import type { ReasoningObjectSnapshot } from '@restormel/contracts/reasoning-object';
 import type { ReasoningEvent, RunTrace } from '@restormel/contracts/trace';
 import type { NormalizedRunTrace } from '@restormel/contracts/trace-ingestion';
+import type { GroundingSource } from '@restormel/contracts/api';
 
 export interface SophiaWorkspaceBuildResult {
   workspace: GraphKitWorkspaceData;
@@ -24,6 +25,8 @@ export function buildSophiaWorkspaceBundleFromCurrentSession(params: {
   enrichmentStatus?: EnrichmentStatusEvent | null;
   activeClaims: Claim[];
   relations: RelationBundle[];
+  sources?: SourceReference[];
+  groundingSources?: GroundingSource[];
   latestUserMessage?: Message | null;
   latestAssistantMessage?: Message | null;
   reasoningEvents?: ReasoningEvent[] | null;
@@ -37,7 +40,9 @@ export function buildSophiaWorkspaceBundleFromCurrentSession(params: {
     constitutionDeltas: params.latestAssistantMessage?.constitutionDeltas ?? null,
     reasoningEvents: params.reasoningEvents ?? null,
     runTrace: params.runTrace ?? null,
-    normalizedTrace: params.normalizedTrace ?? null
+    normalizedTrace: params.normalizedTrace ?? null,
+    sources: params.sources ?? [],
+    groundingSources: params.groundingSources ?? []
   };
 
   if (params.nodes.length > 0 || params.edges.length > 0) {
@@ -73,6 +78,8 @@ export function buildSophiaWorkspaceFromCurrentSession(params: {
   enrichmentStatus?: EnrichmentStatusEvent | null;
   activeClaims: Claim[];
   relations: RelationBundle[];
+  sources?: SourceReference[];
+  groundingSources?: GroundingSource[];
   latestUserMessage?: Message | null;
   latestAssistantMessage?: Message | null;
   reasoningEvents?: ReasoningEvent[] | null;
@@ -95,7 +102,8 @@ export function buildSophiaWorkspaceBundleFromCachedResult(
         finalOutputText:
           cached.passes.synthesis || cached.passes.critique || cached.passes.analysis,
         reasoningQuality: cached.reasoningQuality ?? null,
-        constitutionDeltas: cached.constitutionDeltas ?? null
+        constitutionDeltas: cached.constitutionDeltas ?? null,
+        sources: cached.sources ?? []
       }
     });
   }
@@ -118,7 +126,8 @@ export function buildSophiaWorkspaceBundleFromCachedResult(
       finalOutputText:
         cached.passes.synthesis || cached.passes.critique || cached.passes.analysis,
       reasoningQuality: cached.reasoningQuality ?? null,
-      constitutionDeltas: cached.constitutionDeltas ?? null
+      constitutionDeltas: cached.constitutionDeltas ?? null,
+      sources: cached.sources ?? []
     }
   });
 }

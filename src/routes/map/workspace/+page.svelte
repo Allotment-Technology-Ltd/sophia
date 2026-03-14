@@ -27,6 +27,8 @@
       enrichmentStatus: graphStore.enrichmentStatus,
       activeClaims: referencesStore.activeClaims,
       relations: referencesStore.relations,
+      sources: referencesStore.sources,
+      groundingSources: referencesStore.groundingSources,
       latestUserMessage,
       latestAssistantMessage
     });

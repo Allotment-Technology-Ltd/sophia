@@ -191,6 +191,7 @@ function createConversationStore() {
   let messages = $state<Message[]>([]);
   let isLoading = $state(false);
   let currentPass = $state<PassType | null>(null);
+  let startedPasses = $state<Set<PassType>>(new Set());
   let completedPasses = $state<Set<PassType>>(new Set());
   let currentPasses = $state({ analysis: '', critique: '', synthesis: '', verification: '' });
   let currentStructuredPasses = $state<Partial<Record<PassType, { sections: Array<{ id: string; heading: string; content: string }>; wordCount: number }>>>({});
@@ -277,6 +278,7 @@ function createConversationStore() {
     if (cached.passes.critique) cachedCompleted.add('critique');
     if (cached.passes.synthesis) cachedCompleted.add('synthesis');
     if (cached.passes.verification) cachedCompleted.add('verification');
+    startedPasses = new Set(cachedCompleted);
     completedPasses = cachedCompleted;
     currentPasses = { ...cached.passes, verification: cached.passes.verification ?? '' };
     currentStructuredPasses = {};
@@ -371,6 +373,7 @@ function createConversationStore() {
     get messages() { return messages; },
     get isLoading() { return isLoading; },
     get currentPass() { return currentPass; },
+    get startedPasses() { return [...startedPasses]; },
     get completedPasses() { return [...completedPasses]; },
     get currentPasses() { return currentPasses; },
     get currentStructuredPasses() { return currentStructuredPasses; },
@@ -421,6 +424,7 @@ function createConversationStore() {
       error = null;
       isLoading = true;
       currentPass = null;
+      startedPasses = new Set();
       completedPasses = new Set();
       currentPasses = { analysis: '', critique: '', synthesis: '', verification: '' };
       currentStructuredPasses = {};
@@ -624,6 +628,7 @@ function createConversationStore() {
             switch (event.type) {
               case 'pass_start':
                 currentPass = event.pass;
+                startedPasses = new Set([...startedPasses, event.pass]);
                 if (event.model_provider) {
                   loadingModelProvider = event.model_provider;
                 }
@@ -956,6 +961,7 @@ function createConversationStore() {
       error = null;
       isLoading = true;
       currentPass = 'verification';
+      startedPasses = new Set([...startedPasses, 'verification']);
       currentPasses = { ...currentPasses, verification: '' };
       trackEvent('verification_triggered');
 
@@ -1123,6 +1129,7 @@ function createConversationStore() {
       messages = [];
       error = null;
       currentPass = null;
+      startedPasses = new Set();
       completedPasses = new Set();
       currentPasses = { analysis: '', critique: '', synthesis: '', verification: '' };
       currentStructuredPasses = {};

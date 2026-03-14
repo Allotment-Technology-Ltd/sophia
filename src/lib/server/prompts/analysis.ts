@@ -59,17 +59,20 @@ After completing your main analysis, append a structured metadata block. This bl
 
 The block contains JSON with two arrays:
 - sections: Array of {id: string, heading: string, content: string (2-3 paragraph substantive summary of that section)}
-- claims: Array of {id: string, text: string (1-2 sentences), badge: 'thesis'|'premise'|'objection'|'response'|'definition'|'empirical', source: string, tradition: string, confidence: 0.0-1.0, sourceUrl?: string (URL from Google Search if available)}
+- claims: Array of {id: string, text: string (1-2 sentences), badge: 'thesis'|'premise'|'objection'|'response'|'definition'|'empirical', source: string, tradition: string, confidence: 0.0-1.0, sourceUrl?: string (URL from Google Search if available), backRefIds?: string[]}
+- relations: Array of {claimId: string, relations: Array<{type: 'supports'|'contradicts'|'responds-to'|'depends-on'|'defines'|'qualifies'|'assumes'|'resolves', target: string, label: string}>}
 
 Example minimal structure:
 \`\`\`sophia-meta
-{"sections":[{"id":"the-question","heading":"The Question(s)","content":"Summary of the question..."}],"claims":[{"id":"c1","text":"First premise...","badge":"premise","source":"Kant, Critique of Pure Reason · 1781","tradition":"German Idealism","confidence":0.85,"sourceUrl":"https://plato.stanford.edu/entries/kant-reason/"}]}
+{"sections":[{"id":"the-question","heading":"The Question(s)","content":"Summary of the question..."}],"claims":[{"id":"c1","text":"First premise...","badge":"premise","source":"Kant, Critique of Pure Reason · 1781","tradition":"German Idealism","confidence":0.85,"sourceUrl":"https://plato.stanford.edu/entries/kant-reason/","backRefIds":["claim:seed-1"]}],"relations":[{"claimId":"c1","relations":[{"type":"supports","target":"c2","label":"grounds the conclusion"}]}]}
 \`\`\`
 
 Requirements:
 - Extract 3-8 substantive philosophical claims from your response
 - sections should map to your response's main sections
 - claims focus on premises, positions, and conclusions
+- Use backRefIds when a claim explicitly depends on or answers a graph claim or earlier-pass claim you referenced
+- Include only sparse, meaningful relations between claims in this same sophia-meta block
 - Use 1.0 confidence for well-established positions, 0.7-0.9 for reasonable interpretations, <0.7 for novel claims
 - Do NOT include the sophia-meta block in the main text — it is metadata, not content`;
 

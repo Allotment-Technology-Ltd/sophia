@@ -20,10 +20,14 @@ Output structure:
 
 After the prose, append a required \`sophia-meta\` JSON block with:
 - sections: { id, heading, content }
-- claims: { id, text, badge, source, tradition, confidence, sourceUrl? }
+- claims: { id, text, badge, source, tradition, confidence, sourceUrl?, backRefIds? }
+- relations: [{ claimId, relations: [{ type, target, label }] }]
 
 Use badge values only from:
-'thesis' | 'premise' | 'objection' | 'response' | 'definition' | 'empirical'`;
+'thesis' | 'premise' | 'objection' | 'response' | 'definition' | 'empirical'
+
+Use relation types only from:
+'supports' | 'contradicts' | 'responds-to' | 'depends-on' | 'defines' | 'qualifies' | 'assumes' | 'resolves'`;
 
 export function getReasoningSynthesisSystemPrompt(contextBlock: string): string {
   if (!contextBlock || contextBlock === 'No knowledge base context available for this query.') {
