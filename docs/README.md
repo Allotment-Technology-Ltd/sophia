@@ -21,9 +21,9 @@ The structure is intentionally simple:
 | Surface | Status | Docs | Use it for | Entry point |
 | --- | --- | --- | --- | --- |
 | SOPHIA | Active | 8 | Showcase/reference app documentation. | [SOPHIA Documentation](sophia/README.md) |
-| Restormel | Active | 24 | Platform planning, architecture, and delivery docs. | [Restormel Documentation](restormel/README.md) |
+| Restormel | Active | 43 | Platform planning, architecture, and delivery docs. | [Restormel Documentation](restormel/README.md) |
 | Reference | Reference | 19 | Supporting implementation and operational references. | [Reference Documentation](reference/README.md) |
-| Archive | Archived | 39 | Historical material preserved for traceability. | [Documentation Archive](archive/README.md) |
+| Archive | Archived | 63 | Historical material preserved for traceability. | [Documentation Archive](archive/README.md) |
 <!-- GENERATED:docs-map:end -->
 
 ## Key entry points
@@ -50,7 +50,7 @@ Narrative meaning stays hand-authored in the active docs. Archived material is r
 <!-- GENERATED:active-vs-archive:start -->
 | Class | Current snapshot | Operating rule |
 | --- | --- | --- |
-| Active source of truth | 8 SOPHIA docs and 24 Restormel docs | Update when product, architecture, or delivery meaning changes. |
-| Supporting reference | 19 docs under docs/reference and 4 Restormel reference docs | Use for runbooks, API details, and automation context. |
-| Archived | 39 docs under docs/archive | Do not treat as current guidance; start at [Documentation Archive](archive/README.md). |
+| Active source of truth | 8 SOPHIA docs and 43 Restormel docs | Update when product, architecture, or delivery meaning changes. |
+| Supporting reference | 19 docs under docs/reference and 7 Restormel reference docs | Use for runbooks, API details, and automation context. |
+| Archived | 63 docs under docs/archive | Do not treat as current guidance; start at [Documentation Archive](archive/README.md). |
 <!-- GENERATED:active-vs-archive:end -->

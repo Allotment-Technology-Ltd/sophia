@@ -1,3 +1,14 @@
+---
+title: Restormel Build Pack 05: Concrete Launch Sequence for restormel.dev
+owner: platform-delivery
+product: restormel
+doc_type: launch_sequence
+last_reviewed: 2026-03-14
+sync_to_linear: false
+status: active
+source_of_truth: true
+---
+
 # Restormel Build Pack 05: Concrete Launch Sequence for restormel.dev
 
 ## Purpose

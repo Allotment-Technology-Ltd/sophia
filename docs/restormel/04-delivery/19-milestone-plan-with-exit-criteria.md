@@ -1,7 +1,30 @@
+---
+title: Restormel Platform: Milestone Plan with Exit Criteria
+owner: platform-delivery
+product: restormel
+doc_type: milestone_plan
+last_reviewed: 2026-03-14
+sync_to_linear: false
+status: active
+source_of_truth: true
+---
+
 # Restormel Platform: Milestone Plan with Exit Criteria
 
 ## Purpose
 Translate the platform strategy into milestones with explicit exit criteria.
+
+## Priority Order
+1. Contracts
+2. Graph-core + observability
+3. Restormel Graph MVP
+4. GraphRAG extraction
+5. Hosted GraphRAG
+6. Reasoning extraction
+7. BYOK/providers
+8. SOPHIA migration
+9. Public launch
+10. Marketplace readiness
 
 ## Milestone 0: Foundation locked
 ### Objective

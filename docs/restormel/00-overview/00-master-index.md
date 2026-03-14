@@ -17,10 +17,10 @@ This document is the front door to the full Restormel planning and build pack.
 ## 2. Delivery and execution
 9. `07-overarching-implementation-plan.md`
 10. `08-phased-programmes-of-work.md`
-11. `19-milestone-plan-with-exit-criteria-1.md`
+11. `19-milestone-plan-with-exit-criteria.md`
 12. `20-engineering-backlog-by-epic.md`
 13. `21-design-backlog-by-surface.md`
-14. `22-monetisation-strategies-by-product-1.md`
+14. `22-monetisation-strategies-by-product.md`
 
 ## 3. Platform and product specs
 15. `09-package-boundary-spec.md`

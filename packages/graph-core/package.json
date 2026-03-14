@@ -16,6 +16,6 @@
     "./workspace": "./src/workspace.ts"
   },
   "dependencies": {
-    "@restormel/contracts": "0.0.0"
+    "@restormel/contracts": "workspace:*"
   }
 }

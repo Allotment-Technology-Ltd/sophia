@@ -1,3 +1,14 @@
+---
+title: Restormel Platform: Design Backlog by Surface
+owner: platform-delivery
+product: restormel
+doc_type: design_backlog
+last_reviewed: 2026-03-14
+sync_to_linear: false
+status: active
+source_of_truth: true
+---
+
 # Restormel Platform: Design Backlog by Surface
 
 ## Surface 1: Brand system

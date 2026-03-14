@@ -1,3 +1,14 @@
+---
+title: Restormel Platform Overarching Implementation Plan
+owner: platform-delivery
+product: restormel
+doc_type: delivery_plan
+last_reviewed: 2026-03-14
+sync_to_linear: false
+status: active
+source_of_truth: true
+---
+
 # Restormel Platform Overarching Implementation Plan
 
 ## Purpose
