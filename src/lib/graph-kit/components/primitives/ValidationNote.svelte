@@ -1,7 +1,7 @@
 <script lang="ts">
   interface Props {
     note: string;
-    tone?: 'info' | 'warning';
+    tone?: 'info' | 'warning' | 'error';
   }
 
   let { note, tone = 'warning' }: Props = $props();
@@ -25,6 +25,11 @@
   .validation-note.warning {
     border-color: var(--color-amber-border);
     background: color-mix(in srgb, var(--color-amber-bg) 42%, var(--color-surface-raised));
+  }
+
+  .validation-note.error {
+    border-color: var(--color-coral-border);
+    background: color-mix(in srgb, var(--color-coral-bg) 36%, var(--color-surface-raised));
   }
 
   .validation-note.info {

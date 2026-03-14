@@ -1,273 +1,156 @@
 # Restormel Platform Strategy
 
-## Status
-Draft v1 based on product discovery workshop and architectural review of the SOPHIA codebase.
+## Purpose
+Define the platform position, build-vs-integrate boundaries, and first product wedge for Restormel as it is extracted from the SOPHIA codebase.
 
 ## Executive summary
-Allotment Technology should be positioned as the parent company and Restormel as the developer platform brand. SOPHIA should be repositioned as the public reference application that demonstrates the full power of the platform, rather than acting as the sole commercial product.
+Allotment Technology Ltd is the parent company.
 
-The platform thesis is that AI products are rapidly moving from simple prompt wrappers to graph-aware systems composed of retrieval, reasoning, memory, orchestration, and explainability layers. Most current tooling is either too opaque, too enterprise-heavy, too framework-specific, or too difficult for non-specialist builders to adopt.
+Restormel is the platform: a graph-native reasoning debugger and evaluator for AI systems. Its role is to turn traces, retrieval events, evidence, and intermediate reasoning artefacts into structured reasoning objects that support debugging, evaluation, provenance inspection, contradiction inspection, graph-aware retrieval diagnostics, regression comparison, and governance-grade lineage.
 
-Restormel should solve this by offering reusable, graph-native developer tools that make AI systems understandable, configurable, and trustworthy.
+SOPHIA is the flagship reference application and first downstream consumer. It proves the platform in a real product setting, but it is not the permanent end-state architecture.
 
-## Strategic reframe
-
-### Parent company
-**Allotment Technology Ltd**
-
-Role:
-- company brand
-- legal entity
-- umbrella for multiple products
-- long-term ecosystem owner
-
-### Platform brand
-**Restormel**
-
-Role:
-- developer platform for graph-native AI systems
-- home for reusable packages, APIs, SDKs, UI, and tooling
-- destination for docs, playgrounds, console, self-serve onboarding, and cloud marketplace listings
-
-### Reference application
-**SOPHIA**
-
-Role:
-- flagship showcase app
-- proof that the platform works end to end
-- public demonstration of GraphRAG, reasoning, observability, and visual explainability
-- dogfooding environment for the platform components
-
-## Vision
-Make AI systems understandable, configurable, and trustworthy through reusable graph-native developer tools.
-
-## Mission
-Build the easiest platform for developers to add graph-grounded retrieval, structured reasoning, and visual explainability to any AI product.
+Restormel should not try to win by rebuilding crowded categories. General-purpose tracing, generic RAG orchestration, vector infrastructure, provider layers, and baseline evals should mostly be integrated, adapted, or extended. Restormel should win by owning the layer above those substrates: reasoning graph compilation, canonical reasoning contracts, graph-native debugger UX, graph-aware evaluation, compare mode, and governance-ready lineage.
 
 ## Category
-**Graph-native AI developer platform**
+**Graph-native reasoning debugger and evaluator**
 
-This category is broad enough to include:
-- graph visualisation and observability
-- GraphRAG infrastructure
-- structured reasoning APIs
-- provider configuration and BYOK layers
-- embeddable AI features
-- reference applications like SOPHIA
+Restormel is not:
+- a generic tracing tool
+- a generic RAG framework
+- a vector infrastructure wrapper
+- a generic LLM observability product
 
-## Core thesis
-AI teams increasingly need more than model access. They need:
-- graph-aware retrieval
-- transparent answer paths
-- structured reasoning
-- reliable context-pack construction
-- provider flexibility
-- visual debugging and observability
-
-Restormel should compete by being:
-- easier to adopt
-- more visual
-- more composable
-- more inspectable
-- more accessible to both technical teams and novice builders
-
-## Strategic principles
-
-### 1. Modular first
-Every core capability should be extractable into a reusable package, SDK, API, or UI module.
-
-### 2. SOPHIA is downstream
-SOPHIA should consume shared Restormel modules rather than owning bespoke internal logic where avoidable.
-
-### 3. Visual before abstract
-If the platform is doing something important, the user should be able to see it: graph state, retrieval path, pass flow, grounding, verification, and provenance.
-
-### 4. Configurable by default
-Every platform capability should be useful beyond philosophy. Users should be able to swap:
-- ontology
-- provider
-- model
-- prompts
-- schemas
-- relation types
-- graph structure
-
-### 5. Fast path to first success
-Restormel products must be easy to try. The first interaction should create visible value within minutes, ideally seconds.
-
-## User segments
-
-### Segment A: AI developers
-Needs:
+Restormel is adjacent to:
 - observability
-- better retrieval
-- structured outputs
-- clear traces
-- composable APIs
+- GraphRAG
+- retrieval evaluation
+- governance and audit tooling
 
-Best-fit products:
-- Restormel Graph
-- GraphRAG Toolkit
-- Reasoning API
+## Strategic problem
+AI teams can often inspect prompts, responses, tool calls, and retrieved documents. They still struggle to inspect:
+- which claims were actually made
+- what evidence supported each claim
+- where the support was weak, missing, or contradictory
+- whether retrieval was structurally sufficient
+- what changed between runs, prompts, models, or evidence states
+- how to produce governance-grade decision lineage
 
-### Segment B: vibe coders / solo builders
-Needs:
-- simple self-serve tooling
-- hosted flows
-- templates
-- visual feedback
-- minimal infrastructure setup
+That missing layer is Restormel’s product space.
 
-Best-fit products:
-- Restormel Graph playground
-- BYOK Kit
-- hosted GraphRAG
-- starter kits and templates
+## Platform thesis
+Restormel should compile opaque system activity into a reusable, queryable reasoning object that links:
+- trace events
+- claims
+- evidence
+- provenance
+- support relations
+- contradiction relations
+- evaluations
+- lineage and audit metadata
 
-### Segment C: product teams shipping AI features
-Needs:
-- provider flexibility
-- budget control
-- traceability
-- easier procurement
-- marketplace availability
+The reasoning object is the foundational asset. The workspace, evaluators, compare flows, APIs, and exports all sit on top of it.
 
-Best-fit products:
-- Reasoning API
-- BYOK
-- hosted GraphRAG
-- cloud marketplace listings
+## Build vs integrate
 
-### Segment D: domain products
-Example domains:
-- education
-- policy
-- legal
-- research
-- debate
-- knowledge management
+### COMMODITY — integrate / adapt / extend
+Restormel should default to integration or extension for:
+- tracing and telemetry substrates
+- instrumentation standards
+- generic RAG pipelines and orchestration
+- graph storage and vector storage
+- embeddings and rerankers
+- provider and model access layers
+- baseline retrieval and RAG metrics
 
-Needs:
-- structured claims
-- argument mapping
-- source-grounded output
-- explainable reasoning
+### DIFFERENTIATED — build directly
+Restormel should directly own:
+- reasoning graph compilation
+- canonical reasoning contracts
+- provenance / support / contradiction modelling
+- graph-native debugger UX
+- compare mode for runs, graphs, and evidence states
+- graph-aware retrieval diagnostics
+- governance-ready lineage and audit exports
 
-SOPHIA is a strong proof surface for this segment, but the platform should remain domain-agnostic.
+### ADJACENT — build narrowly where it sharpens the core
+Restormel may own thin layers for:
+- trace adapters and ingestion helpers
+- evaluator execution harnesses
+- run persistence and sharing
+- SDKs for importing or emitting reasoning objects
+- hosted collaboration and retention controls
 
-## Product portfolio
+## Product wedge
+### First wedge
+**Restormel Graph** — the reasoning workspace
 
-### 1. Restormel Graph
-Visual debugger for graphs, traces, and answer paths.
+A workspace that ingests traces, retrieval flows, and evidence and compiles them into a structured reasoning graph for inspection, evaluation, comparison, and sharing.
 
-Jobs:
-- see graph structure
-- inspect node and edge metadata
-- understand retrieval and reasoning paths
-- debug graph-backed AI systems
+Why this wedge:
+- proves the canonical reasoning object
+- integrates with existing traces rather than replacing them
+- gives teams an immediate “show me why this happened” workflow
+- supports monetisation through retention, collaboration, compare mode, evaluation, and governance exports
 
-### 2. Restormel GraphRAG
-Plug-and-play graph-native retrieval and context construction.
+### Supporting capability
+**Graph-aware retrieval diagnostics**
 
-Jobs:
-- ingest documents
-- build graph-aware retrieval results
-- return context packs with traces
-- improve over vector-only RAG
+This should be framed as a capability and monetisable add-on around the core workspace, not as a broad “we are a GraphRAG platform” claim.
 
-### 3. Restormel Reasoning
-Structured multi-pass reasoning as an API.
+## Product family
 
-Jobs:
-- generate analysis, critique, synthesis
-- expose inspectable reasoning artifacts
-- stream structured events
-- support downstream applications
+### 1. Reasoning workspace
+The main surface for debugging, evidence inspection, contradiction inspection, support tracing, compare mode, and saved runs.
 
-### 4. Restormel BYOK
-Bring-your-own-key / provider-flexible layer for third-party apps.
+### 2. Graph-aware evaluators
+Evaluators for support quality, contradiction exposure, evidence sufficiency, retrieval structure, reasoning defects, and regressions across runs.
 
-Jobs:
-- let product owners embed AI features quickly
-- support provider choice
-- manage model access and spending constraints
-- lower hosting and trust friction
+### 3. Lineage and governance exports
+Audit-ready artefacts for regulated and quality-sensitive teams.
 
-### 5. SOPHIA
-Reference app that demonstrates the platform working together.
+### 4. Adapters and ingestion SDKs
+Thin integration layers that let upstream systems send traces, retrieval events, and evidence into Restormel.
 
-## Recommended sequencing
+## Role of SOPHIA
+SOPHIA is:
+- the first downstream consumer
+- the flagship reference application
+- a proving ground for contracts, graph compilation, and debugger UX
+- a source of extraction candidates
 
-### Phase 1: wedge
-**Restormel Graph**
+SOPHIA is not:
+- the permanent platform architecture
+- the only valid use case
+- the product boundary that all platform decisions should optimise around
 
-Why first:
-- easiest to demonstrate
-- immediately improves SOPHIA
-- strong shareability
-- useful across many ecosystems
+## Moat
+Restormel’s moat is not generic tracing, generic RAG, or generic graph storage.
 
-### Phase 2: power layer
-**Restormel GraphRAG**
+The moat is:
+- a unified reasoning object that links graph, trace, evidence, provenance, evaluation, and auditability
+- a debugger UX built around reasoning rather than logs
+- graph-aware evaluators that inspect reasoning quality as reasoning
+- compare workflows that expose changes in support, contradictions, and evidence state
+- governance-grade lineage outputs grounded in the same canonical structure
 
-Why second:
-- technically differentiated
-- strong platform value
-- tightly connected to visualisation
+## Commercial position
+Restormel should be sold as the layer that helps teams understand why an AI system produced an answer, where the reasoning was weak, and what changed between runs.
 
-### Phase 3: intelligence layer
-**Restormel Reasoning**
+That is stronger than selling a generic platform story because it is narrower, more legible, and better matched to an under-solved category.
 
-Why later:
-- needs stronger proof, trust, and positioning
-- more valuable once graph + trace patterns are established
+## Near-term priorities
+1. Finalise the canonical reasoning object.
+2. Extract package boundaries that make SOPHIA a consumer of shared contracts.
+3. Ship the reasoning workspace MVP.
+4. Add graph-aware evaluators and compare mode.
+5. Add retention, sharing, and lineage export as monetisable hosted capabilities.
 
-### Phase 4: distribution multiplier
-**Restormel BYOK**
+## Decision frame for future work
+For any new feature, ask:
+1. Does this strengthen the reasoning object?
+2. Does it improve reasoning debugging, graph-aware evaluation, compare mode, or lineage?
+3. Can this be integrated from the ecosystem rather than rebuilt?
+4. Does this push Restormel into a crowded substrate category?
 
-Why after:
-- strongest once hosted workflows and console exist
-- helps distribution into third-party apps and product teams
-
-## Strategic risks
-
-### Risk 1: too much breadth too early
-Mitigation:
-- one monorepo
-- one canonical schema set
-- one visible wedge product first
-
-### Risk 2: strong architecture, weak product proof
-Mitigation:
-- build demos, playgrounds, visual traces, and adoption-oriented docs in parallel
-
-### Risk 3: SOPHIA continues swallowing roadmap capacity
-Mitigation:
-- extract shared logic early
-- define platform package boundaries before adding major new SOPHIA features
-
-### Risk 4: unclear category language
-Mitigation:
-- anchor messaging around graph-native AI infrastructure, visual explainability, GraphRAG, and structured reasoning
-
-## Success measures
-Early indicators:
-- graph playground usage
-- trace uploads / imports
-- package installs
-- docs visits from quickstart pages
-- successful self-serve activations
-
-Mid-term indicators:
-- hosted GraphRAG projects created
-- API keys generated
-- paid developer/team accounts
-- marketplace-approved listing(s)
-
-Long-term indicators:
-- external products built on Restormel
-- SOPHIA consuming stable platform packages
-- repeatable enterprise procurement path
-
-## One-sentence strategy
-Build Restormel into the easiest way for developers and builders to see, debug, and ship graph-native AI systems, while using SOPHIA as the public demonstration of what the platform can do end to end.
+If the answer to 4 is yes, default to integration rather than ownership.

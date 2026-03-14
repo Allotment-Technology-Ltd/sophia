@@ -1,7 +1,12 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import GraphWorkspace from '$lib/graph-kit/components/GraphWorkspace.svelte';
-  import { buildSophiaWorkspaceFromCurrentSession } from '$lib/graph-kit/adapters/sophiaWorkspaceBuilder';
+  import ReasoningLineagePanel from '$lib/graph-kit/components/ReasoningLineagePanel.svelte';
+  import { buildSophiaWorkspaceBundleFromCurrentSession } from '$lib/graph-kit/adapters/sophiaWorkspaceBuilder';
+  import {
+    buildReasoningLineageReport,
+    renderReasoningLineageMarkdown
+  } from '@restormel/graph-core/lineage';
   import { conversation } from '$lib/stores/conversation.svelte';
   import { graphStore } from '$lib/stores/graph.svelte';
   import { referencesStore } from '$lib/stores/references.svelte';
@@ -14,8 +19,8 @@
     [...conversation.messages].reverse().find((message) => message.role === 'assistant') ?? null
   );
 
-  const workspace = $derived.by(() => {
-    return buildSophiaWorkspaceFromCurrentSession({
+  const workspaceBundle = $derived.by(() => {
+    return buildSophiaWorkspaceBundleFromCurrentSession({
       nodes: graphStore.rawNodes,
       edges: graphStore.rawEdges,
       meta: graphStore.snapshotMeta,
@@ -26,6 +31,15 @@
       latestAssistantMessage
     });
   });
+
+  const workspace = $derived(workspaceBundle.workspace);
+  const lineageReport = $derived.by(() =>
+    buildReasoningLineageReport({
+      snapshot: workspaceBundle.snapshot,
+      title: 'Restormel decision-lineage report'
+    })
+  );
+  const lineageMarkdown = $derived(renderReasoningLineageMarkdown(lineageReport));
 
   async function goToWorkspace(): Promise<void> {
     const url = new URL(window.location.href);
@@ -52,6 +66,12 @@
   <div class="workspace-shell">
     <GraphWorkspace {workspace} />
   </div>
+
+  <ReasoningLineagePanel
+    report={lineageReport}
+    markdown={lineageMarkdown}
+    title="Decision-lineage report"
+  />
 </section>
 
 <style>

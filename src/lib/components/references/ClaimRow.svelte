@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Claim, RelationBundle } from '$lib/types/references';
+  import type { Claim, RelationBundle } from '@restormel/contracts/references';
   import ClaimBadge from './ClaimBadge.svelte';
   import RelationTag from './RelationTag.svelte';
 

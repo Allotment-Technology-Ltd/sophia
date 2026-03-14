@@ -1,324 +1,76 @@
 # Restormel Build Pack 01: Monorepo Folder Blueprint
 
 ## Purpose
+Define the target monorepo structure for Restormel and the migration path from SOPHIA.
 
-This document defines the target monorepo structure for the Restormel platform and the migration path from the current SOPHIA codebase. The goal is to create a package architecture that supports:
+## Recommended repository model
+Use a single monorepo first.
 
-- reusable developer products under the `@restormel/*` namespace
-- SOPHIA as the flagship reference application
-- shared contracts across products and hosted APIs
-- incremental extraction from the existing repository without a risky rewrite
+Why:
+- extraction is still active
+- package boundaries matter more than repo boundaries right now
+- SOPHIA still needs to consume shared modules during transition
+- a monorepo lowers coordination cost while the contracts settle
 
-## Recommended Repository Model
+## Target repository name
+`restormel`
 
-Use a **single monorepo** first.
-
-This is the safest and fastest path because the current codebase has strong coupling across:
-
-- runtime types
-- provider configuration
-- graph projection
-- reasoning orchestration
-- retrieval pipelines
-- streaming event handling
-- UI stores and components
-
-A multi-repo split can happen later if package maturity and team structure justify it.
-
-## Target Repository Name
-
-`restormel-platform`
-
-This becomes the platform workspace that contains:
-
-- product apps
-- public docs
-- hosted API service
-- shared packages
-- infrastructure code
-- migration scripts
-
-## Top-Level Structure
-
+## Top-level structure
 ```text
-restormel-platform/
-  apps/
-  packages/
-  services/
-  docs/
-  infra/
-  scripts/
-  tooling/
-  tests/
-  .changeset/
-  package.json
-  pnpm-workspace.yaml
-  turbo.json
-  tsconfig.base.json
-  eslint.config.js
+/apps
+  /sophia
+  /restormel-web
+/packages
+  /contracts
+  /graph-core
+  /reasoning-core
+  /evals
+  /adapters
+  /observability
+  /ui
+  /providers
+/tooling
+/docs
 ```
 
-## Folder Responsibilities
+## Folder responsibilities
 
-### `apps/`
-User-facing applications and product surfaces.
+### `apps/sophia/`
+Reference application and first downstream consumer.
 
-```text
-apps/
-  sophia/
-  restormel-web/
-  restormel-docs/
-  restormel-console/
-```
+### `apps/restormel-web/`
+Homepage, docs, playground, and authenticated workspace shell.
 
-#### `apps/sophia/`
-The reference application and public demonstration of the platform.
+### `packages/contracts/`
+Canonical reasoning object contracts and validators.
 
-Owns:
-- SOPHIA consumer UI
-- SOPHIA-specific routes and pedagogy flows
-- SOPHIA billing and commercial packaging
-- branded learning and reference experiences
+### `packages/graph-core/`
+Graph transforms, traversal, diffing, and utilities.
 
-Consumes:
-- `@restormel/contracts`
-- `@restormel/graph-core`
-- `@restormel/graphrag-core`
-- `@restormel/reasoning-core`
-- `@restormel/providers`
-- `@restormel/observability`
-- `@restormel/ui`
+### `packages/reasoning-core/`
+Compilation of traces, retrieval, and evidence into reasoning objects.
 
-#### `apps/restormel-web/`
-The public `restormel.dev` marketing and product entry site.
+### `packages/evals/`
+Graph-aware evaluators and comparison summaries.
 
-Owns:
-- product homepage
-- product overview pages
-- playground entry points
-- package landing pages
-- docs hand-off
-- pricing and product comparison pages
+### `packages/adapters/`
+Thin import/export adapters.
 
-#### `apps/restormel-docs/`
-Developer documentation site.
+### `packages/observability/`
+Internal inspection and event helpers for Restormel surfaces.
 
-Owns:
-- quickstarts
-- product docs
-- SDK docs
-- API reference
-- schema reference
-- deployment and marketplace docs
+### `packages/ui/`
+Reusable workspace UI and typed view models.
 
-#### `apps/restormel-console/`
-Authenticated developer control plane.
-
-Owns:
-- projects
-- API keys
-- provider settings
-- usage and billing
-- playground saves
-- trace history
-- import/export tools
-
-### `services/`
-Backend services that power hosted platform products.
-
-```text
-services/
-  api-gateway/
-  reasoning-api/
-  graphrag-api/
-  ingestion-worker/
-  webhooks/
-```
-
-#### `services/api-gateway/`
-Unified public API surface and auth boundary.
-
-#### `services/reasoning-api/`
-Hosted structured reasoning product.
-
-#### `services/graphrag-api/`
-Hosted GraphRAG product.
-
-#### `services/ingestion-worker/`
-Document ingestion, extraction, enrichment, and graph population jobs.
-
-#### `services/webhooks/`
-Provider, billing, and marketplace webhook handlers.
-
-### `packages/`
-Reusable platform modules.
-
-```text
-packages/
-  contracts/
-  graph-core/
-  graphrag-core/
-  reasoning-core/
-  providers/
-  observability/
-  sdk/
-  ui/
-  ingestion-core/
-  cli/
-```
-
-#### `packages/contracts/`
-Stable shared schemas and types.
-
-Exports:
-- graph contract
-- reasoning event contract
-- retrieval trace contract
-- provider config contract
-- source, claim, relation schemas
-
-#### `packages/graph-core/`
-Graph construction, projection, transforms, filtering, and graph stats.
-
-#### `packages/graphrag-core/`
-Retrieval logic, hybrid candidate generation, seed set selection, graph expansion, context-pack shaping.
-
-#### `packages/reasoning-core/`
-Three-pass reasoning runtime, pass orchestration, structured pass outputs, evaluation hooks.
-
-#### `packages/providers/`
-Provider registry, model routing, BYOK validation, credential handling.
-
-#### `packages/observability/`
-Trace handling, snapshot shaping, replay formatting, run diagnostics.
-
-#### `packages/sdk/`
-Public client SDKs for hosted and local platform consumption.
-
-#### `packages/ui/`
-Design-system primitives and platform UI components.
-
-#### `packages/ingestion-core/`
-Claim extraction, passage segmentation, relation extraction, ingestion contracts, enrichment helpers.
-
-#### `packages/cli/`
-Developer CLI for local workflows.
-
-### `docs/`
-Planning, product architecture, ADRs, and internal specifications.
-
-```text
-docs/
-  strategy/
-  architecture/
-  adrs/
-  product/
-  operations/
-```
-
-### `infra/`
-Infrastructure-as-code and deploy definitions.
-
-```text
-infra/
-  pulumi/
-  marketplace/
-  environments/
-```
-
-### `scripts/`
-Migration and operational scripts.
-
-This is where the current SOPHIA scripts can live during transition.
+### `packages/providers/`
+Minimal provider abstractions only where needed.
 
 ### `tooling/`
-Shared tooling config.
+CI, linting, codemods, release helpers, and scripts.
 
-Examples:
-- lint rules
-- release tooling
-- code generators
-- test utilities
-
-### `tests/`
-Cross-package integration and smoke tests.
-
-## Package Naming
-
-Public package namespace should use the Restormel brand.
-
-- `@restormel/contracts`
-- `@restormel/graph-core`
-- `@restormel/graphrag-core`
-- `@restormel/reasoning-core`
-- `@restormel/providers`
-- `@restormel/observability`
-- `@restormel/sdk`
-- `@restormel/ui`
-
-Internal-only or not-yet-public packages can still live under the same namespace or remain private.
-
-## Recommended Tooling
-
-- **pnpm workspaces** for package management
-- **Turborepo** for build and task orchestration
-- **TypeScript project references** for shared package builds
-- **Changesets** for package versioning and releases
-- **Vitest** for package tests
-- **Playwright** for app-level smoke and critical path tests
-
-## Migration Principles
-
-### Principle 1: Extract by boundary, not by ambition
-Move code only once a clean responsibility is defined.
-
-### Principle 2: Stabilize contracts first
-The shared schemas must be frozen before deeper package extraction.
-
-### Principle 3: Keep SOPHIA working throughout
-SOPHIA is still the demo and should not be destabilized by the platform work.
-
-### Principle 4: Prefer adapters over rewrites
-Wrap existing modules where necessary before fully refactoring them.
-
-## Initial App Ownership Model
-
-### First public app to launch
-`apps/restormel-web`
-
-### First internal package to stabilize
-`packages/contracts`
-
-### First functional package to extract
-`packages/graph-core`
-
-### First hosted API to shape
-`services/graphrag-api`
-
-## Proposed Build Order
-
-1. set up monorepo scaffolding
-2. move SOPHIA into `apps/sophia`
-3. create `packages/contracts`
-4. create `packages/graph-core`
-5. create `packages/observability`
-6. stand up `apps/restormel-web`
-7. build Restormel Graph MVP
-8. extract `packages/graphrag-core`
-9. stand up `services/graphrag-api`
-10. extract `packages/reasoning-core`
-
-## Definition of Done for the Blueprint Phase
-
-This blueprint phase is complete when:
-
-- the monorepo exists
-- the folder structure is in place
-- package names are reserved
-- core workspace tooling is configured
-- SOPHIA can build inside the monorepo
-- at least one extracted package is consumed by SOPHIA
-
-## Summary
-
-The monorepo blueprint should optimize for **safe extraction, reusable contracts, and product visibility**. The key move is not to break everything apart immediately, but to create a platform-shaped repository that allows Restormel products to emerge cleanly while SOPHIA keeps functioning as the reference app.
+## Repository rules
+- extract by package boundary, not by aspiration
+- do not create packages for future hypotheticals
+- keep commodity substrate ownership thin
+- keep UI separate from core reasoning logic
+- use adapters to isolate SOPHIA-specific shapes

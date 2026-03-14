@@ -28,16 +28,16 @@ import { ensureHarvardReferencesSection } from './citations/harvard';
 import { retrieveContext } from './retrieval';
 import { buildPassSpecificContextPacks, type ContextPackStats } from './contextPacks';
 import { classifyQueryDomain, getRetrievalDomain } from './domainClassifier';
-import type { PassType } from '$lib/types/passes';
-import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
+import type { PassType } from '@restormel/contracts/passes';
+import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '@restormel/contracts/references';
 import type {
   PassSection,
   GraphNode,
   GraphEdge,
   GraphSnapshotMeta,
   GroundingSource
-} from '$lib/types/api';
-import type { ModelProvider, ReasoningProvider } from '$lib/types/providers';
+} from '@restormel/contracts/api';
+import type { ModelProvider, ReasoningProvider } from '@restormel/contracts/providers';
 import { projectRetrievalToGraph } from './graphProjection';
 
 

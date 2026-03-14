@@ -1,8 +1,8 @@
 import type { HistoryEntry } from '$lib/components/panel/HistoryTab.svelte';
-import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
-import type { ReasoningEvaluation } from '$lib/types/verification';
-import type { ModelProvider, ReasoningProvider } from '$lib/types/providers';
-import type { GraphEdge, GraphNode, GraphSnapshotMeta } from '$lib/types/api';
+import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '@restormel/contracts/references';
+import type { ReasoningEvaluation } from '@restormel/contracts/verification';
+import type { ModelProvider, ReasoningProvider } from '@restormel/contracts/providers';
+import type { GraphEdge, GraphNode, GraphSnapshotMeta } from '@restormel/contracts/api';
 import { getIdToken } from '$lib/firebase';
 
 const MAX_CACHE_ENTRIES = 10;

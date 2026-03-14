@@ -1,425 +1,114 @@
 # Restormel Architectural Modularisation Plan
 
-## Status
-Draft v1 for platform extraction from the current SOPHIA codebase.
+## Purpose
+Define how to extract Restormel from SOPHIA without destabilising working behaviour, while making the platform modular, reusable, and clearly differentiated.
 
-## Goal
-Transform the current SOPHIA application from a monolithic product into a modular platform architecture where reusable infrastructure is extracted into Restormel packages and SOPHIA becomes a downstream consumer.
+## Architectural principle
+Extract stable contracts first, then reasoning and graph core, then product surfaces, then optional hosted layers.
 
-## Guiding architecture principle
-**Package boundaries first, repo split later.**
+Do not attempt a full rewrite. Preserve working behaviour where possible and use package boundaries to reduce coupling before considering repo splits.
 
-The first step should be a package-structured monorepo, not multiple repos. The current code appears tightly coupled enough that an early multi-repo split would create unnecessary friction.
+## Target architecture
+Restormel should be organised as:
+- shared contracts
+- graph and reasoning core
+- adapters to ingest traces, retrieval events, and evidence
+- debugger and comparison surfaces
+- optional hosted APIs and persistence
+- SOPHIA as a downstream app
 
-## Target monorepo structure
+## Strategic ownership boundaries
 
-```text
-/allotment-platform
-  /apps
-    /sophia
-    /restormel-site
-    /restormel-console
-    /api
-    /docs
-  /packages
-    /contracts
-    /graph-core
-    /graphrag-core
-    /reasoning-core
-    /providers
-    /observability
-    /ingestion-core
-    /sdk
-    /ui
-  /infra
-  /scripts
-```
+### COMMODITY — integrate
+- trace collection substrates
+- generic telemetry pipelines
+- provider SDKs and model routing
+- vector and graph database runtime ownership
+- generic RAG orchestration
+- baseline eval libraries
 
-## Package naming
-Use the Restormel namespace for all public packages.
+### DIFFERENTIATED — build
+- reasoning graph compilation
+- canonical reasoning objects
+- support / contradiction / provenance transforms
+- graph-aware diagnostics
+- compare and regression state transforms
+- governance lineage exports
+- reasoning debugger UI and view models
 
-- `@restormel/contracts`
-- `@restormel/graph-core`
-- `@restormel/graphrag-core`
-- `@restormel/reasoning-core`
-- `@restormel/providers`
-- `@restormel/observability`
-- `@restormel/sdk`
-- `@restormel/ui`
+### ADJACENT — own thin wrappers only
+- trace ingestion adapters
+- evaluator runners
+- import/export SDKs
+- run persistence
+- auth, tenancy, and billing hooks for hosted surfaces
 
-Potential internal-only packages:
-- `@restormel/ingestion-core`
-
-## Canonical platform contracts
-These should be defined first and versioned carefully.
-
-### 1. Graph contract
-Defines the shared graph document format used by:
-- Restormel Graph
-- GraphRAG
-- Reasoning traces
-- SOPHIA visualisation
-- import/export adapters
-
-Recommended fields:
-- node id
-- node kind
-- label
-- summary
-- metadata
-- source refs
-- scores
-- edge source
-- edge target
-- edge kind
-- direction
-- weight
-- confidence
-- provenance
-
-### 2. Reasoning event contract
-Defines the event stream format for:
-- SSE
-- API responses
-- replay
-- observability
-- UI rendering
-
-Event examples:
-- run_start
-- pass_start
-- pass_chunk
-- pass_complete
-- claims
-- relations
-- graph_snapshot
-- metadata
-- error
-
-### 3. Retrieval trace contract
-Defines the trace structure for GraphRAG and retrieval inspection.
-
-Trace should capture:
-- candidate generation
-- lexical hits
-- embedding hits
-- reranking
-- seed selection
-- graph expansion
-- pruning decisions
-- context-pack assembly
-
-## Package responsibilities
+## Recommended package groups
 
 ### `@restormel/contracts`
-Purpose:
-- shared types
-- schemas
-- zod validators
-- event contracts
-- DTOs for all other packages
-
-Owns:
-- graph schema
-- reasoning trace schema
-- retrieval trace schema
-- provider config contracts
-- source / claim / relation types
-
-Extraction candidates from current code:
-- `src/lib/types/*`
-- ingestion contracts
-- API DTOs
-- pass enums
-- provider types
-- verification-related shared types
+Canonical schemas, validators, DTOs, enums, IDs, and serialisation rules for reasoning objects, trace imports, evidence, lineage, and evaluation results.
 
 ### `@restormel/graph-core`
-Purpose:
-- graph projection
-- graph transforms
-- graph traversal
-- path and diff helpers
-- graph summarisation
-
-Owns:
-- graph projection from runtime outputs
-- graph filters
-- path discovery
-- graph statistics
-- snapshot diffing
-
-Likely extraction candidates:
-- graph projection logic
-- graph layout helpers
-- graph trace helpers
-- claim/relation normalization utilities
-
-### `@restormel/graphrag-core`
-Purpose:
-- hybrid retrieval
-- seed construction
-- graph expansion
-- relation-aware context pack generation
-
-Owns:
-- dense + lexical retrieval composition
-- seed balancing
-- graph closure enforcement
-- traversal depth control
-- pass-ready context pack shaping
-
-Likely extraction candidates:
-- retrieval pipeline
-- hybrid candidate generation
-- seed-set constructor
-- domain classification used in routing
-- reranking and expansion logic
+Graph modelling, traversal, filtering, diffing, path analysis, and projection helpers. No UI and no provider logic.
 
 ### `@restormel/reasoning-core`
-Purpose:
-- reasoning orchestration runtime
-- pass flow management
-- structured output parsing
-- prompt routing hooks
+Compilation of traces, retrieval flows, and evidence into reasoning objects. Claim extraction, relation synthesis, provenance binding, contradiction detection, and evaluation orchestration.
 
-Owns:
-- analysis / critique / synthesis orchestration
-- continuation handling
-- context pack assignment
-- run metadata
-- structured output normalization
+### `@restormel/evals`
+Graph-aware evaluator primitives and runner interfaces. Focus on support quality, contradiction exposure, evidence sufficiency, retrieval structure, and compare mode deltas.
 
-Likely extraction candidates:
-- reasoning engine
-- engine orchestrator
-- reasoning evaluation helpers
-- context-pack builders
-- prompt builder modules
-
-### `@restormel/providers`
-Purpose:
-- provider abstraction
-- model selection
-- BYOK plumbing
-- provider validation
-
-Owns:
-- provider registry
-- available model metadata
-- key validation
-- provider routing
-- fallback chains
-
-Likely extraction candidates:
-- BYOK modules
-- provider adapters (Gemini, Anthropic, Vertex, Claude, etc.)
+### `@restormel/adapters`
+Importers and exporters for upstream traces, retrieval logs, evidence bundles, and third-party tooling. Keep these thin and replaceable.
 
 ### `@restormel/observability`
-Purpose:
-- traces
-- replay
-- snapshot capture
-- telemetry formatting
-
-Owns:
-- trace creation and finalization
-- graph snapshots over time
-- event-to-replay formatting
-- trace adapters for UI consumption
-
-Likely extraction candidates:
-- SSE helpers
-- trace formatting utilities
-- graph snapshot emission logic
-- replay-related utilities
-
-### `@restormel/sdk`
-Purpose:
-- the developer-facing entry point
-- convenience wrappers for platform usage
-
-Should expose:
-- graph render helpers
-- trace adapters
-- API clients
-- quick setup helpers
-- framework-friendly integration patterns
+Inspection helpers, event streams, and internal instrumentation for Restormel’s own surfaces. This is not a generic observability platform.
 
 ### `@restormel/ui`
-Purpose:
-- reusable UI components for visualisation and product surfaces
+Reusable workspace primitives, inspectors, comparison panes, provenance views, lineage exports, and graph view models.
 
-Should expose:
-- GraphCanvas
-- PipelineView
-- TraceTimeline
-- NodeInspector
-- SnapshotDiffView
-- provider config controls
-- graph filters and legends
+### `@restormel/providers`
+Minimal provider abstractions only where required for Restormel-hosted workflows. Do not turn this into a broad provider platform.
 
-### `@restormel/ingestion-core`
-Purpose:
-- ingestion and graph population pipeline
+## App boundaries
 
-This may remain internal at first.
+### `/apps/sophia`
+Reference application consuming contracts, reasoning core, graph core, and selected UI packages.
 
-Owns:
-- source ingestion
-- parsing
-- claim extraction
-- relation extraction
-- validation
-- graph population
+### `/apps/restormel-web`
+Marketing site, docs, playground, authenticated workspace entry, and console shell.
 
-## Public API direction
-
-### Graph API
-Shared `GraphDocument` format used everywhere.
-
-### GraphRAG API
-Suggested hosted endpoints:
-- `POST /v1/ingest`
-- `POST /v1/retrieve`
-- `GET /v1/runs/:id`
-- `GET /v1/graphs/:id`
-
-### Reasoning API
-Suggested hosted endpoints:
-- `POST /v1/reason`
-- `POST /v1/reason/stream`
-- `GET /v1/reason/runs/:id`
-
-### Provider / BYOK API
-Suggested endpoints:
-- `POST /v1/providers/validate`
-- `GET /v1/providers/models`
-- `POST /v1/projects/:id/provider-config`
+### Optional future apps
+- governance export surface
+- enterprise admin surface
+- internal evaluation workbench
 
 ## Extraction order
+1. Stabilise canonical contracts.
+2. Extract graph-core utilities that are already shared in practice.
+3. Extract reasoning-core compilation logic from SOPHIA internals.
+4. Introduce adapters around trace and retrieval imports.
+5. Move debugger UI into reusable packages.
+6. Add compare mode and evaluator surfaces.
+7. Layer hosted persistence and collaboration on top.
 
-### Phase 1: contracts
-Goal:
-- freeze schemas
-- centralize shared types
+## Anti-patterns to avoid
+- moving code into packages without clarifying ownership
+- abstracting providers and orchestration too early
+- hard-coding UI to SOPHIA-specific shapes
+- building a generic telemetry or RAG product by accident
+- coupling contracts to the needs of a single app
+- designing future-perfect abstractions before the first wedge works
 
-Deliverables:
-- `@restormel/contracts`
-- schema docs
-- type ownership map
+## Transitional rules
+- package boundaries first, repo split later
+- adapters instead of rewrites where shapes differ
+- preserve working SOPHIA behaviour unless the change clearly improves extraction
+- use typed view models between core data and UI surfaces
+- keep hosted concerns separate from core reasoning logic
 
-### Phase 2: graph-core + observability
-Goal:
-- power Restormel Graph MVP
-- stabilize graph and trace handling
-
-Deliverables:
-- `@restormel/graph-core`
-- `@restormel/observability`
-- SOPHIA uses package imports instead of local utilities
-
-### Phase 3: graphrag-core
-Goal:
-- expose retrieval intelligence as reusable platform infrastructure
-
-Deliverables:
-- `@restormel/graphrag-core`
-- retrieval trace contract
-- local SDK + basic hosted surface
-
-### Phase 4: reasoning-core
-Goal:
-- expose structured reasoning runtime as reusable platform capability
-
-Deliverables:
-- `@restormel/reasoning-core`
-- reusable pass orchestration
-- run + event model
-
-### Phase 5: providers
-Goal:
-- unify BYOK and provider-flexible configuration
-
-Deliverables:
-- `@restormel/providers`
-- model metadata registry
-- key validation
-
-### Phase 6: ingestion-core
-Goal:
-- extract ingestion once platform boundaries are stable
-
-Deliverables:
-- `@restormel/ingestion-core`
-- source-to-graph pipeline
-
-## App ownership after extraction
-
-### `apps/sophia`
-Should own:
-- public-facing SOPHIA experience
-- billing, pricing, product messaging
-- auth and user history UX
-- domain-specific flows
-- showcase visual integration using Restormel components
-
-### `apps/restormel-site`
-Should own:
-- product marketing site
-- docs discovery pages
-- playground entry points
-- templates and package discoverability
-
-### `apps/restormel-console`
-Should own:
-- project management
-- API keys
-- trace history
-- uploads
-- billing and usage
-- provider config
-
-### `apps/api`
-Should own:
-- hosted GraphRAG
-- Reasoning API
-- auth/entitlement enforcement
-- API docs generation support
-
-## Architecture rules
-
-### Rule 1
-All cross-package communication should go through contracts.
-
-### Rule 2
-UI packages should not own business logic that belongs in core packages.
-
-### Rule 3
-Reasoning and retrieval must emit traces by default.
-
-### Rule 4
-SOPHIA can extend the platform, but should not fork core logic casually.
-
-### Rule 5
-No platform feature should depend on philosophy-specific naming or schemas at the core level.
-
-## Near-term technical milestones
-1. define graph and trace schemas
-2. create contracts package
-3. move graph utilities and trace shaping into packages
-4. build Restormel Graph MVP against those packages
-5. extract GraphRAG retrieval into a clean package boundary
-6. adapt SOPHIA to consume the extracted modules
-
-## End-state architecture goal
-A developer should be able to:
-- install Restormel packages
-- ingest documents
-- run GraphRAG retrieval
-- inspect traces visually
-- add structured reasoning
-- configure providers
-- optionally deploy or buy through marketplace channels
-
-SOPHIA should simply be the most complete demonstration of that ecosystem.
+## Success criteria
+The modularisation is working when:
+- SOPHIA is a consumer of shared packages rather than the hidden platform
+- the reasoning workspace can ingest data from more than one upstream producer
+- compare mode and evaluators work over the same canonical reasoning object
+- platform docs no longer imply that Restormel owns crowded substrate layers

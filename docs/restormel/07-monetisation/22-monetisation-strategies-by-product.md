@@ -1,240 +1,97 @@
+---
+title: Restormel Platform: Monetisation Strategies by Product
+owner: platform-delivery
+product: restormel
+doc_type: monetisation_strategy
+last_reviewed: 2026-03-14
+sync_to_linear: false
+status: active
+source_of_truth: true
+---
+
 # Restormel Platform: Monetisation Strategies by Product
 
-## Monetisation Principles
-- use wedge products for adoption
-- monetize hosted convenience, collaboration, scale, and governance
-- keep low-level package adoption friction-light
-- meter compute, storage, and trace retention
-- reserve enterprise monetization for support, controls, procurement, and deployment flexibility
+## Monetisation principles
+- monetise hosted convenience, retention, collaboration, and governance
+- keep local / package experimentation easy
+- charge for durable value, not generic plumbing
+- avoid revenue dependence on crowded substrate categories
 
 ## 1. Restormel Graph
+**Classification:** DIFFERENTIATED  
 Role:
-- visual debugger for graph and trace workflows
+- reasoning workspace for debugging, comparison, and evidence inspection
 
 Best model:
-- freemium + hosted team tiers
+- freemium for local / sample use
+- hosted team tiers
+- enterprise tier for controls and governance
 
-Free:
-- local graph import
-- local trace import
-- examples
-- basic inspection and filtering
+Paid levers:
+- retained runs
+- team collaboration
+- compare history
+- evaluator execution
+- lineage exports
 
-Paid:
-- hosted trace storage
-- sharing
-- project workspaces
-- history
-- advanced comparison/diff
-- collaboration
-
-Enterprise:
-- SSO
-- retention controls
-- auditability
-- SLA
-- private deployment options
-
-Why it monetizes:
-- teams pay for persistence, sharing, and collaboration
-- individuals adopt because the core inspection experience is useful
-
-## 2. Restormel GraphRAG
+## 2. Graph-aware evaluators
+**Classification:** DIFFERENTIATED  
 Role:
-- graph-native retrieval engine
+- reasoning-quality and retrieval-structure diagnostics
 
 Best model:
-- usage-based hosted API + optional local SDK
+- usage-based add-on
+- bundled in team / enterprise tiers
 
-Free / Starter:
-- local SDK
-- examples
-- docs
-- trial credits
+Paid levers:
+- evaluator volume
+- saved evaluation history
+- regression reports
 
-Paid:
-- ingest
-- storage
-- retrieval calls
-- trace retention
-- API keys
-- project management
-
-Enterprise:
-- private networking / deployment
-- contract pricing
-- governance controls
-- onboarding and support
-
-Why it monetizes:
-- solves an operational problem
-- has natural usage dimensions
-
-## 3. Restormel Reasoning
+## 3. Lineage and governance exports
+**Classification:** DIFFERENTIATED  
 Role:
-- structured multi-pass reasoning API
+- audit-ready artefacts and controls
 
 Best model:
-- usage-based API with premium structured/streaming tiers
+- enterprise-focused packaging
+- premium add-on where justified
 
-Free / Evaluation:
-- playground access
-- trial requests
-- sample traces
+Paid levers:
+- advanced export types
+- retention and policy controls
+- governance reporting
 
-Paid:
-- batch mode
-- streaming mode
-- structured pass outputs
-- reasoning traces
-- configurable depth and limits
-
-Enterprise:
-- custom prompt/pipeline tuning
-- SLA
-- dedicated throughput
-- deployment flexibility
-
-Why it monetizes:
-- customers pay for inspectable, structured reasoning rather than plain text generation
-
-## 4. Restormel Providers / BYOK
+## 4. APIs and adapters
+**Classification:** ADJACENT  
 Role:
-- provider abstraction and tenant-aware AI configuration
+- import, comparison, evaluation, and export APIs
 
 Best model:
-- developer subscription + embedded/platform tier
+- usage-based
+- bundled with hosted workspace
 
-Free:
-- basic adapters
-- local examples
-- starter templates
+Paid levers:
+- imports
+- comparisons
+- export generation
+- higher retention
 
-Paid:
-- hosted provider settings
-- project-level routing
-- credential validation
-- usage controls
-- embed starter kits
-
-Enterprise:
-- white-label embedding
-- org-level controls
-- audit logs
-- procurement-friendly support
-
-Why it monetizes:
-- strongest as an enabling layer bundled with hosted products
-
-## 5. Core Packages
-Includes:
-- contracts
-- graph-core
-- graphrag-core
-- reasoning-core
-- observability
-- sdk
-- ui
-
-Best model:
-- selective open-core / source-available / permissive mix
-
+## 5. Providers / BYOK / generic infra
+**Classification:** COMMODITY  
 Recommendation:
-- keep `contracts` open
-- keep enough SDK/UI surface open to drive adoption
-- monetize higher-value hosted workflows and advanced operational features
+- do not make this the commercial centre of gravity
+- support it only where required for adoption
 
 ## 6. SOPHIA
-Role:
-- showcase app and reference implementation
+**Classification:** ADJACENT / DIFFERENTIATED depending on market path  
+Recommendation:
+- treat as reference app first
+- commercialise only where its domain-specific wedge is strong and does not distort the platform
 
-Best model:
-- secondary revenue stream, not the primary commercial anchor
-
-Possible paid features:
-- prosumer subscriptions
-- advanced workspaces
-- premium research / education features
-
-Strategic rule:
-- SOPHIA proves the platform
-- it should not swallow roadmap energy intended for platform products
-
-## Recommended Revenue Priority
-1. Hosted GraphRAG
-2. Restormel Graph hosted/team features
-3. Reasoning API
-4. BYOK bundled tiers
-5. SOPHIA premium features
-
-## Recommended Adoption Priority
-1. Restormel Graph
-2. Open/shared packages
-3. GraphRAG SDK/examples
-4. SOPHIA showcase
-5. Reasoning demos
-
-## Packaging Model
-Free:
-- docs
-- examples
-- contracts
-- basic local visualizer
-- limited playground use
-- hosted trial credits
-
-Pro / Builder:
-- individual hosted usage
-- API keys
-- saved traces
-- shareable sessions
-- moderate quotas
-
-Team:
-- workspaces
-- collaboration
-- usage controls
-- higher limits
-- reporting
-
-Enterprise:
-- procurement
-- security docs
-- SSO
-- SLA
-- retention controls
-- marketplace availability
-
-## Product-Level Charging Logic
-Restormel Graph:
-- storage
-- sharing
-- history
-- collaboration
-- advanced analysis tools
-
-GraphRAG:
-- ingest volume
-- storage
-- retrieval calls
-- trace retention
-
-Reasoning:
-- requests
-- streaming
-- structured outputs
-- concurrency
-- premium provider/model access
-
-BYOK:
-- governance
-- configuration
-- multi-project management
-- embed/white-label capabilities
-
-## Bottom Line
-- Restormel Graph is the wedge
-- GraphRAG is the strongest early revenue engine
-- Reasoning is a higher-upside premium layer
-- BYOK is strongest as a bundle/enabler
-- SOPHIA is the showcase, not the main monetization anchor
+## Revenue sequence
+1. Hosted workspace
+2. Evaluators and compare
+3. Governance exports
+4. API and enterprise packaging
+5. Marketplace distribution

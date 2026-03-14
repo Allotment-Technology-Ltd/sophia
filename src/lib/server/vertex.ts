@@ -14,7 +14,7 @@ import {
   isReasoningProvider,
   type ModelProvider,
   type ReasoningProvider
-} from '$lib/types/providers';
+} from '@restormel/contracts/providers';
 
 // Lazy initialization - create vertex client only when first called
 let vertexInstance: ReturnType<typeof createVertex> | null = null;

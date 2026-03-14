@@ -1,5 +1,20 @@
 # SOPHIA Repo Assessment — Production Grade vs Prototype Grade
 
+## Status
+Retained as the grounding document for extraction decisions.
+
+## How to use this document
+Use this assessment to identify extraction candidates, stable modules, and risky coupling. Read it alongside the platform strategy so SOPHIA remains a downstream consumer rather than the implicit platform boundary.
+
+## Extraction reading frame
+When reading this document, tag findings as:
+- COMMODITY — integrate or keep thin
+- DIFFERENTIATED — extract and own
+- ADJACENT — support only where it sharpens the core
+
+---
+# SOPHIA Repo Assessment — Production Grade vs Prototype Grade
+
 ## Scope
 
 This assessment is based on the current repository code and documentation, not just the README. It focuses on what SOPHIA currently does, what looks production-grade already, what still looks prototype-grade, and which engineering moves are most valuable next.

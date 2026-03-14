@@ -1,14 +1,15 @@
-import type { PassType } from '$lib/types/passes';
-import type { GraphEdge, GraphNode, GraphSnapshotMeta, SSEEvent } from '$lib/types/api';
-import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
-import type { ReasoningEvaluation } from '$lib/types/verification';
+import type { PassType } from '@restormel/contracts/passes';
+import type { GraphEdge, GraphNode, GraphSnapshotMeta, SSEEvent } from '@restormel/contracts/api';
+import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '@restormel/contracts/references';
+import type { ReasoningEvaluation } from '@restormel/contracts/verification';
+import { parseReasoningEventBlock } from '@restormel/observability';
 import { handleSSEEvent } from '$lib/utils/sseHandler';
 import { referencesStore } from '$lib/stores/references.svelte';
 import { historyStore, type CachedQueryResult } from '$lib/stores/history.svelte';
 import { graphStore } from '$lib/stores/graph.svelte';
 import { getIdToken } from '$lib/firebase';
 import { trackEvent } from '$lib/utils/analytics';
-import type { ByokProvider, ModelProvider, ReasoningProvider } from '$lib/types/providers';
+import type { ByokProvider, ModelProvider, ReasoningProvider } from '@restormel/contracts/providers';
 
 export interface Message {
   id: string;
@@ -580,13 +581,8 @@ function createConversationStore() {
             const line = part.trim();
             if (!line.startsWith('data: ')) continue;
 
-            const json = line.slice(6);
-            let event: SSEEvent;
-            try {
-              event = JSON.parse(json);
-            } catch {
-              continue;
-            }
+            const event = parseReasoningEventBlock(line) as SSEEvent | null;
+            if (!event) continue;
 
             if (event.type === 'sources') {
               streamedSources = event.sources;

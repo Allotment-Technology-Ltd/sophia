@@ -11,21 +11,13 @@ import {
   VerificationRequestSchema,
   type VerificationRequest,
   type VerificationResult
-} from '$lib/types/verification';
-import type { SSEEvent } from '$lib/types/api';
+} from '@restormel/contracts/verification';
+import type { GraphEdge, GraphNode, GroundingSource, PassSection } from '@restormel/contracts/api';
+import type { Claim, RelationBundle, SourceReference } from '@restormel/contracts/references';
+import type { ReasoningEvent } from '@restormel/contracts/trace';
+import { serializeReasoningEvent } from '@restormel/observability';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
 import { logServerAnalytics } from '$lib/server/analytics';
-
-interface VerifySseEvent {
-  type:
-    | SSEEvent['type']
-    | 'extraction_complete'
-    | 'reasoning_scores'
-    | 'constitution_check'
-    | 'verification_complete'
-    | 'error';
-  [key: string]: unknown;
-}
 
 function buildHeaders(requestId: string, processingTimeMs: number, tokenUsage?: string): HeadersInit {
   return {
@@ -216,10 +208,10 @@ export const POST: RequestHandler = async ({ request }) => {
     async start(controller) {
       let closed = false;
 
-      const send = (event: VerifySseEvent) => {
+      const send = (event: ReasoningEvent) => {
         if (closed) return;
         try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          controller.enqueue(encoder.encode(serializeReasoningEvent(event)));
         } catch {
           closed = true;
         }
@@ -246,20 +238,41 @@ export const POST: RequestHandler = async ({ request }) => {
               send({ type: 'pass_complete', pass });
             },
             onPassStructured(pass, sections, wordCount) {
-              send({ type: 'pass_structured', pass, sections, wordCount });
+              send({
+                type: 'pass_structured',
+                pass,
+                sections: sections as PassSection[],
+                wordCount
+              });
             },
             onSources(sources) {
-              send({ type: 'sources', sources });
+              send({ type: 'sources', sources: sources as SourceReference[] });
             },
             onGroundingSources(pass, sources) {
-              send({ type: 'grounding_sources', pass, sources });
+              send({
+                type: 'grounding_sources',
+                pass,
+                sources: sources as GroundingSource[]
+              });
             },
             onGraphSnapshot(nodes, edges) {
-              send({ type: 'graph_snapshot', nodes, edges });
+              send({
+                type: 'graph_snapshot',
+                nodes: nodes as GraphNode[],
+                edges: edges as GraphEdge[]
+              } as ReasoningEvent);
             },
             onClaims(pass, claims, relations) {
-              send({ type: 'claims', pass, claims });
-              send({ type: 'relations', pass, relations });
+              send({
+                type: 'claims',
+                pass: pass as 'analysis' | 'critique' | 'synthesis',
+                claims: claims as Claim[]
+              } as ReasoningEvent);
+              send({
+                type: 'relations',
+                pass: pass as 'analysis' | 'critique' | 'synthesis',
+                relations: relations as RelationBundle[]
+              } as ReasoningEvent);
             },
             onConfidenceSummary(avgConfidence, lowConfidenceCount, totalClaims) {
               send({ type: 'confidence_summary', avgConfidence, lowConfidenceCount, totalClaims });

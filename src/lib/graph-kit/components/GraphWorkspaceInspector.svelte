@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { GraphKitInspectorPayload } from '$lib/graph-kit/types';
+  import type { GraphKitEvaluationFinding, GraphKitInspectorPayload } from '$lib/graph-kit/types';
   import CitationChip from '$lib/graph-kit/components/primitives/CitationChip.svelte';
   import EvidenceCard from '$lib/graph-kit/components/primitives/EvidenceCard.svelte';
   import SourceBadge from '$lib/graph-kit/components/primitives/SourceBadge.svelte';
@@ -16,6 +16,12 @@
   let provenanceSectionEl = $state<HTMLElement | null>(null);
   let evidenceSectionEl = $state<HTMLElement | null>(null);
   let validationSectionEl = $state<HTMLElement | null>(null);
+
+  function toneForFinding(finding: GraphKitEvaluationFinding): 'info' | 'warning' | 'error' {
+    if (finding.severity === 'error') return 'error';
+    if (finding.severity === 'warning') return 'warning';
+    return 'info';
+  }
 
   $effect(() => {
     if (focusedSection === 'provenance') {
@@ -160,6 +166,20 @@
         <div class="validation-stack">
           {#each payload.validationNotes as note}
             <ValidationNote {note} tone="warning" />
+          {/each}
+        </div>
+      </section>
+    {/if}
+
+    {#if payload.evaluationFindings && payload.evaluationFindings.length > 0}
+      <section class="section-card">
+        <h3>Graph Evaluation Findings</h3>
+        <div class="validation-stack">
+          {#each payload.evaluationFindings as finding}
+            <ValidationNote
+              note={`${finding.title}: ${finding.summary}`}
+              tone={toneForFinding(finding)}
+            />
           {/each}
         </div>
       </section>

@@ -3,12 +3,31 @@ name: Restormel Docs Lint
 on:
   pull_request:
     paths:
+      - "README.md"
+      - "docs/README.md"
       - "docs/restormel/**"
+      - "docs/sophia/**"
+      - "docs/reference/**"
+      - "docs/archive/README.md"
       - "docs/Restormel/**"
       - "scripts/restormel/**"
       - ".github/workflows/docs-lint.yml"
       - ".github/workflows/docs-freshness.yml"
       - ".github/workflows/linear-sync.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "README.md"
+      - "docs/README.md"
+      - "docs/restormel/**"
+      - "docs/sophia/**"
+      - "docs/reference/**"
+      - "docs/archive/README.md"
+      - "docs/Restormel/**"
+      - "scripts/restormel/**"
+      - ".github/workflows/docs-lint.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -24,6 +43,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Check generated repo docs blocks
+        run: python3 scripts/restormel/update_repo_docs.py --check
 
       - name: Run docs lint
         run: python3 scripts/restormel/docs_lint.py --check-links

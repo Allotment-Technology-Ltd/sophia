@@ -1,151 +1,90 @@
 ---
 title: Restormel Platform: Engineering Backlog by Epic
-owner: engineering
+owner: platform-delivery
 product: restormel
 doc_type: engineering_backlog
-last_reviewed: 2026-03-13
-sync_to_linear: true
+last_reviewed: 2026-03-14
+sync_to_linear: false
+status: active
+source_of_truth: true
 ---
 
 # Restormel Platform: Engineering Backlog by Epic
 
-## Epic: 1 - Monorepo Foundation
+## Epic 1: Monorepo foundation
+**Classification:** ADJACENT  
 - workspace tooling
 - shared build config
-- CI for apps and packages
-- package release/versioning approach
+- CI
+- release/versioning approach
 
-## Epic: 2 - Canonical Contracts and Schemas
-- graph node/edge/document schema extraction
-- reasoning event schema extraction
-- retrieval trace schema extraction
-- zod validation and fixtures
-- refactor SOPHIA endpoints to package contracts
+## Epic 2: Canonical contracts and schemas
+**Classification:** DIFFERENTIATED  
+- reasoning object schema
+- claim / evidence / provenance / lineage contracts
+- validators and fixtures
+- SOPHIA contract adoption
 
-## Epic: 3 - Graph Core Extraction
-- extract graph projection
-- graph stats helpers
-- path-finding helpers
-- graph diff helpers
-- graph filters/query helpers
-- refactor SOPHIA graph consumers
+## Epic 3: Graph core extraction
+**Classification:** DIFFERENTIATED  
+- graph transforms
+- stats helpers
+- traversal
+- diff helpers
 
-## Epic: 4 - Observability and Trace System
-- extract SSE event shaping
-- trace builder abstraction
-- graph snapshot events
-- replay serialization/hydration
-- trace persistence interface
-- sample traces
+## Epic 4: Reasoning core extraction
+**Classification:** DIFFERENTIATED  
+- claim compilation
+- provenance binding
+- support / contradiction modelling
+- import compilation pipeline
 
-## Epic: 5 - Restormel Graph MVP
-- graph canvas
-- trace timeline
-- inspector
-- filters
-- path highlighting
-- graph import
-- trace import
-- sample demos
-- invalid payload handling
+## Epic 5: Adapters and imports
+**Classification:** ADJACENT  
+- trace imports
+- retrieval event imports
+- export helpers
+- ecosystem alignment
 
-## Epic: 6 - GraphRAG Core Extraction
-- hybrid candidate generation
-- lexical + dense orchestration
-- seed balancing
-- graph expansion
-- context-pack builder
-- retrieval trace generation
-- representative tests
-- SDK examples
+## Epic 6: Restormel Graph MVP
+**Classification:** DIFFERENTIATED  
+- workspace shell
+- claim/evidence inspectors
+- provenance panel
+- compare mode
+- evaluator summary
 
-## Epic: 7 - Hosted GraphRAG
-- project and dataset model
-- ingest endpoint
-- retrieve endpoint
-- API keys
-- usage metering
-- run history
-- console pages
-- “open in Restormel”
+## Epic 7: Evaluators
+**Classification:** DIFFERENTIATED  
+- support quality checks
+- contradiction exposure
+- evidence sufficiency
+- regression summary
 
-## Epic: 8 - Reasoning Core Extraction
-- pass runner abstraction
-- analysis/critique/synthesis orchestration
-- continuation handling
-- structured parsing
-- batch and stream modes
-- provider-agnostic interface
-- fixtures and examples
+## Epic 8: Lineage exports
+**Classification:** DIFFERENTIATED  
+- export schema
+- human-readable summaries
+- machine-readable audit outputs
 
-## Epic: 9 - Hosted Reasoning API
-- hosted reasoning endpoint
-- graph/context-pack inputs
-- batch mode
-- streaming mode
-- rate limits
-- SDK helpers
-- GraphRAG -> Reasoning examples
-- console run inspection
+## Epic 9: Hosted workspace
+**Classification:** ADJACENT  
+- auth
+- persistence
+- sharing
+- usage limits
+- billing hooks
 
-## Epic: 10 - Providers / BYOK
-- provider registry
-- credential validation
-- project-level provider settings
-- model catalog
-- fallback logic
-- BYOK credential storage
-- starter kits
-- safety and quota limits
+## Epic 10: Enterprise controls
+**Classification:** ADJACENT  
+- SSO / SCIM
+- admin
+- retention policy
+- audit controls
 
-## Epic: 11 - Restormel Site / Docs / Playground
-- homepage
-- product pages
-- docs IA
-- playground
-- example gallery
-- pricing
-- console routing
-- changelog/blog
-- analytics
-
-## Epic: 12 - SOPHIA Migration
-- replace app-local contracts
-- replace graph projection
-- replace event shaping
-- replace retrieval runtime
-- replace reasoning orchestration
-- replace provider logic
-- remove duplicate code
-
-## Epic: 13 - Billing, Metering, and Packaging
-- product plan model
-- usage metering
-- billing dashboards
-- plan gating
-- OSS vs paid licensing strategy
-- usage alerts
-- reporting
-
-## Epic: 14 - Marketplace Readiness
-- first marketplace SKU selection
-- entitlement flow
-- security and architecture docs
-- support SLAs
-- billing/fulfillment alignment
-- listing page variants
-
-## Suggested Waves
-Wave 1: Epics 1–4
-Wave 2: Epics 5 and 11
-Wave 3: Epics 6 and 7
-Wave 4: Epics 8–10
-Wave 5: Epics 12–14
-
-## Delivery Rule
-Each epic should include:
-- engineering stories
-- DX stories
-- docs
-- instrumentation
-- a demo outcome
+## Epic 11: Deprioritised or integrate-first work
+**Classification:** COMMODITY  
+- provider platform expansion
+- broad BYOK work
+- generic observability ownership
+- generic GraphRAG orchestration

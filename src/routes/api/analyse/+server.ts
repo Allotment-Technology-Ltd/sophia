@@ -2,16 +2,18 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { runDialecticalEngine } from '$lib/server/engine';
 import type { SSEEvent } from '$lib/types/api';
+import type { RunTrace } from '@restormel/contracts/trace';
 import { createHash, randomUUID } from 'node:crypto';
 import { query as dbQuery } from '$lib/server/db';
 import { adminDb } from '$lib/server/firebase-admin';
+import { eventsToTrace, serializeReasoningEvent } from '@restormel/observability';
 import { runVerificationPipeline } from '$lib/server/verification/pipeline';
 import { runDepthEnrichment } from '$lib/server/enrichment/pipeline';
 import { recordSnapshotLineage } from '$lib/server/enrichment/store';
 import { extractFromSource } from '$lib/server/enrichment/sourceExtractor';
-import type { AnalysisPhase, Claim, RelationBundle } from '$lib/types/references';
-import type { GraphEdge, GraphNode, GraphSnapshotMeta } from '$lib/types/api';
-import type { ExtractedClaim, ExtractedRelation, ReasoningEvaluation } from '$lib/types/verification';
+import type { AnalysisPhase, Claim, RelationBundle } from '@restormel/contracts/references';
+import type { GraphEdge, GraphNode, GraphSnapshotMeta } from '@restormel/contracts/api';
+import type { ExtractedClaim, ExtractedRelation, ReasoningEvaluation } from '@restormel/contracts/verification';
 import { evaluateReasoning } from '$lib/server/reasoningEval';
 import { evaluateConstitutionWithTelemetry } from '$lib/server/constitution/evaluator';
 import { getAvailableReasoningModels } from '$lib/server/vertex';
@@ -25,7 +27,7 @@ import {
   parseByokProvider as parseSharedByokProvider,
   parseReasoningProvider,
   type ModelProvider
-} from '$lib/types/providers';
+} from '@restormel/contracts/providers';
 import { consumePlatformBudget, type QueryKind } from '$lib/server/rateLimit';
 import {
   consumeIngestionEntitlements,
@@ -141,7 +143,8 @@ async function saveFirestoreCache(
   modelId: string | undefined,
   domainMode: 'auto' | 'manual',
   domain: 'ethics' | 'philosophy_of_mind' | undefined,
-  events: SSEEvent[]
+  events: SSEEvent[],
+  runTrace?: RunTrace
 ): Promise<void> {
   try {
     const storageEvents = events.filter((e) => REPLAY_EVENT_TYPES.has(e.type));
@@ -158,6 +161,7 @@ async function saveFirestoreCache(
         domain_mode: domainMode,
         domain: domain ?? null,
         events: storageEvents,
+        run_trace: runTrace ?? null,
         createdAt: new Date()
       });
     console.log(`[FIRESTORE] Saved query for uid=${uid} hash=${queryHash.slice(0, 8)}`);
@@ -1213,7 +1217,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       function sendEvent(event: SSEEvent): void {
         if (controllerClosed) return;
         try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          controller.enqueue(encoder.encode(serializeReasoningEvent(event)));
         } catch (err) {
           controllerClosed = true;
           console.warn('[SSE] enqueue failed (client disconnected):', err instanceof Error ? err.message : String(err));
@@ -1709,7 +1713,24 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
           // A4: Save to Firestore (per-user)
           if (uid) {
-            await saveFirestoreCache(uid, queryHash, queryText, lens, depthMode, effectiveModelProvider, modelId, domainMode, domain, replayEvents);
+            const runTrace = eventsToTrace(replayEvents, {
+              source: 'sse',
+              runId: queryRunId,
+              query: queryText
+            });
+            await saveFirestoreCache(
+              uid,
+              queryHash,
+              queryText,
+              lens,
+              depthMode,
+              effectiveModelProvider,
+              modelId,
+              domainMode,
+              domain,
+              replayEvents,
+              runTrace
+            );
           }
 
           // Also save to SurrealDB shared cache (best-effort)

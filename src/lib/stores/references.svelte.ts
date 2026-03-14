@@ -1,5 +1,5 @@
-import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '$lib/types/references';
-import type { PassType } from '$lib/types/passes';
+import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '@restormel/contracts/references';
+import type { PassType } from '@restormel/contracts/passes';
 import type { GroundingSource } from '$lib/types/api';
 
 const PHASE_ORDER: AnalysisPhase[] = ['analysis', 'critique', 'synthesis'];

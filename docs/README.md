@@ -7,35 +7,50 @@ last_reviewed: 2026-03-13
 
 # Documentation Index
 
-This directory is now organised around four surfaces:
+This is the landing page for the repository documentation surface.
 
-## Active SOPHIA docs
+The structure is intentionally simple:
+- [`docs/sophia/`](sophia/README.md) holds the active SOPHIA showcase/reference-app narrative
+- [`docs/restormel/`](restormel/README.md) holds the active Restormel platform strategy, architecture, and delivery pack
+- [`docs/reference/`](reference/README.md) holds maintained supporting reference material
+- [`docs/archive/`](archive/README.md) preserves historical and superseded material
 
-These are the current source-of-truth documents for SOPHIA as the showcase/reference application.
+## Documentation surfaces
 
-- [docs/sophia/README.md](sophia/README.md)
-- [docs/sophia/current-state.md](sophia/current-state.md)
-- [docs/sophia/architecture.md](sophia/architecture.md)
-- [docs/sophia/product-role.md](sophia/product-role.md)
-- [docs/sophia/roadmap.md](sophia/roadmap.md)
-- [docs/sophia/domain-expansion.md](sophia/domain-expansion.md)
-- [docs/sophia/changelog.md](sophia/changelog.md)
-- [docs/sophia/documentation-governance.md](sophia/documentation-governance.md)
+<!-- GENERATED:docs-map:start -->
+| Surface | Status | Docs | Use it for | Entry point |
+| --- | --- | --- | --- | --- |
+| SOPHIA | Active | 8 | Showcase/reference app documentation. | [SOPHIA Documentation](sophia/README.md) |
+| Restormel | Active | 43 | Platform planning, architecture, and delivery docs. | [Restormel Documentation](restormel/README.md) |
+| Reference | Reference | 19 | Supporting implementation and operational references. | [Reference Documentation](reference/README.md) |
+| Archive | Archived | 63 | Historical material preserved for traceability. | [Documentation Archive](archive/README.md) |
+<!-- GENERATED:docs-map:end -->
 
-## Active Restormel platform docs
+## Key entry points
 
-Use the Restormel pack for platform strategy, architecture, delivery, marketplace, and monetisation guidance.
+Start with the entry points below before browsing deeper folders.
 
-- [docs/restormel/00-overview/00-master-index.md](restormel/00-overview/00-master-index.md)
+<!-- GENERATED:key-doc-entry-points:start -->
+| Document | Link |
+| --- | --- |
+| SOPHIA Documentation | [SOPHIA Documentation](sophia/README.md) |
+| Current State | [Current State](sophia/current-state.md) |
+| Architecture | [Architecture](sophia/architecture.md) |
+| Roadmap | [Roadmap](sophia/roadmap.md) |
+| Restormel Documentation | [Restormel Documentation](restormel/README.md) |
+| Restormel Platform: Milestone Plan with Exit Criteria | [Restormel Platform: Milestone Plan with Exit Criteria](restormel/04-delivery/19-milestone-plan-with-exit-criteria.md) |
+| Reference Documentation | [Reference Documentation](reference/README.md) |
+| Documentation Archive | [Documentation Archive](archive/README.md) |
+<!-- GENERATED:key-doc-entry-points:end -->
 
-## Supporting reference docs
+## Active vs archive
 
-These remain useful, but they are not the primary SOPHIA source-of-truth set.
+Narrative meaning stays hand-authored in the active docs. Archived material is retained for traceability but should not be treated as current guidance unless an active document explicitly sends you there.
 
-- [docs/reference/README.md](reference/README.md)
-
-## Historical material
-
-Superseded plans, old strategy docs, delivery checkpoints, and implementation notes now live under the archive.
-
-- [docs/archive/README.md](archive/README.md)
+<!-- GENERATED:active-vs-archive:start -->
+| Class | Current snapshot | Operating rule |
+| --- | --- | --- |
+| Active source of truth | 8 SOPHIA docs and 43 Restormel docs | Update when product, architecture, or delivery meaning changes. |
+| Supporting reference | 19 docs under docs/reference and 7 Restormel reference docs | Use for runbooks, API details, and automation context. |
+| Archived | 63 docs under docs/archive | Do not treat as current guidance; start at [Documentation Archive](archive/README.md). |
+<!-- GENERATED:active-vs-archive:end -->

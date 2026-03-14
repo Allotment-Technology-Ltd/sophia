@@ -1,11 +1,7 @@
-import type {
-  GraphKitCompareResult,
-  GraphKitEdge,
-  GraphKitEntityStatus,
-  GraphKitNode,
-  GraphKitWorkspaceData
-} from '$lib/graph-kit/types';
-import type { GraphSnapshotMeta } from '$lib/types/api';
+import type { GraphKitCompareResult, GraphKitNodeKind } from '$lib/graph-kit/types';
+import type { GraphSnapshotMeta } from '@restormel/contracts/api';
+import type { ReasoningObjectSnapshot } from '@restormel/contracts/reasoning-object';
+import { diffReasoningSnapshots } from '@restormel/graph-core/compare';
 
 interface GraphKitCompareInput {
   label: string;
@@ -13,296 +9,168 @@ interface GraphKitCompareInput {
   queryRunId?: string;
   timestamp?: string;
   meta?: GraphSnapshotMeta | null;
-  workspace: GraphKitWorkspaceData;
+  snapshot: ReasoningObjectSnapshot;
 }
 
-interface NodeEntry {
-  signature: string;
-  node: GraphKitNode;
-  evidenceSet: Set<string>;
+function toGraphKitKind(kind?: string): GraphKitNodeKind | undefined {
+  if (!kind) return undefined;
+  return kind as GraphKitNodeKind;
 }
 
-interface EdgeEntry {
-  signature: string;
-  edge: GraphKitEdge;
-  fromTitle: string;
-  toTitle: string;
-}
-
-type ConfidenceChange = GraphKitCompareResult['changedConfidence'][number];
-
-function normalize(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function clip(value: string, max = 120): string {
-  return value.trim().length > max ? value.trim().slice(0, max) : value.trim();
-}
-
-function nodeSignature(node: GraphKitNode): string {
-  return `${node.kind}|${normalize(clip(node.title))}`;
-}
-
-function evidenceSignature(value: string): string {
-  return normalize(clip(value));
-}
-
-function buildNodeEntries(workspace: GraphKitWorkspaceData): Map<string, NodeEntry> {
-  const entries = new Map<string, NodeEntry>();
-
-  for (const node of workspace.graph.nodes) {
-    const signature = nodeSignature(node);
-    if (entries.has(signature)) continue;
-    entries.set(signature, {
-      signature,
-      node,
-      evidenceSet: new Set(
-        node.evidence
-          .map((item) => evidenceSignature(item.summary))
-          .filter((value) => value.length > 0)
-      )
-    });
-  }
-
-  return entries;
-}
-
-function buildEdgeEntries(workspace: GraphKitWorkspaceData): Map<string, EdgeEntry> {
-  const entries = new Map<string, EdgeEntry>();
-  const nodeById = new Map(workspace.graph.nodes.map((node) => [node.id, node]));
-
-  for (const edge of workspace.graph.edges) {
-    const fromNode = nodeById.get(edge.from);
-    const toNode = nodeById.get(edge.to);
-    if (!fromNode || !toNode) continue;
-
-    const fromTitle = fromNode.title;
-    const toTitle = toNode.title;
-    const signature = `${edge.kind}|${normalize(clip(fromTitle))}|${normalize(clip(toTitle))}`;
-    if (entries.has(signature)) continue;
-
-    entries.set(signature, {
-      signature,
-      edge,
-      fromTitle,
-      toTitle
-    });
-  }
-
-  return entries;
-}
-
-function diffSets(before: Set<string>, after: Set<string>): { added: string[]; removed: string[] } {
-  const added = [...after].filter((value) => !before.has(value));
-  const removed = [...before].filter((value) => !after.has(value));
-  return { added, removed };
-}
-
-// Extraction seam:
-// This compares stable Graph Kit view models rather than raw SOPHIA graph data so the
-// logic can move into a standalone package later with minimal changes.
+// Compare mode now consumes package-owned reasoning snapshots instead of Graph Kit view
+// models, so the UI becomes a consumer of canonical reasoning-state diffs rather than the
+// source of truth for diffing semantics.
 export function buildWorkspaceCompareResult(
   baseline: GraphKitCompareInput,
   current: GraphKitCompareInput
 ): GraphKitCompareResult {
-  const baselineNodes = buildNodeEntries(baseline.workspace);
-  const currentNodes = buildNodeEntries(current.workspace);
-  const baselineEdges = buildEdgeEntries(baseline.workspace);
-  const currentEdges = buildEdgeEntries(current.workspace);
-
-  const addedNodes = [...currentNodes.entries()]
-    .filter(([signature]) => !baselineNodes.has(signature))
-    .map(([, entry]) => ({
-      signature: entry.signature,
-      nodeId: entry.node.id,
-      title: entry.node.title,
-      kind: entry.node.kind
-    }));
-
-  const removedNodes = [...baselineNodes.entries()]
-    .filter(([signature]) => !currentNodes.has(signature))
-    .map(([, entry]) => ({
-      signature: entry.signature,
-      nodeId: entry.node.id,
-      title: entry.node.title,
-      kind: entry.node.kind
-    }));
-
-  const addedEdges = [...currentEdges.entries()]
-    .filter(([signature]) => !baselineEdges.has(signature))
-    .map(([, entry]) => ({
-      signature: entry.signature,
-      edgeId: entry.edge.id,
-      kind: entry.edge.kind,
-      fromTitle: entry.fromTitle,
-      toTitle: entry.toTitle
-    }));
-
-  const removedEdges = [...baselineEdges.entries()]
-    .filter(([signature]) => !currentEdges.has(signature))
-    .map(([, entry]) => ({
-      signature: entry.signature,
-      edgeId: entry.edge.id,
-      kind: entry.edge.kind,
-      fromTitle: entry.fromTitle,
-      toTitle: entry.toTitle
-    }));
-
-  const nodeConfidenceChanges: ConfidenceChange[] = [...currentNodes.entries()]
-    .flatMap<ConfidenceChange>(([signature, currentEntry]) => {
-      const baselineEntry = baselineNodes.get(signature);
-      if (!baselineEntry) return [];
-      if (baselineEntry.node.confidence === currentEntry.node.confidence) return [];
-      if (
-        typeof baselineEntry.node.confidence !== 'number' &&
-        typeof currentEntry.node.confidence !== 'number'
-      ) {
-        return [];
-      }
-      return [{
-        signature,
-        target: 'node' as const,
-        title: currentEntry.node.title,
-        before: baselineEntry.node.confidence,
-        after: currentEntry.node.confidence
-      }];
-    });
-
-  const edgeConfidenceChanges: ConfidenceChange[] = [...currentEdges.entries()]
-    .flatMap<ConfidenceChange>(([signature, currentEntry]) => {
-      const baselineEntry = baselineEdges.get(signature);
-      if (!baselineEntry) return [];
-      if (baselineEntry.edge.confidence === currentEntry.edge.confidence) return [];
-      if (
-        typeof baselineEntry.edge.confidence !== 'number' &&
-        typeof currentEntry.edge.confidence !== 'number'
-      ) {
-        return [];
-      }
-      return [{
-        signature,
-        target: 'edge',
-        title: `${currentEntry.fromTitle} ${currentEntry.edge.kind} ${currentEntry.toTitle}`,
-        before: baselineEntry.edge.confidence,
-        after: currentEntry.edge.confidence
-      }];
-    });
-
-  const changedConfidence = [...nodeConfidenceChanges, ...edgeConfidenceChanges];
-
-  const contradictionChanges: GraphKitCompareResult['contradictionChanges'] = [...new Set([
-    ...baselineNodes.keys(),
-    ...currentNodes.keys()
-  ])]
-    .flatMap((signature) => {
-      const before: GraphKitEntityStatus | 'missing' =
-        baselineNodes.get(signature)?.node.status ?? 'missing';
-      const after: GraphKitEntityStatus | 'missing' =
-        currentNodes.get(signature)?.node.status ?? 'missing';
-      if (before === after) return [];
-      const beforeContradiction = before === 'contradicted' || before === 'unresolved';
-      const afterContradiction = after === 'contradicted' || after === 'unresolved';
-      if (!beforeContradiction && !afterContradiction) return [];
-      const title =
-        currentNodes.get(signature)?.node.title ??
-        baselineNodes.get(signature)?.node.title ??
-        signature;
-      return [{ signature, title, before, after }];
-    });
-
-  const claimComparisons = [...currentNodes.entries()]
-    .flatMap(([signature, currentEntry]) => {
-      const baselineEntry = baselineNodes.get(signature);
-      if (!baselineEntry) return [];
-      if (
-        !['claim', 'synthesis', 'conclusion', 'contradiction'].includes(currentEntry.node.kind) &&
-        !['claim', 'synthesis', 'conclusion', 'contradiction'].includes(baselineEntry.node.kind)
-      ) {
-        return [];
-      }
-
-      const evidenceDiff = diffSets(baselineEntry.evidenceSet, currentEntry.evidenceSet);
-      const confidenceChanged = baselineEntry.node.confidence !== currentEntry.node.confidence;
-      if (!confidenceChanged && evidenceDiff.added.length === 0 && evidenceDiff.removed.length === 0) {
-        return [];
-      }
-
-      return [{
-        signature,
-        title: currentEntry.node.title,
-        baselineNodeId: baselineEntry.node.id,
-        currentNodeId: currentEntry.node.id,
-        baselineConfidence: baselineEntry.node.confidence,
-        currentConfidence: currentEntry.node.confidence,
-        evidenceAdded: evidenceDiff.added,
-        evidenceRemoved: evidenceDiff.removed
-      }];
-    });
-
-  const evidenceSetComparisons = claimComparisons
-    .filter((comparison) => comparison.evidenceAdded.length > 0 || comparison.evidenceRemoved.length > 0)
-    .map((comparison) => ({
-      ownerSignature: comparison.signature,
-      ownerTitle: comparison.title,
-      addedEvidence: comparison.evidenceAdded,
-      removedEvidence: comparison.evidenceRemoved
-    }));
-
-  const summaryBits = [
-    `${addedNodes.length} added nodes`,
-    `${removedNodes.length} removed nodes`,
-    `${addedEdges.length} added edges`,
-    `${removedEdges.length} removed edges`
-  ];
-  if (changedConfidence.length > 0) summaryBits.push(`${changedConfidence.length} confidence changes`);
-  if (contradictionChanges.length > 0) summaryBits.push(`${contradictionChanges.length} contradiction changes`);
+  const diff = diffReasoningSnapshots(baseline.snapshot, current.snapshot);
 
   return {
     baselineRun: {
       label: baseline.label,
       query: baseline.query,
-      queryRunId: baseline.queryRunId,
-      timestamp: baseline.timestamp
+      queryRunId: baseline.queryRunId ?? baseline.snapshot.version.queryRunId,
+      timestamp: baseline.timestamp ?? baseline.snapshot.version.generatedAt
     },
     currentRun: {
       label: current.label,
       query: current.query,
-      queryRunId: current.queryRunId,
-      timestamp: current.timestamp
+      queryRunId: current.queryRunId ?? current.snapshot.version.queryRunId,
+      timestamp: current.timestamp ?? current.snapshot.version.generatedAt
     },
     baselineGraph: {
       label: baseline.label,
-      snapshotId: baseline.meta?.snapshot_id,
-      parentSnapshotId: baseline.meta?.parent_snapshot_id,
-      passSequence: baseline.meta?.pass_sequence,
-      nodeCount: baseline.workspace.graph.nodes.length,
-      edgeCount: baseline.workspace.graph.edges.length
+      snapshotId: baseline.meta?.snapshot_id ?? baseline.snapshot.version.snapshotId,
+      parentSnapshotId: baseline.meta?.parent_snapshot_id ?? baseline.snapshot.version.parentSnapshotId,
+      passSequence: baseline.meta?.pass_sequence ?? baseline.snapshot.version.passSequence,
+      nodeCount: baseline.snapshot.graph.nodes.length,
+      edgeCount: baseline.snapshot.graph.edges.length
     },
     currentGraph: {
       label: current.label,
-      snapshotId: current.meta?.snapshot_id,
-      parentSnapshotId: current.meta?.parent_snapshot_id,
-      passSequence: current.meta?.pass_sequence,
-      nodeCount: current.workspace.graph.nodes.length,
-      edgeCount: current.workspace.graph.edges.length
+      snapshotId: current.meta?.snapshot_id ?? current.snapshot.version.snapshotId,
+      parentSnapshotId: current.meta?.parent_snapshot_id ?? current.snapshot.version.parentSnapshotId,
+      passSequence: current.meta?.pass_sequence ?? current.snapshot.version.passSequence,
+      nodeCount: current.snapshot.graph.nodes.length,
+      edgeCount: current.snapshot.graph.edges.length
     },
-    addedNodes,
-    removedNodes,
-    addedEdges,
-    removedEdges,
-    changedConfidence,
-    contradictionChanges,
-    claimComparisons,
-    evidenceSetComparisons,
-    summary: summaryBits.join(' · '),
+    addedNodes: diff.addedNodes.map((item) => ({
+      signature: item.compareKey,
+      nodeId: item.objectId ?? item.compareKey,
+      title: item.title,
+      kind: toGraphKitKind(item.kind) ?? 'claim'
+    })),
+    removedNodes: diff.removedNodes.map((item) => ({
+      signature: item.compareKey,
+      nodeId: item.objectId ?? item.compareKey,
+      title: item.title,
+      kind: toGraphKitKind(item.kind) ?? 'claim'
+    })),
+    addedClaims: diff.addedClaims.map((item) => ({
+      signature: item.compareKey,
+      nodeId: item.objectId,
+      title: item.title,
+      kind: toGraphKitKind(item.kind)
+    })),
+    removedClaims: diff.removedClaims.map((item) => ({
+      signature: item.compareKey,
+      nodeId: item.objectId,
+      title: item.title,
+      kind: toGraphKitKind(item.kind)
+    })),
+    addedEdges: diff.addedEdges.map((item) => ({
+      signature: item.compareKey,
+      edgeId: item.edgeId ?? item.compareKey,
+      kind: item.kind,
+      fromTitle: item.fromTitle,
+      toTitle: item.toTitle
+    })),
+    removedEdges: diff.removedEdges.map((item) => ({
+      signature: item.compareKey,
+      edgeId: item.edgeId ?? item.compareKey,
+      kind: item.kind,
+      fromTitle: item.fromTitle,
+      toTitle: item.toTitle
+    })),
+    changedConfidence: diff.changedConfidence.map((item) => ({
+      signature: item.compareKey,
+      target: item.target === 'output' ? 'node' : item.target,
+      title: item.title,
+      before: item.before,
+      after: item.after
+    })),
+    supportStrengthChanges: diff.supportStrengthChanges.map((item) => ({
+      signature: item.compareKey,
+      title: item.title,
+      before: item.before,
+      after: item.after
+    })),
+    contradictionChanges: diff.contradictionChanges.map((item) => ({
+      signature: item.compareKey,
+      title: item.title,
+      before: item.before,
+      after: item.after,
+      beforeContradictionEdges: item.beforeContradictionEdges,
+      afterContradictionEdges: item.afterContradictionEdges
+    })),
+    claimComparisons: diff.claimDiffs.map((item) => ({
+      signature: item.compareKey,
+      title: item.title,
+      kind: item.kind as GraphKitNodeKind,
+      baselineNodeId: item.baselineNodeId,
+      currentNodeId: item.currentNodeId,
+      baselineConfidence: item.baselineConfidence,
+      currentConfidence: item.currentConfidence,
+      evidenceAdded: item.evidenceAdded,
+      evidenceRemoved: item.evidenceRemoved,
+      provenanceAdded: item.provenanceAdded,
+      provenanceRemoved: item.provenanceRemoved,
+      justificationPathAdded: item.justificationPathAdded,
+      justificationPathRemoved: item.justificationPathRemoved,
+      baselineSupportEdgeCount: item.baselineSupportEdgeCount,
+      currentSupportEdgeCount: item.currentSupportEdgeCount,
+      baselineContradictionEdgeCount: item.baselineContradictionEdgeCount,
+      currentContradictionEdgeCount: item.currentContradictionEdgeCount
+    })),
+    evidenceSetComparisons: diff.evidenceSetDiffs.map((item) => ({
+      ownerSignature: item.ownerCompareKey,
+      ownerTitle: item.ownerTitle,
+      addedEvidence: item.addedEvidence,
+      removedEvidence: item.removedEvidence
+    })),
+    provenanceComparisons: diff.provenanceDiffs.map((item) => ({
+      ownerSignature: item.ownerCompareKey,
+      ownerTitle: item.ownerTitle,
+      addedProvenance: item.addedProvenance,
+      removedProvenance: item.removedProvenance
+    })),
+    justificationPathComparisons: diff.justificationPathDiffs.map((item) => ({
+      ownerSignature: item.ownerCompareKey,
+      ownerTitle: item.ownerTitle,
+      addedPaths: item.addedPaths,
+      removedPaths: item.removedPaths
+    })),
+    outputComparisons: diff.outputDiffs.map((item) => ({
+      signature: item.compareKey,
+      kind: item.kind,
+      title: item.title,
+      baselineOutputId: item.baselineOutputId,
+      currentOutputId: item.currentOutputId,
+      baselineConfidence: item.baselineConfidence,
+      currentConfidence: item.currentConfidence,
+      textChanged: item.textChanged,
+      derivedNodeIdsAdded: item.derivedNodeIdsAdded,
+      derivedNodeIdsRemoved: item.derivedNodeIdsRemoved
+    })),
+    summary: diff.summary,
+    notes: diff.notes,
     todo: [
+      'Real now: reasoning-object diffs for claims, evidence, provenance, support strength, contradiction state, outputs, and local justification paths.',
+      'Partial now: baseline selection still relies on cached SOPHIA runs rather than an arbitrary dual-run picker.',
       'TODO compare-mode graph overlays',
-      'TODO aligned inspector diff view',
-      'TODO run-to-run playback diff'
+      'TODO side-by-side inspector diff view',
+      'TODO baseline graph frame replay'
     ]
   };
 }

@@ -1,15 +1,6 @@
-export type PhilosophicalDomain = 
-  | 'ethics' 
-  | 'applied_ethics' 
-  | 'epistemology' 
-  | 'metaphysics' 
-  | 'philosophy_of_mind' 
-  | 'political_philosophy' 
-  | 'logic' 
-  | 'aesthetics' 
-  | 'philosophy_of_science' 
-  | 'philosophy_of_language' 
-  | 'philosophy_of_ai';
+import type { PhilosophicalDomain } from '@restormel/contracts/domains';
+
+export type { PhilosophicalDomain };
 
 export interface Claim {
   id: string;

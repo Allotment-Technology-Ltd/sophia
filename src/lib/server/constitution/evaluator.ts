@@ -1,7 +1,7 @@
 import { generateText } from 'ai';
 import { z } from 'zod';
-import type { ClaimType, ConstitutionalCheck, ConstitutionRule, RuleEvaluation } from '$lib/types/constitution';
-import { ConstitutionalCheckSchema, RuleEvaluationSchema } from '$lib/types/constitution';
+import type { ClaimType, ConstitutionalCheck, ConstitutionRule, RuleEvaluation } from '@restormel/contracts/constitution';
+import { ConstitutionalCheckSchema, RuleEvaluationSchema } from '@restormel/contracts/constitution';
 import type { ExtractedClaim, ExtractedRelation } from '$lib/types/verification';
 import { getReasoningModel, trackTokens } from '$lib/server/vertex';
 import type { ProviderApiKeys } from '$lib/server/byok/types';

@@ -1,0 +1,15 @@
+{
+  "name": "@restormel/observability",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./fixtures": "./src/fixtures.ts",
+    "./sse": "./src/sse.ts",
+    "./trace": "./src/trace.ts"
+  },
+  "dependencies": {
+    "@restormel/contracts": "workspace:*"
+  }
+}

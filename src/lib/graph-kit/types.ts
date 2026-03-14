@@ -203,6 +203,7 @@ export interface GraphKitInspectorPayload {
   sections: GraphKitInspectorSection[];
   provenance?: GraphKitProvenanceItem[];
   evidence?: GraphKitEvidenceItem[];
+  evaluationFindings?: GraphKitEvaluationFinding[];
   supportRelations?: GraphKitInspectorRelationItem[];
   contradictionRelations?: GraphKitInspectorRelationItem[];
   validationNotes?: string[];
@@ -259,6 +260,40 @@ export interface GraphKitTraceEvent {
   playback: GraphKitTracePlaybackHint;
 }
 
+export interface GraphKitEvaluationFinding {
+  id: string;
+  kind:
+    | 'unsupported-claim'
+    | 'claim-without-evidence'
+    | 'contradiction-density'
+    | 'missing-provenance'
+    | 'weak-source-diversity'
+    | 'unresolved-inference-chain'
+    | 'conclusion-confidence-gap'
+    | 'disconnected-justification-path';
+  severity: 'info' | 'warning' | 'error';
+  title: string;
+  summary: string;
+  rationale?: string;
+  nodeIds: string[];
+  edgeIds: string[];
+  metricValue?: number;
+  threshold?: number;
+}
+
+export interface GraphKitEvaluationSummary {
+  overallStatus: 'ok' | 'warning' | 'error';
+  totalFindings: number;
+  warningCount: number;
+  errorCount: number;
+  topLine: string;
+}
+
+export interface GraphKitGraphEvaluation {
+  summary: GraphKitEvaluationSummary;
+  findings: GraphKitEvaluationFinding[];
+}
+
 export interface GraphKitCompareResult {
   baselineRun: {
     label: string;
@@ -300,6 +335,18 @@ export interface GraphKitCompareResult {
     title: string;
     kind: GraphKitNodeKind;
   }>;
+  addedClaims: Array<{
+    signature: string;
+    nodeId?: string;
+    title: string;
+    kind?: GraphKitNodeKind;
+  }>;
+  removedClaims: Array<{
+    signature: string;
+    nodeId?: string;
+    title: string;
+    kind?: GraphKitNodeKind;
+  }>;
   addedEdges: Array<{
     signature: string;
     edgeId: string;
@@ -321,21 +368,38 @@ export interface GraphKitCompareResult {
     before?: number;
     after?: number;
   }>;
+  supportStrengthChanges: Array<{
+    signature: string;
+    title: string;
+    before?: number;
+    after?: number;
+  }>;
   contradictionChanges: Array<{
     signature: string;
     title: string;
     before: GraphKitEntityStatus | 'missing';
     after: GraphKitEntityStatus | 'missing';
+    beforeContradictionEdges?: number;
+    afterContradictionEdges?: number;
   }>;
   claimComparisons: Array<{
     signature: string;
     title: string;
+    kind: GraphKitNodeKind;
     baselineNodeId?: string;
     currentNodeId?: string;
     baselineConfidence?: number;
     currentConfidence?: number;
     evidenceAdded: string[];
     evidenceRemoved: string[];
+    provenanceAdded: string[];
+    provenanceRemoved: string[];
+    justificationPathAdded: string[];
+    justificationPathRemoved: string[];
+    baselineSupportEdgeCount: number;
+    currentSupportEdgeCount: number;
+    baselineContradictionEdgeCount: number;
+    currentContradictionEdgeCount: number;
   }>;
   evidenceSetComparisons: Array<{
     ownerSignature: string;
@@ -343,7 +407,32 @@ export interface GraphKitCompareResult {
     addedEvidence: string[];
     removedEvidence: string[];
   }>;
+  provenanceComparisons: Array<{
+    ownerSignature: string;
+    ownerTitle: string;
+    addedProvenance: string[];
+    removedProvenance: string[];
+  }>;
+  justificationPathComparisons: Array<{
+    ownerSignature: string;
+    ownerTitle: string;
+    addedPaths: string[];
+    removedPaths: string[];
+  }>;
+  outputComparisons: Array<{
+    signature: string;
+    kind: 'synthesis' | 'conclusion' | 'final-output';
+    title: string;
+    baselineOutputId?: string;
+    currentOutputId?: string;
+    baselineConfidence?: number;
+    currentConfidence?: number;
+    textChanged: boolean;
+    derivedNodeIdsAdded: string[];
+    derivedNodeIdsRemoved: string[];
+  }>;
   summary: string;
+  notes: string[];
   todo: string[];
 }
 
@@ -376,6 +465,7 @@ export interface GraphKitGraphViewModel {
   ghostNodes: GraphKitGhostNode[];
   ghostEdges: GraphKitGhostEdge[];
   compareResult?: GraphKitCompareResult | null;
+  graphEvaluation?: GraphKitGraphEvaluation | null;
   missingData: string[];
 }
 

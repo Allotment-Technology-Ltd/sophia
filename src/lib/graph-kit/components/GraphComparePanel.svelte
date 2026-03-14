@@ -26,6 +26,11 @@
     if (Number.isNaN(date.getTime())) return value;
     return date.toLocaleString();
   }
+
+  function formatScore(value?: number): string {
+    if (typeof value !== 'number') return 'n/a';
+    return value.toFixed(2);
+  }
  </script>
 
 <section class="compare-panel" aria-label="Compare mode">
@@ -34,7 +39,7 @@
       <p class="eyebrow">Compare Mode</p>
       <h2>Reasoning-state comparison</h2>
       <p class="compare-intro">
-        Baseline selection is real. The diff model already tracks node, edge, confidence, contradiction, and evidence-set changes, while graph overlays and inspector diffs remain TODOs.
+        Baseline selection is real. The diff model now runs on reasoning-object snapshots, so compare mode highlights claim, evidence, provenance, contradiction, support-strength, justification-path, and output changes instead of just graph novelty.
       </p>
     </div>
 
@@ -100,19 +105,20 @@
       </section>
 
       <section class="compare-card">
-        <h3>Node And Edge Deltas</h3>
+        <h3>Reasoning Deltas</h3>
         <div class="delta-stack">
-          <p>Added nodes: {compareResult.addedNodes.length}</p>
-          <p>Removed nodes: {compareResult.removedNodes.length}</p>
+          <p>Added claims: {compareResult.addedClaims.length}</p>
+          <p>Removed claims: {compareResult.removedClaims.length}</p>
           <p>Added edges: {compareResult.addedEdges.length}</p>
           <p>Removed edges: {compareResult.removedEdges.length}</p>
         </div>
       </section>
 
       <section class="compare-card">
-        <h3>Confidence And Contradiction Changes</h3>
+        <h3>Confidence, Support, And Contradiction</h3>
         <div class="delta-stack">
           <p>Confidence changes: {compareResult.changedConfidence.length}</p>
+          <p>Support-strength changes: {compareResult.supportStrengthChanges.length}</p>
           <p>Contradiction changes: {compareResult.contradictionChanges.length}</p>
         </div>
       </section>
@@ -122,7 +128,7 @@
       <section class="compare-card">
         <h3>Claim Diffs</h3>
         {#if compareResult.claimComparisons.length === 0}
-          <p class="empty-copy">No claim-level confidence or evidence changes were detected.</p>
+          <p class="empty-copy">No claim-level confidence, evidence, provenance, or path changes were detected.</p>
         {:else}
           <div class="diff-list">
             {#each compareResult.claimComparisons.slice(0, 6) as claim}
@@ -137,15 +143,39 @@
                 </div>
                 <p>
                   confidence:
-                  {claim.baselineConfidence?.toFixed(2) ?? 'n/a'}
+                  {formatScore(claim.baselineConfidence)}
                   →
-                  {claim.currentConfidence?.toFixed(2) ?? 'n/a'}
+                  {formatScore(claim.currentConfidence)}
+                </p>
+                <p>
+                  support edges:
+                  {claim.baselineSupportEdgeCount}
+                  →
+                  {claim.currentSupportEdgeCount}
+                </p>
+                <p>
+                  contradiction pressure:
+                  {claim.baselineContradictionEdgeCount}
+                  →
+                  {claim.currentContradictionEdgeCount}
                 </p>
                 {#if claim.evidenceAdded.length > 0}
                   <p>evidence added: {claim.evidenceAdded.length}</p>
                 {/if}
                 {#if claim.evidenceRemoved.length > 0}
                   <p>evidence removed: {claim.evidenceRemoved.length}</p>
+                {/if}
+                {#if claim.provenanceAdded.length > 0}
+                  <p>provenance added: {claim.provenanceAdded.length}</p>
+                {/if}
+                {#if claim.provenanceRemoved.length > 0}
+                  <p>provenance removed: {claim.provenanceRemoved.length}</p>
+                {/if}
+                {#if claim.justificationPathAdded.length > 0}
+                  <p>paths added: {claim.justificationPathAdded.length}</p>
+                {/if}
+                {#if claim.justificationPathRemoved.length > 0}
+                  <p>paths removed: {claim.justificationPathRemoved.length}</p>
                 {/if}
               </article>
             {/each}
@@ -171,7 +201,81 @@
       </section>
 
       <section class="compare-card">
+        <h3>Provenance Diffs</h3>
+        {#if compareResult.provenanceComparisons.length === 0}
+          <p class="empty-copy">No provenance changes were detected for matched claims.</p>
+        {:else}
+          <div class="diff-list">
+            {#each compareResult.provenanceComparisons.slice(0, 6) as provenance}
+              <article class="diff-item">
+                <strong>{provenance.ownerTitle}</strong>
+                <p>added provenance: {provenance.addedProvenance.length}</p>
+                <p>removed provenance: {provenance.removedProvenance.length}</p>
+              </article>
+            {/each}
+          </div>
+        {/if}
+      </section>
+    </div>
+
+    <div class="compare-grid compare-grid-deep">
+      <section class="compare-card">
+        <h3>Justification Path Diffs</h3>
+        {#if compareResult.justificationPathComparisons.length === 0}
+          <p class="empty-copy">No local justification-path changes were detected for matched claims.</p>
+        {:else}
+          <div class="diff-list">
+            {#each compareResult.justificationPathComparisons.slice(0, 6) as pathDiff}
+              <article class="diff-item">
+                <strong>{pathDiff.ownerTitle}</strong>
+                <p>paths added: {pathDiff.addedPaths.length}</p>
+                <p>paths removed: {pathDiff.removedPaths.length}</p>
+              </article>
+            {/each}
+          </div>
+        {/if}
+      </section>
+
+      <section class="compare-card">
+        <h3>Output Diffs</h3>
+        {#if compareResult.outputComparisons.length === 0}
+          <p class="empty-copy">No final-output, synthesis, or conclusion deltas were detected.</p>
+        {:else}
+          <div class="diff-list">
+            {#each compareResult.outputComparisons.slice(0, 6) as output}
+              <article class="diff-item">
+                <strong>{output.title}</strong>
+                <p>kind: {output.kind}</p>
+                <p>
+                  confidence:
+                  {formatScore(output.baselineConfidence)}
+                  →
+                  {formatScore(output.currentConfidence)}
+                </p>
+                {#if output.textChanged}
+                  <p>text changed</p>
+                {/if}
+                {#if output.derivedNodeIdsAdded.length > 0}
+                  <p>derived nodes added: {output.derivedNodeIdsAdded.length}</p>
+                {/if}
+                {#if output.derivedNodeIdsRemoved.length > 0}
+                  <p>derived nodes removed: {output.derivedNodeIdsRemoved.length}</p>
+                {/if}
+              </article>
+            {/each}
+          </div>
+        {/if}
+      </section>
+
+      <section class="compare-card">
         <h3>Implementation Notes</h3>
+        {#if compareResult.notes.length > 0}
+          <ul class="todo-list">
+            {#each compareResult.notes.slice(0, 4) as item}
+              <li>{item}</li>
+            {/each}
+          </ul>
+        {/if}
         <ul class="todo-list">
           {#each compareResult.todo as item}
             <li>{item}</li>

@@ -2,7 +2,7 @@ import {
 	PassageRecordSchema,
 	type PassageRecord,
 	type PassageRole
-} from './contracts.js';
+} from '@restormel/contracts/ingestion';
 
 interface TextBlock {
 	text: string;

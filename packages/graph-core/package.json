@@ -1,0 +1,21 @@
+{
+  "name": "@restormel/graph-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./compare": "./src/compare.ts",
+    "./diff": "./src/diff.ts",
+    "./evaluation": "./src/evaluation.ts",
+    "./layout": "./src/layout.ts",
+    "./lineage": "./src/lineage.ts",
+    "./projection": "./src/projection.ts",
+    "./summary": "./src/summary.ts",
+    "./trace": "./src/trace.ts",
+    "./workspace": "./src/workspace.ts"
+  },
+  "dependencies": {
+    "@restormel/contracts": "workspace:*"
+  }
+}

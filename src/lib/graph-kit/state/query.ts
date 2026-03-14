@@ -9,6 +9,11 @@ import type {
   GraphKitWorkspaceData,
   GraphKitWorkspaceFilters
 } from '$lib/graph-kit/types';
+import {
+  collectEdgeKinds as collectEdgeKindsBase,
+  collectNodeKinds as collectNodeKindsBase,
+  filterGraph
+} from '@restormel/graph-core/workspace';
 
 function formatValue(value: unknown): string {
   if (Array.isArray(value)) return value.join(', ');
@@ -18,8 +23,14 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
+function summarizeEvaluationFinding(
+  finding: { title: string; summary: string }
+): string {
+  return `${finding.title}: ${finding.summary}`;
+}
+
 export function collectRelationKinds(edges: GraphKitEdge[]): Set<GraphKitEdgeKind> {
-  return new Set(edges.map((edge) => edge.kind));
+  return collectEdgeKindsBase(edges);
 }
 
 // Prefer the "edge" terminology at the Graph Kit boundary. Keep the old
@@ -27,7 +38,7 @@ export function collectRelationKinds(edges: GraphKitEdge[]): Set<GraphKitEdgeKin
 export const collectEdgeKinds = collectRelationKinds;
 
 export function collectNodeKinds(nodes: GraphKitNode[]): Set<GraphKitNodeKind> {
-  return new Set(nodes.map((node) => node.kind));
+  return collectNodeKindsBase(nodes);
 }
 
 export function filterWorkspaceData(
@@ -35,66 +46,18 @@ export function filterWorkspaceData(
   filters: GraphKitWorkspaceFilters,
   selectedNodeId: string | null
 ): GraphKitWorkspaceData {
-  const search = filters.search.trim().toLowerCase();
-
-  const nodeMatches = (node: GraphKitNode): boolean => {
-    if (filters.phase !== 'all' && node.phase && node.phase !== filters.phase) return false;
-    if (!filters.nodeKinds.has(node.kind) && node.id !== selectedNodeId) return false;
-    if (!search) return true;
-    return node.searchText.toLowerCase().includes(search);
-  };
-
-  const matchedNodeIds = new Set(workspace.graph.nodes.filter(nodeMatches).map((node) => node.id));
-  if (selectedNodeId) matchedNodeIds.add(selectedNodeId);
-
-  let edges = workspace.graph.edges.filter((edge) => {
-    if (!filters.edgeKinds.has(edge.kind)) return false;
-    if (filters.phase !== 'all' && edge.phase && edge.phase !== filters.phase) return false;
-    return matchedNodeIds.has(edge.from) && matchedNodeIds.has(edge.to);
-  });
-
-  if (filters.density === 'comfortable') {
-    const logicalEdges = edges.filter((edge) => edge.kind !== 'contains');
-    if (logicalEdges.length > 0) edges = logicalEdges;
-  }
-
-  const visibleNodeIds = new Set<string>();
-  for (const edge of edges) {
-    visibleNodeIds.add(edge.from);
-    visibleNodeIds.add(edge.to);
-  }
-  if (selectedNodeId) visibleNodeIds.add(selectedNodeId);
-
-  const nodes = workspace.graph.nodes.filter((node) => {
-    if (visibleNodeIds.size === 0) return nodeMatches(node);
-    return visibleNodeIds.has(node.id) && nodeMatches(node);
-  });
-
-  const nodeIds = new Set(nodes.map((node) => node.id));
-
   return {
     ...workspace,
-    graph: {
-      ...workspace.graph,
-      nodes,
-      edges,
-      ghostNodes: filters.showGhosts
-        ? workspace.graph.ghostNodes.filter(
-            (node) => !node.anchorNodeId || nodeIds.has(node.anchorNodeId)
-          )
-        : [],
-      ghostEdges: filters.showGhosts
-        ? workspace.graph.ghostEdges.filter(
-            (edge) => nodeIds.has(edge.from) && nodeIds.has(edge.to)
-          )
-        : []
-    }
+    graph: filterGraph(workspace.graph, filters, selectedNodeId, {
+      comfortableHiddenEdgeKinds: ['contains']
+    })
   };
 }
 
 export function buildWorkspaceInspectorPayload(
   workspace: GraphKitWorkspaceData
 ): GraphKitInspectorPayload {
+  const graphEvaluation = workspace.graph.graphEvaluation;
   return {
     target: 'workspace',
     title: workspace.summary.title,
@@ -118,9 +81,26 @@ export function buildWorkspaceInspectorPayload(
                 value: note
               }))
             : [{ label: 'status', value: 'No known modeling gaps recorded' }]
-      }
+      },
+      ...(graphEvaluation
+        ? [
+            {
+              title: 'Graph Evaluation',
+              rows: [
+                { label: 'status', value: graphEvaluation.summary.overallStatus },
+                { label: 'findings', value: `${graphEvaluation.summary.totalFindings}` },
+                { label: 'warnings', value: `${graphEvaluation.summary.warningCount}` },
+                { label: 'errors', value: `${graphEvaluation.summary.errorCount}` }
+              ]
+            }
+          ]
+        : [])
     ],
-    validationNotes: workspace.graph.missingData,
+    evaluationFindings: graphEvaluation?.findings.slice(0, 8) ?? [],
+    validationNotes: [
+      ...(graphEvaluation ? [graphEvaluation.summary.topLine] : []),
+      ...workspace.graph.missingData
+    ],
     todo: [
       'TODO: provenance drawer integration',
       'TODO: compare mode entry point'
@@ -134,6 +114,8 @@ export function buildNodeInspectorPayload(
 ): GraphKitInspectorPayload | null {
   const node = workspace.graph.nodes.find((candidate) => candidate.id === nodeId);
   if (!node) return null;
+  const evaluationFindings =
+    workspace.graph.graphEvaluation?.findings.filter((finding) => finding.nodeIds.includes(nodeId)) ?? [];
 
   const connectedEdges = workspace.graph.edges.filter(
     (edge) => edge.from === nodeId || edge.to === nodeId
@@ -248,14 +230,27 @@ export function buildNodeInspectorPayload(
           connectedRows.length > 0
             ? connectedRows
             : [{ label: 'connections', value: 'No visible connections in the current filter scope' }]
-      }
+      },
+      ...(evaluationFindings.length > 0
+        ? [
+            {
+              title: 'Graph Evaluation',
+              rows: evaluationFindings.map((finding) => ({
+                label: finding.kind,
+                value: summarizeEvaluationFinding(finding)
+              }))
+            }
+          ]
+        : [])
     ],
     provenance: node.provenance,
     evidence: node.evidence,
+    evaluationFindings,
     supportRelations,
     contradictionRelations,
     validationNotes: [
       ...node.metadata.missingSignals,
+      ...evaluationFindings.map((finding) => summarizeEvaluationFinding(finding)),
       ...(node.provenance.length === 0 ? ['No structured provenance payload is available for this node yet.'] : []),
       ...(supportRelations.length === 0 && contradictionRelations.length === 0
         ? ['No explicit support or contradiction relations are visible under the current filters.']

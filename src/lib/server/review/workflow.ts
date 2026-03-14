@@ -1,5 +1,5 @@
 import { create, query, update } from '$lib/server/db';
-import type { ReviewState, VerificationState } from '$lib/server/ingestion/contracts';
+import type { ReviewState, VerificationState } from '@restormel/contracts/ingestion';
 
 export const REVIEWABLE_RELATION_TABLES = [
 	'supports',
