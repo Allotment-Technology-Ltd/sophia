@@ -3,6 +3,7 @@ import type { CachedQueryResult } from '$lib/stores/history.svelte';
 export interface ComparisonBaseline {
   query: string;
   label: string;
+  cached: CachedQueryResult;
   metadata: CachedQueryResult['metadata'];
   claimsByPass: CachedQueryResult['claimsByPass'];
   relationsByPass: CachedQueryResult['relationsByPass'];
@@ -67,6 +68,7 @@ function createComparisonStore() {
       baseline = {
         query: cached.query,
         label,
+        cached,
         metadata: cached.metadata,
         claimsByPass: cached.claimsByPass,
         relationsByPass: cached.relationsByPass,
