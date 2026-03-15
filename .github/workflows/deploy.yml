@@ -169,7 +169,7 @@ jobs:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
-      - uses: pulumi/actions@v5
+      - uses: pulumi/actions@v6
         id: preview
         with:
           command: preview
@@ -207,7 +207,7 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v3
 
-      - uses: pulumi/actions@v5
+      - uses: pulumi/actions@v6
         with:
           command: up
           stack-name: production
