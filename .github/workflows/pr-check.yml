@@ -48,6 +48,27 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
+      - name: Assert Restormel staging verification secrets
+        env:
+          RESTORMEL_GATEWAY_KEY: ${{ secrets.RESTORMEL_GATEWAY_KEY_STAGING }}
+          RESTORMEL_PROJECT_ID: ${{ secrets.RESTORMEL_PROJECT_ID_STAGING }}
+          RESTORMEL_ENVIRONMENT_ID: ${{ secrets.RESTORMEL_ENVIRONMENT_ID_STAGING }}
+        run: |
+          test -n "$RESTORMEL_GATEWAY_KEY" || { echo "Missing RESTORMEL_GATEWAY_KEY_STAGING"; exit 1; }
+          test -n "$RESTORMEL_PROJECT_ID" || { echo "Missing RESTORMEL_PROJECT_ID_STAGING"; exit 1; }
+          test -n "$RESTORMEL_ENVIRONMENT_ID" || { echo "Missing RESTORMEL_ENVIRONMENT_ID_STAGING"; exit 1; }
+
+      - name: Restormel Doctor
+        run: npx @restormel/doctor
+
+      - name: Restormel Validate
+        env:
+          RESTORMEL_GATEWAY_KEY: ${{ secrets.RESTORMEL_GATEWAY_KEY_STAGING }}
+          RESTORMEL_PROJECT_ID: ${{ secrets.RESTORMEL_PROJECT_ID_STAGING }}
+          RESTORMEL_ENVIRONMENT_ID: ${{ secrets.RESTORMEL_ENVIRONMENT_ID_STAGING }}
+          RESTORMEL_KEYS_BASE: ${{ secrets.RESTORMEL_KEYS_BASE_STAGING }}
+        run: npx @restormel/validate
+
       - name: Audit dependencies
         run: pnpm audit --audit-level=high
         continue-on-error: true

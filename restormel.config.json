@@ -1,0 +1,8 @@
+{
+  "framework": "sveltekit",
+  "providers": [
+    "vertex",
+    "anthropic",
+    "openai"
+  ]
+}

@@ -4,6 +4,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { loadServerEnv } from './env';
 import type { ProviderApiKeys } from './byok/types';
+import { resolveProviderDecision } from './resolve-provider';
 import {
   DEFAULT_MODEL_CATALOG,
   REASONING_PROVIDER_BASE_URL_ENV,
@@ -216,6 +217,9 @@ export interface ReasoningModelRoute {
   modelId: string;
   supportsGrounding: boolean;
   credentialSource: 'byok' | 'platform';
+  routingSource?: 'restormel' | 'legacy';
+  resolvedRouteId?: string | null;
+  resolvedExplanation?: string | null;
 }
 
 export interface AvailableModelOption {
@@ -300,14 +304,14 @@ export function getReasoningModel(options?: {
   return route.model;
 }
 
-export function getExtractionModel(options?: {
+export function getExtractionModelRoute(options?: {
   providerApiKeys?: ProviderApiKeys;
-}) {
+}): ReasoningModelRoute {
   const config = getRuntimeRoutingConfig();
 
   const byokVertexKey = options?.providerApiKeys?.vertex?.trim();
   if (byokVertexKey) {
-    return getGoogleForApiKey(byokVertexKey)(config.extractionModelId);
+    return buildVertexRoute(config.extractionModelId, byokVertexKey);
   }
 
   for (const provider of REASONING_PROVIDER_ORDER) {
@@ -316,15 +320,26 @@ export function getExtractionModel(options?: {
     if (!key) continue;
 
     if (provider === 'anthropic') {
-      return getAnthropicForApiKey(key)(config.providerExtractionModelIds.anthropic || config.providerReasoningModelIds.anthropic!);
+      return buildAnthropicRoute(
+        config.providerExtractionModelIds.anthropic || config.providerReasoningModelIds.anthropic!,
+        key
+      );
     }
 
-    return getOpenAICompatibleForProvider(provider, key)(
-      config.providerExtractionModelIds[provider] || config.providerReasoningModelIds[provider]!
+    return buildOpenAICompatibleRoute(
+      provider,
+      config.providerExtractionModelIds[provider] || config.providerReasoningModelIds[provider]!,
+      key
     );
   }
 
-  return getVertex()(config.extractionModelId);
+  return buildVertexRoute(config.extractionModelId);
+}
+
+export function getExtractionModel(options?: {
+  providerApiKeys?: ProviderApiKeys;
+}) {
+  return getExtractionModelRoute(options).model;
 }
 
 function getDeepVertexModelId(config: RuntimeRoutingConfig, pass: RoutingPass): string {
@@ -502,6 +517,48 @@ export function getReasoningModelRoute(options?: {
   }
 
   return buildVertexRoute(getDeepVertexModelId(config, pass));
+}
+
+export async function resolveReasoningModelRoute(options?: {
+  depthMode?: 'quick' | 'standard' | 'deep';
+  pass?: RoutingPass;
+  requestedProvider?: RequestedProvider;
+  requestedModelId?: string;
+  providerApiKeys?: ProviderApiKeys;
+  routeId?: string;
+}): Promise<ReasoningModelRoute> {
+  const legacyRoute = getReasoningModelRoute(options);
+  const config = getRuntimeRoutingConfig();
+  const decision = await resolveProviderDecision({
+    preferredProvider: options?.requestedProvider,
+    preferredModel: options?.requestedModelId,
+    routeId: options?.routeId,
+    legacy: () => ({
+      provider: legacyRoute.provider,
+      model: legacyRoute.modelId,
+      source: 'legacy'
+    })
+  });
+
+  if (decision.source === 'legacy') {
+    return {
+      ...legacyRoute,
+      routingSource: 'legacy',
+      resolvedRouteId: null,
+      resolvedExplanation: null
+    };
+  }
+
+  const modelId =
+    decision.model?.trim() ||
+    getReasoningModelIdForProvider(decision.provider, config);
+
+  return {
+    ...getRouteForProvider(decision.provider, modelId, options?.providerApiKeys),
+    routingSource: 'restormel',
+    resolvedRouteId: decision.routeId ?? null,
+    resolvedExplanation: decision.explanation ?? null
+  };
 }
 
 export function getAvailableReasoningModels(options?: {

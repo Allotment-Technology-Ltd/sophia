@@ -1,8 +1,7 @@
 import { generateObject, generateText, streamText } from 'ai';
 import { z } from 'zod';
 import {
-  getExtractionModel,
-  getReasoningModelRoute,
+  resolveReasoningModelRoute,
   type ReasoningModelRoute,
   trackTokens,
   getGroundingTool
@@ -157,6 +156,7 @@ interface EngineOptions {
   domainMode?: 'auto' | 'manual';
   domain?: 'ethics' | 'philosophy_of_mind';
   viewerUid?: string | null;
+  routeId?: string;
   modelProvider?: ModelProvider;
   modelId?: string;
   queryRunId?: string;
@@ -413,26 +413,30 @@ export async function runDialecticalEngine(
   const isAgnosticMode = engineMode === 'agnostic';
   const selectedDomainMode = options?.domainMode ?? 'auto';
   const selectedDomain = options?.domain;
+  const routeId = options?.routeId;
   const modelProvider = options?.modelProvider ?? 'auto';
   const modelId = options?.modelId;
   const depthMode = options?.depthMode ?? 'standard';
-  const analysisModelRoute = getReasoningModelRoute({
+  const analysisModelRoute = await resolveReasoningModelRoute({
     depthMode,
     pass: 'analysis',
+    routeId,
     requestedProvider: modelProvider,
     requestedModelId: modelId,
     providerApiKeys: options?.providerApiKeys
   });
-  const critiqueModelRoute = getReasoningModelRoute({
+  const critiqueModelRoute = await resolveReasoningModelRoute({
     depthMode,
     pass: 'critique',
+    routeId,
     requestedProvider: modelProvider,
     requestedModelId: modelId,
     providerApiKeys: options?.providerApiKeys
   });
-  const synthesisModelRoute = getReasoningModelRoute({
+  const synthesisModelRoute = await resolveReasoningModelRoute({
     depthMode,
     pass: 'synthesis',
+    routeId,
     requestedProvider: modelProvider,
     requestedModelId: modelId,
     providerApiKeys: options?.providerApiKeys
@@ -1112,6 +1116,7 @@ export async function runVerificationPass(
   callbacks: EngineCallbacks,
   options?: {
     depthMode?: 'quick' | 'standard' | 'deep';
+    routeId?: string;
     modelProvider?: ModelProvider;
     providerApiKeys?: ProviderApiKeys;
   }
@@ -1120,9 +1125,10 @@ export async function runVerificationPass(
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
   let streamFailure: unknown = null;
-  const verificationModelRoute = getReasoningModelRoute({
+  const verificationModelRoute = await resolveReasoningModelRoute({
     pass: 'verification',
     depthMode: options?.depthMode ?? 'standard',
+    routeId: options?.routeId,
     requestedProvider: options?.modelProvider ?? 'auto',
     providerApiKeys: options?.providerApiKeys
   });

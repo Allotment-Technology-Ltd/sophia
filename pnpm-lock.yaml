@@ -35,6 +35,12 @@ importers:
       '@google/generative-ai':
         specifier: ^0.24.1
         version: 0.24.1
+      '@restormel/keys':
+        specifier: file:vendor/restormel/restormel-keys-0.2.5.tgz
+        version: file:vendor/restormel/restormel-keys-0.2.5.tgz
+      '@restormel/keys-svelte':
+        specifier: file:vendor/restormel/restormel-keys-svelte-0.1.0.tgz
+        version: file:vendor/restormel/restormel-keys-svelte-0.1.0.tgz(svelte@5.53.6)
       ai:
         specifier: 6.0.105
         version: 6.0.105(zod@4.3.6)
@@ -974,6 +980,19 @@ packages:
         optional: true
       typescript:
         optional: true
+
+  '@restormel/keys-svelte@file:vendor/restormel/restormel-keys-svelte-0.1.0.tgz':
+    resolution: {integrity: sha512-Y/YuXTaHpJpDR2mdwP/OY7O7eM8/uRyFZ2mCvuOC3rYGpI+sBg7hUGJcKH1hv2thJJ9JhFYewyKzrMee51Tn9Q==, tarball: file:vendor/restormel/restormel-keys-svelte-0.1.0.tgz}
+    version: 0.1.0
+    peerDependencies:
+      svelte: ^5.0.0
+
+  '@restormel/keys@0.2.5':
+    resolution: {integrity: sha512-p2xHfGjC+ibDRb3+lp96rdIiz1SCDHTdm/ygolrrIZZRIGJn7Oy+R2w5Gsn86xKbCL56yjmkH3Npqc6nSJsfMA==}
+
+  '@restormel/keys@file:vendor/restormel/restormel-keys-0.2.5.tgz':
+    resolution: {integrity: sha512-ay9LGZEHlH9KxpB4wMHfBpG7zANXYgupH5WExVTh28f6jQUD7PJbN/7Ki+2nbEnrOhGYQ4Veuq/fEpc5GVSluQ==, tarball: file:vendor/restormel/restormel-keys-0.2.5.tgz}
+    version: 0.2.5
 
   '@rollup/plugin-commonjs@29.0.0':
     resolution: {integrity: sha512-U2YHaxR2cU/yAiwKJtJRhnyLk7cifnQw0zUpISsocBDoHDJn+HTV74ABqnwr5bEgWUwFZC9oFL6wLe21lHu5eQ==}
@@ -4343,6 +4362,15 @@ snapshots:
       typescript: 5.9.3
     transitivePeerDependencies:
       - supports-color
+
+  '@restormel/keys-svelte@file:vendor/restormel/restormel-keys-svelte-0.1.0.tgz(svelte@5.53.6)':
+    dependencies:
+      '@restormel/keys': 0.2.5
+      svelte: 5.53.6
+
+  '@restormel/keys@0.2.5': {}
+
+  '@restormel/keys@file:vendor/restormel/restormel-keys-0.2.5.tgz': {}
 
   '@rollup/plugin-commonjs@29.0.0(rollup@4.59.0)':
     dependencies:

@@ -1,7 +1,7 @@
 import { generateText } from 'ai';
 import { z } from 'zod';
 import { extractSophiaMetaBlock } from './engine';
-import { getExtractionModel, trackTokens } from './vertex';
+import { getExtractionModelRoute, trackTokens } from './vertex';
 import type { ProviderApiKeys } from './byok/types';
 import {
   ExtractionResultSchema,
@@ -35,8 +35,11 @@ export async function extractClaims(
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
     try {
+      const extractionRoute = getExtractionModelRoute({
+        providerApiKeys: options?.providerApiKeys
+      });
       const result = await generateText({
-        model: getExtractionModel({ providerApiKeys: options?.providerApiKeys }),
+        model: extractionRoute.model,
         system: VERIFICATION_EXTRACTION_SYSTEM_PROMPT,
         prompt: buildVerificationExtractionUserPrompt(request),
         maxOutputTokens: 2048
@@ -57,7 +60,7 @@ export async function extractClaims(
         relations: metaBlock.relations,
         metadata: {
           source_length: sourceText.length,
-          extraction_model: process.env.GEMINI_EXTRACTION_MODEL || 'gemini-2.5-flash',
+          extraction_model: extractionRoute.modelId,
           extraction_duration_ms: Date.now() - startedAt,
           tokens_used: {
             input: inputTokens,

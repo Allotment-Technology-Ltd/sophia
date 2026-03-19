@@ -11,26 +11,49 @@
     options?: ModelOption[];
     disabled?: boolean;
     layout?: 'inline' | 'stacked';
+    loading?: boolean;
+    errorMessage?: string;
+    emptyMessage?: string;
+    onRetry?: (() => void) | undefined;
   }
 
   let {
     value = $bindable<string>('auto'),
     options = [],
     disabled = false,
-    layout = 'inline'
+    layout = 'inline',
+    loading = false,
+    errorMessage = '',
+    emptyMessage = '',
+    onRetry
   }: Props = $props();
 
   const selected = $derived(options.find((option) => option.value === value));
+  const hasVisibleChoices = $derived(options.some((option) => !option.disabled));
 </script>
 
 <div class="model-row" class:stacked={layout === 'stacked'} aria-label="Model selector">
   <label for="model-select">Choose your model</label>
-  <select id="model-select" bind:value {disabled}>
+  <select id="model-select" bind:value disabled={disabled || loading || !!errorMessage || !hasVisibleChoices}>
     {#each options as option}
       <option value={option.value} disabled={option.disabled}>{option.label}</option>
     {/each}
   </select>
-  <span class="hint">{selected?.description ?? 'Select a model'}</span>
+  <div class="hint-block">
+    <span class="hint">{selected?.description ?? 'Select a model'}</span>
+    {#if loading}
+      <span class="state loading" role="status">Loading policy-filtered models…</span>
+    {:else if errorMessage}
+      <div class="state error" role="alert">
+        <span>{errorMessage}</span>
+        {#if onRetry}
+          <button type="button" class="retry-btn" onclick={onRetry}>Retry</button>
+        {/if}
+      </div>
+    {:else if emptyMessage}
+      <span class="state empty" role="status">{emptyMessage}</span>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -66,11 +89,46 @@
     letter-spacing: 0;
   }
 
+  .hint-block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
   .hint {
     text-transform: none;
     letter-spacing: 0;
     font-size: 0.72rem;
     color: var(--color-dim);
+  }
+
+  .state {
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 0.7rem;
+    line-height: 1.4;
+  }
+
+  .state.loading,
+  .state.empty {
+    color: var(--color-dim);
+  }
+
+  .state.error {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--color-danger, #d35b5b);
+  }
+
+  .retry-btn {
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-text);
+    border-radius: 3px;
+    padding: 3px 8px;
+    font-size: 0.7rem;
+    cursor: pointer;
   }
 
   .model-row.stacked .hint {

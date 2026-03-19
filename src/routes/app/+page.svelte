@@ -29,7 +29,7 @@
   import Button from '$lib/components/Button.svelte';
   import PassCard from '$lib/components/PassCard.svelte';
   import LensSelector from '$lib/components/LensSelector.svelte';
-  import ModelSelector from '$lib/components/ModelSelector.svelte';
+  import RestormelModelSelector from '$lib/components/RestormelModelSelector.svelte';
   import DepthSelector from '$lib/components/DepthSelector.svelte';
   import ReasoningQualityBadge from '$lib/components/ReasoningQualityBadge.svelte';
   import ConstitutionImpactPanel from '$lib/components/ConstitutionImpactPanel.svelte';
@@ -45,6 +45,11 @@
   import { extractFurtherQuestions } from '$lib/utils/extractQuestions';
   import DialecticalTriangle from '$lib/components/DialecticalTriangle.svelte';
   import { getRandomExamples } from '$lib/constants/examples';
+  import {
+    createSophiaModelSelectorKeys,
+    createSophiaModelSelectorProviders,
+    toSophiaSelectorProviderId
+  } from '$lib/restormel/model-selector';
   import {
     DEFAULT_MODEL_CATALOG,
     PROVIDER_UI_META,
@@ -103,11 +108,30 @@
     totalEstimatedCostUsd: number;
     passEstimates: RunCostPassEstimate[];
   }
+  interface AllowedModelsResponse {
+    models: Array<{
+      id: string;
+      provider: ReasoningProvider;
+      label?: string;
+      description?: string;
+    }>;
+    allowed_by_provider?: Partial<Record<ReasoningProvider, string[]>>;
+    filtering?: {
+      active?: boolean;
+      degraded?: boolean;
+      routeId?: string | null;
+    };
+    error?: string;
+  }
 
   let modelOptions = $state<ModelOption[]>([]);
+  let allowedModelIdsByProvider = $state<Partial<Record<ReasoningProvider, string[]>>>({});
   let byokProviders = $state<ByokProviderStatus[]>([]);
   let keySource = $state<QueryKeySource>('platform');
   let byokStatusError = $state('');
+  let modelOptionsLoading = $state(false);
+  let modelOptionsError = $state('');
+  let modelPolicyFilteringActive = $state(false);
   let selectedModelValue = $state<string>('auto');
   let customModelId = $state('');
   let previousKeySource: QueryKeySource = 'platform';
@@ -231,6 +255,12 @@
     selectedModelValue = fallback ? fallback.value : 'auto';
   }
 
+  function handleRestormelModelSelect(providerId: string, modelId: string): void {
+    const provider = toSophiaSelectorProviderId(providerId);
+    if (!provider) return;
+    applyModelSelection(provider, modelId);
+  }
+
   const selectedModel = $derived(parseSelectedModel(selectedModelValue));
   const selectableModelOptions = $derived.by(() => {
     if (keySource === 'platform') {
@@ -238,6 +268,17 @@
     }
     return modelOptions.filter((option) => option.provider === keySource);
   });
+  const restormelModelSelectorProviders = $derived.by(() =>
+    createSophiaModelSelectorProviders(
+      selectableModelOptions.map((option) => ({
+        provider: option.provider,
+        id: option.id
+      }))
+    )
+  );
+  const restormelModelSelectorKeys = $derived.by(() =>
+    createSophiaModelSelectorKeys(byokProviders, restormelModelSelectorProviders, keySource)
+  );
   const modelSelectOptions = $derived.by(() => {
     const dynamicOptions = selectableModelOptions.map((option) => ({
       value: option.value,
@@ -258,10 +299,12 @@
         provider,
         labelPrefix: getModelProviderLabel(provider),
         byokLabel: PROVIDER_UI_META[provider].label,
-        ids: [
-          ...modelOptions.filter((option) => option.provider === provider).map((option) => option.id),
-          ...(FALLBACK_MODELS[provider] ?? [])
-        ]
+        ids: modelPolicyFilteringActive
+          ? [...(allowedModelIdsByProvider[provider] ?? [])]
+          : [
+              ...modelOptions.filter((option) => option.provider === provider).map((option) => option.id),
+              ...(FALLBACK_MODELS[provider] ?? [])
+            ]
       }));
     const byokOnly = byokOnlyProviderRows.flatMap((row) =>
       row.ids
@@ -280,6 +323,15 @@
       ...byokOnly
     ];
   });
+  const modelSelectorEmptyMessage = $derived.by(() => {
+    if (modelOptionsLoading || modelOptionsError) return '';
+    if (selectableModelOptions.length > 0) return '';
+    if (modelPolicyFilteringActive) {
+      return 'No explicit models are allowed for this key source right now. Auto remains available.';
+    }
+    return '';
+  });
+  const customModelOverrideAllowed = $derived(!modelPolicyFilteringActive);
 
   function buildFallbackModelOptions(source: QueryKeySource): ModelOption[] {
     const fallback: ModelOption[] = [];
@@ -377,22 +429,22 @@
   async function loadModelOptions(
     token: string | null,
     source: QueryKeySource
-  ): Promise<void> {
+  ): Promise<AllowedModelsResponse> {
     const params = new URLSearchParams();
     params.set('credential_mode', source === 'platform' ? 'platform' : 'byok');
     if (source !== 'platform') {
       params.set('byok_provider', source);
     }
-    const url = `/api/models?${params.toString()}`;
+    const url = `/api/allowed-models?${params.toString()}`;
     const response = await fetch(url, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined
     });
     if (!response.ok) throw new Error(`status ${response.status}`);
-    const payload = await response.json();
+    const payload = await response.json() as AllowedModelsResponse;
     const fetched = Array.isArray(payload.models) ? payload.models : [];
     modelOptions = fetched
-      .filter((item: any) => item?.id && isReasoningProvider(item?.provider))
-      .map((item: any) => {
+      .filter((item) => item?.id && isReasoningProvider(item?.provider))
+      .map((item) => {
         const provider = item.provider as ReasoningProvider;
         return {
           value: `${provider}::${item.id}`,
@@ -402,6 +454,27 @@
           id: item.id
         };
       });
+    allowedModelIdsByProvider = payload.allowed_by_provider ?? {};
+    modelPolicyFilteringActive = payload.filtering?.active === true;
+    modelOptionsError = payload.error ?? '';
+    return payload;
+  }
+
+  async function refreshModelOptions(
+    token: string | null,
+    source: QueryKeySource
+  ): Promise<void> {
+    modelOptionsLoading = true;
+    try {
+      await loadModelOptions(token, source);
+    } catch {
+      modelOptions = buildFallbackModelOptions(source);
+      allowedModelIdsByProvider = {};
+      modelPolicyFilteringActive = false;
+      modelOptionsError = 'Policy-filtered models are temporarily unavailable. Showing the local fallback list.';
+    } finally {
+      modelOptionsLoading = false;
+    }
   }
 
   onMount(() => {
@@ -412,9 +485,12 @@
           await loadByokProviders(token);
           await refreshIngestionBilling(token);
         }
-        await loadModelOptions(token, keySource);
+        await refreshModelOptions(token, keySource);
       } catch {
         modelOptions = buildFallbackModelOptions(keySource);
+        allowedModelIdsByProvider = {};
+        modelPolicyFilteringActive = false;
+        modelOptionsError = 'Policy-filtered models are temporarily unavailable. Showing the local fallback list.';
       }
     })();
   });
@@ -501,14 +577,11 @@
     let cancelled = false;
     (async () => {
       const token = await getIdToken();
-      if (!token) return;
       try {
-        await loadModelOptions(token, keySource);
-      } catch {
         if (!cancelled) {
-          modelOptions = buildFallbackModelOptions(keySource);
+          await refreshModelOptions(token, keySource);
         }
-      }
+      } catch {}
     })();
     return () => {
       cancelled = true;
@@ -1712,12 +1785,21 @@
                         {/each}
                       </select>
                     </div>
-                    <ModelSelector
+                    <RestormelModelSelector
                       bind:value={selectedModelValue}
-                      options={modelSelectOptions}
+                      keys={restormelModelSelectorKeys}
+                      providers={restormelModelSelectorProviders}
                       disabled={conversation.isLoading}
+                      loading={modelOptionsLoading}
+                      errorMessage={modelOptionsError}
+                      emptyMessage={modelSelectorEmptyMessage}
+                      onSelect={handleRestormelModelSelect}
+                      onRetry={async () => {
+                        const token = await getIdToken();
+                        await refreshModelOptions(token, keySource);
+                      }}
                     />
-                    {#if keySource !== 'platform'}
+                    {#if keySource !== 'platform' && customModelOverrideAllowed}
                       <div class="custom-model-row">
                         <label for="custom-model-id">Or enter any model id</label>
                         <input
@@ -1732,6 +1814,10 @@
                       </div>
                       <p class="custom-model-hint">
                         Custom model ids are sent directly with your {PROVIDER_UI_META[keySource].label} key.
+                      </p>
+                    {:else if keySource !== 'platform' && modelPolicyFilteringActive}
+                      <p class="custom-model-hint">
+                        Custom model overrides are disabled while Restormel policy filtering is active.
                       </p>
                     {/if}
                   </div>
@@ -2214,15 +2300,24 @@
                   </select>
                 </div>
                 <div class="rerun-field rerun-field-model">
-                  <ModelSelector
+                  <RestormelModelSelector
                     bind:value={selectedModelValue}
-                    options={modelSelectOptions}
+                    keys={restormelModelSelectorKeys}
+                    providers={restormelModelSelectorProviders}
                     disabled={conversation.isLoading}
                     layout="stacked"
+                    loading={modelOptionsLoading}
+                    errorMessage={modelOptionsError}
+                    emptyMessage={modelSelectorEmptyMessage}
+                    onSelect={handleRestormelModelSelect}
+                    onRetry={async () => {
+                      const token = await getIdToken();
+                      await refreshModelOptions(token, keySource);
+                    }}
                   />
                 </div>
               </div>
-              {#if keySource !== 'platform'}
+              {#if keySource !== 'platform' && customModelOverrideAllowed}
                 <div class="custom-model-row rerun-custom-model">
                   <label for="rerun-custom-model-id">Or enter any model id</label>
                   <input
@@ -2235,6 +2330,10 @@
                     autocomplete="off"
                   />
                 </div>
+              {:else if keySource !== 'platform' && modelPolicyFilteringActive}
+                <p class="custom-model-hint rerun-custom-model">
+                  Custom model overrides are disabled while Restormel policy filtering is active.
+                </p>
               {/if}
               <div class="ingestion-budget compact">
                 <span>Public left: {ingestionBilling.publicRemaining ?? '—'}</span>

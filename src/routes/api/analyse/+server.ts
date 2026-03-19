@@ -1443,6 +1443,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             sendEventWithCapture({ type: 'error', message: error });
           }
         }, {
+          routeId: process.env.RESTORMEL_ANALYSE_ROUTE_ID?.trim() || undefined,
           lens,
           depthMode,
           modelProvider: effectiveModelProvider,
