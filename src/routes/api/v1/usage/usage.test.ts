@@ -33,8 +33,8 @@ vi.mock('$lib/server/firebase-admin', () => ({
   adminDb: mockDb
 }));
 
-vi.mock('$lib/server/apiAuth', () => ({
-  isAdminUid: vi.fn((uid: string) => uid === 'admin-uid')
+vi.mock('$lib/server/authRoles', () => ({
+  hasAdministratorRole: vi.fn((user: { role?: string | null }) => user?.role === 'administrator')
 }));
 
 vi.mock('$lib/server/analytics', () => ({
@@ -61,7 +61,7 @@ describe('/api/v1/usage', () => {
   it('blocks non-admin from reading another owner usage', async () => {
     const { GET } = await import('./+server');
     const response = await GET({
-      locals: { user: { uid: 'user-1', email: null, displayName: null, photoURL: null } },
+      locals: { user: { uid: 'user-1', email: null, displayName: null, photoURL: null, role: 'user', roles: ['user'] } },
       url: new URL('http://localhost/api/v1/usage?owner_uid=user-2')
     } as any);
 
@@ -106,7 +106,7 @@ describe('/api/v1/usage', () => {
 
     const { GET } = await import('./+server');
     const response = await GET({
-      locals: { user: { uid: 'user-1', email: null, displayName: null, photoURL: null } },
+      locals: { user: { uid: 'user-1', email: null, displayName: null, photoURL: null, role: 'user', roles: ['user'] } },
       url: new URL('http://localhost/api/v1/usage')
     } as any);
 

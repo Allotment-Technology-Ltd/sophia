@@ -64,8 +64,11 @@ vi.mock('$lib/server/apiAuth', () => ({
     keyId: 'key_test',
     keyHash: 'hash_test',
     prefix: 'sk-sophia-test'
-  })),
-  isAdminUid: vi.fn((uid: string) => uid === 'admin-uid')
+  }))
+}));
+
+vi.mock('$lib/server/authRoles', () => ({
+  hasAdministratorRole: vi.fn((user: { role?: string | null }) => user?.role === 'administrator')
 }));
 
 vi.mock('$lib/server/analytics', () => ({
@@ -80,7 +83,7 @@ describe('/api/v1/keys ownership controls', () => {
   it('rejects non-admin owner_uid overrides on list', async () => {
     const { GET } = await import('./+server');
     const response = await GET({
-      locals: { user: { uid: 'user-1', email: null, displayName: null, photoURL: null } },
+      locals: { user: { uid: 'user-1', email: null, displayName: null, photoURL: null, role: 'user', roles: ['user'] } },
       url: new URL('http://localhost/api/v1/keys?owner_uid=user-2')
     } as any);
 
@@ -112,7 +115,7 @@ describe('/api/v1/keys ownership controls', () => {
 
     const { GET } = await import('./+server');
     const response = await GET({
-      locals: { user: { uid: 'user-1', email: null, displayName: null, photoURL: null } },
+      locals: { user: { uid: 'user-1', email: null, displayName: null, photoURL: null, role: 'user', roles: ['user'] } },
       url: new URL('http://localhost/api/v1/keys')
     } as any);
 
@@ -126,7 +129,7 @@ describe('/api/v1/keys ownership controls', () => {
   it('rejects non-admin owner override on create', async () => {
     const { POST } = await import('./+server');
     const response = await POST({
-      locals: { user: { uid: 'user-1', email: null, displayName: null, photoURL: null } },
+      locals: { user: { uid: 'user-1', email: null, displayName: null, photoURL: null, role: 'user', roles: ['user'] } },
       request: new Request('http://localhost/api/v1/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -147,7 +150,7 @@ describe('/api/v1/keys ownership controls', () => {
 
     const { DELETE } = await import('./+server');
     const response = await DELETE({
-      locals: { user: { uid: 'user-1', email: null, displayName: null, photoURL: null } },
+      locals: { user: { uid: 'user-1', email: null, displayName: null, photoURL: null, role: 'user', roles: ['user'] } },
       url: new URL('http://localhost/api/v1/keys?key_id=key_1'),
       request: new Request('http://localhost/api/v1/keys?key_id=key_1', { method: 'DELETE' })
     } as any);

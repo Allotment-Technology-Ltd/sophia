@@ -2,12 +2,13 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from '$lib/server/firebase-admin';
-import { createApiKey, isAdminUid } from '$lib/server/apiAuth';
+import { createApiKey } from '$lib/server/apiAuth';
+import { hasAdministratorRole } from '$lib/server/authRoles';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
 import { logServerAnalytics } from '$lib/server/analytics';
 
-function getAuthContext(uid: string | undefined): { uid: string; isAdmin: boolean } | Response {
-  if (!uid) {
+function getAuthContext(user: App.Locals['user']): { uid: string; isAdmin: boolean } | Response {
+  if (!user?.uid) {
     return problemJson({
       status: 401,
       title: 'Authentication required',
@@ -15,7 +16,7 @@ function getAuthContext(uid: string | undefined): { uid: string; isAdmin: boolea
     });
   }
 
-  return { uid, isAdmin: isAdminUid(uid) };
+  return { uid: user.uid, isAdmin: hasAdministratorRole(user) };
 }
 
 function requestHeaders(requestId: string): HeadersInit {
@@ -26,7 +27,7 @@ function requestHeaders(requestId: string): HeadersInit {
 
 export const GET: RequestHandler = async ({ locals, request, url }) => {
   const requestId = resolveRequestId(request);
-  const auth = getAuthContext(locals.user?.uid);
+  const auth = getAuthContext(locals.user);
   if (auth instanceof Response) return auth;
 
   const ownerUidParam = url.searchParams.get('owner_uid')?.trim();
@@ -80,7 +81,7 @@ export const GET: RequestHandler = async ({ locals, request, url }) => {
 
 export const POST: RequestHandler = async ({ locals, request }) => {
   const requestId = resolveRequestId(request);
-  const auth = getAuthContext(locals.user?.uid);
+  const auth = getAuthContext(locals.user);
   if (auth instanceof Response) return auth;
 
   let body: { name?: string; owner_uid?: string; daily_quota?: number };
@@ -149,7 +150,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
 export const DELETE: RequestHandler = async ({ locals, request, url }) => {
   const requestId = resolveRequestId(request);
-  const auth = getAuthContext(locals.user?.uid);
+  const auth = getAuthContext(locals.user);
   if (auth instanceof Response) return auth;
 
   let keyId = url.searchParams.get('key_id');

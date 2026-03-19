@@ -22,6 +22,7 @@
   let currentUser = $state(browser ? auth?.currentUser ?? null : null);
   let billingTier = $state<'free' | 'pro' | 'premium' | null>(null);
   let founderActive = $state(false);
+  let administrator = $state(false);
   let userMenuOpen = $state(false);
   const learnEnabled = (publicEnv.PUBLIC_ENABLE_LEARN_MODULE ?? 'false').toLowerCase() === 'true';
 
@@ -60,12 +61,39 @@
     }
   }
 
+  async function refreshAdministratorState(): Promise<void> {
+    if (!browser || !currentUser) {
+      administrator = false;
+      return;
+    }
+    try {
+      const token = await getIdToken();
+      if (!token) {
+        administrator = false;
+        return;
+      }
+      const response = await fetch('/api/admin/me', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) {
+        administrator = false;
+        return;
+      }
+      const body = await response.json();
+      administrator = body.is_admin === true;
+    } catch {
+      administrator = false;
+    }
+  }
+
   if (browser) {
     onAuthChange((user) => {
       currentUser = user;
       void refreshBillingTier();
+      void refreshAdministratorState();
     });
     void refreshBillingTier();
+    void refreshAdministratorState();
   }
 
   onMount(() => {
@@ -105,6 +133,9 @@
     <a href="/app" class="mode-link" aria-current={$page.url.pathname.startsWith('/app') ? 'page' : undefined}>Inquire</a>
     {#if learnEnabled}
       <a href="/learn" class="mode-link" aria-current={$page.url.pathname.startsWith('/learn') ? 'page' : undefined}>Learn</a>
+    {/if}
+    {#if administrator}
+      <a href="/admin" class="mode-link" aria-current={$page.url.pathname.startsWith('/admin') ? 'page' : undefined}>Admin</a>
     {/if}
   </div>
 
@@ -158,6 +189,11 @@
               <div class="user-name">{currentUser.displayName}</div>
               <div class="user-email">{currentUser.email}</div>
             </div>
+            {#if administrator}
+              <a class="dropdown-item" href="/admin" role="menuitem">
+                Admin Hub
+              </a>
+            {/if}
             <button class="dropdown-item" onclick={handleSignOut} role="menuitem">
               Sign out
             </button>

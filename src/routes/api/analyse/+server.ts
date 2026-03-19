@@ -20,6 +20,7 @@ import { getAvailableReasoningModels } from '$lib/server/vertex';
 import { loadByokProviderApiKeys } from '$lib/server/byok/store';
 import type { ByokProvider, ProviderApiKeys } from '$lib/server/byok/types';
 import { isByokProviderEnabled, isReasoningProviderEnabled } from '$lib/server/byok/config';
+import { restormelEvaluatePolicies } from '$lib/server/restormel';
 import {
   REASONING_PROVIDER_ORDER,
   getModelProviderLabel,
@@ -68,6 +69,10 @@ type QueueSourceKind = 'user' | 'grounding';
 type QueueStatus = 'queued' | 'pending_review' | 'approved' | 'ingesting' | 'ingested' | 'failed' | 'rejected';
 
 type CredentialMode = 'auto' | 'platform' | 'byok';
+
+function toRestormelPolicyProvider(provider: ModelProvider): string {
+  return provider === 'vertex' ? 'google' : provider;
+}
 
 const DEFAULT_TRUSTED_INGESTION_DOMAINS = [
   'plato.stanford.edu',
@@ -1000,6 +1005,29 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       if (!exists) {
         return json({ error: `model_id ${modelId} is not available for provider ${effectiveModelProvider}` }, { status: 400 });
       }
+      try {
+        const policyResult = await restormelEvaluatePolicies({
+          environmentId: process.env.RESTORMEL_ENVIRONMENT_ID?.trim() || 'production',
+          routeId: process.env.RESTORMEL_ANALYSE_ROUTE_ID?.trim() || undefined,
+          modelId,
+          providerType: toRestormelPolicyProvider(effectiveModelProvider)
+        });
+        if (!policyResult.data.allowed) {
+          return json(
+            {
+              error: `model_id ${modelId} is currently blocked by Restormel policy for provider ${effectiveModelProvider}.`
+            },
+            { status: 400 }
+          );
+        }
+      } catch (error) {
+        if (process.env.NODE_ENV !== 'test') {
+          console.warn(
+            '[restormel] Failed to evaluate explicit model selection; continuing with local availability fallback:',
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+      }
     }
   }
 
@@ -1471,7 +1499,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
         if (reasoningQualityEnabled && extractedClaims.length > 0) {
           try {
-            const reasoningQuality: ReasoningEvaluation = await evaluateReasoning(
+            const reasoningQualityResult = await evaluateReasoning(
               extractedClaims,
               extractedRelations,
               {
@@ -1481,7 +1509,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             );
             sendEventWithCapture({
               type: 'reasoning_quality',
-              reasoning_quality: reasoningQuality
+              reasoning_quality: reasoningQualityResult.evaluation as ReasoningEvaluation
             });
           } catch (err) {
             console.warn('[ANALYSE] reasoning quality evaluation failed:', err instanceof Error ? err.message : String(err));

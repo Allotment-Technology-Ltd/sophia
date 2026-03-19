@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { adminDb } from '$lib/server/firebase-admin';
-import { isAdminUid } from '$lib/server/apiAuth';
+import { hasAdministratorRole } from '$lib/server/authRoles';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
 import { logServerAnalytics } from '$lib/server/analytics';
 
@@ -31,7 +31,7 @@ export const GET: RequestHandler = async ({ locals, request, url }) => {
     });
   }
 
-  const isAdmin = isAdminUid(uid);
+  const isAdmin = hasAdministratorRole(locals.user);
   const ownerUidParam = url.searchParams.get('owner_uid')?.trim();
   const ownerUid = ownerUidParam || uid;
 

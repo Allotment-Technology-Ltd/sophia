@@ -56,10 +56,19 @@ export class RestormelResolveError extends Error {
   }
 }
 
-const RESTORMEL_BASE_URL =
+function normalizeRestormelBaseUrl(raw: string): string {
+  return raw
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\/keys\/dashboard$/i, '')
+    .replace(/\/keys$/i, '');
+}
+
+export const RESTORMEL_BASE_URL = normalizeRestormelBaseUrl(
   process.env.RESTORMEL_KEYS_BASE?.trim() ||
-  process.env.RESTORMEL_BASE_URL?.trim() ||
-  'https://restormel.dev/keys/dashboard';
+    process.env.RESTORMEL_BASE_URL?.trim() ||
+    'https://restormel.dev/keys/dashboard'
+);
 const RESTORMEL_GATEWAY_KEY = process.env.RESTORMEL_GATEWAY_KEY?.trim() || '';
 const RESTORMEL_PROJECT_ID = process.env.RESTORMEL_PROJECT_ID?.trim() || '';
 
