@@ -1,7 +1,4 @@
 <script lang="ts">
-  import { KeyManager } from '@restormel/keys-svelte';
-  import '@restormel/keys-svelte/theme.css';
-  import type { KeyAddResult, KeyConfig, KeyRemoveResult, ProviderValidationResult } from '@restormel/keys';
   import { auth, signOutUser, onAuthChange, getIdToken } from '$lib/firebase';
   import { goto, replaceState } from '$app/navigation';
   import { browser } from '$app/environment';
@@ -10,13 +7,6 @@
     PROVIDER_UI_META,
     type ByokProvider
   } from '$lib/types/providers';
-  import {
-    canonicalizeSophiaProviderId,
-    createSophiaKeyManagerProviders,
-    createSophiaKeysInstance,
-    toSophiaKeyRecord,
-    toSophiaStorageByokProviderId
-  } from '$lib/restormel/key-manager';
   import { page } from '$app/state';
 
   interface ByokProviderStatus {
@@ -89,10 +79,24 @@
   const BYOK_PROVIDER_LABELS: Record<ByokProvider, string> = Object.fromEntries(
     BYOK_PROVIDER_ORDER.map((provider) => [provider, PROVIDER_UI_META[provider].label])
   ) as Record<ByokProvider, string>;
+  const BYOK_PROVIDER_HINTS: Record<ByokProvider, string> = Object.fromEntries(
+    BYOK_PROVIDER_ORDER.map((provider) => [provider, PROVIDER_UI_META[provider].hint])
+  ) as Record<ByokProvider, string>;
+  const BYOK_PROVIDER_PLACEHOLDERS: Record<ByokProvider, string> = Object.fromEntries(
+    BYOK_PROVIDER_ORDER.map((provider) => [provider, PROVIDER_UI_META[provider].placeholder])
+  ) as Record<ByokProvider, string>;
+
+  function emptyProviderMap<T>(value: T): Record<ByokProvider, T> {
+    return Object.fromEntries(BYOK_PROVIDER_ORDER.map((provider) => [provider, value])) as Record<ByokProvider, T>;
+  }
+
   let currentUser = $state(browser ? auth?.currentUser : null);
   let byokProviders = $state<ByokProviderStatus[]>([]);
+  let byokInputs = $state<Record<ByokProvider, string>>(emptyProviderMap(''));
+  let byokSaving = $state<Record<ByokProvider, boolean>>(emptyProviderMap(false));
   let byokLoading = $state(false);
   let byokError = $state('');
+  let byokMessage = $state('');
   let billingLoading = $state(false);
   let billingBusyAction = $state('');
   let billingError = $state('');
@@ -123,8 +127,6 @@
 
   let { initialSettingsTab = 'general' }: Props = $props();
   let activeSettingsTab = $state<SettingsSubTab>('general');
-  let keyManagerProviders = $derived(createSophiaKeyManagerProviders(byokProviders.map((status) => status.provider)));
-  let keyManagerKeys = $derived(createSophiaKeysInstance(byokProviders, keyManagerProviders));
   const SETTINGS_REQUEST_TIMEOUT_MS = 12_000;
 
   function setActiveSettingsTab(tab: SettingsSubTab): void {
@@ -205,6 +207,7 @@
     if (!currentUser) {
       byokProviders = [];
       byokError = '';
+      byokMessage = '';
       return;
     }
     byokLoading = true;
@@ -218,6 +221,99 @@
       byokError = err instanceof Error ? err.message : String(err);
     } finally {
       byokLoading = false;
+    }
+  }
+
+  function getByokStatusLabel(status: ByokProviderStatus['status']): string {
+    if (status === 'active') return 'Active';
+    if (status === 'pending_validation') return 'Pending validation';
+    if (status === 'invalid') return 'Invalid key';
+    if (status === 'revoked') return 'Revoked';
+    return 'Not configured';
+  }
+
+  function setByokSaving(provider: ByokProvider, saving: boolean): void {
+    byokSaving = {
+      ...byokSaving,
+      [provider]: saving
+    };
+  }
+
+  async function saveByokKey(provider: ByokProvider): Promise<void> {
+    byokError = '';
+    byokMessage = '';
+    const apiKey = byokInputs[provider].trim();
+    if (!apiKey) {
+      byokError = `Enter a ${BYOK_PROVIDER_LABELS[provider]} API key before saving.`;
+      return;
+    }
+
+    setByokSaving(provider, true);
+    try {
+      const response = await fetchWithFirebase(`/api/byok/providers/${provider}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ api_key: apiKey })
+      });
+      const body = await parseResponseOrThrow(response);
+      byokInputs = {
+        ...byokInputs,
+        [provider]: ''
+      };
+      await refreshByokProviders();
+      const ok = body?.validation?.ok === true;
+      byokMessage = ok
+        ? `${BYOK_PROVIDER_LABELS[provider]} key saved and validated.`
+        : `${BYOK_PROVIDER_LABELS[provider]} key saved but validation failed.`;
+    } catch (err) {
+      byokError = err instanceof Error ? err.message : String(err);
+    } finally {
+      setByokSaving(provider, false);
+    }
+  }
+
+  async function validateByokKey(provider: ByokProvider): Promise<void> {
+    byokError = '';
+    byokMessage = '';
+    setByokSaving(provider, true);
+    try {
+      const response = await fetchWithFirebase(`/api/byok/providers/${provider}/validate`, {
+        method: 'POST'
+      });
+      const body = await parseResponseOrThrow(response);
+      await refreshByokProviders();
+      const ok = body?.validation?.ok === true;
+      byokMessage = ok
+        ? `${BYOK_PROVIDER_LABELS[provider]} credential is valid.`
+        : `${BYOK_PROVIDER_LABELS[provider]} validation failed.`;
+    } catch (err) {
+      byokError = err instanceof Error ? err.message : String(err);
+    } finally {
+      setByokSaving(provider, false);
+    }
+  }
+
+  async function revokeByokKey(provider: ByokProvider): Promise<void> {
+    byokError = '';
+    byokMessage = '';
+    setByokSaving(provider, true);
+    try {
+      const response = await fetchWithFirebase(`/api/byok/providers/${provider}`, {
+        method: 'DELETE'
+      });
+      await parseResponseOrThrow(response);
+      byokInputs = {
+        ...byokInputs,
+        [provider]: ''
+      };
+      await refreshByokProviders();
+      byokMessage = `${BYOK_PROVIDER_LABELS[provider]} credential revoked.`;
+    } catch (err) {
+      byokError = err instanceof Error ? err.message : String(err);
+    } finally {
+      setByokSaving(provider, false);
     }
   }
 
@@ -406,166 +502,6 @@
       sourcesError = err instanceof Error ? err.message : String(err);
     } finally {
       deletingSourceId = '';
-    }
-  }
-
-  async function validateKeyManagerCredential(
-    providerId: string,
-    rawCredential: string
-  ): Promise<ProviderValidationResult> {
-    const provider = toSophiaStorageByokProviderId(providerId, keyManagerProviders);
-    if (!provider) {
-      return {
-        valid: false,
-        errors: [`Unsupported provider: ${providerId}`]
-      };
-    }
-
-    try {
-      const hasRawCredential = rawCredential.trim().length > 0;
-      const response = await fetchWithFirebase(
-        hasRawCredential
-          ? `/api/byok/providers/${provider}/validate-raw`
-          : `/api/byok/providers/${provider}/validate`,
-        hasRawCredential
-          ? {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                api_key: rawCredential
-              })
-            }
-          : {
-              method: 'POST'
-            }
-      );
-      const body = await parseResponseOrThrow(response);
-      const validationOk = body?.validation?.ok === true;
-      if (!hasRawCredential) {
-        await refreshByokProviders();
-      }
-      return validationOk
-        ? { valid: true }
-        : {
-            valid: false,
-            errors: [body?.validation?.error || `${BYOK_PROVIDER_LABELS[provider]} validation failed.`]
-          };
-    } catch (err) {
-      return {
-        valid: false,
-        errors: [err instanceof Error ? err.message : String(err)]
-      };
-    }
-  }
-
-  async function revalidateKeyManagerCredential(
-    keyId: string,
-    providerId: string
-  ): Promise<ProviderValidationResult> {
-    const storageProvider = toSophiaStorageByokProviderId(providerId, keyManagerProviders);
-    if (!storageProvider) {
-      return {
-        valid: false,
-        errors: [`Unsupported provider: ${providerId}`]
-      };
-    }
-
-    try {
-      const response = await fetchWithFirebase(`/api/byok/providers/${storageProvider}/validate`, {
-        method: 'POST'
-      });
-      const body = await parseResponseOrThrow(response);
-      await refreshByokProviders();
-      return body?.validation?.ok === true
-        ? { valid: true }
-        : {
-            valid: false,
-            errors: [body?.validation?.error || `${BYOK_PROVIDER_LABELS[storageProvider]} validation failed.`]
-          };
-    } catch (err) {
-      return {
-        valid: false,
-        errors: [err instanceof Error ? err.message : String(err)]
-      };
-    }
-  }
-
-  async function handleKeyManagerAdd(key: KeyConfig, rawCredential?: string): Promise<KeyAddResult> {
-    const canonicalProviderId = canonicalizeSophiaProviderId(key.provider, keyManagerProviders);
-    const provider = toSophiaStorageByokProviderId(canonicalProviderId, keyManagerProviders);
-    const apiKey = rawCredential?.trim();
-    if (!provider || !apiKey) {
-      return {
-        ok: false,
-        error: 'Key Manager did not provide a valid provider credential to save.'
-      };
-    }
-
-    try {
-      const response = await fetchWithFirebase(`/api/byok/providers/${provider}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          api_key: apiKey
-        })
-      });
-      const body = await parseResponseOrThrow(response);
-      const providerStatus = body?.provider as ByokProviderStatus | undefined;
-      const validationOk = body?.validation?.ok === true;
-
-      if (!validationOk) {
-        await fetchWithFirebase(`/api/byok/providers/${provider}`, {
-          method: 'DELETE'
-        }).catch(() => undefined);
-        await refreshByokProviders();
-        return {
-          ok: false,
-          error: body?.validation?.error || `${BYOK_PROVIDER_LABELS[provider]} validation failed during save.`
-        };
-      }
-
-      await refreshByokProviders();
-
-      return {
-        ok: true,
-        savedKey: providerStatus ? toSophiaKeyRecord(providerStatus, keyManagerProviders) ?? undefined : undefined
-      };
-    } catch (err) {
-      return {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err)
-      };
-    }
-  }
-
-  async function handleKeyManagerRemove(keyId: string): Promise<KeyRemoveResult> {
-    const status = byokProviders.find((candidate) => candidate.provider === keyId);
-    const provider = status
-      ? toSophiaStorageByokProviderId(status.provider, keyManagerProviders)
-      : toSophiaStorageByokProviderId(keyId, keyManagerProviders);
-    if (!provider) {
-      return {
-        ok: false,
-        error: `Unknown provider id: ${keyId}`
-      };
-    }
-
-    try {
-      const response = await fetchWithFirebase(`/api/byok/providers/${provider}`, {
-        method: 'DELETE'
-      });
-      await parseResponseOrThrow(response);
-      await refreshByokProviders();
-      return { ok: true };
-    } catch (err) {
-      return {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err)
-      };
     }
   }
 
@@ -768,30 +704,92 @@
         </div>
       </div>
     {:else}
-      <div class="key-manager-shell">
+      <div class="byok-native-shell">
         <div class="setting-info">
-          <span class="setting-name">Restormel Key Manager</span>
+          <span class="setting-name">Manage provider credentials</span>
           <span class="setting-desc">
-            Sophia now uses the packaged Restormel flow directly for BYOK management.
-          </span>
-          <span class="setting-desc">
-            Validation stays server-side through Sophia&apos;s BYOK endpoints, so raw credentials do not go directly
-            from the browser to model providers.
+            Credentials stay in Sophia custody and are validated through Sophia&apos;s server-side BYOK endpoints.
           </span>
         </div>
 
-        <KeyManager
-          keys={keyManagerKeys}
-          userId={currentUser.uid}
-          providers={keyManagerProviders}
-          onValidate={validateKeyManagerCredential}
-          onRevalidate={revalidateKeyManagerCredential}
-          onKeyAdded={handleKeyManagerAdd}
-          onKeyRemoved={handleKeyManagerRemove}
-        />
+        <div class="byok-provider-grid">
+          {#each byokProviders as status (status.provider)}
+            {@const provider = status.provider}
+            <div class="byok-provider-card">
+              <div class="byok-provider-head">
+                <div class="setting-info">
+                  <span class="setting-name byok-provider-name">{BYOK_PROVIDER_LABELS[provider]}</span>
+                  <span class="setting-desc">{BYOK_PROVIDER_HINTS[provider]}</span>
+                </div>
+                <span
+                  class="byok-status-badge"
+                  class:is-active={status.status === 'active'}
+                  class:is-invalid={status.status === 'invalid'}
+                >
+                  {getByokStatusLabel(status.status)}
+                </span>
+              </div>
+
+              <div class="byok-provider-meta">
+                <span>Fingerprint: {status.fingerprint_last8 ? `...${status.fingerprint_last8}` : '—'}</span>
+                <span>Validated: {formatDate(status.validated_at)}</span>
+                <span>Updated: {formatDate(status.updated_at)}</span>
+              </div>
+
+              {#if status.last_error}
+                <p class="byok-message error byok-inline-error">
+                  Last validation error: {status.last_error}
+                </p>
+              {/if}
+
+              <div class="byok-provider-actions">
+                <input
+                  class="byok-input"
+                  type="password"
+                  placeholder={BYOK_PROVIDER_PLACEHOLDERS[provider]}
+                  value={byokInputs[provider]}
+                  oninput={(event) => {
+                    byokInputs = {
+                      ...byokInputs,
+                      [provider]: (event.currentTarget as HTMLInputElement).value
+                    };
+                  }}
+                  disabled={byokSaving[provider]}
+                />
+                <button
+                  class="byok-btn"
+                  type="button"
+                  onclick={() => saveByokKey(provider)}
+                  disabled={byokSaving[provider]}
+                >
+                  {byokSaving[provider] ? 'Saving...' : 'Save key'}
+                </button>
+                <button
+                  class="byok-btn secondary"
+                  type="button"
+                  onclick={() => validateByokKey(provider)}
+                  disabled={byokSaving[provider] || !status.configured}
+                >
+                  Validate
+                </button>
+                <button
+                  class="byok-btn danger"
+                  type="button"
+                  onclick={() => revokeByokKey(provider)}
+                  disabled={byokSaving[provider] || !status.configured}
+                >
+                  Revoke
+                </button>
+              </div>
+            </div>
+          {/each}
+        </div>
       </div>
     {/if}
 
+    {#if byokMessage}
+      <p class="byok-message success">{byokMessage}</p>
+    {/if}
     {#if byokError}
       <div class="byok-feedback">
         <p class="byok-message error">{byokError}</p>
@@ -1120,7 +1118,7 @@
     gap: 6px;
   }
 
-  .key-manager-shell {
+  .byok-native-shell {
     display: grid;
     gap: 12px;
     border: 1px solid var(--color-border);
@@ -1128,6 +1126,91 @@
     background: color-mix(in srgb, var(--color-surface-raised) 68%, transparent);
     padding: 12px;
     margin: 0 0 12px;
+  }
+
+  .byok-provider-grid {
+    display: grid;
+    gap: 10px;
+  }
+
+  .byok-provider-card {
+    display: grid;
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  }
+
+  .byok-provider-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .byok-provider-name {
+    font-size: 1rem;
+  }
+
+  .byok-status-badge {
+    flex-shrink: 0;
+    font-family: var(--font-ui);
+    font-size: 0.6rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 4px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--color-border);
+    color: var(--color-muted);
+    background: transparent;
+  }
+
+  .byok-status-badge.is-active {
+    border-color: var(--color-sage-border);
+    color: var(--color-sage);
+    background: color-mix(in srgb, var(--color-sage) 10%, transparent);
+  }
+
+  .byok-status-badge.is-invalid {
+    border-color: color-mix(in srgb, var(--color-warning, #e07070) 45%, transparent);
+    color: var(--color-warning, #e07070);
+    background: color-mix(in srgb, var(--color-warning, #e07070) 10%, transparent);
+  }
+
+  .byok-provider-meta {
+    display: grid;
+    gap: 4px;
+    font-family: var(--font-ui);
+    font-size: 0.66rem;
+    color: var(--color-dim);
+  }
+
+  .byok-provider-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .byok-input {
+    min-width: 0;
+    width: 100%;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    padding: 8px 10px;
+    font-family: var(--font-ui);
+    font-size: 0.78rem;
+  }
+
+  .byok-input:disabled {
+    opacity: 0.6;
+  }
+
+  .byok-inline-error {
+    margin: 0;
   }
 
   .billing-card {
@@ -1220,9 +1303,13 @@
     .settings-subtabs {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+    .byok-provider-head,
     .source-row {
       flex-direction: column;
       align-items: stretch;
+    }
+    .byok-provider-actions {
+      grid-template-columns: 1fr;
     }
     .sources-head {
       flex-direction: column;
