@@ -43,6 +43,8 @@
     };
   });
   const hasProviders = $derived(providers.length > 0);
+  const showFallbackWarning = $derived(Boolean(errorMessage));
+  const canRenderSelector = $derived(hasProviders && !loading);
 
   function handleAutoSelect(): void {
     value = 'auto';
@@ -79,21 +81,24 @@
 
   {#if loading}
     <div class="restormel-model-state" role="status">Loading policy-filtered models…</div>
-  {:else if errorMessage}
-    <div class="restormel-model-state error" role="alert">
-      <span>{errorMessage}</span>
-      {#if onRetry}
-        <button type="button" class="restormel-retry-btn" onclick={onRetry}>Retry</button>
-      {/if}
-    </div>
   {:else if !hasProviders}
     <div class="restormel-model-state" role="status">
       {emptyMessage || 'No explicit models are currently available for this key source.'}
     </div>
   {:else}
-    <div class="restormel-theme-shell" class:is-disabled={disabled}>
-      <RestormelModelSelector {keys} {providers} onSelect={handleSelect} />
-    </div>
+    {#if showFallbackWarning}
+      <div class="restormel-model-state warning" role="status" aria-live="polite">
+        <span>{errorMessage}</span>
+        {#if onRetry}
+          <button type="button" class="restormel-retry-btn" onclick={onRetry}>Retry</button>
+        {/if}
+      </div>
+    {/if}
+    {#if canRenderSelector}
+      <div class="restormel-theme-shell" class:is-disabled={disabled}>
+        <RestormelModelSelector {keys} {providers} onSelect={handleSelect} />
+      </div>
+    {/if}
     {#if emptyMessage}
       <div class="restormel-model-state" role="status">{emptyMessage}</div>
     {/if}
@@ -159,12 +164,14 @@
     color: var(--color-dim);
   }
 
-  .restormel-model-state.error {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-    color: var(--color-danger, #d35b5b);
+  .restormel-model-state.warning {
+    display: grid;
+    gap: 10px;
+    color: color-mix(in oklab, var(--color-danger, #d35b5b) 88%, white 12%);
+    padding: 0.55rem 0.7rem;
+    border: 1px solid color-mix(in oklab, var(--color-danger, #d35b5b) 32%, var(--color-border));
+    border-radius: 10px;
+    background: color-mix(in oklab, var(--color-danger, #d35b5b) 8%, transparent);
   }
 
   .restormel-theme-shell {
@@ -194,6 +201,10 @@
     .restormel-auto-btn {
       width: 100%;
       justify-content: center;
+    }
+
+    .restormel-retry-btn {
+      width: 100%;
     }
   }
 </style>
