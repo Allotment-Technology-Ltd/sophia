@@ -121,4 +121,44 @@ describe('/api/allowed-models', () => {
       }
     ]);
   });
+
+  it('keeps partial policy-filtered results when only some model evaluations fail', async () => {
+    mockRestormelEvaluatePolicies.mockImplementation(async ({ modelId }) => {
+      if (modelId === 'gpt-4o') {
+        throw new Error('unknown model in Restormel catalog');
+      }
+
+      return {
+        data: {
+          allowed: modelId === 'claude-3-5-sonnet',
+          violations: []
+        }
+      };
+    });
+
+    const { GET } = await import('./+server');
+    const response = await GET({
+      locals: { user: { uid: 'user:partial' } },
+      url: new URL('http://localhost/api/allowed-models?credential_mode=auto')
+    } as any);
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.filtering).toEqual({
+      active: true,
+      degraded: false,
+      routeId: 'interactive'
+    });
+    expect(body.error).toBeUndefined();
+    expect(body.models).toEqual([
+      {
+        id: 'claude-3-5-sonnet',
+        provider: 'anthropic',
+        label: 'Anthropic · claude-3-5-sonnet',
+        description: 'User BYOK Anthropic model'
+      }
+    ]);
+    expect(body.allowed_by_provider.anthropic).toContain('claude-3-5-sonnet');
+    expect(body.allowed_by_provider.openai).toEqual([]);
+  });
 });

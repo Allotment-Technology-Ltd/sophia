@@ -125,6 +125,7 @@
   let activeSettingsTab = $state<SettingsSubTab>('general');
   let keyManagerProviders = $derived(createSophiaKeyManagerProviders(byokProviders.map((status) => status.provider)));
   let keyManagerKeys = $derived(createSophiaKeysInstance(byokProviders, keyManagerProviders));
+  const SETTINGS_REQUEST_TIMEOUT_MS = 12_000;
 
   function setActiveSettingsTab(tab: SettingsSubTab): void {
     activeSettingsTab = tab;
@@ -143,17 +144,44 @@
     return new Date(iso).toLocaleString();
   }
 
+  function withTimeout<T>(promise: Promise<T>, message: string, timeoutMs = SETTINGS_REQUEST_TIMEOUT_MS): Promise<T> {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<T>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+    });
+
+    return Promise.race([promise, timeoutPromise]).finally(() => {
+      if (timeoutId) clearTimeout(timeoutId);
+    }) as Promise<T>;
+  }
+
   async function fetchWithFirebase(path: string, init: RequestInit = {}): Promise<Response> {
-    const token = await getIdToken();
+    const token = await withTimeout(
+      getIdToken(),
+      'Authentication timed out while preparing the request. Please retry.'
+    );
     if (!token) {
       throw new Error('Sign in required.');
     }
     const headers = new Headers(init.headers);
     headers.set('Authorization', `Bearer ${token}`);
-    return fetch(path, {
-      ...init,
-      headers
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), SETTINGS_REQUEST_TIMEOUT_MS);
+
+    try {
+      return await fetch(path, {
+        ...init,
+        headers,
+        signal: controller.signal
+      });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        throw new Error('Request timed out while contacting the server. Please retry.');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async function parseResponseOrThrow(response: Response): Promise<any> {
@@ -765,7 +793,12 @@
     {/if}
 
     {#if byokError}
-      <p class="byok-message error">{byokError}</p>
+      <div class="byok-feedback">
+        <p class="byok-message error">{byokError}</p>
+        <button class="byok-btn secondary" type="button" onclick={() => void refreshByokProviders()}>
+          Retry BYOK status
+        </button>
+      </div>
     {/if}
   {:else if activeSettingsTab === 'payments'}
     <p class="settings-section-label">Payments</p>
@@ -1254,6 +1287,13 @@
   .byok-message.error {
     color: var(--color-warning, #e07070);
     background: color-mix(in srgb, var(--color-warning, #e07070) 10%, transparent);
+  }
+
+  .byok-feedback {
+    display: grid;
+    gap: 8px;
+    justify-items: start;
+    margin-bottom: 10px;
   }
 
   .setting-info {
