@@ -51,6 +51,7 @@ jobs:
           gcloud compute ssh "${DB_INSTANCE}" \
             --zone="${DB_ZONE}" \
             --project="${PROJECT_ID}" \
+            --quiet \
             --tunnel-through-iap \
             -- -L "${DB_LOCAL_PORT}:localhost:8000" -N \
             >/tmp/sophia-nightly-db-tunnel.log 2>&1 &
