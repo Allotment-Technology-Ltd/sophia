@@ -124,6 +124,9 @@
   let sourceHints = $state<Record<string, SourceHintRow>>({});
   let catalogSync = $state<CatalogSyncState | null>(null);
 
+  /** 1–4: which tab is visible (single-panel wizard) */
+  let wizardStep = $state(1);
+
   const showCatalogSourceColumn = $derived.by(() =>
     modelCatalogEntries.some((r) => r.catalogSource)
   );
@@ -271,10 +274,35 @@
     }
   ]);
 
-  const activeStep = $derived.by(() => {
-    const firstIncomplete = setupSteps.findIndex((step) => !step.complete);
-    return firstIncomplete === -1 ? setupSteps.length : firstIncomplete + 1;
+  /** Next is blocked until prerequisites for the current step are met */
+  const canGoNextFromCurrentStep = $derived.by(() => {
+    if (wizardStep === 1) return sourceReady;
+    if (wizardStep === 2) return chainReady && duplicateModels.length === 0;
+    if (wizardStep === 3) return true;
+    return true;
   });
+
+  const nextButtonHint = $derived.by((): string | null => {
+    if (wizardStep === 1 && !sourceReady) {
+      return 'Add a URL or file and set source type before continuing.';
+    }
+    if (wizardStep === 2) {
+      if (!chainReady) return 'Choose a model for each slot.';
+      if (duplicateModels.length > 0) return 'Use three distinct models.';
+    }
+    return null;
+  });
+
+  function goWizardBack(): void {
+    if (wizardStep <= 1) return;
+    wizardStep -= 1;
+  }
+
+  function goWizardNext(): void {
+    if (wizardStep >= 4) return;
+    if (!canGoNextFromCurrentStep) return;
+    wizardStep += 1;
+  }
 
   async function authorizedJson(url: string, init?: RequestInit): Promise<any> {
     const token = await getIdToken();
@@ -479,6 +507,7 @@
     modelChain = [h.budget, h.balanced, h.quality];
     successMessage = 'Filled Model 1–3 with suggested picks (lowest cost → balanced → quality-first).';
     errorMessage = '';
+    wizardStep = 2;
   }
 
   function moveModel(index: number, direction: -1 | 1): void {
@@ -768,7 +797,7 @@
         Configure ingestion with a guided setup flow
       </h1>
       <p class="mt-3 max-w-3xl text-base leading-7 text-sophia-dark-muted">
-        Choose a source, set your three-model chain, optionally run a Restormel recommendation, then start Phase 1.
+        One step at a time: use the tabs to switch between stages. <span class="text-sophia-dark-text">Start Phase 1</span> only appears on tab 4 after your chain is valid.
       </p>
     </header>
 
@@ -795,16 +824,18 @@
         </div>
       {/if}
 
-      <div class="mt-10 w-full">
+      <div class="mt-10 flex w-full flex-col gap-8 lg:flex-row lg:items-start lg:gap-10">
         <nav
-          class="setup-stepper mb-10 flex flex-wrap items-stretch justify-center gap-3 border-b border-sophia-dark-border/60 pb-8"
-          aria-label="Setup progress"
+          class="flex w-full flex-col gap-1 sm:max-w-xl lg:max-w-[15rem] lg:shrink-0"
+          aria-label="Setup steps"
         >
           {#each setupSteps as step, idx}
-            <div
-              class={`flex min-w-[9.5rem] max-w-[15rem] flex-1 flex-col rounded-xl border px-3 py-3 sm:px-4 sm:py-4 ${idx + 1 === activeStep ? 'border-sophia-dark-purple/45 bg-sophia-dark-purple/10' : 'border-sophia-dark-border bg-sophia-dark-bg/60'}`}
+            <button
+              type="button"
+              onclick={() => (wizardStep = idx + 1)}
+              class={`flex w-full flex-col items-start rounded-lg border px-4 py-3 text-left transition-colors ${wizardStep === idx + 1 ? 'border-sophia-dark-purple/50 bg-sophia-dark-purple/12' : 'border-sophia-dark-border bg-sophia-dark-bg/50 hover:border-sophia-dark-border'}`}
             >
-              <div class="flex items-center justify-between gap-2">
+              <div class="flex w-full items-center justify-between gap-2">
                 <span class="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Step {idx + 1}</span>
                 <span
                   class={`rounded-full border px-2 py-0.5 font-mono text-[0.58rem] uppercase tracking-[0.12em] ${step.complete ? 'border-sophia-dark-sage/40 bg-sophia-dark-sage/10 text-sophia-dark-sage' : 'border-sophia-dark-border bg-sophia-dark-surface-raised text-sophia-dark-muted'}`}
@@ -812,13 +843,14 @@
                   {step.complete ? '✓' : '•'}
                 </span>
               </div>
-              <div class="mt-2 font-serif text-base leading-snug text-sophia-dark-text sm:text-lg">{step.title}</div>
-              <p class="mt-1 text-xs leading-5 text-sophia-dark-muted">{step.subtitle}</p>
-            </div>
+              <span class="mt-1 font-serif text-base text-sophia-dark-text">{step.title}</span>
+              <span class="mt-0.5 text-xs leading-snug text-sophia-dark-muted">{step.subtitle}</span>
+            </button>
           {/each}
         </nav>
 
-        <div class="mx-auto w-full max-w-5xl space-y-6">
+        <div class="min-w-0 flex-1 space-y-6">
+          {#if wizardStep === 1}
           <section class="setup-card rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/95 p-6 md:p-8">
             <div class="mb-5 flex items-center justify-between gap-3">
               <h2 class="text-2xl font-serif text-sophia-dark-text">1. Source input</h2>
@@ -900,7 +932,7 @@
               <span class="text-xs text-sophia-dark-muted">Auto-detected from URL when possible. You can override manually.</span>
             </label>
           </section>
-
+          {:else if wizardStep === 2}
           <section class="setup-card rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/95 p-6 md:p-8">
             <div class="mb-5 flex items-center justify-between gap-3">
               <h2 class="text-2xl font-serif text-sophia-dark-text">2. Model chain & failover</h2>
@@ -908,7 +940,7 @@
             </div>
 
             <p class="mb-5 text-sm leading-6 text-sophia-dark-muted">
-              This is the main control: choose each slot from the groups below (your route, then the full reference catalog). Step 3 only adds an optional Restormel ranking — it does not unlock the dropdowns.
+              This is the main control: choose each slot from the groups below (your route, then the full reference catalog). The Recommend tab only adds an optional Restormel ranking — it does not unlock these dropdowns.
             </p>
 
             <div class="space-y-4">
@@ -1014,7 +1046,7 @@
               </div>
             {/if}
           </section>
-
+          {:else if wizardStep === 3}
           <section class="setup-card rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/95 p-6 md:p-8">
             <div class="mb-5 flex items-center justify-between gap-3">
               <h2 class="text-2xl font-serif text-sophia-dark-text">3. Optional: Restormel recommendation</h2>
@@ -1102,7 +1134,7 @@
                     class="mt-4 rounded border border-sophia-dark-sage/40 bg-sophia-dark-sage/12 px-4 py-2.5 font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-sage hover:bg-sophia-dark-sage/18"
                     onclick={() => applySuggestedChainFromHints()}
                   >
-                    Apply suggested picks to chain (step 2)
+                    Apply suggested picks to model chain (tab 2)
                   </button>
                 </div>
               {/if}
@@ -1195,7 +1227,7 @@
               </div>
             {/if}
           </section>
-
+          {:else if wizardStep === 4}
           <section class="setup-card rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/95 p-6 md:p-8">
             <div class="mb-5 flex items-center justify-between gap-3">
               <h2 class="text-2xl font-serif text-sophia-dark-text">4. Review & proceed</h2>
@@ -1261,6 +1293,35 @@
               {/if}
             </div>
           </section>
+          {/if}
+
+          {#if wizardStep < 4}
+            <div
+              class="flex flex-col gap-4 border-t border-sophia-dark-border/50 pt-6 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between"
+            >
+              <button
+                type="button"
+                onclick={goWizardBack}
+                disabled={wizardStep === 1}
+                class="rounded border border-sophia-dark-border px-4 py-3 font-mono text-sm text-sophia-dark-muted hover:bg-sophia-dark-surface-raised disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                ← Back
+              </button>
+              <div class="flex min-w-0 flex-1 flex-col items-stretch gap-2 sm:max-w-md sm:flex-row sm:items-center sm:justify-end">
+                {#if nextButtonHint}
+                  <p class="text-xs leading-5 text-sophia-dark-dim sm:mr-2 sm:text-right">{nextButtonHint}</p>
+                {/if}
+                <button
+                  type="button"
+                  onclick={goWizardNext}
+                  disabled={!canGoNextFromCurrentStep}
+                  class="rounded border border-sophia-dark-purple/45 bg-sophia-dark-purple/16 px-5 py-3 font-mono text-sm text-sophia-dark-text hover:bg-sophia-dark-purple/24 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+          {/if}
         </div>
       </div>
     {/if}
