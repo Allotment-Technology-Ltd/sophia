@@ -8,6 +8,7 @@ import {
   restormelGetSwitchCriteriaEnums,
   restormelListRoutes
 } from '$lib/server/restormel';
+import { getRestormelRecommendationSupport } from '$lib/server/restormelRecommendations';
 import { serializeRestormelError } from '$lib/server/restormelAdmin';
 
 export const GET: RequestHandler = async ({ locals }) => {
@@ -22,6 +23,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 
   return json({
     environmentId: RESTORMEL_ENVIRONMENT_ID,
+    recommendations: getRestormelRecommendationSupport(),
     capabilities: capabilities.status === 'fulfilled' ? capabilities.value.data : null,
     switchCriteria: switchCriteria.status === 'fulfilled' ? switchCriteria.value.data : null,
     providersHealth: providersHealth.status === 'fulfilled' ? providersHealth.value.data : null,

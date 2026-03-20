@@ -12,7 +12,7 @@
   type WorkbenchPhaseId = 'prepare' | 'preflight' | 'pipeline' | 'simulate' | 'run' | 'review';
   type SourceMode = 'url' | 'file';
   type RouteCoverageMode = 'dedicated' | 'shared' | 'missing';
-  type PhaseSignal = 'locked' | 'attention' | 'ready' | 'running' | 'passed';
+  type PhaseSignal = 'not_started' | 'blocked' | 'attention' | 'ready' | 'running' | 'passed';
 
   interface AdminRouteRecord {
     id: string;
@@ -48,8 +48,25 @@
     endpoint?: string;
   }
 
+  interface AdminHistoryEntry {
+    id?: string;
+    version?: number | null;
+    publishedVersion?: number | null;
+    createdAt?: string | null;
+    publishedAt?: string | null;
+    updatedBy?: string | null;
+    publishedBy?: string | null;
+    changeSummary?: string | null;
+    [key: string]: unknown;
+  }
+
   interface RoutingContextPayload {
     environmentId?: string;
+    recommendations?: {
+      available: boolean;
+      reason: string;
+      actionTypes?: string[];
+    } | null;
     capabilities: { workloads?: string[]; stages?: string[] } | null;
     switchCriteria: Record<string, unknown> | null;
     providersHealth: {
@@ -226,10 +243,14 @@
   let routingContext = $state<RoutingContextPayload | null>(null);
   let routeStepsById = $state<Record<string, AdminStepRecord[]>>({});
   let routeStepErrors = $state<Record<string, string>>({});
+  let routeHistoryById = $state<Record<string, AdminHistoryEntry[]>>({});
+  let routeHistoryErrors = $state<Record<string, string>>({});
   let selectedStage = $state('ingestion_extraction');
   let simulationState = $state<'idle' | 'running' | 'ready' | 'failed'>('idle');
   let simulationResult = $state<Record<string, unknown> | null>(null);
   let simulationError = $state('');
+  let recommendationState = $state<'idle' | 'requesting'>('idle');
+  let recommendationMessage = $state('');
 
   const activeOperation = $derived.by(() =>
     operations.find((operation) => operation.id === selectedId) ?? selectedOperation
@@ -271,8 +292,25 @@
   const selectedRouteStepError = $derived.by(
     () => (selectedStageDescriptor?.route?.id ? routeStepErrors[selectedStageDescriptor.route.id] ?? '' : '')
   );
+  const selectedRouteHistory = $derived.by(
+    () =>
+      (selectedStageDescriptor?.route?.id
+        ? routeHistoryById[selectedStageDescriptor.route.id] ?? []
+        : []) as AdminHistoryEntry[]
+  );
+  const selectedRouteHistoryError = $derived.by(
+    () => (selectedStageDescriptor?.route?.id ? routeHistoryErrors[selectedStageDescriptor.route.id] ?? '' : '')
+  );
   const providerHealthEntries = $derived.by(
     () => routingContext?.providersHealth?.providers ?? []
+  );
+  const recommendationSupport = $derived.by(
+    () =>
+      routingContext?.recommendations ?? {
+        available: false,
+        reason: 'Restormel recommendation actions are not yet available for this environment.',
+        actionTypes: []
+      }
   );
   const dedicatedRouteCount = $derived(
     stageDescriptors.filter((descriptor) => descriptor.mode === 'dedicated').length
@@ -283,6 +321,64 @@
   const missingStageCount = $derived(
     stageDescriptors.filter((descriptor) => descriptor.mode === 'missing').length
   );
+  const selectedRouteHistoryLatest = $derived.by(() => selectedRouteHistory[0] ?? null);
+  const providerHealthSummary = $derived.by(() => {
+    const total = providerHealthEntries.length;
+    const healthy = providerHealthEntries.filter((provider) =>
+      ['healthy', 'ready'].includes((provider.status ?? '').toLowerCase())
+    ).length;
+    const degraded = providerHealthEntries.filter((provider) =>
+      ['degraded', 'warning'].includes((provider.status ?? '').toLowerCase())
+    ).length;
+    const failed = providerHealthEntries.filter((provider) =>
+      ['failed', 'unhealthy'].includes((provider.status ?? '').toLowerCase())
+    ).length;
+    return { total, healthy, degraded, failed };
+  });
+  const selectedRouteSyncState = $derived.by(() => {
+    const route = selectedStageDescriptor?.route;
+    if (!route) {
+      return {
+        tone: 'blocked' as PhaseSignal,
+        label: 'No route',
+        detail: 'This stage does not yet have a route bound to it.'
+      };
+    }
+
+    if (selectedRouteHistoryError) {
+      return {
+        tone: 'attention' as PhaseSignal,
+        label: 'History unavailable',
+        detail: selectedRouteHistoryError
+      };
+    }
+
+    if (route.version && route.publishedVersion && route.version !== route.publishedVersion) {
+      return {
+        tone: 'attention' as PhaseSignal,
+        label: 'Draft differs',
+        detail: `Draft v${route.version} differs from published v${route.publishedVersion}.`
+      };
+    }
+
+    return {
+      tone: 'passed' as PhaseSignal,
+      label: 'In sync',
+      detail: `Published route ${route.name ?? route.id} is aligned with the current version.`
+    };
+  });
+  const selectedRoutePolicySummary = $derived.by(() => {
+    if (selectedRouteSteps.length === 0) {
+      return 'No policy detail is available for this stage yet.';
+    }
+
+    const switchCount = selectedRouteSteps.filter((step) => step.switchCriteria || step.fallbackOn).length;
+    const retryCount = selectedRouteSteps.filter((step) => step.retryPolicy).length;
+    const costCount = selectedRouteSteps.filter((step) => step.costPolicy).length;
+    const fallbackCount = Math.max(selectedRouteSteps.length - 1, 0);
+
+    return `${fallbackCount} fallback ${fallbackCount === 1 ? 'step' : 'steps'}, ${switchCount} switch rule${switchCount === 1 ? '' : 's'}, ${retryCount} retry polic${retryCount === 1 ? 'y' : 'ies'}, ${costCount} cost polic${costCount === 1 ? 'y' : 'ies'}.`;
+  });
   const suggestedSourceType = $derived.by(() => inferSourceType(sourceUrl));
   const payloadPreviewObject = $derived.by<Record<string, unknown> | null>(() => {
     try {
@@ -443,10 +539,29 @@
         return 'text-sophia-dark-blue border-sophia-dark-blue/35 bg-sophia-dark-blue/8';
       case 'running':
         return 'text-sophia-dark-amber border-sophia-dark-amber/35 bg-sophia-dark-amber/8';
+      case 'blocked':
+        return 'text-sophia-dark-coral border-sophia-dark-coral/35 bg-sophia-dark-coral/8';
       case 'attention':
         return 'text-sophia-dark-copper border-sophia-dark-copper/35 bg-sophia-dark-copper/8';
       default:
         return 'text-sophia-dark-dim border-sophia-dark-border bg-sophia-dark-surface-raised/30';
+    }
+  }
+
+  function phaseSignalLabel(signal: PhaseSignal): string {
+    switch (signal) {
+      case 'not_started':
+        return 'Not started';
+      case 'blocked':
+        return 'Blocked';
+      case 'attention':
+        return 'Needs attention';
+      case 'ready':
+        return 'Ready';
+      case 'running':
+        return 'Running';
+      case 'passed':
+        return 'Passed';
     }
   }
 
@@ -685,48 +800,93 @@
       detail: 'Source setup, route coverage, and provider visibility are in a workable state.'
     };
   });
+  const reviewRecommendation = $derived.by(() => {
+    if (!activeOperation) {
+      return {
+        tone: 'not_started' as PhaseSignal,
+        title: 'No run selected yet.',
+        detail: 'Choose a recent run or queue a new operation to inspect outcomes here.'
+      };
+    }
+
+    if (activeOperation.status === 'queued' || activeOperation.status === 'running') {
+      return {
+        tone: 'running' as PhaseSignal,
+        title: 'This run is still in progress.',
+        detail: 'Keep the review panel open for logs, or leave it running while you inspect another phase.'
+      };
+    }
+
+    if (activeOperation.status === 'succeeded') {
+      return {
+        tone: 'passed' as PhaseSignal,
+        title: 'The run completed successfully.',
+        detail: 'Review the outcome and lineage, then decide whether a follow-on validation, sync, or promotion step is needed.'
+      };
+    }
+
+    return {
+      tone: 'attention' as PhaseSignal,
+      title: 'This run needs operator attention.',
+      detail: activeOperation.last_error ?? 'Check the summary and log, then retry or adjust the route before running again.'
+    };
+  });
 
   function phaseSignal(id: WorkbenchPhaseId): PhaseSignal {
-    const blockers = preflightBlockers();
-    const warnings = preflightWarnings();
+    const blockers = preflightBlockerList;
+    const warnings = preflightWarningList;
     const hasSucceeded = activeOperation?.status === 'succeeded';
+    const hasSourceInput = Boolean(sourceUrl.trim() || sourceFile.trim());
+    const activeIdx = PHASES.findIndex((phase) => phase.id === activePhase);
+    const idx = PHASES.findIndex((phase) => phase.id === id);
+
+    if (idx > activeIdx) {
+      if (id === 'run' && simulationState === 'ready') return 'ready';
+      if (id === 'review' && activeOperation) {
+        return activeOperation.status === 'queued' || activeOperation.status === 'running' ? 'running' : 'ready';
+      }
+      return 'not_started';
+    }
 
     if (id === 'prepare') {
+      if (!hasSourceInput && !payloadParseError) return activePhase === 'prepare' ? 'not_started' : 'not_started';
       if (activePhase === 'prepare') return prepareReady ? 'ready' : 'attention';
       return prepareReady ? 'passed' : 'attention';
     }
 
     if (id === 'preflight') {
-      if (!prepareReady) return 'locked';
-      if (blockers.length > 0 || warnings.length > 0) return activePhase === 'preflight' ? 'attention' : 'attention';
+      if (!hasSourceInput) return 'not_started';
+      if (!prepareReady) return activePhase === 'preflight' ? 'blocked' : 'blocked';
+      if (blockers.length > 0) return 'blocked';
+      if (warnings.length > 0) return 'attention';
       return activePhase === 'preflight' ? 'ready' : 'passed';
     }
 
     if (id === 'pipeline') {
-      if (!prepareReady) return 'locked';
+      if (!prepareReady) return activeIdx >= idx ? 'blocked' : 'not_started';
       if (missingStageCount > 0 || providerHealthEntries.length === 0) return 'attention';
       return activePhase === 'pipeline' ? 'ready' : 'passed';
     }
 
     if (id === 'simulate') {
-      if (!prepareReady) return 'locked';
+      if (!prepareReady) return activeIdx >= idx ? 'blocked' : 'not_started';
       if (simulationState === 'running') return 'running';
       if (simulationState === 'ready') return 'passed';
       if (simulationState === 'failed') return 'attention';
-      return 'ready';
+      return activePhase === 'simulate' ? 'ready' : 'not_started';
     }
 
     if (id === 'run') {
-      if (!prepareReady) return 'locked';
+      if (!prepareReady) return activeIdx >= idx ? 'blocked' : 'not_started';
       if (activeOperation?.status === 'queued' || activeOperation?.status === 'running') return 'running';
       if (hasSucceeded) return 'passed';
       if (activeOperation) {
         return activeOperation.status === 'succeeded' ? 'passed' : 'attention';
       }
-      return 'ready';
+      return simulationState === 'ready' ? 'ready' : 'not_started';
     }
 
-    if (!activeOperation) return 'locked';
+    if (!activeOperation) return 'not_started';
     if (activeOperation.status === 'succeeded') return 'passed';
     if (activeOperation.status === 'queued' || activeOperation.status === 'running') return 'running';
     return 'attention';
@@ -740,6 +900,45 @@
   function advancePhase(): void {
     const next = nextPhase(activePhase);
     if (next) activePhase = next;
+  }
+
+  async function requestRecommendation(actionType: string): Promise<void> {
+    recommendationState = 'requesting';
+    recommendationMessage = '';
+    errorMessage = '';
+
+    try {
+      const routeId = selectedStageDescriptor?.route?.id;
+      if (!routeId) {
+        throw new Error('No route is bound to the selected stage.');
+      }
+
+      const body = await authorizedJson(`/api/admin/ingestion-routing/routes/${routeId}/recommend`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          actionType,
+          environmentId: routingEnvironmentId,
+          workload: selectedStageDescriptor?.route?.workload ?? 'ingestion',
+          stage: selectedStageDescriptor?.stage ?? selectedStage,
+          task: selectedStageDescriptor?.stage === 'ingestion_embedding' ? 'embedding' : 'completion',
+          estimatedInputTokens,
+          estimatedInputChars
+        })
+      });
+
+      if (body?.support?.reason) {
+        recommendationMessage = body.support.reason;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Recommendation request failed';
+      recommendationMessage = message;
+      errorMessage = message;
+    } finally {
+      recommendationState = 'idle';
+    }
   }
 
   async function authorizedJson(url: string, init?: RequestInit): Promise<any> {
@@ -787,21 +986,31 @@
     );
     const nextSteps: Record<string, AdminStepRecord[]> = {};
     const nextErrors: Record<string, string> = {};
+    const nextHistory: Record<string, AdminHistoryEntry[]> = {};
+    const nextHistoryErrors: Record<string, string> = {};
 
     await Promise.all(
       uniqueRouteIds.map(async (routeId) => {
         try {
-          const stepBody = await authorizedJson(`/api/admin/ingestion-routing/routes/${routeId}/steps`);
+          const [stepBody, historyBody] = await Promise.all([
+            authorizedJson(`/api/admin/ingestion-routing/routes/${routeId}/steps`),
+            authorizedJson(`/api/admin/ingestion-routing/routes/${routeId}/history`)
+          ]);
           nextSteps[routeId] = Array.isArray(stepBody.steps) ? stepBody.steps : [];
+          nextHistory[routeId] = Array.isArray(historyBody.history) ? historyBody.history : [];
         } catch (error) {
           nextSteps[routeId] = [];
+          nextHistory[routeId] = [];
           nextErrors[routeId] = error instanceof Error ? error.message : 'Failed to load route steps';
+          nextHistoryErrors[routeId] = error instanceof Error ? error.message : 'Failed to load route history';
         }
       })
     );
 
     routeStepsById = nextSteps;
     routeStepErrors = nextErrors;
+    routeHistoryById = nextHistory;
+    routeHistoryErrors = nextHistoryErrors;
     if (!selectedStage || !routingStages.includes(selectedStage)) {
       selectedStage = routingStages[0] ?? 'ingestion_extraction';
     }
@@ -1163,7 +1372,8 @@
               class:is-active={phase.id === activePhase}
               class:is-passed={phaseSignal(phase.id) === 'passed'}
               class:is-attention={phaseSignal(phase.id) === 'attention'}
-              class:is-locked={phaseSignal(phase.id) === 'locked'}
+              class:is-blocked={phaseSignal(phase.id) === 'blocked'}
+              class:is-locked={phaseSignal(phase.id) === 'not_started'}
               onclick={() => (activePhase = phase.id)}
             >
               <div class="flex items-start justify-between gap-3">
@@ -1172,7 +1382,7 @@
                   <div class="mt-2 font-serif text-2xl leading-none text-sophia-dark-text">{phase.title}</div>
                 </div>
                 <span class={`rounded-full border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] ${statusTone(phaseSignal(phase.id))}`}>
-                  {phaseSignal(phase.id)}
+                  {phaseSignalLabel(phaseSignal(phase.id))}
                 </span>
               </div>
               <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">{phase.summary}</p>
@@ -1458,7 +1668,7 @@
                 <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <div class={`inline-flex rounded-full border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.14em] ${statusTone(phaseSignal('preflight'))}`}>
-                      {phaseSignal('preflight')}
+                      {phaseSignalLabel(phaseSignal('preflight'))}
                     </div>
                     <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">
                       Proceed when the current warnings are acceptable for this run. Use the routing studio if you need to refine the stage plan before launch.
@@ -1752,7 +1962,7 @@
                   <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Launch verdict</div>
                   <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 p-4">
                     <div class={`inline-flex rounded-full border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.14em] ${statusTone(phaseSignal('run'))}`}>
-                      {phaseSignal('run')}
+                      {phaseSignalLabel(phaseSignal('run'))}
                     </div>
                     <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">
                       {prepareReady
@@ -1805,14 +2015,20 @@
             <div class="space-y-6">
               <div>
                 <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Phase 6</div>
-                <h2 class="mt-2 text-3xl font-serif text-sophia-dark-text">Review the run, then decide whether the next phase is safe.</h2>
+                <h2 class="mt-2 text-3xl font-serif text-sophia-dark-text">Review the result and decide the next action.</h2>
                 <p class="mt-3 max-w-3xl text-base leading-7 text-sophia-dark-muted">
-                  The most recent operation becomes the review surface. Read the status, the lineage, and the log without leaving the walkthrough.
+                  The selected operation becomes a run workspace. Review the status, timeline, outcome, and log without leaving the staged flow.
                 </p>
               </div>
 
               {#if activeOperation}
-                <div class="grid gap-4 md:grid-cols-4">
+                <div class={`rounded border px-4 py-4 ${statusTone(reviewRecommendation.tone)}`}>
+                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em]">Review verdict</div>
+                  <h3 class="mt-2 text-2xl font-serif text-sophia-dark-text">{reviewRecommendation.title}</h3>
+                  <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{reviewRecommendation.detail}</p>
+                </div>
+
+                <div class="grid gap-4 md:grid-cols-5">
                   <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
                     <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Status</div>
                     <div class="mt-2 font-mono text-sm text-sophia-dark-text">{activeOperation.status}</div>
@@ -1829,12 +2045,16 @@
                     <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Executor</div>
                     <div class="mt-2 font-mono text-sm text-sophia-dark-text">{activeOperation.executor}</div>
                   </div>
+                  <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                    <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Last updated</div>
+                    <div class="mt-2 font-mono text-sm text-sophia-dark-text">{formatDate(activeOperation.updated_at)}</div>
+                  </div>
                 </div>
 
-                <div class="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                <div class="grid gap-6 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
                   <div class="space-y-4">
                     <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-                      <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Summary</div>
+                      <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Outcome summary</div>
                       <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">{activeOperation.result_summary ?? 'Job is still in progress.'}</p>
                       {#if activeOperation.last_error}
                         <p class="mt-3 font-mono text-xs text-sophia-dark-copper">{activeOperation.last_error}</p>
@@ -1842,7 +2062,7 @@
                     </div>
 
                     <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-                      <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Lineage</div>
+                      <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Run details</div>
                       <dl class="mt-3 space-y-2 font-mono text-xs text-sophia-dark-text">
                         <div class="flex justify-between gap-4"><dt>Action</dt><dd>{activeOperation.requested_action}</dd></div>
                         <div class="flex justify-between gap-4"><dt>Tool</dt><dd>{activeOperation.restormel_tool ?? 'adapter'}</dd></div>
@@ -1854,26 +2074,47 @@
                       </dl>
                     </div>
 
-                    <div class="flex flex-wrap gap-3">
-                      <button
-                        type="button"
-                        onclick={() => triggerOperationAction(activeOperation.id, 'retry')}
-                        class="rounded border border-sophia-dark-blue/40 px-4 py-2 font-mono text-sm text-sophia-dark-blue hover:bg-sophia-dark-blue/10"
-                      >
-                        Retry
-                      </button>
-                      <button
-                        type="button"
-                        onclick={() => triggerOperationAction(activeOperation.id, 'cancel')}
-                        class="rounded border border-sophia-dark-copper/40 px-4 py-2 font-mono text-sm text-sophia-dark-copper hover:bg-sophia-dark-copper/10"
-                      >
-                        Cancel
-                      </button>
+                    <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                      <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Next actions</div>
+                      <div class="mt-4 flex flex-wrap gap-3">
+                        <button
+                          type="button"
+                          onclick={() => triggerOperationAction(activeOperation.id, 'retry')}
+                          class="rounded border border-sophia-dark-blue/40 px-4 py-2 font-mono text-sm text-sophia-dark-blue hover:bg-sophia-dark-blue/10"
+                        >
+                          Retry
+                        </button>
+                        <button
+                          type="button"
+                          onclick={() => triggerOperationAction(activeOperation.id, 'cancel')}
+                          class="rounded border border-sophia-dark-copper/40 px-4 py-2 font-mono text-sm text-sophia-dark-copper hover:bg-sophia-dark-copper/10"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onclick={() => (activePhase = 'pipeline')}
+                          class="rounded border border-sophia-dark-border px-4 py-2 font-mono text-sm text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+                        >
+                          Review pipeline
+                        </button>
+                      </div>
+                      <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">
+                        Use retry when the route is still appropriate. Return to the pipeline if the failure suggests a stage or policy change first.
+                      </p>
                     </div>
                   </div>
 
                   <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-                    <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Live log</div>
+                    <div class="flex items-start justify-between gap-3">
+                      <div>
+                        <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Live log</div>
+                        <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">Read the raw execution output for this selected run.</p>
+                      </div>
+                      <span class={`rounded-full border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] ${badgeClass(activeOperation.status)}`}>
+                        {activeOperation.status}
+                      </span>
+                    </div>
                     <pre class="mt-4 min-h-[24rem] overflow-auto whitespace-pre-wrap break-words rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 p-4 font-mono text-xs text-sophia-dark-text">{activeOperation.log_text || 'No logs captured yet.'}</pre>
                   </div>
                 </div>
@@ -1919,74 +2160,187 @@
           </section>
 
           <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5">
-            <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Restormel advice</div>
-            <div class="mt-4 rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-              <div class={`inline-flex rounded-full border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.14em] ${statusTone(routingAdvisory.tone)}`}>
-                {routingAdvisory.tone}
-              </div>
-              <h3 class="mt-3 text-2xl font-serif text-sophia-dark-text">{routingAdvisory.title}</h3>
-              <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">{routingAdvisory.body}</p>
-
-              <div class="mt-4 space-y-3">
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 px-3 py-3">
-                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Route focus</div>
-                  <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{routingAdvisory.routeFocus}</p>
-                </div>
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 px-3 py-3">
-                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Policy focus</div>
-                  <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{routingAdvisory.policyFocus}</p>
-                </div>
-              </div>
-
-              <div class="mt-4 flex flex-wrap gap-3">
-                {#if ingestProvider !== 'auto'}
-                  <button
-                    type="button"
-                    onclick={useAutomaticRouting}
-                    class="rounded border border-sophia-dark-blue/40 px-3 py-2 font-mono text-xs text-sophia-dark-blue hover:bg-sophia-dark-blue/10"
-                  >
-                    Apply recommended auto routing
-                  </button>
-                {/if}
-                <a
-                  href="/admin/ingestion-routing"
-                  class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-xs text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
-                >
-                  Refine route and policies
-                </a>
-              </div>
-            </div>
-          </section>
-
-          <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5">
-            <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Routing signal</div>
+            <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Decision panel</div>
             <div class="mt-4 space-y-3">
               <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-                <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Environment</div>
-                <div class="mt-2 font-mono text-xs text-sophia-dark-text break-all">{routingEnvironmentId}</div>
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Selected stage</div>
+                    <div class="mt-2 text-2xl font-serif text-sophia-dark-text">{selectedStageDescriptor?.title ?? 'No stage selected'}</div>
+                  </div>
+                  <span class={`rounded-full border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] ${routeModeTone(selectedStageDescriptor?.mode ?? 'missing')}`}>
+                    {selectedStageDescriptor ? routeModeLabel(selectedStageDescriptor.mode) : 'Needs routing'}
+                  </span>
+                </div>
+                <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">{selectedStageDescriptor?.summary ?? 'Choose a stage to inspect its route and controls.'}</p>
               </div>
+
+              <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Route summary</div>
+                  <div class="mt-2 font-mono text-sm text-sophia-dark-text break-all">
+                    {selectedStageDescriptor?.route ? selectedStageDescriptor.route.name ?? selectedStageDescriptor.route.id : 'No route bound'}
+                  </div>
+                  <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                    Environment {routingEnvironmentId}. Dedicated {dedicatedRouteCount}, shared {sharedFallbackCount}, missing {missingStageCount}.
+                  </p>
+                </div>
+
+                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Policy summary</div>
+                  <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{selectedRoutePolicySummary}</p>
+                  <p class="mt-3 font-mono text-xs text-sophia-dark-dim">{routingAdvisory.policyFocus}</p>
+                </div>
+
+                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Estimated cost</div>
+                  <div class="mt-2 font-mono text-sm text-sophia-dark-text">
+                    {simulationResult?.estimatedCostUsd ?? 'Run preview to price this stage'}
+                  </div>
+                  <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                    {simulationResult
+                      ? `Selected step ${String(simulationResult.selectedStepId ?? '—')} with ${((simulationResult.fallbackCandidates as Array<unknown> | undefined) ?? []).length} fallback candidate(s).`
+                      : 'Simulation has not been run for the current stage yet.'}
+                  </p>
+                </div>
+
+                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Provider health</div>
+                  <div class="mt-2 font-mono text-sm text-sophia-dark-text">
+                    {providerHealthSummary.healthy}/{providerHealthSummary.total || 0} healthy
+                  </div>
+                  <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                    {providerHealthSummary.failed > 0
+                      ? `${providerHealthSummary.failed} provider${providerHealthSummary.failed === 1 ? '' : 's'} currently failing.`
+                      : providerHealthSummary.degraded > 0
+                        ? `${providerHealthSummary.degraded} provider${providerHealthSummary.degraded === 1 ? '' : 's'} degraded.`
+                        : providerHealthSummary.total > 0
+                          ? 'Configured providers are visible to the workbench.'
+                          : 'No provider health entries are available yet.'}
+                  </p>
+                </div>
+
+                <div class={`rounded border px-4 py-4 ${statusTone(selectedRouteSyncState.tone)}`}>
+                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em]">Route sync</div>
+                  <div class="mt-2 font-mono text-sm text-sophia-dark-text">{selectedRouteSyncState.label}</div>
+                  <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{selectedRouteSyncState.detail}</p>
+                  {#if selectedRouteHistoryLatest}
+                    <p class="mt-3 font-mono text-xs text-sophia-dark-dim">
+                      updated {formatDate(selectedRouteHistoryLatest.createdAt ?? null)}
+                      {#if selectedRouteHistoryLatest.updatedBy}
+                        {' '}by {selectedRouteHistoryLatest.updatedBy}
+                      {/if}
+                    </p>
+                  {/if}
+                </div>
+
+                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Recent route history</div>
+                  {#if selectedRouteHistory.length > 0}
+                    <div class="mt-3 space-y-3">
+                      {#each selectedRouteHistory.slice(0, 2) as entry}
+                        <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/20 px-3 py-3">
+                          <div class="font-mono text-xs text-sophia-dark-text">
+                            version {entry.version ?? '—'} / published {entry.publishedVersion ?? '—'}
+                          </div>
+                          <div class="mt-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
+                            {formatDate(entry.createdAt ?? null)}
+                          </div>
+                          <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{entry.changeSummary ?? 'No change summary provided.'}</p>
+                        </div>
+                      {/each}
+                    </div>
+                  {:else if selectedRouteHistoryError}
+                    <div class="mt-3 rounded border border-sophia-dark-copper/35 bg-sophia-dark-copper/8 px-4 py-3 text-sm text-sophia-dark-copper">
+                      {selectedRouteHistoryError}
+                    </div>
+                  {:else}
+                    <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">No route history is available for the selected stage yet.</p>
+                  {/if}
+                </div>
+              </div>
+
               <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-                <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Coverage</div>
-                <div class="mt-3 grid gap-2">
-                  <div class="flex items-center justify-between font-mono text-xs">
-                    <span class="text-sophia-dark-muted">Dedicated routes</span>
-                    <span class="text-sophia-dark-text">{dedicatedRouteCount}</span>
-                  </div>
-                  <div class="flex items-center justify-between font-mono text-xs">
-                    <span class="text-sophia-dark-muted">Shared fallback</span>
-                    <span class="text-sophia-dark-text">{sharedFallbackCount}</span>
-                  </div>
-                  <div class="flex items-center justify-between font-mono text-xs">
-                    <span class="text-sophia-dark-muted">Missing stages</span>
-                    <span class="text-sophia-dark-text">{missingStageCount}</span>
-                  </div>
+                <div class={`inline-flex rounded-full border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.14em] ${statusTone(routingAdvisory.tone)}`}>
+                  {phaseSignalLabel(routingAdvisory.tone)}
+                </div>
+                <h3 class="mt-3 text-2xl font-serif text-sophia-dark-text">{routingAdvisory.title}</h3>
+                <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">{routingAdvisory.body}</p>
+                <div class="mt-4 flex flex-wrap gap-3">
+                  {#if ingestProvider !== 'auto'}
+                    <button
+                      type="button"
+                      onclick={useAutomaticRouting}
+                      class="rounded border border-sophia-dark-blue/40 px-3 py-2 font-mono text-xs text-sophia-dark-blue hover:bg-sophia-dark-blue/10"
+                    >
+                      Apply recommended auto routing
+                    </button>
+                  {/if}
+                  <a
+                    href="/admin/ingestion-routing"
+                    class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-xs text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+                  >
+                    Refine route and policies
+                  </a>
                 </div>
               </div>
-              {#if routingContext?.errors?.routes}
-                <div class="rounded border border-sophia-dark-copper/35 bg-sophia-dark-copper/8 px-4 py-3 font-mono text-xs text-sophia-dark-copper">
-                  {routingContext.errors.routes.detail}
+
+              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">One-click fixes</div>
+                <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                  These actions are wired for the future Restormel recommendation API. Once that surface is live, Sophia will be able to request stage-specific route and policy fixes from here.
+                </p>
+                <div class="mt-4 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    disabled={!recommendationSupport.available || recommendationState === 'requesting'}
+                    onclick={() => void requestRecommendation('fix_automatically')}
+                    class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-xs text-sophia-dark-muted hover:bg-sophia-dark-surface-raised disabled:opacity-50"
+                  >
+                    Fix automatically
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!recommendationSupport.available || recommendationState === 'requesting'}
+                    onclick={() => void requestRecommendation('use_recommended_route')}
+                    class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-xs text-sophia-dark-muted hover:bg-sophia-dark-surface-raised disabled:opacity-50"
+                  >
+                    Use recommended route
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!recommendationSupport.available || recommendationState === 'requesting'}
+                    onclick={() => void requestRecommendation('use_cheaper_route')}
+                    class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-xs text-sophia-dark-muted hover:bg-sophia-dark-surface-raised disabled:opacity-50"
+                  >
+                    Use cheaper route
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!recommendationSupport.available || recommendationState === 'requesting'}
+                    onclick={() => void requestRecommendation('use_more_reliable_route')}
+                    class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-xs text-sophia-dark-muted hover:bg-sophia-dark-surface-raised disabled:opacity-50"
+                  >
+                    Use more reliable route
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!recommendationSupport.available || recommendationState === 'requesting'}
+                    onclick={() => void requestRecommendation('rerun_phase')}
+                    class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-xs text-sophia-dark-muted hover:bg-sophia-dark-surface-raised disabled:opacity-50"
+                  >
+                    Re-run this phase
+                  </button>
                 </div>
-              {/if}
+                <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">
+                  {recommendationSupport.available
+                    ? 'Recommendations are available for this environment.'
+                    : recommendationSupport.reason}
+                </p>
+                {#if recommendationMessage}
+                  <p class="mt-2 font-mono text-xs text-sophia-dark-dim">{recommendationMessage}</p>
+                {/if}
+              </div>
             </div>
           </section>
 
@@ -2134,6 +2488,16 @@
   .phase-step.is-attention::before {
     background: linear-gradient(90deg, rgba(212, 147, 111, 0), rgba(212, 147, 111, 0.65), rgba(212, 147, 111, 0));
     opacity: 0.45;
+  }
+
+  .phase-step.is-blocked {
+    border-color: rgba(214, 98, 98, 0.34);
+    background: linear-gradient(180deg, rgba(54, 25, 25, 0.68), rgba(31, 18, 18, 0.92));
+  }
+
+  .phase-step.is-blocked::before {
+    background: linear-gradient(90deg, rgba(214, 98, 98, 0), rgba(214, 98, 98, 0.7), rgba(214, 98, 98, 0));
+    opacity: 0.5;
   }
 
   .phase-step.is-locked {
