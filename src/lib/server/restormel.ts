@@ -301,9 +301,16 @@ function toDashboardError(
   status: number,
   payload: unknown
 ): RestormelDashboardError {
+  const payloadText =
+    typeof payload === 'string' && payload.trim() ? payload.trim() : null;
+  const isLikelyHtml =
+    payloadText !== null && /<(?:!doctype|html|head|body)\b/i.test(payloadText);
+
   const code =
     isRecord(payload) && typeof payload.error === 'string'
       ? payload.error
+      : isLikelyHtml
+        ? 'upstream_non_json'
       : status === 401
         ? 'unauthorized'
         : status === 403
@@ -319,8 +326,10 @@ function toDashboardError(
       ? payload.detail
       : isRecord(payload) && typeof payload.message === 'string'
         ? payload.message
-        : typeof payload === 'string' && payload.trim()
-          ? payload.trim().slice(0, 300)
+        : isLikelyHtml
+          ? `Upstream returned HTML instead of JSON (status ${status}). Check RESTORMEL_KEYS_BASE / RESTORMEL_BASE_URL and endpoint routing.`
+          : payloadText
+            ? payloadText.slice(0, 220)
           : `Restormel request failed with status ${status}`;
 
   return new RestormelDashboardError({

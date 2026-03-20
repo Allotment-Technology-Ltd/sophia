@@ -82,14 +82,33 @@
     | 'resolve'
     | 'publish'
     | 'rollback';
+  type EditorTab = 'configure' | 'simulate' | 'probe';
 
   const DEFAULT_ENVIRONMENT_ID = 'production';
+  const STAGE_LABELS: Record<string, string> = {
+    ingestion_extraction: 'Extraction',
+    ingestion_relations: 'Relations',
+    ingestion_grouping: 'Grouping',
+    ingestion_validation: 'Validation',
+    ingestion_embedding: 'Embedding',
+    ingestion_json_repair: 'JSON Repair'
+  };
+
+  const STAGE_DESCRIPTIONS: Record<string, string> = {
+    ingestion_extraction: 'Pull claims and source passages from the document.',
+    ingestion_relations: 'Connect support, tension, and dependency relationships.',
+    ingestion_grouping: 'Cluster arguments and recurring positions.',
+    ingestion_validation: 'Check readiness, evidence quality, and confidence.',
+    ingestion_embedding: 'Prepare retrieval vectors and lookup support.',
+    ingestion_json_repair: 'Clean malformed model output before final storage.'
+  };
 
   let pageState = $state<PageState>('loading');
   let currentUserEmail = $state<string | null>(null);
   let pageError = $state('');
   let pageMessage = $state('');
   let busyAction = $state<BusyAction>('');
+  let editorTab = $state<EditorTab>('configure');
 
   let capabilities = $state<{ workloads?: string[]; stages?: string[] } | null>(null);
   let switchCriteria = $state<Record<string, unknown> | null>(null);
@@ -102,6 +121,7 @@
     routes: null
   });
 
+  let selectedStage = $state<string | null>(null);
   let selectedRouteId = $state<string | null>(null);
   let steps = $state<AdminStepRecord[]>([]);
   let history = $state<AdminHistoryEntry[]>([]);
@@ -115,39 +135,82 @@
   let simulationResult = $state<Record<string, unknown> | null>(null);
   let resolveResult = $state<Record<string, unknown> | null>(null);
 
-  const selectedRoute = $derived(
-    routes.find((route) => route.id === selectedRouteId) ?? null
-  );
+  const selectedRoute = $derived(routes.find((route) => route.id === selectedRouteId) ?? null);
   const sharedRoute = $derived.by(
     () => routes.find((route) => !route.stage && route.enabled !== false) ?? null
   );
+  const providerHealthEntries = $derived.by(() => providersHealth?.providers ?? []);
+  const stageList = $derived.by(
+    () => capabilities?.stages ?? Object.keys(STAGE_LABELS)
+  );
+  const sortedSteps = $derived.by(
+    () => [...steps].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0))
+  );
+  const validHistory = $derived.by(() =>
+    history
+      .map((entry) => ({
+        ...entry,
+        effectiveAt: entry.publishedAt ?? entry.createdAt ?? null
+      }))
+      .filter((entry) => hasValidDate(entry.effectiveAt))
+  );
 
   const routeStageCoverage = $derived.by(() => {
-    const stages = capabilities?.stages ?? [];
-    return stages.map((stage) => ({
-      stage,
-      route:
-        routes.find((route) => route.stage === stage && route.enabled !== false) ??
-        sharedRoute ??
-        null,
-      mode:
-        routes.find((route) => route.stage === stage && route.enabled !== false) !== undefined
-          ? ('dedicated' as RouteCoverageMode)
-          : sharedRoute
-            ? ('shared' as RouteCoverageMode)
-            : ('missing' as RouteCoverageMode)
-    }));
+    return stageList.map((stage) => {
+      const dedicatedRoute =
+        routes.find((route) => route.stage === stage && route.enabled !== false) ?? null;
+      const route = dedicatedRoute ?? sharedRoute ?? null;
+      const mode: RouteCoverageMode = dedicatedRoute
+        ? 'dedicated'
+        : route
+          ? 'shared'
+          : 'missing';
+
+      return {
+        stage,
+        title: stageTitle(stage),
+        description: stageDescription(stage),
+        route,
+        mode
+      };
+    });
   });
 
+  const selectedCoverageEntry = $derived.by(() => {
+    if (selectedStage) {
+      return routeStageCoverage.find((entry) => entry.stage === selectedStage) ?? null;
+    }
+    if (selectedRoute?.stage) {
+      return routeStageCoverage.find((entry) => entry.stage === selectedRoute.stage) ?? null;
+    }
+    return routeStageCoverage[0] ?? null;
+  });
+
+  function stageTitle(stage: string | null | undefined): string {
+    if (!stage) return 'Shared route';
+    return STAGE_LABELS[stage] ?? stage.replace(/^ingestion_/, '').replaceAll('_', ' ');
+  }
+
+  function stageDescription(stage: string | null | undefined): string {
+    if (!stage) return 'Reusable route for stages without dedicated coverage.';
+    return STAGE_DESCRIPTIONS[stage] ?? 'Stage detail not yet documented.';
+  }
+
   function formatDate(value: string | null | undefined): string {
-    if (!value) return '—';
-    return new Date(value).toLocaleString('en-GB', {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toLocaleString('en-GB', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
     });
+  }
+
+  function hasValidDate(value: string | null | undefined): boolean {
+    return formatDate(value).length > 0;
   }
 
   function formatContextError(error: ContextError | null): string {
@@ -164,6 +227,81 @@
       default:
         return 'Needs routing';
     }
+  }
+
+  function routeModeTone(mode: RouteCoverageMode): string {
+    switch (mode) {
+      case 'dedicated':
+        return 'border-sophia-dark-sage/35 bg-sophia-dark-sage/10 text-sophia-dark-sage';
+      case 'shared':
+        return 'border-sophia-dark-blue/35 bg-sophia-dark-blue/10 text-sophia-dark-blue';
+      default:
+        return 'border-sophia-dark-copper/35 bg-sophia-dark-copper/10 text-sophia-dark-copper';
+    }
+  }
+
+  function providerTone(status: string | null | undefined): string {
+    const value = (status ?? '').toLowerCase();
+    if (value === 'healthy' || value === 'ready') {
+      return 'border-sophia-dark-sage/35 bg-sophia-dark-sage/10 text-sophia-dark-sage';
+    }
+    if (value === 'degraded' || value === 'warning') {
+      return 'border-sophia-dark-amber/35 bg-sophia-dark-amber/10 text-sophia-dark-amber';
+    }
+    if (value === 'failed' || value === 'unhealthy') {
+      return 'border-sophia-dark-coral/35 bg-sophia-dark-coral/10 text-sophia-dark-coral';
+    }
+    return 'border-sophia-dark-border bg-sophia-dark-surface-raised text-sophia-dark-text';
+  }
+
+  function routeStatusSummary(route: AdminRouteRecord | null): string {
+    if (!route) return 'No route configured';
+    return `Draft v${route.version ?? '—'} · Published v${route.publishedVersion ?? '—'}`;
+  }
+
+  function modelLabel(step: AdminStepRecord): string {
+    const provider = step.providerPreference?.trim();
+    const model = step.modelId?.trim();
+    if (!provider && !model) return 'Model not configured';
+    if (!provider) return model ?? 'Model not configured';
+    if (!model) return provider;
+    return `${provider} · ${model}`;
+  }
+
+  function fieldValue(value: unknown): string {
+    if (value === null || value === undefined || value === '') return 'Not configured';
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+    if (Array.isArray(value)) return value.length > 0 ? value.join(', ') : 'Not configured';
+    return JSON.stringify(value);
+  }
+
+  function stepDetailFields(step: AdminStepRecord): Array<{ label: string; value: string }> {
+    const fallbackOn = step['fallbackOn'];
+    const timeoutMs = step['timeoutMs'];
+
+    return [
+      { label: 'Enabled', value: step.enabled === false ? 'Disabled' : 'Enabled' },
+      { label: 'Fallback on', value: fieldValue(fallbackOn) },
+      { label: 'Switch criteria', value: step.switchCriteria ? 'Configured' : 'Not configured' },
+      { label: 'Retry policy', value: step.retryPolicy ? 'Configured' : 'Not configured' },
+      { label: 'Cost policy', value: step.costPolicy ? 'Configured' : 'Not configured' },
+      { label: 'Timeout', value: fieldValue(timeoutMs) }
+    ];
+  }
+
+  function switchCriteriaRows(payload: Record<string, unknown> | null): Array<{ key: string; values: string[] }> {
+    if (!payload) return [];
+
+    return Object.entries(payload).map(([key, value]) => {
+      const values = Array.isArray(value)
+        ? value.map((item) => String(item))
+        : value && typeof value === 'object'
+          ? Object.keys(value as Record<string, unknown>)
+          : [String(value)];
+      return { key, values };
+    });
   }
 
   async function authorizedJson(url: string, init?: RequestInit): Promise<any> {
@@ -187,11 +325,22 @@
     return body;
   }
 
-  function buildDefaultScenario(route: AdminRouteRecord | null): Record<string, unknown> {
-    const stage = route?.stage ?? 'ingestion_extraction';
+  function buildDefaultRouteDraft(stage: string | null): Record<string, unknown> {
+    return {
+      name: stage ? `${stageTitle(stage)} Route` : 'Shared ingestion route',
+      stage,
+      workload: 'ingestion',
+      enabled: true
+    };
+  }
+
+  function buildDefaultScenario(route: AdminRouteRecord | null, stageOverride: string | null): Record<string, unknown> {
+    const stage = stageOverride ?? route?.stage ?? 'ingestion_extraction';
     const scenario: Record<string, unknown> = {
       environmentId: DEFAULT_ENVIRONMENT_ID,
       routeId: route?.id ?? undefined,
+      workload: route?.workload ?? 'ingestion',
+      stage,
       task: stage === 'ingestion_embedding' ? 'embedding' : 'completion',
       attempt: 1,
       estimatedInputTokens: 12000,
@@ -203,18 +352,29 @@
       }
     };
 
-    if (route?.stage || route?.workload) {
-      scenario.workload = route?.workload ?? 'ingestion';
-      scenario.stage = route?.stage ?? stage;
-    }
-
     return scenario;
   }
 
-  function syncDraftsFromRoute(route: AdminRouteRecord | null): void {
-    routeJsonDraft = JSON.stringify(route ?? {}, null, 2);
-    simulateJsonDraft = JSON.stringify(buildDefaultScenario(route), null, 2);
-    resolveJsonDraft = JSON.stringify(buildDefaultScenario(route), null, 2);
+  function syncDraftsFromRoute(route: AdminRouteRecord | null, stageOverride: string | null): void {
+    routeJsonDraft = JSON.stringify(route ?? buildDefaultRouteDraft(stageOverride), null, 2);
+    simulateJsonDraft = JSON.stringify(buildDefaultScenario(route, stageOverride), null, 2);
+    resolveJsonDraft = JSON.stringify(buildDefaultScenario(route, stageOverride), null, 2);
+  }
+
+  function resetDraft(kind: 'route' | 'steps' | 'simulate' | 'resolve'): void {
+    if (kind === 'route') {
+      syncDraftsFromRoute(selectedRoute, selectedStage);
+      return;
+    }
+    if (kind === 'steps') {
+      stepsJsonDraft = JSON.stringify(steps, null, 2);
+      return;
+    }
+    if (kind === 'simulate') {
+      simulateJsonDraft = JSON.stringify(buildDefaultScenario(selectedRoute, selectedStage), null, 2);
+      return;
+    }
+    resolveJsonDraft = JSON.stringify(buildDefaultScenario(selectedRoute, selectedStage), null, 2);
   }
 
   async function loadRouteArtifacts(routeId: string): Promise<void> {
@@ -241,41 +401,78 @@
     }
   }
 
-  async function selectRoute(routeId: string): Promise<void> {
+  async function selectRoute(routeId: string, stageOverride: string | null = selectedStage): Promise<void> {
     selectedRouteId = routeId;
+    if (stageOverride !== undefined) selectedStage = stageOverride;
     const route = routes.find((entry) => entry.id === routeId) ?? null;
-    syncDraftsFromRoute(route);
+    syncDraftsFromRoute(route, stageOverride);
     simulationResult = null;
     resolveResult = null;
     await loadRouteArtifacts(routeId);
+  }
+
+  async function chooseStage(stage: string): Promise<void> {
+    selectedStage = stage;
+    const coverage =
+      routeStageCoverage.find((entry) => entry.stage === stage) ??
+      null;
+
+    if (coverage?.route?.id) {
+      await selectRoute(coverage.route.id, stage);
+      return;
+    }
+
+    selectedRouteId = null;
+    steps = [];
+    history = [];
+    stepsJsonDraft = '[]';
+    simulationResult = null;
+    resolveResult = null;
+    syncDraftsFromRoute(null, stage);
   }
 
   async function loadRoutingContext(): Promise<void> {
     busyAction = 'context';
     pageError = '';
     pageMessage = '';
-    const body = (await authorizedJson('/api/admin/ingestion-routing/context')) as ContextPayload;
-    capabilities = body.capabilities;
-    switchCriteria = body.switchCriteria;
-    providersHealth = body.providersHealth;
-    routes = Array.isArray(body.routes) ? body.routes : [];
-    contextErrors = body.errors ?? contextErrors;
 
-    const nextRouteId =
-      selectedRouteId && routes.some((route) => route.id === selectedRouteId)
-        ? selectedRouteId
-        : routes[0]?.id ?? null;
-    selectedRouteId = nextRouteId;
-    syncDraftsFromRoute(routes.find((route) => route.id === nextRouteId) ?? null);
+    try {
+      const body = (await authorizedJson('/api/admin/ingestion-routing/context')) as ContextPayload;
+      const nextRoutes = Array.isArray(body.routes) ? body.routes : [];
+      const nextSharedRoute =
+        nextRoutes.find((route) => !route.stage && route.enabled !== false) ?? null;
+      const nextStages = body.capabilities?.stages ?? Object.keys(STAGE_LABELS);
+      const nextSelectedStage =
+        selectedStage && nextStages.includes(selectedStage)
+          ? selectedStage
+          : nextStages[0] ?? nextRoutes.find((route) => route.stage)?.stage ?? null;
+      const routeForStage =
+        (nextSelectedStage
+          ? nextRoutes.find((route) => route.stage === nextSelectedStage && route.enabled !== false) ?? null
+          : null) ??
+        nextSharedRoute ??
+        nextRoutes[0] ??
+        null;
 
-    if (nextRouteId) {
-      await loadRouteArtifacts(nextRouteId);
-    } else {
-      steps = [];
-      history = [];
-      stepsJsonDraft = '[]';
+      capabilities = body.capabilities;
+      switchCriteria = body.switchCriteria;
+      providersHealth = body.providersHealth;
+      routes = nextRoutes;
+      contextErrors = body.errors ?? contextErrors;
+      selectedStage = nextSelectedStage;
+      selectedRouteId = routeForStage?.id ?? null;
+      syncDraftsFromRoute(routeForStage, nextSelectedStage);
+
+      if (routeForStage?.id) {
+        await loadRouteArtifacts(routeForStage.id);
+      } else {
+        steps = [];
+        history = [];
+        stepsJsonDraft = '[]';
+      }
+    } finally {
+      busyAction = '';
     }
-    busyAction = '';
   }
 
   async function loadAdminContext(): Promise<void> {
@@ -322,7 +519,7 @@
       pageMessage = `Route ${body.route?.id ?? selectedRoute.id} saved.`;
       await loadRoutingContext();
       if (body.route?.id) {
-        await selectRoute(String(body.route.id));
+        await selectRoute(String(body.route.id), selectedStage);
       }
     } catch (error) {
       pageError = error instanceof Error ? error.message : 'Failed to save route';
@@ -416,7 +613,7 @@
     }
   }
 
-  async function rollbackRoute(): Promise<void> {
+  async function rollbackRoute(toVersion?: number | null): Promise<void> {
     if (!selectedRouteId) return;
     busyAction = 'rollback';
     pageError = '';
@@ -425,9 +622,14 @@
       await authorizedJson(`/api/admin/ingestion-routing/routes/${selectedRouteId}/rollback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ environmentId: DEFAULT_ENVIRONMENT_ID })
+        body: JSON.stringify({
+          environmentId: DEFAULT_ENVIRONMENT_ID,
+          ...(toVersion ? { toVersion } : {})
+        })
       });
-      pageMessage = `Rollback requested for ${selectedRouteId}.`;
+      pageMessage = toVersion
+        ? `Rollback requested to version ${toVersion}.`
+        : `Rollback requested for ${selectedRouteId}.`;
       await loadRouteArtifacts(selectedRouteId);
       await loadRoutingContext();
     } catch (error) {
@@ -472,355 +674,648 @@
 </script>
 
 <div class="min-h-screen bg-sophia-dark-bg text-sophia-dark-text">
-  <div class="mx-auto max-w-7xl px-6 py-8 space-y-8">
-    <div class="flex flex-wrap items-start justify-between gap-4">
-      <div>
-        <h1 class="mb-1 text-3xl font-serif text-sophia-dark-text">Ingestion Routing</h1>
-        <p class="font-mono text-sm text-sophia-dark-muted">
-          Live Restormel control plane for ingestion routes, steps, simulation, lifecycle, and resolve probes.
-        </p>
+  <div class="mx-auto max-w-[75rem] px-8 py-8 space-y-8">
+    <section class="rounded-2xl border border-sophia-dark-border bg-sophia-dark-surface p-8 md:p-10">
+      <div class="flex flex-col gap-8 xl:flex-row xl:items-start xl:justify-between">
+        <div class="space-y-5">
+          <div class="flex flex-wrap items-center gap-3">
+            <span class="rounded-full border border-sophia-dark-purple/35 bg-sophia-dark-purple/10 px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-purple">
+              Admin Ingestion
+            </span>
+            <span class="rounded-full border border-sophia-dark-border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">
+              Control plane
+            </span>
+          </div>
+
+          <div>
+            <h1 class="text-[2.1rem] font-serif leading-[1.08] text-sophia-dark-text md:text-[2.6rem]">
+              Ingestion Routing
+            </h1>
+            <p class="mt-3 max-w-3xl text-[0.98rem] leading-7 text-sophia-dark-muted">
+              Inspect stage coverage, edit route drafts, simulate decisions, and verify live resolve behavior without dropping into raw endpoint logs.
+            </p>
+          </div>
+
+          <nav class="flex flex-wrap items-center gap-6">
+            <a href="/admin/operations" class="px-0 py-1 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-muted hover:text-sophia-dark-text">
+              Operations Workbench
+            </a>
+            <a href="/admin/ingestion-routing" class="px-0 py-1 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-text">
+              Ingestion Routing
+            </a>
+            <a href="/admin/review" class="px-0 py-1 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-muted hover:text-sophia-dark-text">
+              Review Queue
+            </a>
+          </nav>
+        </div>
+
+        <div class="flex shrink-0 flex-wrap gap-3">
+          <button
+            type="button"
+            class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised px-4 py-2.5 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-muted hover:bg-sophia-dark-surface"
+            onclick={loadRoutingContext}
+            disabled={busyAction !== ''}
+          >
+            {busyAction === 'context' ? 'Refreshing…' : 'Refresh control plane'}
+          </button>
+          <a
+            href="/admin"
+            class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised px-4 py-2.5 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-muted hover:bg-sophia-dark-surface"
+          >
+            Back to admin
+          </a>
+        </div>
       </div>
-      <div class="flex flex-wrap gap-3">
-        <button
-          type="button"
-          class="rounded border border-sophia-dark-blue/40 bg-sophia-dark-blue/10 px-4 py-2 font-mono text-sm text-sophia-dark-blue hover:bg-sophia-dark-blue/20"
-          onclick={loadRoutingContext}
-          disabled={busyAction !== ''}
-        >
-          {busyAction === 'context' ? 'Refreshing…' : 'Refresh control plane'}
-        </button>
-        <a
-          href="/admin/operations"
-          class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised px-4 py-2 font-mono text-sm hover:bg-sophia-dark-surface"
-        >
-          Operations Workbench
-        </a>
-        <a
-          href="/admin"
-          class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised px-4 py-2 font-mono text-sm hover:bg-sophia-dark-surface"
-        >
-          ← Back to Admin
-        </a>
-      </div>
-    </div>
+    </section>
 
     {#if pageState === 'loading'}
-      <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-6 font-mono text-sm text-sophia-dark-muted">
+      <div class="rounded-2xl border border-sophia-dark-border bg-sophia-dark-surface p-6 font-mono text-sm text-sophia-dark-muted">
         Loading administrator context…
       </div>
     {:else if pageState === 'forbidden'}
-      <div class="rounded border border-sophia-dark-copper/40 bg-sophia-dark-copper/10 p-6">
-        <h2 class="mb-2 text-lg font-serif text-sophia-dark-copper">Administrator access required</h2>
-        <p class="font-mono text-sm text-sophia-dark-copper">
+      <div class="rounded-2xl border border-sophia-dark-copper/40 bg-sophia-dark-copper/10 p-6">
+        <h2 class="text-lg font-serif text-sophia-dark-copper">Administrator access required</h2>
+        <p class="mt-2 font-mono text-sm text-sophia-dark-copper">
           {currentUserEmail ?? 'This account'} does not currently hold the `administrator` role.
         </p>
       </div>
     {:else}
       {#if pageError}
-        <div class="rounded border border-sophia-dark-copper/40 bg-sophia-dark-copper/10 p-4 font-mono text-sm text-sophia-dark-copper">
+        <div class="rounded-2xl border border-sophia-dark-copper/40 bg-sophia-dark-copper/10 px-5 py-4 font-mono text-sm text-sophia-dark-copper">
           {pageError}
         </div>
       {/if}
+
       {#if pageMessage}
-        <div class="rounded border border-sophia-dark-sage/40 bg-sophia-dark-sage/10 p-4 font-mono text-sm text-sophia-dark-sage">
+        <div class="rounded-2xl border border-sophia-dark-sage/40 bg-sophia-dark-sage/10 px-5 py-4 font-mono text-sm text-sophia-dark-sage">
           {pageMessage}
         </div>
       {/if}
 
-      <div class="grid gap-6 xl:grid-cols-[1.1fr,0.9fr]">
-        <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5 space-y-4">
-          <div>
-            <div class="mb-2 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">
-              Runtime surface
+      <div class="grid gap-6 xl:grid-cols-[1.08fr,0.92fr]">
+        <section class="rounded-2xl border border-sophia-dark-border bg-sophia-dark-surface p-6 md:p-8">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <div class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">
+                Runtime surface
+              </div>
+              <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                Provider health, coverage, and control-plane metadata for the current Restormel project.
+              </p>
             </div>
-            <p class="text-sm text-sophia-dark-muted">
-              Health, stage coverage, and exact upstream endpoint failures are surfaced directly from Sophia’s current Restormel project.
-            </p>
           </div>
 
-          <div class="grid gap-4 md:grid-cols-2">
-            <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
-              <div class="mb-2 font-mono text-xs text-sophia-dark-muted">Providers health</div>
+          <div class="mt-6 grid gap-4 md:grid-cols-2">
+            <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+              <div class="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-muted">Providers health</div>
               {#if contextErrors.providersHealth}
-                <div class="font-mono text-xs text-sophia-dark-copper">{formatContextError(contextErrors.providersHealth)}</div>
-              {:else if (providersHealth?.providers?.length ?? 0) > 0}
-                <div class="flex flex-wrap gap-2">
-                  {#each providersHealth?.providers ?? [] as provider}
-                    <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-xs text-sophia-dark-text">
+                <div class="mt-4 rounded-xl border border-sophia-dark-copper/35 bg-sophia-dark-copper/10 px-4 py-3 font-mono text-xs text-sophia-dark-copper">
+                  {formatContextError(contextErrors.providersHealth)}
+                </div>
+              {:else if providerHealthEntries.length > 0}
+                <div class="mt-4 flex flex-wrap gap-2">
+                  {#each providerHealthEntries as provider}
+                    <span class={`rounded-full border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] ${providerTone(provider.status)}`}>
                       {provider.providerType ?? 'provider'} · {provider.status ?? 'unknown'}
                     </span>
                   {/each}
                 </div>
               {:else}
-                <div class="font-mono text-xs text-sophia-dark-muted">No provider bindings reported.</div>
+                <div class="mt-4 rounded-xl border border-sophia-dark-amber/35 bg-sophia-dark-amber/10 px-4 py-3">
+                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-amber">Warning</div>
+                  <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                    No provider bindings are visible for this project, so operator guidance is weaker than it should be.
+                  </p>
+                </div>
               {/if}
             </div>
 
-            <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
-              <div class="mb-2 font-mono text-xs text-sophia-dark-muted">Capabilities</div>
+            <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+              <div class="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-muted">Capabilities</div>
               {#if contextErrors.capabilities}
-                <div class="font-mono text-xs text-sophia-dark-copper">{formatContextError(contextErrors.capabilities)}</div>
+                <div class="mt-4 rounded-xl border border-sophia-dark-copper/35 bg-sophia-dark-copper/10 px-4 py-3 font-mono text-xs text-sophia-dark-copper">
+                  {formatContextError(contextErrors.capabilities)}
+                </div>
               {:else}
-                <div class="space-y-2 font-mono text-xs text-sophia-dark-text">
-                  <div>Workloads: {(capabilities?.workloads ?? []).join(', ') || '—'}</div>
-                  <div>Stages: {(capabilities?.stages ?? []).length}</div>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Workloads</div>
+                    <div class="mt-2 flex flex-wrap gap-2">
+                      {#each capabilities?.workloads ?? [] as workload}
+                        <span class="rounded-full border border-sophia-dark-border bg-sophia-dark-surface-raised px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-text">
+                          {workload}
+                        </span>
+                      {/each}
+                    </div>
+                  </div>
+                  <div>
+                    <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Stages</div>
+                    <div class="mt-2 font-mono text-sm text-sophia-dark-text">{stageList.length}</div>
+                  </div>
                 </div>
               {/if}
             </div>
           </div>
 
-          <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
-            <div class="mb-3 font-mono text-xs text-sophia-dark-muted">Stage coverage</div>
+          <div class="mt-6 rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+            <div class="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-muted">Stage coverage</div>
+            <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+              Select a stage to inspect the route, steps, and history below.
+            </p>
+
             {#if contextErrors.routes}
-              <div class="font-mono text-xs text-sophia-dark-copper">{formatContextError(contextErrors.routes)}</div>
+              <div class="mt-4 rounded-xl border border-sophia-dark-copper/35 bg-sophia-dark-copper/10 px-4 py-3 font-mono text-xs text-sophia-dark-copper">
+                {formatContextError(contextErrors.routes)}
+              </div>
             {:else}
-              <div class="grid gap-3 md:grid-cols-2">
+              <div class="mt-5 grid gap-3 md:grid-cols-2">
                 {#each routeStageCoverage as entry}
                   <button
                     type="button"
-                    class="rounded border px-3 py-3 text-left font-mono text-xs transition-colors {entry.route?.id === selectedRouteId ? 'border-sophia-dark-blue/40 bg-sophia-dark-blue/10 text-sophia-dark-blue' : 'border-sophia-dark-border bg-sophia-dark-surface-raised text-sophia-dark-text hover:bg-sophia-dark-surface'}"
-                    onclick={() => entry.route && selectRoute(entry.route.id)}
-                    disabled={!entry.route}
+                    class={`rounded-xl border px-4 py-4 text-left transition-colors ${
+                      selectedCoverageEntry?.stage === entry.stage
+                        ? 'border-sophia-dark-purple/45 bg-sophia-dark-purple/10'
+                        : 'border-sophia-dark-border bg-sophia-dark-surface-raised/30 hover:bg-sophia-dark-surface-raised/50'
+                    }`}
+                    onclick={() => void chooseStage(entry.stage)}
                   >
-                    <div class="mb-1 flex items-center justify-between gap-2">
-                      <span class="uppercase tracking-[0.08em] text-sophia-dark-muted">{entry.stage}</span>
-                      <span class="rounded border border-sophia-dark-border px-2 py-1 text-[0.68rem] uppercase tracking-[0.12em] {entry.mode === 'dedicated' ? 'text-sophia-dark-sage' : entry.mode === 'shared' ? 'text-sophia-dark-blue' : 'text-sophia-dark-copper'}">
+                    <div class="flex items-start justify-between gap-4">
+                      <div>
+                        <div class="font-serif text-xl text-sophia-dark-text">{entry.title}</div>
+                        <p class="mt-1 text-sm leading-6 text-sophia-dark-muted">{entry.description}</p>
+                      </div>
+                      <span class={`rounded-full border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] ${routeModeTone(entry.mode)}`}>
                         {routeModeLabel(entry.mode)}
                       </span>
                     </div>
-                    {#if entry.route}
-                      <div>{entry.route.name ?? entry.route.id}</div>
-                      <div class="mt-1 text-sophia-dark-dim">v{entry.route.version ?? '—'} / published {entry.route.publishedVersion ?? '—'}</div>
-                    {:else}
-                      <div class="text-sophia-dark-copper">No route currently returned</div>
-                    {/if}
+                    <div class="mt-4 flex items-center justify-between gap-4 border-t border-sophia-dark-border pt-4">
+                      <div>
+                        <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Route</div>
+                        <div class="mt-1 font-mono text-sm text-sophia-dark-text">
+                          {entry.route ? entry.route.name ?? entry.route.id : 'No route currently returned'}
+                        </div>
+                        <div class="mt-1 font-mono text-xs text-sophia-dark-dim">
+                          {routeStatusSummary(entry.route)}
+                        </div>
+                      </div>
+                      <div class="font-mono text-sm text-sophia-dark-muted">→</div>
+                    </div>
                   </button>
                 {/each}
               </div>
             {/if}
           </div>
 
-          <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
-            <div class="mb-2 font-mono text-xs text-sophia-dark-muted">Switch criteria enums</div>
+          <details class="mt-6 rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+            <summary class="cursor-pointer font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-muted">
+              Switch criteria enums
+            </summary>
             {#if contextErrors.switchCriteria}
-              <div class="font-mono text-xs text-sophia-dark-copper">{formatContextError(contextErrors.switchCriteria)}</div>
+              <div class="mt-4 rounded-xl border border-sophia-dark-copper/35 bg-sophia-dark-copper/10 px-4 py-3 font-mono text-xs text-sophia-dark-copper">
+                {formatContextError(contextErrors.switchCriteria)}
+              </div>
             {:else}
-              <pre class="overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-sophia-dark-text">{JSON.stringify(switchCriteria ?? {}, null, 2)}</pre>
+              <div class="mt-4 space-y-3">
+                {#each switchCriteriaRows(switchCriteria) as row}
+                  <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-surface-raised/25 px-4 py-3">
+                    <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">{row.key}</div>
+                    <div class="mt-2 flex flex-wrap gap-2">
+                      {#each row.values as value}
+                        <span class="rounded-full border border-sophia-dark-border bg-sophia-dark-surface px-3 py-1 font-mono text-[0.68rem] text-sophia-dark-text">
+                          {value}
+                        </span>
+                      {/each}
+                    </div>
+                  </div>
+                {/each}
+              </div>
             {/if}
-          </div>
+          </details>
         </section>
 
-        <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5 space-y-4">
-          <div>
-            <div class="mb-2 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">
-              Route workspace
-            </div>
-            <p class="text-sm text-sophia-dark-muted">
-              Inspect steps, run simulation, exercise lifecycle actions, and preserve exact upstream failures.
-            </p>
-          </div>
+        <section class="rounded-2xl border border-sophia-dark-border bg-sophia-dark-surface p-6 md:p-8">
+          <div class="flex flex-col gap-6">
+            <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div>
+                <div class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">
+                  Route workspace
+                </div>
+                <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                  Currently inspecting the route and lifecycle for the selected stage.
+                </p>
+              </div>
 
-          {#if selectedRoute}
+              <label class="space-y-2">
+                <span class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Route selector</span>
+                <select
+                  value={selectedRouteId ?? ''}
+                  class="w-full min-w-[16rem] rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-sm text-sophia-dark-text"
+                  onchange={(event) => {
+                    const nextId = (event.currentTarget as HTMLSelectElement).value;
+                    if (nextId) {
+                      void selectRoute(nextId, routes.find((route) => route.id === nextId)?.stage ?? selectedStage);
+                    }
+                  }}
+                >
+                  {#each routes as route}
+                    <option value={route.id}>{route.name ?? route.id}</option>
+                  {/each}
+                </select>
+              </label>
+            </div>
+
             <div class="grid gap-4 md:grid-cols-3">
-              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
-                <div class="mb-1 font-mono text-xs text-sophia-dark-muted">Route</div>
-                <div class="font-mono text-sm text-sophia-dark-text">{selectedRoute.name ?? selectedRoute.id}</div>
+              <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+                <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Currently inspecting</div>
+                <div class="mt-2 font-serif text-2xl text-sophia-dark-text">{selectedRoute?.name ?? 'No route selected'}</div>
+                <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                  {selectedRoute ? selectedRoute.id : 'Choose a route or stage to begin.'}
+                </p>
               </div>
-              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
-                <div class="mb-1 font-mono text-xs text-sophia-dark-muted">Stage</div>
-                <div class="font-mono text-sm text-sophia-dark-text">{selectedRoute.stage ?? '—'}</div>
+              <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+                <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Stage</div>
+                <div class="mt-2 font-mono text-sm text-sophia-dark-text">
+                  {selectedCoverageEntry ? selectedCoverageEntry.title : 'No stage selected'}
+                </div>
+                <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                  {selectedCoverageEntry ? selectedCoverageEntry.description : 'Select a stage card to bind this workspace.'}
+                </p>
               </div>
-              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
-                <div class="mb-1 font-mono text-xs text-sophia-dark-muted">Versions</div>
-                <div class="font-mono text-sm text-sophia-dark-text">draft {selectedRoute.version ?? '—'} / published {selectedRoute.publishedVersion ?? '—'}</div>
+              <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+                <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Versions</div>
+                <div class="mt-2 font-mono text-sm text-sophia-dark-text">{routeStatusSummary(selectedRoute)}</div>
+                <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                  Draft and published versions for the selected route.
+                </p>
               </div>
             </div>
 
             <div class="flex flex-wrap gap-3">
               <button
                 type="button"
-                class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-xs text-sophia-dark-text hover:bg-sophia-dark-surface-raised"
-                onclick={() => loadRouteArtifacts(selectedRoute.id)}
-                disabled={busyAction !== ''}
+                class="rounded border border-sophia-dark-border px-4 py-2.5 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+                onclick={() => selectedRouteId && loadRouteArtifacts(selectedRouteId)}
+                disabled={!selectedRouteId || busyAction !== ''}
               >
                 {busyAction === 'steps' || busyAction === 'history' ? 'Refreshing…' : 'Refresh steps + history'}
               </button>
               <button
                 type="button"
-                class="rounded border border-sophia-dark-sage/40 px-3 py-2 font-mono text-xs text-sophia-dark-sage hover:bg-sophia-dark-sage/10"
+                class="rounded border border-sophia-dark-purple/45 bg-sophia-dark-purple/16 px-4 py-2.5 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-text hover:bg-sophia-dark-purple/24"
                 onclick={publishRoute}
-                disabled={busyAction !== ''}
+                disabled={!selectedRouteId || busyAction !== ''}
               >
                 {busyAction === 'publish' ? 'Publishing…' : 'Publish route'}
               </button>
               <button
                 type="button"
-                class="rounded border border-sophia-dark-copper/40 px-3 py-2 font-mono text-xs text-sophia-dark-copper hover:bg-sophia-dark-copper/10"
-                onclick={rollbackRoute}
-                disabled={busyAction !== ''}
+                class="rounded border border-sophia-dark-copper/40 px-4 py-2.5 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-copper hover:bg-sophia-dark-copper/10"
+                onclick={() => void rollbackRoute()}
+                disabled={!selectedRouteId || busyAction !== ''}
               >
                 {busyAction === 'rollback' ? 'Rolling back…' : 'Rollback route'}
               </button>
             </div>
-          {:else}
-            <div class="rounded border border-dashed border-sophia-dark-border px-4 py-8 text-center font-mono text-sm text-sophia-dark-muted">
-              No route is currently selectable from the Restormel project.
-            </div>
-          {/if}
+          </div>
         </section>
       </div>
 
-      {#if selectedRoute}
-        <div class="grid gap-6 xl:grid-cols-[0.95fr,1.05fr]">
-          <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5 space-y-4">
-            <div>
-              <div class="mb-2 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">
-                Steps and history
-              </div>
-              <p class="text-sm text-sophia-dark-muted">
-                Machine-readable route steps, switch criteria, and lifecycle history from Restormel.
-              </p>
+      <div class="grid gap-6 xl:grid-cols-[0.95fr,1.05fr]">
+        <section class="rounded-2xl border border-sophia-dark-border bg-sophia-dark-surface p-6 md:p-8">
+          <div>
+            <div class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">
+              Steps and history
             </div>
+            <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+              Structured route steps, fallback flow, and publish history for the selected stage.
+            </p>
+          </div>
 
-            {#if stepsError}
-              <div class="rounded border border-sophia-dark-copper/40 bg-sophia-dark-copper/10 p-4 font-mono text-xs text-sophia-dark-copper">
-                {stepsError}
-              </div>
-            {/if}
-
-            <div class="space-y-3">
-              {#each steps as step}
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
-                  <div class="mb-2 flex flex-wrap items-center gap-2">
-                    <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-xs text-sophia-dark-muted">
-                      order {step.orderIndex ?? '—'}
-                    </span>
-                    <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-xs text-sophia-dark-text">
-                      {step.providerPreference ?? 'provider?'} · {step.modelId ?? 'model?'}
-                    </span>
-                    <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-xs text-sophia-dark-text">
-                      {step.enabled === false ? 'disabled' : 'enabled'}
-                    </span>
-                  </div>
-                  <pre class="overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-sophia-dark-text">{JSON.stringify(step, null, 2)}</pre>
-                </div>
-              {:else}
-                <div class="rounded border border-dashed border-sophia-dark-border px-4 py-6 text-center font-mono text-sm text-sophia-dark-muted">
-                  No steps returned for this route.
-                </div>
-              {/each}
-            </div>
-
-            <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
-              <div class="mb-2 font-mono text-xs text-sophia-dark-muted">Route history</div>
-              {#if historyError}
-                <div class="font-mono text-xs text-sophia-dark-copper">{historyError}</div>
-              {:else if history.length > 0}
-                <div class="space-y-3">
-                  {#each history as entry}
-                    <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised p-3">
-                      <div class="font-mono text-xs text-sophia-dark-text">version {entry.version ?? '—'} / published {entry.publishedVersion ?? '—'}</div>
-                      <div class="mt-1 font-mono text-xs text-sophia-dark-muted">updated {formatDate(entry.createdAt)} · published {formatDate(entry.publishedAt)}</div>
-                      {#if entry.changeSummary}
-                        <div class="mt-2 text-sm text-sophia-dark-text">{entry.changeSummary}</div>
+          {#if selectedRoute}
+            <div class="mt-6 rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+              <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Fallback chain</div>
+              {#if sortedSteps.length > 0}
+                <div class="mt-4 space-y-3">
+                  {#each sortedSteps as step, index}
+                    <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-surface-raised/25 px-4 py-4">
+                      <div class="flex items-center justify-between gap-3">
+                        <div>
+                          <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Step {index + 1}</div>
+                          <div class="mt-2 font-mono text-sm text-sophia-dark-text">{modelLabel(step)}</div>
+                        </div>
+                        <span class={`rounded-full border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] ${step.enabled === false ? 'border-sophia-dark-copper/35 bg-sophia-dark-copper/10 text-sophia-dark-copper' : 'border-sophia-dark-sage/35 bg-sophia-dark-sage/10 text-sophia-dark-sage'}`}>
+                          {step.enabled === false ? 'Disabled' : 'Enabled'}
+                        </span>
+                      </div>
+                      {#if index < sortedSteps.length - 1}
+                        <div class="mt-3 font-mono text-xs text-sophia-dark-blue">fallback →</div>
                       {/if}
                     </div>
                   {/each}
                 </div>
               {:else}
-                <div class="font-mono text-xs text-sophia-dark-muted">No route history returned.</div>
+                <div class="mt-4 rounded-xl border border-dashed border-sophia-dark-border px-4 py-6 text-center font-mono text-sm text-sophia-dark-muted">
+                  No steps returned for this route.
+                </div>
               {/if}
             </div>
-          </section>
 
-          <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5 space-y-4">
+            {#if stepsError}
+              <div class="mt-6 rounded-xl border border-sophia-dark-copper/40 bg-sophia-dark-copper/10 p-4 font-mono text-xs text-sophia-dark-copper">
+                {stepsError}
+              </div>
+            {/if}
+
+            <div class="mt-6 space-y-4">
+              {#each sortedSteps as step, index}
+                <article class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+                  <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Step {index + 1}</div>
+                      <h3 class="mt-2 font-serif text-2xl text-sophia-dark-text">{modelLabel(step)}</h3>
+                    </div>
+                    <span class={`rounded-full border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] ${step.enabled === false ? 'border-sophia-dark-copper/35 bg-sophia-dark-copper/10 text-sophia-dark-copper' : 'border-sophia-dark-sage/35 bg-sophia-dark-sage/10 text-sophia-dark-sage'}`}>
+                      {step.enabled === false ? 'Disabled' : 'Enabled'}
+                    </span>
+                  </div>
+
+                  <div class="mt-5 grid gap-3 sm:grid-cols-2">
+                    {#each stepDetailFields(step) as field}
+                      <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-surface-raised/20 px-4 py-3">
+                        <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">{field.label}</div>
+                        <div class="mt-2 font-mono text-sm text-sophia-dark-text">{field.value}</div>
+                      </div>
+                    {/each}
+                  </div>
+
+                  <details class="mt-5 rounded-xl border border-sophia-dark-border bg-sophia-dark-surface-raised/12 p-4">
+                    <summary class="cursor-pointer font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-muted">
+                      Show raw JSON
+                    </summary>
+                    <pre class="mt-4 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-sophia-dark-border bg-sophia-dark-surface px-4 py-4 font-mono text-xs text-sophia-dark-text">{JSON.stringify(step, null, 2)}</pre>
+                  </details>
+                </article>
+              {/each}
+            </div>
+
+            <div class="mt-6 rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+              <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Route history</div>
+              {#if historyError}
+                <div class="mt-4 rounded-xl border border-sophia-dark-copper/35 bg-sophia-dark-copper/10 px-4 py-3 font-mono text-xs text-sophia-dark-copper">
+                  {historyError}
+                </div>
+              {:else if validHistory.length > 0}
+                <div class="mt-4 space-y-3">
+                  {#each validHistory as entry}
+                    <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-surface-raised/25 px-4 py-4">
+                      <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <div class="font-mono text-xs text-sophia-dark-text">
+                            Version {entry.version ?? '—'} · published {entry.publishedVersion ?? '—'}
+                          </div>
+                          <div class="mt-2 font-mono text-xs text-sophia-dark-dim">
+                            {formatDate(entry.effectiveAt)}{entry.publishedBy || entry.updatedBy ? ` · ${entry.publishedBy ?? entry.updatedBy}` : ''}
+                          </div>
+                          {#if entry.changeSummary}
+                            <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">{entry.changeSummary}</p>
+                          {/if}
+                        </div>
+                        <button
+                          type="button"
+                          class="rounded border border-sophia-dark-copper/40 px-3 py-2 font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-copper hover:bg-sophia-dark-copper/10"
+                          onclick={() => void rollbackRoute(entry.version ?? null)}
+                          disabled={busyAction !== '' || !(entry.version ?? null)}
+                        >
+                          Restore this version
+                        </button>
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <div class="mt-4 rounded-xl border border-dashed border-sophia-dark-border px-4 py-6 text-center font-mono text-sm text-sophia-dark-muted">
+                  No valid route history is available yet.
+                </div>
+              {/if}
+            </div>
+          {:else}
+            <div class="mt-6 rounded-xl border border-dashed border-sophia-dark-border px-4 py-10 text-center font-mono text-sm text-sophia-dark-muted">
+              No route is currently selectable from the Restormel project.
+            </div>
+          {/if}
+        </section>
+
+        <section class="rounded-2xl border border-sophia-dark-border bg-sophia-dark-surface p-6 md:p-8">
+          <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div>
-              <div class="mb-2 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">
+              <div class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">
                 Editing and probes
               </div>
-              <p class="text-sm text-sophia-dark-muted">
-                Advanced mode for saving draft JSON, simulating stage decisions, and verifying live resolve metadata.
+              <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                Save route drafts, test simulation, and verify resolve responses with structured input templates.
               </p>
             </div>
 
-            <label class="block space-y-2">
-              <span class="font-mono text-xs text-sophia-dark-muted">Route draft JSON</span>
-              <textarea bind:value={routeJsonDraft} rows="10" class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-xs text-sophia-dark-text"></textarea>
-            </label>
-            <button
-              type="button"
-              class="rounded border border-sophia-dark-blue/40 px-4 py-2 font-mono text-xs text-sophia-dark-blue hover:bg-sophia-dark-blue/10"
-              onclick={saveRouteDraft}
-              disabled={busyAction !== ''}
-            >
-              {busyAction === 'save-route' ? 'Saving route…' : 'Save route draft'}
-            </button>
+            <div class="inline-flex rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-1">
+              <button
+                type="button"
+                class={`rounded-lg px-4 py-2 font-mono text-xs uppercase tracking-[0.14em] ${editorTab === 'configure' ? 'bg-sophia-dark-purple/16 text-sophia-dark-text' : 'text-sophia-dark-muted'}`}
+                onclick={() => (editorTab = 'configure')}
+              >
+                Configure
+              </button>
+              <button
+                type="button"
+                class={`rounded-lg px-4 py-2 font-mono text-xs uppercase tracking-[0.14em] ${editorTab === 'simulate' ? 'bg-sophia-dark-purple/16 text-sophia-dark-text' : 'text-sophia-dark-muted'}`}
+                onclick={() => (editorTab = 'simulate')}
+              >
+                Simulate
+              </button>
+              <button
+                type="button"
+                class={`rounded-lg px-4 py-2 font-mono text-xs uppercase tracking-[0.14em] ${editorTab === 'probe' ? 'bg-sophia-dark-purple/16 text-sophia-dark-text' : 'text-sophia-dark-muted'}`}
+                onclick={() => (editorTab = 'probe')}
+              >
+                Probe
+              </button>
+            </div>
+          </div>
 
-            <label class="block space-y-2">
-              <span class="font-mono text-xs text-sophia-dark-muted">Steps draft JSON</span>
-              <textarea bind:value={stepsJsonDraft} rows="12" class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-xs text-sophia-dark-text"></textarea>
-            </label>
-            <button
-              type="button"
-              class="rounded border border-sophia-dark-blue/40 px-4 py-2 font-mono text-xs text-sophia-dark-blue hover:bg-sophia-dark-blue/10"
-              onclick={saveStepsDraft}
-              disabled={busyAction !== ''}
-            >
-              {busyAction === 'save-steps' ? 'Saving steps…' : 'Save steps draft'}
-            </button>
+          {#if editorTab === 'configure'}
+            <div class="mt-6 space-y-5">
+              <section class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+                <div class="flex items-start justify-between gap-4">
+                  <div>
+                    <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Route configuration</div>
+                    <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                      Save the selected route draft with the current stage binding and version metadata.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+                    onclick={() => resetDraft('route')}
+                  >
+                    Reset to template
+                  </button>
+                </div>
+                <textarea bind:value={routeJsonDraft} rows="12" class="mt-4 min-h-[14rem] w-full overflow-y-auto rounded-xl border border-sophia-dark-border bg-sophia-dark-surface px-4 py-4 font-mono text-xs text-sophia-dark-text"></textarea>
+                <div class="mt-4 flex justify-end">
+                  <button
+                    type="button"
+                    class="rounded border border-sophia-dark-purple/45 bg-sophia-dark-purple/16 px-4 py-2.5 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-text hover:bg-sophia-dark-purple/24"
+                    onclick={saveRouteDraft}
+                    disabled={!selectedRoute || busyAction !== ''}
+                  >
+                    {busyAction === 'save-route' ? 'Saving route…' : 'Save route draft'}
+                  </button>
+                </div>
+              </section>
 
-            <label class="block space-y-2">
-              <span class="font-mono text-xs text-sophia-dark-muted">Simulation request JSON</span>
-              <textarea bind:value={simulateJsonDraft} rows="10" class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-xs text-sophia-dark-text"></textarea>
-            </label>
-            <button
-              type="button"
-              class="rounded border border-sophia-dark-sage/40 px-4 py-2 font-mono text-xs text-sophia-dark-sage hover:bg-sophia-dark-sage/10"
-              onclick={simulateRoute}
-              disabled={busyAction !== ''}
-            >
-              {busyAction === 'simulate' ? 'Simulating…' : 'Simulate route'}
-            </button>
-            {#if simulationResult}
-              <pre class="overflow-auto whitespace-pre-wrap break-words rounded border border-sophia-dark-border bg-sophia-dark-bg p-4 font-mono text-xs text-sophia-dark-text">{JSON.stringify(simulationResult, null, 2)}</pre>
-            {/if}
+              <section class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+                <div class="flex items-start justify-between gap-4">
+                  <div>
+                    <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Steps configuration</div>
+                    <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                      Update the ordered step chain for the selected route.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+                    onclick={() => resetDraft('steps')}
+                  >
+                    Reset to template
+                  </button>
+                </div>
+                <textarea bind:value={stepsJsonDraft} rows="14" class="mt-4 min-h-[16rem] w-full overflow-y-auto rounded-xl border border-sophia-dark-border bg-sophia-dark-surface px-4 py-4 font-mono text-xs text-sophia-dark-text"></textarea>
+                <div class="mt-4 flex justify-end">
+                  <button
+                    type="button"
+                    class="rounded border border-sophia-dark-purple/45 bg-sophia-dark-purple/16 px-4 py-2.5 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-text hover:bg-sophia-dark-purple/24"
+                    onclick={saveStepsDraft}
+                    disabled={!selectedRouteId || busyAction !== ''}
+                  >
+                    {busyAction === 'save-steps' ? 'Saving steps…' : 'Save steps draft'}
+                  </button>
+                </div>
+              </section>
+            </div>
+          {:else if editorTab === 'simulate'}
+            <div class="mt-6 space-y-5">
+              <section class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+                <div class="flex items-start justify-between gap-4">
+                  <div>
+                    <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Simulation request</div>
+                    <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                      Test the likely selected step, fallback candidates, and estimated cost without mutating the route.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+                    onclick={() => resetDraft('simulate')}
+                  >
+                    Reset to template
+                  </button>
+                </div>
+                <textarea bind:value={simulateJsonDraft} rows="12" class="mt-4 min-h-[14rem] w-full overflow-y-auto rounded-xl border border-sophia-dark-border bg-sophia-dark-surface px-4 py-4 font-mono text-xs text-sophia-dark-text"></textarea>
+                <div class="mt-4 flex justify-end">
+                  <button
+                    type="button"
+                    class="rounded border border-sophia-dark-blue/40 px-4 py-2.5 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-blue hover:bg-sophia-dark-blue/10"
+                    onclick={simulateRoute}
+                    disabled={!selectedRouteId || busyAction !== ''}
+                  >
+                    {busyAction === 'simulate' ? 'Simulating…' : 'Simulate route'}
+                  </button>
+                </div>
+              </section>
 
-            <label class="block space-y-2">
-              <span class="font-mono text-xs text-sophia-dark-muted">Resolve probe JSON</span>
-              <textarea bind:value={resolveJsonDraft} rows="10" class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-xs text-sophia-dark-text"></textarea>
-            </label>
-            <button
-              type="button"
-              class="rounded border border-sophia-dark-sage/40 px-4 py-2 font-mono text-xs text-sophia-dark-sage hover:bg-sophia-dark-sage/10"
-              onclick={resolveRouteDecision}
-              disabled={busyAction !== ''}
-            >
-              {busyAction === 'resolve' ? 'Resolving…' : 'Run resolve probe'}
-            </button>
-            {#if resolveResult}
-              <div class="grid gap-3 md:grid-cols-2">
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
-                  <div class="mb-1 font-mono text-xs text-sophia-dark-muted">Selected step</div>
-                  <div class="font-mono text-sm text-sophia-dark-text">{resolveResult.selectedStepId ?? '—'}</div>
+              <section class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+                <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Simulation result</div>
+                {#if simulationResult}
+                  <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-surface-raised/20 px-4 py-3">
+                      <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Selected step</div>
+                      <div class="mt-2 font-mono text-sm text-sophia-dark-text">{simulationResult.selectedStepId ?? '—'}</div>
+                    </div>
+                    <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-surface-raised/20 px-4 py-3">
+                      <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Estimated cost</div>
+                      <div class="mt-2 font-mono text-sm text-sophia-dark-text">{simulationResult.estimatedCostUsd ?? '—'}</div>
+                    </div>
+                  </div>
+                  <pre class="mt-4 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-sophia-dark-border bg-sophia-dark-surface px-4 py-4 font-mono text-xs text-sophia-dark-text">{JSON.stringify(simulationResult, null, 2)}</pre>
+                {:else}
+                  <div class="mt-4 rounded-xl border border-dashed border-sophia-dark-border px-4 py-6 text-center font-mono text-sm text-sophia-dark-muted">
+                    Run a simulation to inspect the output here.
+                  </div>
+                {/if}
+              </section>
+            </div>
+          {:else}
+            <div class="mt-6 space-y-5">
+              <section class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+                <div class="flex items-start justify-between gap-4">
+                  <div>
+                    <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Resolve probe</div>
+                    <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                      Probe the live resolve surface to inspect machine-readable routing metadata.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+                    onclick={() => resetDraft('resolve')}
+                  >
+                    Reset to template
+                  </button>
                 </div>
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
-                  <div class="mb-1 font-mono text-xs text-sophia-dark-muted">Order / switch</div>
-                  <div class="font-mono text-sm text-sophia-dark-text">{resolveResult.selectedOrderIndex ?? '—'} / {resolveResult.switchReasonCode ?? '—'}</div>
+                <textarea bind:value={resolveJsonDraft} rows="12" class="mt-4 min-h-[14rem] w-full overflow-y-auto rounded-xl border border-sophia-dark-border bg-sophia-dark-surface px-4 py-4 font-mono text-xs text-sophia-dark-text"></textarea>
+                <div class="mt-4 flex justify-end">
+                  <button
+                    type="button"
+                    class="rounded border border-sophia-dark-blue/40 px-4 py-2.5 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-blue hover:bg-sophia-dark-blue/10"
+                    onclick={resolveRouteDecision}
+                    disabled={busyAction !== ''}
+                  >
+                    {busyAction === 'resolve' ? 'Resolving…' : 'Run resolve probe'}
+                  </button>
                 </div>
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
-                  <div class="mb-1 font-mono text-xs text-sophia-dark-muted">Provider / model</div>
-                  <div class="font-mono text-sm text-sophia-dark-text">{resolveResult.providerType ?? '—'} / {resolveResult.modelId ?? '—'}</div>
-                </div>
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg p-4">
-                  <div class="mb-1 font-mono text-xs text-sophia-dark-muted">Estimated cost</div>
-                  <div class="font-mono text-sm text-sophia-dark-text">{resolveResult.estimatedCostUsd ?? '—'}</div>
-                </div>
-              </div>
-              <pre class="overflow-auto whitespace-pre-wrap break-words rounded border border-sophia-dark-border bg-sophia-dark-bg p-4 font-mono text-xs text-sophia-dark-text">{JSON.stringify(resolveResult, null, 2)}</pre>
-            {/if}
-          </section>
-        </div>
-      {/if}
+              </section>
+
+              <section class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">
+                <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Resolve result</div>
+                {#if resolveResult}
+                  <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-surface-raised/20 px-4 py-3">
+                      <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Selected step</div>
+                      <div class="mt-2 font-mono text-sm text-sophia-dark-text">{resolveResult.selectedStepId ?? '—'}</div>
+                    </div>
+                    <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-surface-raised/20 px-4 py-3">
+                      <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Order / switch</div>
+                      <div class="mt-2 font-mono text-sm text-sophia-dark-text">{resolveResult.selectedOrderIndex ?? '—'} / {resolveResult.switchReasonCode ?? '—'}</div>
+                    </div>
+                    <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-surface-raised/20 px-4 py-3">
+                      <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Provider / model</div>
+                      <div class="mt-2 font-mono text-sm text-sophia-dark-text">{resolveResult.providerType ?? '—'} / {resolveResult.modelId ?? '—'}</div>
+                    </div>
+                    <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-surface-raised/20 px-4 py-3">
+                      <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Estimated cost</div>
+                      <div class="mt-2 font-mono text-sm text-sophia-dark-text">{resolveResult.estimatedCostUsd ?? '—'}</div>
+                    </div>
+                  </div>
+                  <pre class="mt-4 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-sophia-dark-border bg-sophia-dark-surface px-4 py-4 font-mono text-xs text-sophia-dark-text">{JSON.stringify(resolveResult, null, 2)}</pre>
+                {:else}
+                  <div class="mt-4 rounded-xl border border-dashed border-sophia-dark-border px-4 py-6 text-center font-mono text-sm text-sophia-dark-muted">
+                    Run a resolve probe to inspect the output here.
+                  </div>
+                {/if}
+              </section>
+            </div>
+          {/if}
+        </section>
+      </div>
     {/if}
   </div>
 </div>

@@ -1,5 +1,5 @@
 import { adminAuth } from '$lib/server/firebase-admin';
-import { syncAuthenticatedUserRole } from '$lib/server/authRoles';
+import { isSeedAdministratorEmail, syncAuthenticatedUserRole, type UserRoleRecord } from '$lib/server/authRoles';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
 import type { Handle } from '@sveltejs/kit';
 
@@ -28,12 +28,26 @@ export const handle: Handle = async ({ event, resolve }) => {
     try {
       const token = authHeader.slice(7);
       const decoded = await adminAuth.verifyIdToken(token);
-      const roleRecord = await syncAuthenticatedUserRole({
-        uid: decoded.uid,
-        email: decoded.email ?? null,
-        displayName: decoded.name ?? null,
-        photoURL: decoded.picture ?? null
-      });
+      const fallbackRole = isSeedAdministratorEmail(decoded.email) ? 'administrator' : 'user';
+      let roleRecord: UserRoleRecord = {
+        role: fallbackRole,
+        roles: [fallbackRole]
+      };
+
+      try {
+        roleRecord = await syncAuthenticatedUserRole({
+          uid: decoded.uid,
+          email: decoded.email ?? null,
+          displayName: decoded.name ?? null,
+          photoURL: decoded.picture ?? null
+        });
+      } catch (roleSyncError) {
+        console.warn(
+          '[AUTH] role sync failed, falling back to seeded role:',
+          roleSyncError instanceof Error ? roleSyncError.message : String(roleSyncError)
+        );
+      }
+
       event.locals.user = {
         uid: decoded.uid,
         email: decoded.email ?? null,

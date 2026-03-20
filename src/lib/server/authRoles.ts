@@ -31,6 +31,12 @@ function getSeedAdministratorEmails(): Set<string> {
 
 const SEEDED_ADMINISTRATOR_EMAILS = getSeedAdministratorEmails();
 
+export function isSeedAdministratorEmail(email: string | null | undefined): boolean {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return false;
+  return SEEDED_ADMINISTRATOR_EMAILS.has(normalized);
+}
+
 function normalizeRoles(input: unknown, fallback: AppUserRole): AppUserRole[] {
   if (!Array.isArray(input)) return [fallback];
   const roles = input.filter((value): value is AppUserRole => value === 'user' || value === 'administrator');
