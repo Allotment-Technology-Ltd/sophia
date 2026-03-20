@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import type { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
@@ -359,7 +360,7 @@ async function runCommandWithLogs(params: {
       cwd: process.cwd(),
       env: { ...process.env, ...params.env },
       stdio: 'pipe'
-    });
+    }) as ChildProcessWithoutNullStreams & EventEmitter;
     runningProcesses.set(params.id, child);
 
     let stdout = '';
@@ -381,14 +382,14 @@ async function runCommandWithLogs(params: {
       void append(chunk, 'stderr');
     });
 
-    child.on('error', async (error) => {
+    child.on('error', async (error: Error) => {
       runningProcesses.delete(params.id);
       logText = `${logText}\n[PROCESS ERROR] ${error.message}\n`.slice(-60000);
       await updateOperationDoc(params.id, { log_text: logText });
       reject(error);
     });
 
-    child.on('close', async (code) => {
+    child.on('close', async (code: number | null) => {
       runningProcesses.delete(params.id);
       await updateOperationDoc(params.id, { log_text: logText });
       resolve({
