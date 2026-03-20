@@ -48,7 +48,8 @@ COPY --from=builder /app/build ./build
 # Ingestion adapter runs `npx tsx scripts/fetch-source.ts` / `scripts/ingest.ts` — needs sources + config for ESM resolution
 COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/src ./src
-# Root has jsconfig.json only (no tsconfig.json); tsx resolves script imports without it
+# Minimal tsconfig (fetch-source + sourceIdentity) for tsx; full app typecheck still uses jsconfig.json
+COPY --from=builder /app/tsconfig.json ./tsconfig.json
 COPY --from=builder /app/jsconfig.json ./jsconfig.json
 
 # Writable cache for fetched sources (Cloud Run: ensure no read-only root override)
