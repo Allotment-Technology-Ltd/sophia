@@ -1221,6 +1221,16 @@
                     {/if}
                   </p>
                 {/if}
+                {#if routeContextError?.code === 'upstream_non_json'}
+                  <p class="text-xs leading-relaxed text-sophia-dark-muted">
+                    Sophia appends <span class="font-mono">/api</span> to the Keys dashboard base. If
+                    <span class="font-mono">RESTORMEL_KEYS_BASE</span> is only the site origin (e.g.
+                    <span class="font-mono">https://restormel.dev</span>), the request hits the wrong path and the
+                    server returns an HTML error page. Use
+                    <span class="font-mono">https://restormel.dev/keys/dashboard</span> (or redeploy with the latest
+                    server, which normalizes bare origins automatically).
+                  </p>
+                {/if}
                 <p>
                   <a
                     href="/admin/ingestion-routing"

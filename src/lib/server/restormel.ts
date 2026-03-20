@@ -180,7 +180,21 @@ export class RestormelResolveError extends RestormelDashboardError {
   }
 }
 
-function normalizeRestormelBaseUrl(raw: string): string {
+/** Dashboard JSON API is under `{origin}/keys/dashboard/api`, not `{origin}/api`. */
+function isBareRestormelKeysOrigin(urlLike: string): boolean {
+  try {
+    const u = new URL(/^https?:\/\//i.test(urlLike) ? urlLike : `https://${urlLike}`);
+    if (!u.hostname.endsWith('restormel.dev')) return false;
+    const path = u.pathname.replace(/\/+$/, '') || '/';
+    // Mistaken bare host or `/api` only — not a full path like /keys/dashboard
+    return path === '/' || path === '/api';
+  } catch {
+    return false;
+  }
+}
+
+/** Normalize RESTORMEL_KEYS_BASE / RESTORMEL_BASE_URL to the Keys dashboard base (no trailing /api). */
+export function normalizeRestormelBaseUrl(raw: string): string {
   const trimmed = raw.trim().replace(/\/+$/, '');
   if (!trimmed) return 'https://restormel.dev/keys/dashboard';
   if (/\/keys\/dashboard\/api$/i.test(trimmed)) {
@@ -192,7 +206,16 @@ function normalizeRestormelBaseUrl(raw: string): string {
   if (/\/keys$/i.test(trimmed)) {
     return `${trimmed}/dashboard`;
   }
-  return trimmed.replace(/\/api$/i, '');
+  const withoutTrailingApi = trimmed.replace(/\/api$/i, '');
+  if (isBareRestormelKeysOrigin(withoutTrailingApi)) {
+    const u = new URL(
+      /^https?:\/\//i.test(withoutTrailingApi)
+        ? withoutTrailingApi
+        : `https://${withoutTrailingApi}`
+    );
+    return `${u.origin}/keys/dashboard`;
+  }
+  return withoutTrailingApi;
 }
 
 export const RESTORMEL_BASE_URL = normalizeRestormelBaseUrl(
