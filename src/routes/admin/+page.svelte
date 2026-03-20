@@ -128,6 +128,14 @@
     modelCatalogEntries.some((r) => r.catalogSource)
   );
 
+  /** Why "Validate best models" is disabled — show next to the button */
+  const validateRouteHint = $derived.by((): string | null => {
+    if (loadingContextState === 'loading') return 'Loading routes from Restormel…';
+    if (routes.length === 0) return null;
+    if (!selectedRouteId) return 'Choose a route above — validation calls the recommend API for that route.';
+    return null;
+  });
+
   const selectedRoute = $derived.by(
     () => routes.find((route) => route.id === selectedRouteId) ?? null
   );
@@ -237,7 +245,7 @@
   });
 
   const canStartPhaseOne = $derived.by(
-    () => sourceReady && validationRan && validationResults.length > 0 && chainReady && duplicateModels.length === 0
+    () => sourceReady && chainReady && duplicateModels.length === 0
   );
 
   const setupSteps = $derived.by(() => [
@@ -247,14 +255,14 @@
       complete: sourceReady
     },
     {
-      title: 'Validation',
-      subtitle: 'Model recommendation pass',
-      complete: validationRan && validationResults.length > 0
-    },
-    {
       title: 'Model chain',
       subtitle: 'Primary, fallback, failover',
       complete: chainReady && duplicateModels.length === 0
+    },
+    {
+      title: 'Recommend',
+      subtitle: 'Optional Restormel pass',
+      complete: (validationRan && validationResults.length > 0) || chainReady
     },
     {
       title: 'Review',
@@ -463,6 +471,14 @@
     const file = fileList?.[0] ?? null;
     sourceFile = file;
     sourceFileName = file?.name ?? '';
+  }
+
+  function applySuggestedChainFromHints(): void {
+    const h = hintForSource;
+    if (!h) return;
+    modelChain = [h.budget, h.balanced, h.quality];
+    successMessage = 'Filled Model 1–3 with suggested picks (lowest cost → balanced → quality-first).';
+    errorMessage = '';
   }
 
   function moveModel(index: number, direction: -1 | 1): void {
@@ -727,7 +743,7 @@
 </script>
 
 <div class="admin-ingestion min-h-screen text-sophia-dark-text">
-  <div class="admin-ingestion-shell mx-auto w-full max-w-[75rem] px-8 py-10">
+  <div class="admin-ingestion-shell mx-auto w-full max-w-[min(100%,88rem)] px-4 py-8 sm:px-8 sm:py-10 lg:px-12">
     <header class="rounded-2xl border border-sophia-dark-border/80 bg-sophia-dark-surface/95 p-8 md:p-10">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex flex-wrap items-center gap-2">
@@ -752,7 +768,7 @@
         Configure ingestion with a guided setup flow
       </h1>
       <p class="mt-3 max-w-3xl text-base leading-7 text-sophia-dark-muted">
-        Provide a source, validate model recommendations, confirm failover behavior, then start Phase 1 with a reviewed summary.
+        Choose a source, set your three-model chain, optionally run a Restormel recommendation, then start Phase 1.
       </p>
     </header>
 
@@ -779,26 +795,30 @@
         </div>
       {/if}
 
-      <div class="mt-8 grid gap-8 lg:grid-cols-[15rem,minmax(0,1fr)]">
-        <aside class="setup-sidebar rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/95 p-5">
-          <div class="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-muted">Setup progress</div>
-          <ol class="mt-4 space-y-3">
-            {#each setupSteps as step, idx}
-              <li class={`rounded border px-4 py-4 ${idx + 1 === activeStep ? 'border-sophia-dark-purple/45 bg-sophia-dark-purple/10' : 'border-sophia-dark-border bg-sophia-dark-bg/60'}`}>
-                <div class="flex items-center justify-between gap-2">
-                  <span class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">Step {idx + 1}</span>
-                  <span class={`rounded-full border px-2 py-1 font-mono text-[0.62rem] uppercase tracking-[0.12em] ${step.complete ? 'border-sophia-dark-sage/40 bg-sophia-dark-sage/10 text-sophia-dark-sage' : 'border-sophia-dark-border bg-sophia-dark-surface-raised text-sophia-dark-muted'}`}>
-                    {step.complete ? '✓' : '•'}
-                  </span>
-                </div>
-                <div class="mt-2 font-serif text-xl text-sophia-dark-text">{step.title}</div>
-                <p class="mt-1 text-xs leading-5 text-sophia-dark-muted">{step.subtitle}</p>
-              </li>
-            {/each}
-          </ol>
-        </aside>
+      <div class="mt-10 w-full">
+        <nav
+          class="setup-stepper mb-10 flex flex-wrap items-stretch justify-center gap-3 border-b border-sophia-dark-border/60 pb-8"
+          aria-label="Setup progress"
+        >
+          {#each setupSteps as step, idx}
+            <div
+              class={`flex min-w-[9.5rem] max-w-[15rem] flex-1 flex-col rounded-xl border px-3 py-3 sm:px-4 sm:py-4 ${idx + 1 === activeStep ? 'border-sophia-dark-purple/45 bg-sophia-dark-purple/10' : 'border-sophia-dark-border bg-sophia-dark-bg/60'}`}
+            >
+              <div class="flex items-center justify-between gap-2">
+                <span class="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Step {idx + 1}</span>
+                <span
+                  class={`rounded-full border px-2 py-0.5 font-mono text-[0.58rem] uppercase tracking-[0.12em] ${step.complete ? 'border-sophia-dark-sage/40 bg-sophia-dark-sage/10 text-sophia-dark-sage' : 'border-sophia-dark-border bg-sophia-dark-surface-raised text-sophia-dark-muted'}`}
+                >
+                  {step.complete ? '✓' : '•'}
+                </span>
+              </div>
+              <div class="mt-2 font-serif text-base leading-snug text-sophia-dark-text sm:text-lg">{step.title}</div>
+              <p class="mt-1 text-xs leading-5 text-sophia-dark-muted">{step.subtitle}</p>
+            </div>
+          {/each}
+        </nav>
 
-        <div class="space-y-6">
+        <div class="mx-auto w-full max-w-5xl space-y-6">
           <section class="setup-card rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/95 p-6 md:p-8">
             <div class="mb-5 flex items-center justify-between gap-3">
               <h2 class="text-2xl font-serif text-sophia-dark-text">1. Source input</h2>
@@ -883,9 +903,127 @@
 
           <section class="setup-card rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/95 p-6 md:p-8">
             <div class="mb-5 flex items-center justify-between gap-3">
-              <h2 class="text-2xl font-serif text-sophia-dark-text">2. Validate models</h2>
-              <span class="help-tip" title="This checks the current route and returns ranked model advice for the selected source profile.">ⓘ</span>
+              <h2 class="text-2xl font-serif text-sophia-dark-text">2. Model chain & failover</h2>
+              <span class="help-tip" title="Model chain order defines fallback progression: Model 1 fails -> Model 2 -> Model 3.">ⓘ</span>
             </div>
+
+            <p class="mb-5 text-sm leading-6 text-sophia-dark-muted">
+              This is the main control: choose each slot from the groups below (your route, then the full reference catalog). Step 3 only adds an optional Restormel ranking — it does not unlock the dropdowns.
+            </p>
+
+            <div class="space-y-4">
+              {#each [0, 1, 2] as index}
+                <div class="model-row rounded-xl border border-sophia-dark-border bg-sophia-dark-bg/70 px-4 py-4">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
+                    <span class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">Model {index + 1}</span>
+                    <div class="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onclick={() => moveModel(index, -1)}
+                        disabled={index === 0}
+                        class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-xs text-sophia-dark-muted disabled:opacity-40"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        onclick={() => moveModel(index, 1)}
+                        disabled={index === 2}
+                        class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-xs text-sophia-dark-muted disabled:opacity-40"
+                      >
+                        ↓
+                      </button>
+                    </div>
+                  </div>
+                  <div class="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                    <select
+                      value={modelChain[index]}
+                      onchange={(event) => {
+                        const next = [...modelChain];
+                        next[index] = (event.currentTarget as HTMLSelectElement).value;
+                        modelChain = next;
+                      }}
+                      class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-sm text-sophia-dark-text"
+                    >
+                      <option value="">Select model</option>
+                      {#if selectOptionsRoute.length === 0 && selectOptionsCatalog.length === 0 && selectOptionsOther.length === 0}
+                        {#each chainModelSelectOptions as option}
+                          <option value={option}>{option}</option>
+                        {/each}
+                      {:else}
+                        {#if selectOptionsRoute.length > 0}
+                          <optgroup label="On your Restormel route">
+                            {#each selectOptionsRoute as option}
+                              <option value={option}>{option}</option>
+                            {/each}
+                          </optgroup>
+                        {/if}
+                        {#if selectOptionsCatalog.length > 0}
+                          <optgroup label="Reference catalog">
+                            {#each selectOptionsCatalog as option}
+                              <option value={option}>{option}</option>
+                            {/each}
+                          </optgroup>
+                        {/if}
+                        {#if selectOptionsOther.length > 0}
+                          <optgroup label="Other picks & validation">
+                            {#each selectOptionsOther as option}
+                              <option value={option}>{option}</option>
+                            {/each}
+                          </optgroup>
+                        {/if}
+                      {/if}
+                    </select>
+                    {#if modelChain[index]}
+                      {@const meta = modelMetadata(modelChain[index])}
+                      <div class="flex flex-wrap gap-2">
+                        <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Context {meta.contextWindow}</span>
+                        <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Cost {meta.costTier}</span>
+                        {#if meta.qualityTier}
+                          <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Quality {meta.qualityTier}</span>
+                        {/if}
+                        <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Speed {meta.speed}</span>
+                      </div>
+                    {/if}
+                  </div>
+                  {#if index < 2}
+                    <div class="mt-4 font-mono text-xs text-sophia-dark-dim">Falls back to Model {index + 2} on configured failover.</div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+
+            <label class="mt-6 block space-y-2">
+              <span class="text-sm text-sophia-dark-muted">
+                Preferred failover action
+                <span class="help-tip" title="Defines what SOPHIA does when the current model fails at runtime.">ⓘ</span>
+              </span>
+              <select
+                bind:value={failoverAction}
+                class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-sm text-sophia-dark-text"
+              >
+                {#each FAILOVER_OPTIONS as option}
+                  <option value={option.id}>{option.label}</option>
+                {/each}
+              </select>
+            </label>
+
+            {#if duplicateModels.length > 0}
+              <div class="mt-5 rounded border border-sophia-dark-copper/45 bg-sophia-dark-copper/10 px-4 py-3 font-mono text-xs text-sophia-dark-copper">
+                Duplicate model selection detected: {duplicateModels.join(', ')}. Use distinct models for resilient fallback.
+              </div>
+            {/if}
+          </section>
+
+          <section class="setup-card rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/95 p-6 md:p-8">
+            <div class="mb-5 flex items-center justify-between gap-3">
+              <h2 class="text-2xl font-serif text-sophia-dark-text">3. Optional: Restormel recommendation</h2>
+              <span class="help-tip" title="Calls the recommend API for the selected route. Your model chain in step 2 is what Phase 1 uses; this step only refines rankings.">ⓘ</span>
+            </div>
+
+            <p class="mb-5 text-sm leading-6 text-sophia-dark-muted">
+              Optional. If you already chose models in step 2, you can skip this. To run it, pick a Restormel route — the button stays inactive until a route is selected (it is not broken).
+            </p>
 
             <details class="mb-6 rounded-xl border border-sophia-dark-border bg-sophia-dark-bg/60 p-4" open>
               <summary class="cursor-pointer font-serif text-lg text-sophia-dark-text">
@@ -959,9 +1097,27 @@
                     <li><span class="font-mono text-xs text-sophia-dark-text">Quality-first</span> — {hintForSource.quality}</li>
                   </ul>
                   <p class="mt-3 text-xs leading-5 text-sophia-dark-muted">{hintForSource.note}</p>
+                  <button
+                    type="button"
+                    class="mt-4 rounded border border-sophia-dark-sage/40 bg-sophia-dark-sage/12 px-4 py-2.5 font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-sage hover:bg-sophia-dark-sage/18"
+                    onclick={() => applySuggestedChainFromHints()}
+                  >
+                    Apply suggested picks to chain (step 2)
+                  </button>
                 </div>
               {/if}
             </details>
+
+            {#if routes.length === 0 && loadingContextState === 'idle'}
+              <div class="mb-5 rounded-lg border border-sophia-dark-copper/35 bg-sophia-dark-copper/10 px-4 py-3 text-sm text-sophia-dark-muted">
+                No routes returned from Restormel for this project.
+                <a
+                  href="/admin/ingestion-routing"
+                  class="font-mono text-sophia-dark-text underline underline-offset-2 hover:text-sophia-dark-sage"
+                  >Ingestion Routing</a>
+                or the Dashboard steps API. Validation cannot run until at least one route exists.
+              </div>
+            {/if}
 
             <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
               <div class="space-y-2">
@@ -983,6 +1139,9 @@
                   <span class="font-mono">ingestion_extraction</span>
                   <span class="help-tip" title="This is the first ingestion stage where structured claims are extracted from the source.">ⓘ</span>
                 </p>
+                {#if validateRouteHint}
+                  <p class="text-xs leading-5 text-sophia-dark-dim">{validateRouteHint}</p>
+                {/if}
               </div>
               <button
                 type="button"
@@ -1039,116 +1198,6 @@
 
           <section class="setup-card rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/95 p-6 md:p-8">
             <div class="mb-5 flex items-center justify-between gap-3">
-              <h2 class="text-2xl font-serif text-sophia-dark-text">3. Model chain & failover</h2>
-              <span class="help-tip" title="Model chain order defines fallback progression: Model 1 fails -> Model 2 -> Model 3.">ⓘ</span>
-            </div>
-
-            <div class="space-y-4">
-              {#each [0, 1, 2] as index}
-                <div class="model-row rounded-xl border border-sophia-dark-border bg-sophia-dark-bg/70 px-4 py-4">
-                  <div class="flex flex-wrap items-center justify-between gap-3">
-                    <span class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">Model {index + 1}</span>
-                    <div class="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onclick={() => moveModel(index, -1)}
-                        disabled={index === 0}
-                        class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-xs text-sophia-dark-muted disabled:opacity-40"
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        onclick={() => moveModel(index, 1)}
-                        disabled={index === 2}
-                        class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-xs text-sophia-dark-muted disabled:opacity-40"
-                      >
-                        ↓
-                      </button>
-                    </div>
-                  </div>
-                  <div class="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-                    <select
-                      value={modelChain[index]}
-                      onchange={(event) => {
-                        const next = [...modelChain];
-                        next[index] = (event.currentTarget as HTMLSelectElement).value;
-                        modelChain = next;
-                      }}
-                      class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-sm text-sophia-dark-text"
-                    >
-                      <option value="">Select model</option>
-                      {#if selectOptionsRoute.length === 0 && selectOptionsCatalog.length === 0 && selectOptionsOther.length === 0}
-                        {#each chainModelSelectOptions as option}
-                          <option value={option}>{option}</option>
-                        {/each}
-                      {:else}
-                        {#if selectOptionsRoute.length > 0}
-                          <optgroup label="On your Restormel route">
-                            {#each selectOptionsRoute as option}
-                              <option value={option}>{option}</option>
-                            {/each}
-                          </optgroup>
-                        {/if}
-                        {#if selectOptionsCatalog.length > 0}
-                          <optgroup label="Reference catalog">
-                            {#each selectOptionsCatalog as option}
-                              <option value={option}>{option}</option>
-                            {/each}
-                          </optgroup>
-                        {/if}
-                        {#if selectOptionsOther.length > 0}
-                          <optgroup label="Validation / fallback">
-                            {#each selectOptionsOther as option}
-                              <option value={option}>{option}</option>
-                            {/each}
-                          </optgroup>
-                        {/if}
-                      {/if}
-                    </select>
-                    {#if modelChain[index]}
-                      {@const meta = modelMetadata(modelChain[index])}
-                      <div class="flex flex-wrap gap-2">
-                        <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Context {meta.contextWindow}</span>
-                        <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Cost {meta.costTier}</span>
-                        {#if meta.qualityTier}
-                          <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Quality {meta.qualityTier}</span>
-                        {/if}
-                        <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Speed {meta.speed}</span>
-                      </div>
-                    {/if}
-                  </div>
-                  {#if index < 2}
-                    <div class="mt-4 font-mono text-xs text-sophia-dark-dim">Falls back to Model {index + 2} on configured failover.</div>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-
-            <label class="mt-6 block space-y-2">
-              <span class="text-sm text-sophia-dark-muted">
-                Preferred failover action
-                <span class="help-tip" title="Defines what SOPHIA does when the current model fails at runtime.">ⓘ</span>
-              </span>
-              <select
-                bind:value={failoverAction}
-                class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-sm text-sophia-dark-text"
-              >
-                {#each FAILOVER_OPTIONS as option}
-                  <option value={option.id}>{option.label}</option>
-                {/each}
-              </select>
-            </label>
-
-            {#if duplicateModels.length > 0}
-              <div class="mt-5 rounded border border-sophia-dark-copper/45 bg-sophia-dark-copper/10 px-4 py-3 font-mono text-xs text-sophia-dark-copper">
-                Duplicate model selection detected: {duplicateModels.join(', ')}. Use distinct models for resilient fallback.
-              </div>
-            {/if}
-          </section>
-
-          <section class="setup-card rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/95 p-6 md:p-8">
-            <div class="mb-5 flex items-center justify-between gap-3">
               <h2 class="text-2xl font-serif text-sophia-dark-text">4. Review & proceed</h2>
               <span class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">Final check</span>
             </div>
@@ -1190,7 +1239,7 @@
                 type="button"
                 onclick={() => void startPhaseOne()}
                 disabled={!canStartPhaseOne}
-                title={!canStartPhaseOne ? 'Complete source setup, run validation, and confirm a non-duplicated model chain before continuing.' : ''}
+                title={!canStartPhaseOne ? 'Complete source setup and a non-duplicated three-model chain before continuing.' : ''}
                 class="rounded border border-sophia-dark-sage/45 bg-sophia-dark-sage/14 px-5 py-3 font-mono text-sm text-sophia-dark-sage hover:bg-sophia-dark-sage/20 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Start Phase 1: Extraction →
@@ -1204,7 +1253,7 @@
               </button>
               {#if !canStartPhaseOne}
                 <p class="w-full text-sm leading-6 text-sophia-dark-muted">
-                  Complete source setup, run validation, and confirm a non-duplicated model chain before continuing.
+                  Complete source setup and fill all three model slots with distinct models to continue.
                 </p>
               {/if}
               {#if lastDraftSavedAt}
