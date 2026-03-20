@@ -549,10 +549,26 @@ async function executeIngestImportOperation(
   }
 
   if (!sourceFile) {
+    const hintLines: string[] = [];
+    if (payload.dry_run) {
+      hintLines.push(
+        'Dry run is on — fetch was skipped, so no local .txt was written. Turn off dry run, or provide source_file with an absolute path to an existing .txt.'
+      );
+    } else if (payload.source_url) {
+      hintLines.push(
+        'Expected data/sources/<slug>.txt plus a matching .meta.json after fetch (matched by canonical URL hash).'
+      );
+      hintLines.push(
+        'If fetch exited 0 but nothing was found, the runtime may be missing scripts/ or src/ (hosted images must COPY them for tsx), or the URL in the payload differs from the canonical URL stored in meta.'
+      );
+    } else {
+      hintLines.push('Provide source_file pointing to a readable .txt on the server, or source_url + source_type for fetch.');
+    }
+    const hintBlock = hintLines.map((line) => `[INGEST] ${line}\n`).join('');
     return {
-      logText: `${nextLog}[INGEST] Unable to resolve source file for ingestion.\n`,
+      logText: `${nextLog}[INGEST] Unable to resolve source file for ingestion.\n${hintBlock}`,
       status: 'failed',
-      summary: 'Unable to resolve source file for ingestion.',
+      summary: `Unable to resolve source file for ingestion.${payload.dry_run ? ' Dry run skips fetch.' : ''}`,
       validationStatus: 'failed',
       syncStatus: 'pending'
     };

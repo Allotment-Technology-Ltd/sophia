@@ -1934,6 +1934,14 @@
                 <p class="mt-3 max-w-3xl text-base leading-7 text-sophia-dark-muted">
                   Choose the source, confirm the run type, and set the execution defaults before moving to checks.
                 </p>
+                {#if selectedKind === 'ingest_import'}
+                  <p class="mt-4 max-w-3xl border-l-2 border-sophia-dark-purple/35 pl-4 text-sm leading-7 text-sophia-dark-dim">
+                    When you later queue this run, the server runs <span class="font-mono text-sophia-dark-muted">fetch-source</span> (URL →
+                    <span class="font-mono text-sophia-dark-muted">data/sources/*.txt</span>), then
+                    <span class="font-mono text-sophia-dark-muted">ingest.ts</span>, then checks Surreal. Expand
+                    <span class="font-mono text-sophia-dark-muted">Live log</span> on the operation to see each step; Phase 6 shows pass or fail.
+                  </p>
+                {/if}
               </div>
 
               <div class="workbench-split workbench-split-xl grid gap-6">
@@ -2059,7 +2067,9 @@
                     <div class="flex items-start justify-between gap-4">
                       <span>
                         <span class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Dry run</span>
-                        <span class="mt-2 block text-sm leading-6 text-sophia-dark-muted">Check the plan without committing downstream changes.</span>
+                        <span class="mt-2 block text-sm leading-6 text-sophia-dark-muted">
+                          Skips fetch and ingest commands — no <span class="font-mono text-sophia-dark-dim">data/sources/*.txt</span> is written, so URL imports will fail at “resolve source file” unless you only use <span class="font-mono text-sophia-dark-dim">source_file</span>.
+                        </span>
                       </span>
                       <input bind:checked={dryRun} type="checkbox" class="mt-1 h-4 w-4 accent-[var(--color-blue)]" />
                     </div>

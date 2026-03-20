@@ -54,6 +54,7 @@
     "node-html-parser": "^7.1.0",
     "posthog-node": "^5.28.0",
     "surrealdb": "^2.0.0",
+    "tsx": "^4.21.0",
     "voyageai": "^0.2.1",
     "zod": "^4.3.6"
   },
@@ -71,7 +72,6 @@
     "svelte": "^5.53.6",
     "svelte-check": "^4.4.4",
     "tailwindcss": "^4.2.1",
-    "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vite": "^5.0.0",
     "vitest": "^4.0.18"
