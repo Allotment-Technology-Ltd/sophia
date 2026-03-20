@@ -108,6 +108,10 @@
 
   let firstStage = $state('ingestion_extraction');
   let routes = $state<RouteRecord[]>([]);
+  /** When GET /routes fails, Restormel error detail (otherwise empty list looks like “no config”) */
+  let routeContextError = $state<{ status: number; code: string; detail: string; endpoint?: string } | null>(
+    null
+  );
   let selectedRouteId = $state('');
   let routeSteps = $state<StepRecord[]>([]);
 
@@ -134,8 +138,10 @@
   /** Why "Validate best models" is disabled — show next to the button */
   const validateRouteHint = $derived.by((): string | null => {
     if (loadingContextState === 'loading') return 'Loading routes from Restormel…';
-    if (routes.length === 0) return null;
-    if (!selectedRouteId) return 'Choose a route above — validation calls the recommend API for that route.';
+    if (routes.length === 0) {
+      return 'No routes in this project — you can still run guide-only validation, or add routes via Ingestion Routing.';
+    }
+    if (!selectedRouteId) return 'Choose a route above — live validation calls the recommend API for that route.';
     return null;
   });
 
@@ -417,6 +423,11 @@
     try {
       const body = await authorizedJson('/api/admin/ingestion-routing/context');
       const nextRoutes = Array.isArray(body.routes) ? (body.routes as RouteRecord[]) : [];
+      const err = body.errors?.routes;
+      routeContextError =
+        err && typeof err === 'object' && typeof (err as { detail?: unknown }).detail === 'string'
+          ? (err as { status: number; code: string; detail: string; endpoint?: string })
+          : null;
       routes = nextRoutes;
       const stageMatch =
         nextRoutes.find((route) => route.stage === firstStage) ??
@@ -543,7 +554,60 @@
     });
   }
 
+  /** Rankings when Restormel has no routes — uses source-type hints when available */
+  function buildLocalValidationWithoutRoute(): ValidationRecommendation[] {
+    const h = hintForSource;
+    if (h) {
+      const rows = [
+        { rank: 1 as const, model: h.budget, reason: 'Lowest-cost pick for this source type (guide).' },
+        { rank: 2 as const, model: h.balanced, reason: 'Balanced pick for this source type (guide).' },
+        { rank: 3 as const, model: h.quality, reason: 'Quality-first pick for this source type (guide).' }
+      ];
+      return rows.map((row) => {
+        const meta = modelMetadata(row.model);
+        return {
+          rank: row.rank,
+          model: row.model,
+          confidence: Number((0.9 - (row.rank - 1) * 0.08).toFixed(2)),
+          reason: row.reason,
+          costTier: meta.costTier,
+          speed: meta.speed,
+          contextWindow: meta.contextWindow
+        };
+      });
+    }
+    return buildValidationRecommendations(
+      'No Restormel routes and no source hints — using default catalog order.'
+    );
+  }
+
   async function runModelValidation(): Promise<void> {
+    if (routes.length > 0 && !selectedRouteId) {
+      errorMessage = 'Select a route before validation.';
+      return;
+    }
+
+    if (routes.length === 0) {
+      recommendingState = 'loading';
+      errorMessage = '';
+      successMessage = '';
+      try {
+        const summary =
+          'No Restormel routes for this project — guide-only ranking (live recommend API needs a route).';
+        validationSummary = summary;
+        validationResults = buildLocalValidationWithoutRoute();
+        validationRan = true;
+        successMessage =
+          'Generated guide-only rankings. Add routes in Restormel (or fix the routes API) to use live validation.';
+        if (validationResults.length >= 3) {
+          modelChain = [validationResults[0].model, validationResults[1].model, validationResults[2].model];
+        }
+      } finally {
+        recommendingState = 'idle';
+      }
+      return;
+    }
+
     if (!selectedRouteId) {
       errorMessage = 'Select a route before validation.';
       return;
@@ -1129,6 +1193,9 @@
                     <li><span class="font-mono text-xs text-sophia-dark-text">Quality-first</span> — {hintForSource.quality}</li>
                   </ul>
                   <p class="mt-3 text-xs leading-5 text-sophia-dark-muted">{hintForSource.note}</p>
+                  <p class="mt-3 text-xs leading-5 text-sophia-dark-dim">
+                    This button fills Model 1–3 on the Model chain tab with the three lines above (cost → balanced → quality) and switches you to that tab. It does not talk to Restormel.
+                  </p>
                   <button
                     type="button"
                     class="mt-4 rounded border border-sophia-dark-sage/40 bg-sophia-dark-sage/12 px-4 py-2.5 font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-sage hover:bg-sophia-dark-sage/18"
@@ -1141,13 +1208,34 @@
             </details>
 
             {#if routes.length === 0 && loadingContextState === 'idle'}
-              <div class="mb-5 rounded-lg border border-sophia-dark-copper/35 bg-sophia-dark-copper/10 px-4 py-3 text-sm text-sophia-dark-muted">
-                No routes returned from Restormel for this project.
-                <a
-                  href="/admin/ingestion-routing"
-                  class="font-mono text-sophia-dark-text underline underline-offset-2 hover:text-sophia-dark-sage"
-                  >Ingestion Routing</a>
-                or the Dashboard steps API. Validation cannot run until at least one route exists.
+              <div class="mb-5 space-y-3 rounded-lg border border-sophia-dark-copper/35 bg-sophia-dark-copper/10 px-4 py-3 text-sm text-sophia-dark-muted">
+                <p>
+                  The route list is empty — either no routes are configured in Restormel for this project, or the
+                  <span class="font-mono text-sophia-dark-text">GET …/routes</span> call failed.
+                </p>
+                {#if routeContextError}
+                  <p class="rounded border border-sophia-dark-copper/40 bg-sophia-dark-bg/80 px-3 py-2 font-mono text-xs text-sophia-dark-copper">
+                    API error ({routeContextError.status} {routeContextError.code}): {routeContextError.detail}
+                    {#if routeContextError.endpoint}
+                      <span class="block mt-1 text-sophia-dark-dim">{routeContextError.endpoint}</span>
+                    {/if}
+                  </p>
+                {/if}
+                <p>
+                  <a
+                    href="/admin/ingestion-routing"
+                    class="font-mono text-sophia-dark-text underline underline-offset-2 hover:text-sophia-dark-sage"
+                    >Ingestion Routing</a>
+                  or the Restormel Dashboard / CLI to create routes and steps. Meanwhile, use the button below for
+                  Sophia’s guide-only ranking (no Restormel route required).
+                </p>
+                <button
+                  type="button"
+                  class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+                  onclick={() => void loadIngestionContext()}
+                >
+                  Retry loading routes
+                </button>
               </div>
             {/if}
 
@@ -1178,10 +1266,16 @@
               <button
                 type="button"
                 class="rounded border border-sophia-dark-purple/45 bg-sophia-dark-purple/16 px-5 py-3 font-mono text-sm text-sophia-dark-text hover:bg-sophia-dark-purple/24 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={loadingContextState === 'loading' || recommendingState === 'loading' || !selectedRouteId}
+                disabled={loadingContextState === 'loading' ||
+                  recommendingState === 'loading' ||
+                  (routes.length > 0 && !selectedRouteId)}
                 onclick={() => void runModelValidation()}
               >
-                {recommendingState === 'loading' ? 'Validating…' : 'Validate best models'}
+                {recommendingState === 'loading'
+                  ? 'Validating…'
+                  : routes.length === 0
+                    ? 'Guide-only validate'
+                    : 'Validate best models'}
               </button>
             </div>
 
