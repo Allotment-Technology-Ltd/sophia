@@ -242,12 +242,8 @@ function extractGenericContent(
 		throw new Error('Could not find main content in page');
 	}
 
-	// Remove navigation and boilerplate
-	mainContent.querySelectorAll('nav, header, footer, .nav, .sidebar').forEach((n) => {
-		n.remove();
-	});
-
-	// Try to get title from <title> tag or first heading
+	// Title/author before stripping nodes — WordPress often wraps the post title in <header>,
+	// and removing header first would delete <h1> and break title detection.
 	let title = 'Unknown Title';
 	const titleTag = root.querySelector('title');
 	const h1 = root.querySelector('h1, .title');
@@ -262,6 +258,11 @@ function extractGenericContent(
 
 	const authorNode = root.querySelector('.author, [rel="author"]');
 	const author = authorNode ? [authorNode.text] : [];
+
+	// Remove navigation and boilerplate
+	mainContent.querySelectorAll('nav, header, footer, .nav, .sidebar').forEach((n) => {
+		n.remove();
+	});
 
 	return { text: mainContent.text.trim(), title, author };
 }

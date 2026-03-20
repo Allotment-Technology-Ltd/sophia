@@ -317,5 +317,16 @@
     "priority": "USEFUL",
     "subdomain": "meta-ethics",
     "wave": 3
+  },
+  {
+    "id": 30,
+    "title": "The Man Who Taught His Asshole to Talk",
+    "author": ["William S. Burroughs"],
+    "year": 1959,
+    "url": "https://realitystudio.org/texts/naked-lunch/talking-asshole/",
+    "source_type": "institutional",
+    "priority": "USEFUL",
+    "subdomain": "literature",
+    "wave": 3
   }
 ]
