@@ -65,6 +65,7 @@ async function resolveAaifReasoningRoute(
     failureMode?: 'degraded_default' | 'error';
   }
 ): Promise<ReasoningModelRoute> {
+  const estimatedInputTokens = estimateTextTokens(request.input);
   return resolveReasoningModelRoute({
     pass: request.task === 'completion' ? 'verification' : 'analysis',
     depthMode: latencyToDepth(request.constraints?.latency),
@@ -72,7 +73,14 @@ async function resolveAaifReasoningRoute(
     requestedProvider: options?.requestedProvider,
     requestedModelId: options?.requestedModelId,
     providerApiKeys: options?.providerApiKeys,
-    failureMode: options?.failureMode ?? 'error'
+    failureMode: options?.failureMode ?? 'error',
+    restormelContext: {
+      task: request.task ?? 'chat',
+      attempt: 1,
+      estimatedInputTokens,
+      estimatedInputChars: request.input.length,
+      constraints: request.constraints
+    }
   });
 }
 

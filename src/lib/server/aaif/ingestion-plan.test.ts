@@ -47,7 +47,20 @@ describe('planIngestionStage', () => {
     expect(mockResolveExtractionModelRoute).toHaveBeenCalledWith({
       requestedProvider: 'auto',
       routeId: 'interactive',
-      failureMode: 'degraded_default'
+      failureMode: 'degraded_default',
+      restormelContext: {
+        workload: 'ingestion',
+        stage: 'ingestion_extraction',
+        task: 'completion',
+        attempt: 1,
+        estimatedInputTokens: 9_500,
+        estimatedInputChars: 38_000,
+        complexity: 'medium',
+        constraints: {
+          latency: 'low',
+          maxCost: undefined
+        }
+      }
     });
     expect(plan.provider).toBe('vertex');
     expect(plan.model).toBe('gemini-2.5-flash');
@@ -83,7 +96,20 @@ describe('planIngestionStage', () => {
       depthMode: 'deep',
       routeId: 'verification',
       requestedProvider: 'anthropic',
-      failureMode: 'degraded_default'
+      failureMode: 'degraded_default',
+      restormelContext: {
+        workload: 'ingestion',
+        stage: 'ingestion_validation',
+        task: 'completion',
+        attempt: 1,
+        estimatedInputTokens: 34_000,
+        estimatedInputChars: 80_000,
+        complexity: 'high',
+        constraints: {
+          latency: 'high',
+          maxCost: undefined
+        }
+      }
     });
     expect(plan.provider).toBe('anthropic');
     expect(plan.request.constraints?.latency).toBe('high');

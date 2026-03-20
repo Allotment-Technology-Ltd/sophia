@@ -14,6 +14,7 @@ import {
 } from '@restormel/contracts/providers';
 import { loadServerEnv } from './env';
 import type { ProviderApiKeys } from './byok/types';
+import type { RestormelFallbackCandidate } from './restormel';
 import { resolveProviderDecision, type ResolveFailureKind } from './resolve-provider';
 
 // Lazy initialization - create vertex client only when first called
@@ -132,6 +133,12 @@ export interface ReasoningModelRoute {
   resolvedRouteId?: string | null;
   resolvedExplanation?: string | null;
   resolvedFailureKind?: ResolveFailureKind;
+  resolvedStepId?: string | null;
+  resolvedOrderIndex?: number | null;
+  resolvedSwitchReasonCode?: string | null;
+  resolvedEstimatedCostUsd?: number | null;
+  resolvedMatchedCriteria?: unknown;
+  resolvedFallbackCandidates?: RestormelFallbackCandidate[] | null;
 }
 
 export interface AvailableModelOption {
@@ -298,6 +305,25 @@ async function resolveRoute(options: {
   providerApiKeys?: ProviderApiKeys;
   routeId?: string;
   failureMode?: 'degraded_default' | 'error';
+  restormelContext?: {
+    workload?: string;
+    stage?: string;
+    task?: string;
+    attempt?: number;
+    estimatedInputTokens?: number;
+    estimatedInputChars?: number;
+    complexity?: string;
+    constraints?: {
+      latency?: string;
+      maxCost?: number;
+    };
+    previousFailure?: {
+      failureKind?: string;
+      providerType?: string;
+      modelId?: string;
+      [key: string]: unknown;
+    };
+  };
 }): Promise<ReasoningModelRoute> {
   const depthMode = options.depthMode ?? 'standard';
   const pass = options.pass ?? 'generic';
@@ -306,6 +332,7 @@ async function resolveRoute(options: {
     preferredProvider: options.requestedProvider,
     preferredModel: options.requestedModelId,
     routeId: options.routeId,
+    restormelContext: options.restormelContext,
     safeDefault,
     failureMode: options.failureMode ?? 'degraded_default'
   });
@@ -327,7 +354,13 @@ async function resolveRoute(options: {
     routingSource: decision.source,
     resolvedRouteId: decision.routeId ?? null,
     resolvedExplanation: decision.explanation ?? null,
-    resolvedFailureKind: decision.failureKind
+    resolvedFailureKind: decision.failureKind,
+    resolvedStepId: decision.selectedStepId ?? null,
+    resolvedOrderIndex: decision.selectedOrderIndex ?? null,
+    resolvedSwitchReasonCode: decision.switchReasonCode ?? null,
+    resolvedEstimatedCostUsd: decision.estimatedCostUsd ?? null,
+    resolvedMatchedCriteria: decision.matchedCriteria ?? null,
+    resolvedFallbackCandidates: decision.fallbackCandidates ?? null
   };
 }
 
@@ -339,6 +372,25 @@ export async function resolveReasoningModelRoute(options?: {
   providerApiKeys?: ProviderApiKeys;
   routeId?: string;
   failureMode?: 'degraded_default' | 'error';
+  restormelContext?: {
+    workload?: string;
+    stage?: string;
+    task?: string;
+    attempt?: number;
+    estimatedInputTokens?: number;
+    estimatedInputChars?: number;
+    complexity?: string;
+    constraints?: {
+      latency?: string;
+      maxCost?: number;
+    };
+    previousFailure?: {
+      failureKind?: string;
+      providerType?: string;
+      modelId?: string;
+      [key: string]: unknown;
+    };
+  };
 }): Promise<ReasoningModelRoute> {
   return resolveRoute({
     type: 'reasoning',
@@ -352,6 +404,25 @@ export async function resolveExtractionModelRoute(options?: {
   providerApiKeys?: ProviderApiKeys;
   routeId?: string;
   failureMode?: 'degraded_default' | 'error';
+  restormelContext?: {
+    workload?: string;
+    stage?: string;
+    task?: string;
+    attempt?: number;
+    estimatedInputTokens?: number;
+    estimatedInputChars?: number;
+    complexity?: string;
+    constraints?: {
+      latency?: string;
+      maxCost?: number;
+    };
+    previousFailure?: {
+      failureKind?: string;
+      providerType?: string;
+      modelId?: string;
+      [key: string]: unknown;
+    };
+  };
 }): Promise<ReasoningModelRoute> {
   return resolveRoute({
     type: 'extraction',
@@ -361,7 +432,8 @@ export async function resolveExtractionModelRoute(options?: {
     requestedModelId: options?.requestedModelId,
     providerApiKeys: options?.providerApiKeys,
     routeId: options?.routeId,
-    failureMode: options?.failureMode ?? 'error'
+    failureMode: options?.failureMode ?? 'error',
+    restormelContext: options?.restormelContext
   });
 }
 

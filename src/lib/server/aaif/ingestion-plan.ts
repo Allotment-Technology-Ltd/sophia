@@ -1,6 +1,7 @@
 import { estimateCost, defaultProviders } from '@restormel/keys';
 import type { AAIFLatency, AAIFRequest } from '@restormel/aaif';
 import type { ModelProvider } from '@restormel/contracts/providers';
+import type { RestormelFallbackCandidate } from '../restormel.js';
 import { EMBEDDING_MODEL } from '../embeddings.js';
 import {
   resolveExtractionModelRoute,
@@ -39,6 +40,11 @@ export interface IngestionStagePlan {
   estimatedCostUsd: number;
   routingReason: string;
   routingSource: 'restormel' | 'requested' | 'degraded_default';
+  selectedStepId?: string | null;
+  selectedOrderIndex?: number | null;
+  switchReasonCode?: string | null;
+  matchedCriteria?: unknown;
+  fallbackCandidates?: RestormelFallbackCandidate[] | null;
   route?: ReasoningModelRoute;
 }
 
@@ -213,6 +219,11 @@ export async function planIngestionStage(
       model: EMBEDDING_MODEL,
       estimatedCostUsd: estimateEmbeddingCostUsd(context),
       routingSource: 'requested',
+      selectedStepId: null,
+      selectedOrderIndex: null,
+      switchReasonCode: null,
+      matchedCriteria: null,
+      fallbackCandidates: null,
       routingReason:
         'Sophia currently executes ingestion embeddings on the Vertex embedding pipeline because Restormel execution routing for embeddings is not exposed in the published runtime.'
     };
@@ -224,14 +235,43 @@ export async function planIngestionStage(
       ? await resolveExtractionModelRoute({
           requestedProvider,
           routeId,
-          failureMode: 'degraded_default'
+          failureMode: 'degraded_default',
+          restormelContext: {
+            workload: 'ingestion',
+            stage: 'ingestion_extraction',
+            task: 'completion',
+            attempt: 1,
+            estimatedInputTokens: context.estimatedTokens,
+            estimatedInputChars: context.sourceLengthChars ?? context.estimatedTokens * 4,
+            complexity:
+              context.estimatedTokens > 18_000 ? 'high' : context.estimatedTokens > 8_000 ? 'medium' : 'low',
+            constraints: request.constraints
+          }
         })
       : await resolveReasoningModelRoute({
           pass: stagePass(stage),
           depthMode: latencyToDepth(stageLatency(stage, context)),
           routeId,
           requestedProvider,
-          failureMode: 'degraded_default'
+          failureMode: 'degraded_default',
+          restormelContext: {
+            workload: 'ingestion',
+            stage: `ingestion_${stage}`,
+            task: 'completion',
+            attempt: 1,
+            estimatedInputTokens: estimateStageUsage(stage, context).inputTokens,
+            estimatedInputChars:
+              typeof context.sourceLengthChars === 'number'
+                ? context.sourceLengthChars
+                : Math.max(context.estimatedTokens * 4, 0),
+            complexity:
+              stageLatency(stage, context) === 'high'
+                ? 'high'
+                : stageLatency(stage, context) === 'balanced'
+                  ? 'medium'
+                  : 'low',
+            constraints: request.constraints
+          }
         });
   const usage = estimateStageUsage(stage, context);
 
@@ -243,6 +283,11 @@ export async function planIngestionStage(
     model: route.modelId,
     estimatedCostUsd: estimateReasoningCostUsd(route, usage.inputTokens, usage.outputTokens),
     routingSource: route.routingSource ?? 'restormel',
+    selectedStepId: route.resolvedStepId ?? null,
+    selectedOrderIndex: route.resolvedOrderIndex ?? null,
+    switchReasonCode: route.resolvedSwitchReasonCode ?? null,
+    matchedCriteria: route.resolvedMatchedCriteria ?? null,
+    fallbackCandidates: route.resolvedFallbackCandidates ?? null,
     routingReason:
       route.resolvedExplanation ??
       (route.routingSource === 'degraded_default'

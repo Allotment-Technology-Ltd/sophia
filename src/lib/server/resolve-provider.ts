@@ -1,8 +1,11 @@
 import { isReasoningProvider, type ModelProvider, type ReasoningProvider } from '@restormel/contracts/providers';
-import { RestormelResolveError, restormelResolve } from './restormel';
-
-const RESTORMEL_ENVIRONMENT_ID =
-  process.env.RESTORMEL_ENVIRONMENT_ID?.trim() || 'production';
+import {
+  RESTORMEL_ENVIRONMENT_ID,
+  RestormelResolveError,
+  type ResolveRequest,
+  type RestormelFallbackCandidate,
+  restormelResolve
+} from './restormel';
 
 export interface ProviderDecision {
   provider: ReasoningProvider;
@@ -11,6 +14,12 @@ export interface ProviderDecision {
   routeId?: string | null;
   explanation?: string | null;
   failureKind?: ResolveFailureKind;
+  selectedStepId?: string | null;
+  selectedOrderIndex?: number | null;
+  switchReasonCode?: string | null;
+  estimatedCostUsd?: number | null;
+  matchedCriteria?: unknown;
+  fallbackCandidates?: RestormelFallbackCandidate[] | null;
 }
 
 export type ResolveFailureKind =
@@ -113,6 +122,7 @@ export async function resolveProviderDecision(options: {
   preferredProvider?: ModelProvider;
   preferredModel?: string;
   routeId?: string;
+  restormelContext?: Omit<ResolveRequest, 'environmentId' | 'routeId'>;
   safeDefault?: {
     provider: ReasoningProvider;
     model: string | null;
@@ -135,7 +145,8 @@ export async function resolveProviderDecision(options: {
   try {
     const result = await restormelResolve({
       environmentId: RESTORMEL_ENVIRONMENT_ID,
-      routeId: options.routeId
+      routeId: options.routeId,
+      ...options.restormelContext
     });
     const providerType = normalizeRestormelProvider(result.data.providerType);
     if (!providerType) {
@@ -151,7 +162,13 @@ export async function resolveProviderDecision(options: {
       model: result.data.modelId ?? options.preferredModel ?? null,
       source: 'restormel',
       routeId: result.data.routeId,
-      explanation: result.data.explanation
+      explanation: result.data.explanation,
+      selectedStepId: result.data.selectedStepId ?? null,
+      selectedOrderIndex: result.data.selectedOrderIndex ?? null,
+      switchReasonCode: result.data.switchReasonCode ?? null,
+      estimatedCostUsd: result.data.estimatedCostUsd ?? null,
+      matchedCriteria: result.data.matchedCriteria ?? null,
+      fallbackCandidates: result.data.fallbackCandidates ?? null
     };
   } catch (error) {
     const failure =
@@ -185,7 +202,13 @@ export async function resolveProviderDecision(options: {
         explanation:
           options.safeDefault.explanation ??
           `${failure.userMessage} Using Sophia's degraded default route.`,
-        failureKind: failure.kind
+        failureKind: failure.kind,
+        selectedStepId: null,
+        selectedOrderIndex: null,
+        switchReasonCode: null,
+        estimatedCostUsd: null,
+        matchedCriteria: null,
+        fallbackCandidates: null
       };
     }
 

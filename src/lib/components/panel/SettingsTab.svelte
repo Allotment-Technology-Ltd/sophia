@@ -91,8 +91,6 @@
   }
 
   let currentUser = $state(browser ? auth?.currentUser : null);
-  let administrator = $state(false);
-  let adminStateLoading = $state(false);
   let byokProviders = $state<ByokProviderStatus[]>([]);
   let byokInputs = $state<Record<ByokProvider, string>>(emptyProviderMap(''));
   let byokSaving = $state<Record<ByokProvider, boolean>>(emptyProviderMap(false));
@@ -224,30 +222,6 @@
     } finally {
       byokLoading = false;
     }
-  }
-
-  async function refreshAdministratorState(): Promise<void> {
-    if (!currentUser) {
-      administrator = false;
-      adminStateLoading = false;
-      return;
-    }
-
-    adminStateLoading = true;
-    try {
-      const response = await fetchWithFirebase('/api/admin/me', { method: 'GET' });
-      const body = await parseResponseOrThrow(response);
-      administrator = body?.is_admin === true;
-    } catch {
-      administrator = false;
-    } finally {
-      adminStateLoading = false;
-    }
-  }
-
-  async function openAdminRoute(path: '/admin' | '/admin/operations' | '/admin/review'): Promise<void> {
-    if (!browser) return;
-    await goto(path);
   }
 
   function getByokStatusLabel(status: ByokProviderStatus['status']): string {
@@ -534,12 +508,10 @@
   if (browser) {
     onAuthChange((user) => {
       currentUser = user;
-      void refreshAdministratorState();
       void refreshByokProviders();
       void refreshBillingState(true, true);
       void refreshPrivateSources();
     });
-    void refreshAdministratorState();
     void refreshByokProviders();
     void refreshBillingState(true, true);
     void refreshPrivateSources();
@@ -678,33 +650,6 @@
           <span class="setting-desc">{currentUser.email ?? ''}</span>
         </div>
       </div>
-      {#if administrator}
-        <div class="admin-access-card">
-          <div class="setting-info">
-            <span class="setting-name">Administrator tools</span>
-            <span class="setting-desc">
-              Open Sophia administration directly from Settings and go straight to the work you need.
-            </span>
-          </div>
-          <div class="admin-access-actions">
-            <button class="byok-btn" type="button" onclick={() => openAdminRoute('/admin')}>
-              Open admin hub
-            </button>
-            <button class="byok-btn secondary" type="button" onclick={() => openAdminRoute('/admin/operations')}>
-              Operations
-            </button>
-            <button class="byok-btn secondary" type="button" onclick={() => openAdminRoute('/admin/review')}>
-              Review queue
-            </button>
-          </div>
-        </div>
-      {:else if adminStateLoading}
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Checking administrator access...</span>
-          </div>
-        </div>
-      {/if}
       <div class="setting-row">
         <button class="sign-out-btn" onclick={handleSignOut}>
           Sign out
@@ -1137,22 +1082,6 @@
     background: color-mix(in srgb, var(--color-surface-raised) 72%, transparent);
     padding: 10px;
     margin: 0 0 12px;
-  }
-
-  .admin-access-card {
-    display: grid;
-    gap: 10px;
-    border: 1px solid var(--color-sage-border);
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--color-sage) 8%, transparent);
-    padding: 12px;
-    margin: 0 0 12px;
-  }
-
-  .admin-access-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
   }
 
   .byok-journey-title {

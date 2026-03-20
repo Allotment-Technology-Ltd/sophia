@@ -9,6 +9,8 @@ describe('classifyResolveFailure', () => {
         status: 403,
         code: 'policy_blocked',
         detail: 'All route steps were blocked by policy',
+        endpoint: '/projects/project-id/resolve',
+        payload: { error: 'policy_blocked' },
         userMessage: 'AI model routing is temporarily unavailable because workspace usage limits were reached.',
         violations: [
           {
@@ -33,6 +35,8 @@ describe('classifyResolveFailure', () => {
         status: 403,
         code: 'policy_blocked',
         detail: 'All route steps were blocked by policy',
+        endpoint: '/projects/project-id/resolve',
+        payload: { error: 'policy_blocked' },
         userMessage: 'No permitted AI model route is currently available.',
         violations: [
           {
@@ -69,6 +73,8 @@ describe('resolveProviderDecision', () => {
       status: 403,
       code: 'policy_blocked',
       detail: 'All route steps were blocked by policy',
+      endpoint: '/projects/project-id/resolve',
+      payload: { error: 'policy_blocked' },
       userMessage: 'No permitted AI model route is currently available.',
       violations: [
         {
@@ -93,7 +99,13 @@ describe('resolveProviderDecision', () => {
       source: 'degraded_default',
       routeId: null,
       explanation: 'No permitted AI model route is currently available. Using Sophia\'s degraded default route.',
-      failureKind: 'policy_blocked'
+      failureKind: 'policy_blocked',
+      selectedStepId: null,
+      selectedOrderIndex: null,
+      switchReasonCode: null,
+      estimatedCostUsd: null,
+      matchedCriteria: null,
+      fallbackCandidates: null
     });
     expect(warn).toHaveBeenCalledWith(
       '[restormel] Policy blocked all Restormel route steps; evaluating degraded fallback',

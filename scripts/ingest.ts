@@ -1308,7 +1308,7 @@ async function callStageModel(params: {
 				throw new Error('Model output was truncated (max_tokens reached)');
 			}
 			console.log(
-				`  [ROUTE] ${stage}: ${plan.provider}/${plan.model} source=${plan.routingSource} cost~$${usageCostUsd.toFixed(4)}`
+				`  [ROUTE] ${stage}: ${plan.provider}/${plan.model} source=${plan.routingSource} step=${plan.selectedStepId ?? '—'} order=${plan.selectedOrderIndex ?? '—'} switch=${plan.switchReasonCode ?? '—'} cost~$${usageCostUsd.toFixed(4)}`
 			);
 			assertStageBudget(budget, tracker);
 			return result.text;
@@ -1798,12 +1798,12 @@ async function main() {
 	console.log(`Est. tokens: ~${estimatedSourceTokens.toLocaleString()}`);
 	console.log(`Passages: ${passages.length} (${extractionBatches.length} extraction batch${extractionBatches.length === 1 ? '' : 'es'})`);
 	console.log(`Ingest provider hint: ${ingestProvider}`);
-	console.log(`Extraction route: ${extractionPlan.provider}:${extractionPlan.model} (${extractionPlan.routingSource})`);
-	console.log(`Relations route:  ${relationPlan.provider}:${relationPlan.model} (${relationPlan.routingSource})`);
-	console.log(`Grouping route:   ${groupingPlan.provider}:${groupingPlan.model} (${groupingPlan.routingSource})`);
-	console.log(`Validation route: ${validationPlan.provider}:${validationPlan.model} (${validationPlan.routingSource})`);
-	console.log(`Embedding route:  ${embeddingPlan.provider}:${embeddingPlan.model} (${embeddingPlan.routingSource})`);
-	console.log(`Repair route:     ${jsonRepairPlan.provider}:${jsonRepairPlan.model} (${jsonRepairPlan.routingSource})`);
+	console.log(`Extraction route: ${extractionPlan.provider}:${extractionPlan.model} (${extractionPlan.routingSource}) step=${extractionPlan.selectedStepId ?? '—'} switch=${extractionPlan.switchReasonCode ?? '—'}`);
+	console.log(`Relations route:  ${relationPlan.provider}:${relationPlan.model} (${relationPlan.routingSource}) step=${relationPlan.selectedStepId ?? '—'} switch=${relationPlan.switchReasonCode ?? '—'}`);
+	console.log(`Grouping route:   ${groupingPlan.provider}:${groupingPlan.model} (${groupingPlan.routingSource}) step=${groupingPlan.selectedStepId ?? '—'} switch=${groupingPlan.switchReasonCode ?? '—'}`);
+	console.log(`Validation route: ${validationPlan.provider}:${validationPlan.model} (${validationPlan.routingSource}) step=${validationPlan.selectedStepId ?? '—'} switch=${validationPlan.switchReasonCode ?? '—'}`);
+	console.log(`Embedding route:  ${embeddingPlan.provider}:${embeddingPlan.model} (${embeddingPlan.routingSource}) step=${embeddingPlan.selectedStepId ?? '—'} switch=${embeddingPlan.switchReasonCode ?? '—'}`);
+	console.log(`Repair route:     ${jsonRepairPlan.provider}:${jsonRepairPlan.model} (${jsonRepairPlan.routingSource}) step=${jsonRepairPlan.selectedStepId ?? '—'} switch=${jsonRepairPlan.switchReasonCode ?? '—'}`);
 	console.log(`Validate: ${shouldValidate ? 'YES (Gemini)' : 'No'}`);
 	if (resumeFromStage) {
 		console.log(`Resume from: ${resumeFromStage}`);
