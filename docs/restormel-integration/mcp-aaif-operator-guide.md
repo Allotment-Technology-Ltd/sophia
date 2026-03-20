@@ -49,6 +49,28 @@ Environment notes:
 - `integration.generate`
 - `docs.search`
 
+These tools help you **inspect** models, explain routing, and validate providers. They do **not** create or update Dashboard route definitions or ordered step lists. For mutating routes/steps, use the **CLI** below or the Restormel Dashboard API directly.
+
+## Configure route steps via CLI (recommended for agents & CI)
+
+Use the repo script that calls the same Dashboard endpoints as Sophia’s admin proxies (`RESTORMEL_GATEWAY_KEY` + `RESTORMEL_PROJECT_ID`):
+
+```bash
+npm run restormel:route-steps -- list-routes
+npm run restormel:route-steps -- get-steps <routeId>
+npm run restormel:route-steps -- apply-steps <routeId> scripts/restormel/examples/extraction-steps.example.json
+# or pipe JSON:
+cat my-steps.json | npm run restormel:route-steps -- apply-steps <routeId>
+npm run restormel:route-steps -- capabilities
+```
+
+Payload for `apply-steps` is a **JSON array of steps** (same as the Ingestion Routing admin textarea), or `{ "steps": [ ... ] }`. Add as many steps as you need; `orderIndex` defines the failover chain. Example: `scripts/restormel/examples/extraction-steps.example.json`.
+
+## AAIF vs route configuration
+
+- **AAIF** (`POST /api/beta/aaif` and `executeAAIFRequest`) is for **runtime** chat/completion/embedding requests with routing constraints — not for CRUD on Restormel routes or steps.
+- **Route/step configuration** belongs in Restormel (Dashboard or the CLI above). Ingestion planning then **consumes** those routes at execution time.
+
 ## Burn-in checks after deploy
 
 Run these after the 100% Restormel release is live:

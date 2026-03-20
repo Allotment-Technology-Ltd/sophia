@@ -34,6 +34,36 @@
     contextWindow: string;
   }
 
+  type CatalogEntrySource = 'annotated' | 'remote' | 'static_supplement';
+
+  interface CatalogEntry {
+    label: string;
+    provider: string;
+    modelId: string;
+    costTier: 'low' | 'medium' | 'high';
+    qualityTier: 'capable' | 'strong' | 'frontier';
+    speed: 'fast' | 'balanced' | 'thorough';
+    contextWindow: string;
+    bestFor: string;
+    catalogSource?: CatalogEntrySource;
+  }
+
+  interface CatalogSyncState {
+    status: 'restormel' | 'static' | 'merged';
+    reason?: string;
+    remoteRowCount: number;
+    annotatedCount: number;
+    inferredRemoteCount: number;
+    staticSupplementCount: number;
+  }
+
+  interface SourceHintRow {
+    budget: string;
+    balanced: string;
+    quality: string;
+    note: string;
+  }
+
   const SOURCE_TYPES = [
     { id: 'sep_entry', label: 'Stanford Encyclopedia of Philosophy' },
     { id: 'gutenberg_text', label: 'Project Gutenberg' },
@@ -53,6 +83,13 @@
     'gutenberg.org': 'gutenberg_text',
     'www.gutenberg.org': 'gutenberg_text'
   };
+
+  /** When Restormel route steps omit model IDs, validation still returns ranked labels — keep selects in sync. */
+  const FALLBACK_CHAIN_MODEL_LABELS = [
+    'anthropic · claude-3-5-sonnet-20241022',
+    'openai · gpt-4o',
+    'google · gemini-2.5-pro'
+  ] as const;
 
   let pageState = $state<PageState>('loading');
   let currentUserEmail = $state<string | null>(null);
@@ -83,6 +120,14 @@
 
   let lastDraftSavedAt = $state<string | null>(null);
 
+  let modelCatalogEntries = $state<CatalogEntry[]>([]);
+  let sourceHints = $state<Record<string, SourceHintRow>>({});
+  let catalogSync = $state<CatalogSyncState | null>(null);
+
+  const showCatalogSourceColumn = $derived.by(() =>
+    modelCatalogEntries.some((r) => r.catalogSource)
+  );
+
   const selectedRoute = $derived.by(
     () => routes.find((route) => route.id === selectedRouteId) ?? null
   );
@@ -97,6 +142,45 @@
       if (!options.includes(label)) options.push(label);
     }
     return options;
+  });
+
+  const chainModelSelectOptions = $derived.by(() => {
+    const options: string[] = [];
+    const push = (label: string) => {
+      const t = label.trim();
+      if (t && !options.includes(t)) options.push(t);
+    };
+    for (const label of modelOptions) push(label);
+    for (const m of modelChain) push(m);
+    for (const r of validationResults) push(r.model);
+    for (const e of modelCatalogEntries) push(e.label);
+    if (options.length === 0) {
+      for (const label of FALLBACK_CHAIN_MODEL_LABELS) push(label);
+    }
+    return options;
+  });
+
+  const sourceTypeLabel = $derived.by(
+    () => SOURCE_TYPES.find((t) => t.id === sourceType)?.label ?? sourceType
+  );
+
+  const hintForSource = $derived.by(() => sourceHints[sourceType] ?? null);
+
+  /** Route steps first; full catalog; then validation-only / fallback labels */
+  const selectOptionsRoute = $derived.by(() => [...modelOptions]);
+
+  const selectOptionsCatalog = $derived.by(() => {
+    const inRoute = new Set(modelOptions);
+    return modelCatalogEntries
+      .map((e) => e.label)
+      .filter((l) => !inRoute.has(l))
+      .sort((a, b) => a.localeCompare(b));
+  });
+
+  const selectOptionsOther = $derived.by(() => {
+    const inRoute = new Set(modelOptions);
+    const inCat = new Set(modelCatalogEntries.map((e) => e.label));
+    return chainModelSelectOptions.filter((l) => !inRoute.has(l) && !inCat.has(l));
   });
 
   const sourceReady = $derived.by(
@@ -213,7 +297,22 @@
     return 0.03;
   }
 
-  function modelMetadata(modelLabel: string): { contextWindow: string; costTier: 'low' | 'medium' | 'high'; speed: 'fast' | 'balanced' | 'thorough' } {
+  function modelMetadata(modelLabel: string): {
+    contextWindow: string;
+    costTier: 'low' | 'medium' | 'high';
+    speed: 'fast' | 'balanced' | 'thorough';
+    qualityTier?: 'capable' | 'strong' | 'frontier';
+  } {
+    const trimmed = modelLabel.trim();
+    const fromCat = modelCatalogEntries.find((e) => e.label === trimmed);
+    if (fromCat) {
+      return {
+        contextWindow: fromCat.contextWindow,
+        costTier: fromCat.costTier,
+        speed: fromCat.speed,
+        qualityTier: fromCat.qualityTier
+      };
+    }
     const label = modelLabel.toLowerCase();
     if (label.includes('flash') || label.includes('mini')) {
       return { contextWindow: '128k', costTier: 'low', speed: 'fast' };
@@ -299,6 +398,33 @@
     }
   }
 
+  function catalogSourceLabel(source: CatalogEntrySource | undefined): string {
+    if (source === 'annotated') return 'Restormel + guide';
+    if (source === 'remote') return 'Restormel only';
+    if (source === 'static_supplement') return 'Guide only';
+    return '—';
+  }
+
+  async function loadModelCatalog(): Promise<void> {
+    try {
+      const body = await authorizedJson('/api/admin/ingestion-routing/model-catalog');
+      modelCatalogEntries = Array.isArray(body.entries) ? (body.entries as CatalogEntry[]) : [];
+      sourceHints =
+        typeof body.sourceHints === 'object' && body.sourceHints !== null
+          ? (body.sourceHints as Record<string, SourceHintRow>)
+          : {};
+      const sync = body.catalogSync;
+      catalogSync =
+        sync && typeof sync === 'object' && typeof sync.status === 'string'
+          ? (sync as CatalogSyncState)
+          : null;
+    } catch {
+      modelCatalogEntries = [];
+      sourceHints = {};
+      catalogSync = null;
+    }
+  }
+
   async function loadAdminContext(): Promise<void> {
     const token = await getIdToken();
     if (!token) {
@@ -323,6 +449,7 @@
     pageState = body.is_admin ? 'ready' : 'forbidden';
     if (pageState === 'ready') {
       await loadIngestionContext();
+      await loadModelCatalog();
       hydrateDraft();
     }
   }
@@ -349,9 +476,8 @@
   }
 
   function buildValidationRecommendations(summaryText: string): ValidationRecommendation[] {
-    const candidates = modelOptions.length > 0
-      ? modelOptions
-      : ['anthropic · claude-3-5-sonnet', 'openai · gpt-4o', 'google · gemini-2.5-pro'];
+    const candidates =
+      modelOptions.length > 0 ? modelOptions : [...FALLBACK_CHAIN_MODEL_LABELS];
 
     return candidates.slice(0, 5).map((model, idx) => {
       const meta = modelMetadata(model);
@@ -475,7 +601,8 @@
       modelChain,
       failoverAction,
       validationRan,
-      validationSummary
+      validationSummary,
+      validationResults
     };
     localStorage.setItem('sophia.admin.ingestion.draft', JSON.stringify(payload));
     lastDraftSavedAt = new Date().toLocaleString('en-GB', {
@@ -511,6 +638,31 @@
       }
       validationRan = draft.validationRan === true;
       validationSummary = typeof draft.validationSummary === 'string' ? draft.validationSummary : validationSummary;
+      if (Array.isArray(draft.validationResults)) {
+        const parsed = draft.validationResults.filter(
+          (row): row is Record<string, unknown> =>
+            typeof row === 'object' && row !== null && typeof (row as { model?: unknown }).model === 'string'
+        );
+        validationResults = parsed.map((row, idx) => ({
+          rank: typeof row.rank === 'number' ? row.rank : idx + 1,
+          model: String(row.model),
+          confidence: typeof row.confidence === 'number' ? row.confidence : 0.75,
+          reason: typeof row.reason === 'string' ? row.reason : '',
+          costTier:
+            row.costTier === 'low' || row.costTier === 'medium' || row.costTier === 'high'
+              ? row.costTier
+              : 'medium',
+          speed:
+            row.speed === 'fast' || row.speed === 'balanced' || row.speed === 'thorough'
+              ? row.speed
+              : 'balanced',
+          contextWindow: typeof row.contextWindow === 'string' ? row.contextWindow : '128k'
+        }));
+      }
+      if (validationRan && validationResults.length === 0) {
+        validationRan = false;
+        validationSummary = 'Run validation to generate ranked model advice for this source.';
+      }
     } catch {
       // ignore invalid draft payload
     }
@@ -735,6 +887,82 @@
               <span class="help-tip" title="This checks the current route and returns ranked model advice for the selected source profile.">ⓘ</span>
             </div>
 
+            <details class="mb-6 rounded-xl border border-sophia-dark-border bg-sophia-dark-bg/60 p-4" open>
+              <summary class="cursor-pointer font-serif text-lg text-sophia-dark-text">
+                Model reference — cost, quality &amp; task fit
+              </summary>
+              <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">
+                Tiers are <span class="text-sophia-dark-text">relative</span> for planning. Actual spend and availability depend on Restormel routing and your provider keys.
+              </p>
+              {#if catalogSync}
+                <p class="mt-2 font-mono text-xs leading-5 text-sophia-dark-dim">
+                  {#if catalogSync.status === 'restormel'}
+                    Model list from Restormel ({catalogSync.remoteRowCount} rows); guide copy where labels match.
+                  {:else if catalogSync.status === 'merged'}
+                    Merged: Restormel index ({catalogSync.remoteRowCount} rows) + {catalogSync.staticSupplementCount} guide-only
+                    supplement{catalogSync.staticSupplementCount === 1 ? '' : 's'}.
+                  {:else}
+                    Static guide only
+                    {#if catalogSync.reason}
+                      — {catalogSync.reason}
+                    {/if}
+                  {/if}
+                </p>
+              {/if}
+              {#if modelCatalogEntries.length > 0}
+                <div class="mt-4 overflow-x-auto rounded-lg border border-sophia-dark-border">
+                  <table class="w-full min-w-[44rem] border-collapse text-left text-sm">
+                    <thead class="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
+                      <tr>
+                        <th class="border-b border-sophia-dark-border px-3 py-2">Model</th>
+                        <th class="border-b border-sophia-dark-border px-3 py-2">Cost</th>
+                        <th class="border-b border-sophia-dark-border px-3 py-2">Quality</th>
+                        <th class="border-b border-sophia-dark-border px-3 py-2">Speed</th>
+                        <th class="border-b border-sophia-dark-border px-3 py-2">Context</th>
+                        <th class="border-b border-sophia-dark-border px-3 py-2">Best for</th>
+                        {#if showCatalogSourceColumn}
+                          <th class="border-b border-sophia-dark-border px-3 py-2">Source</th>
+                        {/if}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each modelCatalogEntries as row}
+                        <tr class="border-b border-sophia-dark-border/80 text-sophia-dark-text last:border-0">
+                          <td class="px-3 py-2 font-mono text-xs">{row.label}</td>
+                          <td class="px-3 py-2 text-sophia-dark-muted">{row.costTier}</td>
+                          <td class="px-3 py-2 text-sophia-dark-muted">{row.qualityTier}</td>
+                          <td class="px-3 py-2 text-sophia-dark-muted">{row.speed}</td>
+                          <td class="px-3 py-2 font-mono text-xs text-sophia-dark-muted">{row.contextWindow}</td>
+                          <td class="px-3 py-2 text-sophia-dark-muted">{row.bestFor}</td>
+                          {#if showCatalogSourceColumn}
+                            <td class="px-3 py-2 font-mono text-[0.65rem] text-sophia-dark-dim">
+                              {catalogSourceLabel(row.catalogSource)}
+                            </td>
+                          {/if}
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {:else}
+                <p class="mt-3 font-mono text-xs text-sophia-dark-dim">Catalog loading…</p>
+              {/if}
+
+              {#if hintForSource}
+                <div class="mt-5 rounded-lg border border-sophia-dark-purple/30 bg-sophia-dark-purple/8 px-4 py-4">
+                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-dim">
+                    Suggested starting points for “{sourceTypeLabel}”
+                  </div>
+                  <ul class="mt-3 max-w-3xl text-sm leading-7 text-sophia-dark-muted">
+                    <li><span class="font-mono text-xs text-sophia-dark-text">Lowest cost</span> — {hintForSource.budget}</li>
+                    <li><span class="font-mono text-xs text-sophia-dark-text">Balanced</span> — {hintForSource.balanced}</li>
+                    <li><span class="font-mono text-xs text-sophia-dark-text">Quality-first</span> — {hintForSource.quality}</li>
+                  </ul>
+                  <p class="mt-3 text-xs leading-5 text-sophia-dark-muted">{hintForSource.note}</p>
+                </div>
+              {/if}
+            </details>
+
             <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
               <div class="space-y-2">
                 <div class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">
@@ -775,6 +1003,7 @@
                 <div class="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Recommended ranking</div>
                 <div class="mt-3 space-y-3">
                   {#each validationResults as recommendation}
+                    {@const recoMeta = modelMetadata(recommendation.model)}
                     <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 px-3 py-3">
                       <div class="flex flex-wrap items-center justify-between gap-2">
                         <div class="font-mono text-sm text-sophia-dark-text">
@@ -792,6 +1021,11 @@
                         <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">
                           Cost {recommendation.costTier}
                         </span>
+                        {#if recoMeta.qualityTier}
+                          <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">
+                            Quality {recoMeta.qualityTier}
+                          </span>
+                        {/if}
                         <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">
                           Speed {recommendation.speed}
                         </span>
@@ -844,15 +1078,42 @@
                       class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-sm text-sophia-dark-text"
                     >
                       <option value="">Select model</option>
-                      {#each modelOptions as option}
-                        <option value={option}>{option}</option>
-                      {/each}
+                      {#if selectOptionsRoute.length === 0 && selectOptionsCatalog.length === 0 && selectOptionsOther.length === 0}
+                        {#each chainModelSelectOptions as option}
+                          <option value={option}>{option}</option>
+                        {/each}
+                      {:else}
+                        {#if selectOptionsRoute.length > 0}
+                          <optgroup label="On your Restormel route">
+                            {#each selectOptionsRoute as option}
+                              <option value={option}>{option}</option>
+                            {/each}
+                          </optgroup>
+                        {/if}
+                        {#if selectOptionsCatalog.length > 0}
+                          <optgroup label="Reference catalog">
+                            {#each selectOptionsCatalog as option}
+                              <option value={option}>{option}</option>
+                            {/each}
+                          </optgroup>
+                        {/if}
+                        {#if selectOptionsOther.length > 0}
+                          <optgroup label="Validation / fallback">
+                            {#each selectOptionsOther as option}
+                              <option value={option}>{option}</option>
+                            {/each}
+                          </optgroup>
+                        {/if}
+                      {/if}
                     </select>
                     {#if modelChain[index]}
                       {@const meta = modelMetadata(modelChain[index])}
                       <div class="flex flex-wrap gap-2">
                         <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Context {meta.contextWindow}</span>
                         <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Cost {meta.costTier}</span>
+                        {#if meta.qualityTier}
+                          <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Quality {meta.qualityTier}</span>
+                        {/if}
                         <span class="rounded border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Speed {meta.speed}</span>
                       </div>
                     {/if}

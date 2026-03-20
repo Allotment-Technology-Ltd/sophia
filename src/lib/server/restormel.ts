@@ -520,3 +520,11 @@ export async function restormelGetSwitchCriteriaEnums(): Promise<RestormelSwitch
     `${projectPath()}/switch-criteria-enums`
   );
 }
+
+/**
+ * Project model index (Restormel Dashboard). Shape may vary; callers should parse defensively.
+ * @see docs/restormel-integration/ingestion-control-plane-spec.md — metadata endpoint
+ */
+export async function restormelListProjectModels(): Promise<unknown> {
+  return requestRestormel<unknown>(`${projectPath()}/models`);
+}

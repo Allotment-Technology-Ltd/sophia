@@ -27,6 +27,7 @@
     "ingest:unknown:resume": "tsx --env-file=.env scripts/ingest.ts data/sources/unknown-title.txt --stop-after-embedding",
     "ingest:nightly": "tsx --env-file=.env scripts/ingest-nightly-links.ts",
     "health": "curl -s --max-time 30 https://usesophia.app/api/health | jq .",
+    "restormel:route-steps": "tsx --env-file=.env scripts/restormel/route-steps.ts",
     "infra:preview": "cd infra && pulumi preview --stack production",
     "infra:up": "cd infra && pulumi up --stack production",
     "infra:refresh": "cd infra && pulumi refresh --stack production",

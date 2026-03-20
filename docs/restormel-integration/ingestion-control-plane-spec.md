@@ -252,9 +252,11 @@ Useful public endpoints already appearing live:
 - `GET /projects/{projectId}/providers/health`
 - `GET /projects/{projectId}/switch-criteria-enums`
 
-Still required:
+Still required (upstream contract):
 
 - `GET /projects/{projectId}/models`
+
+**Sophia:** When this endpoint returns JSON, `/api/admin/ingestion-routing/model-catalog` merges the response with the static ingestion guide: matching `provider · modelId` labels keep curated copy; unknown models appear with heuristic tiers. If the call fails or the body is empty, the admin UI falls back to the static catalog only.
 
 Required metadata:
 

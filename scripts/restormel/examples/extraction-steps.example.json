@@ -1,0 +1,23 @@
+[
+  {
+    "id": "primary",
+    "orderIndex": 0,
+    "enabled": true,
+    "providerPreference": "anthropic",
+    "modelId": "claude-sonnet-4-5-20250514"
+  },
+  {
+    "id": "fallback_openai",
+    "orderIndex": 1,
+    "enabled": true,
+    "providerPreference": "openai",
+    "modelId": "gpt-4o"
+  },
+  {
+    "id": "fallback_google",
+    "orderIndex": 2,
+    "enabled": true,
+    "providerPreference": "google",
+    "modelId": "gemini-2.5-pro"
+  }
+]
