@@ -18,6 +18,7 @@ export type IngestionStage =
   | 'json_repair';
 
 export type IngestProviderPreference = 'auto' | 'vertex' | 'anthropic';
+type StageRouteBindingMode = 'dedicated' | 'shared' | 'none';
 
 export interface IngestionPlanningContext {
   sourceTitle: string;
@@ -97,22 +98,82 @@ function latencyToDepth(latency: AAIFLatency): 'quick' | 'standard' | 'deep' {
   return 'standard';
 }
 
-function stageRouteId(stage: IngestionStage): string | undefined {
+function stageRouteBinding(stage: IngestionStage): {
+  routeId?: string;
+  mode: StageRouteBindingMode;
+} {
   if (stage === 'validation') {
-    return (
+    const dedicated =
       process.env.RESTORMEL_INGEST_VALIDATION_ROUTE_ID?.trim() ||
-      process.env.RESTORMEL_VERIFY_ROUTE_ID?.trim() ||
-      process.env.RESTORMEL_ANALYSE_ROUTE_ID?.trim() ||
-      undefined
-    );
+      process.env.RESTORMEL_VERIFY_ROUTE_ID?.trim();
+    if (dedicated) {
+      return {
+        routeId: dedicated,
+        mode: 'dedicated'
+      };
+    }
+
+    const shared =
+      process.env.RESTORMEL_INGEST_ROUTE_ID?.trim() ||
+      process.env.RESTORMEL_ANALYSE_ROUTE_ID?.trim();
+    return shared
+      ? {
+          routeId: shared,
+          mode: 'shared'
+        }
+      : {
+          mode: 'none'
+        };
   }
 
-  return (
-    process.env[`RESTORMEL_INGEST_${stage.toUpperCase()}_ROUTE_ID`]?.trim() ||
+  const dedicated = process.env[`RESTORMEL_INGEST_${stage.toUpperCase()}_ROUTE_ID`]?.trim();
+  if (dedicated) {
+    return {
+      routeId: dedicated,
+      mode: 'dedicated'
+    };
+  }
+
+  const shared =
     process.env.RESTORMEL_INGEST_ROUTE_ID?.trim() ||
-    process.env.RESTORMEL_ANALYSE_ROUTE_ID?.trim() ||
-    undefined
-  );
+    process.env.RESTORMEL_ANALYSE_ROUTE_ID?.trim();
+  return shared
+    ? {
+        routeId: shared,
+        mode: 'shared'
+      }
+    : {
+        mode: 'none'
+      };
+}
+
+function buildStageRestormelContext(options: {
+  stage: IngestionStage;
+  routeMode: StageRouteBindingMode;
+  task: AAIFRequest['task'];
+  estimatedInputTokens: number;
+  estimatedInputChars: number;
+  complexity: 'low' | 'medium' | 'high';
+  constraints: AAIFRequest['constraints'];
+}) {
+  const base = {
+    task: options.task,
+    attempt: 1,
+    estimatedInputTokens: options.estimatedInputTokens,
+    estimatedInputChars: options.estimatedInputChars,
+    complexity: options.complexity,
+    constraints: options.constraints
+  };
+
+  if (options.routeMode !== 'dedicated') {
+    return base;
+  }
+
+  return {
+    workload: 'ingestion',
+    stage: `ingestion_${options.stage}`,
+    ...base
+  };
 }
 
 function stageMaxCost(stage: IngestionStage): number | undefined {
@@ -208,7 +269,8 @@ export async function planIngestionStage(
   context: IngestionPlanningContext
 ): Promise<IngestionStagePlan> {
   const request = buildStageRequest(stage, context);
-  const routeId = stageRouteId(stage);
+  const routeBinding = stageRouteBinding(stage);
+  const routeId = routeBinding.routeId;
 
   if (stage === 'embedding') {
     return {
@@ -236,17 +298,16 @@ export async function planIngestionStage(
           requestedProvider,
           routeId,
           failureMode: 'degraded_default',
-          restormelContext: {
-            workload: 'ingestion',
-            stage: 'ingestion_extraction',
-            task: 'completion',
-            attempt: 1,
+          restormelContext: buildStageRestormelContext({
+            stage,
+            routeMode: routeBinding.mode,
+            task: request.task,
             estimatedInputTokens: context.estimatedTokens,
             estimatedInputChars: context.sourceLengthChars ?? context.estimatedTokens * 4,
             complexity:
               context.estimatedTokens > 18_000 ? 'high' : context.estimatedTokens > 8_000 ? 'medium' : 'low',
             constraints: request.constraints
-          }
+          })
         })
       : await resolveReasoningModelRoute({
           pass: stagePass(stage),
@@ -254,11 +315,10 @@ export async function planIngestionStage(
           routeId,
           requestedProvider,
           failureMode: 'degraded_default',
-          restormelContext: {
-            workload: 'ingestion',
-            stage: `ingestion_${stage}`,
-            task: 'completion',
-            attempt: 1,
+          restormelContext: buildStageRestormelContext({
+            stage,
+            routeMode: routeBinding.mode,
+            task: request.task,
             estimatedInputTokens: estimateStageUsage(stage, context).inputTokens,
             estimatedInputChars:
               typeof context.sourceLengthChars === 'number'
@@ -271,7 +331,7 @@ export async function planIngestionStage(
                   ? 'medium'
                   : 'low',
             constraints: request.constraints
-          }
+          })
         });
   const usage = estimateStageUsage(stage, context);
 

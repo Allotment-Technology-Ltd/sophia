@@ -60,6 +60,19 @@
     [key: string]: unknown;
   }
 
+  interface AdminOperationWorkbenchRecord extends AdminOperationRecord {
+    logs?: unknown[] | null;
+    route_decision?: {
+      routeName?: string | null;
+      providerType?: string | null;
+      modelId?: string | null;
+      switchReasonCode?: string | null;
+      estimatedCostUsd?: number | string | null;
+      [key: string]: unknown;
+    } | null;
+    [key: string]: unknown;
+  }
+
   interface RoutingContextPayload {
     environmentId?: string;
     recommendations?: {
@@ -216,9 +229,9 @@
     }
   };
 
-  let operations = $state<AdminOperationRecord[]>([]);
+  let operations = $state<AdminOperationWorkbenchRecord[]>([]);
   let selectedId = $state<string | null>(null);
-  let selectedOperation = $state<AdminOperationRecord | null>(null);
+  let selectedOperation = $state<AdminOperationWorkbenchRecord | null>(null);
   let selectedKind = $state<OperationKind>('ingest_import');
   let payloadText = $state('');
   let requestState = $state<'idle' | 'submitting'>('idle');
@@ -251,6 +264,7 @@
   let simulationError = $state('');
   let recommendationState = $state<'idle' | 'requesting'>('idle');
   let recommendationMessage = $state('');
+  let launchConfirmed = $state(false);
 
   const activeOperation = $derived.by(() =>
     operations.find((operation) => operation.id === selectedId) ?? selectedOperation
@@ -335,6 +349,29 @@
     ).length;
     return { total, healthy, degraded, failed };
   });
+  const routeCoverageSummary = $derived.by(() => {
+    if (missingStageCount > 0) {
+      return {
+        tone: 'attention' as PhaseSignal,
+        label: `${missingStageCount} missing`,
+        detail: 'Some stages still need a dedicated route before this becomes a fully staged ingestion plan.'
+      };
+    }
+
+    if (sharedFallbackCount > 0) {
+      return {
+        tone: 'ready' as PhaseSignal,
+        label: `${sharedFallbackCount} shared`,
+        detail: 'No stages are missing, but some still rely on the shared route rather than a dedicated stage route.'
+      };
+    }
+
+    return {
+      tone: 'passed' as PhaseSignal,
+      label: `${dedicatedRouteCount}/${routingStages.length} dedicated`,
+      detail: 'Every stage now has dedicated route coverage.'
+    };
+  });
   const selectedRouteSyncState = $derived.by(() => {
     const route = selectedStageDescriptor?.route;
     if (!route) {
@@ -413,6 +450,16 @@
     }
   });
   const estimatedInputChars = $derived(estimatedInputTokens * 4);
+  const activeOperationLogText = $derived.by(() => {
+    if (!activeOperation) return 'No logs captured yet.';
+    if (typeof activeOperation.log_text === 'string' && activeOperation.log_text.trim()) {
+      return activeOperation.log_text;
+    }
+    if (Array.isArray(activeOperation.logs)) {
+      return activeOperation.logs.map((entry) => String(entry)).join('\n');
+    }
+    return 'No logs captured yet.';
+  });
   const routingAdvisory = $derived.by(() => {
     const healthyProviders = providerHealthEntries.filter((provider) =>
       ['healthy', 'ready'].includes((provider.status ?? '').toLowerCase())
@@ -587,13 +634,6 @@
     }
   }
 
-  function providerStateTone(status: string | null | undefined): string {
-    if (status === 'healthy' || status === 'ready') return 'text-sophia-dark-sage border-sophia-dark-sage/35 bg-sophia-dark-sage/8';
-    if (status === 'degraded' || status === 'warning') return 'text-sophia-dark-copper border-sophia-dark-copper/35 bg-sophia-dark-copper/8';
-    if (status === 'failed' || status === 'unhealthy') return 'text-sophia-dark-coral border-sophia-dark-coral/35 bg-sophia-dark-coral/8';
-    return 'text-sophia-dark-dim border-sophia-dark-border bg-sophia-dark-surface-raised/30';
-  }
-
   function currentTrianglePass(): 'analysis' | 'critique' | 'synthesis' {
     if (activePhase === 'prepare' || activePhase === 'preflight') return 'analysis';
     if (activePhase === 'pipeline' || activePhase === 'simulate') return 'critique';
@@ -709,7 +749,11 @@
   }
 
   const prepareReady = $derived(preflightBlockers().length === 0);
-  const canLaunch = $derived(prepareReady && requestState !== 'submitting');
+  const canLaunch = $derived(
+    prepareReady &&
+      requestState !== 'submitting' &&
+      (selectedKind !== 'ingest_import' || launchConfirmed)
+  );
   const preflightBlockerList = $derived.by(() => preflightBlockers());
   const preflightWarningList = $derived.by(() => preflightWarnings());
   const criticalSignals = $derived.by(() => {
@@ -754,12 +798,19 @@
         value: `${missingStageCount} missing`,
         detail: 'Some stages still need routing.'
       });
+    } else if (sharedFallbackCount > 0) {
+      signals.push({
+        tone: 'ready',
+        label: 'Route coverage',
+        value: `${sharedFallbackCount} shared`,
+        detail: 'No stages are missing, but some still rely on the shared route.'
+      });
     } else {
       signals.push({
         tone: 'passed',
         label: 'Route coverage',
-        value: `${dedicatedRouteCount} staged`,
-        detail: 'Every stage has route coverage.'
+        value: `${dedicatedRouteCount} dedicated`,
+        detail: 'Every stage has dedicated coverage.'
       });
     }
 
@@ -830,6 +881,114 @@
       title: 'This run needs operator attention.',
       detail: activeOperation.last_error ?? 'Check the summary and log, then retry or adjust the route before running again.'
     };
+  });
+  const activePhaseMeta = $derived.by(
+    () => PHASES.find((phase) => phase.id === activePhase) ?? PHASES[0]
+  );
+  const activePhaseNumber = $derived.by(
+    () => Math.max(1, PHASES.findIndex((phase) => phase.id === activePhase) + 1)
+  );
+  const systemStatus = $derived.by(() => {
+    if (preflightBlockerList.length > 0) {
+      return {
+        tone: 'blocked' as PhaseSignal,
+        eyebrow: 'Launch blocked',
+        title: `${preflightBlockerList.length} blocker${preflightBlockerList.length === 1 ? '' : 's'} must be resolved before this run can continue.`,
+        detail: preflightBlockerList[0],
+        ctaLabel: 'Review checks',
+        ctaHref: null as string | null,
+        ctaAction: 'preflight' as const
+      };
+    }
+
+    if (missingStageCount > 0) {
+      return {
+        tone: 'attention' as PhaseSignal,
+        eyebrow: 'Route coverage',
+        title: `${missingStageCount} stage${missingStageCount === 1 ? '' : 's'} still need dedicated routing.`,
+        detail:
+          providerHealthEntries.length === 0
+            ? 'Provider visibility is also weak for this project, so launch guidance is incomplete.'
+            : 'Automatic fallback can still run, but the staged plan is not yet fully bound.',
+        ctaLabel: 'Open routing studio',
+        ctaHref: '/admin/ingestion-routing',
+        ctaAction: null as 'preflight' | null
+      };
+    }
+
+    if (providerHealthEntries.length === 0) {
+      return {
+        tone: 'attention' as PhaseSignal,
+        eyebrow: 'Weak signal',
+        title: 'Provider health is not visible for this project.',
+        detail: 'Routing can still exist, but reliability guidance is weaker than it should be until bindings are visible.',
+        ctaLabel: 'Review checks',
+        ctaHref: null as string | null,
+        ctaAction: 'preflight' as const
+      };
+    }
+
+    return {
+      tone: 'passed' as PhaseSignal,
+      eyebrow: 'System',
+      title: 'The operator surface is clear enough to walk the run from source to review.',
+      detail: 'Routes, provider visibility, and staged checks are available.',
+      ctaLabel: 'Review pipeline',
+      ctaHref: null as string | null,
+      ctaAction: 'pipeline' as const
+    };
+  });
+  const stickyAction = $derived.by(() => {
+    switch (activePhase) {
+      case 'prepare':
+        return {
+          label: 'Continue to review checks',
+          note: `Step ${activePhaseNumber} of ${PHASES.length} · ${prepareReady ? 'Source configured' : 'Source still needs attention'}`,
+          disabled: !prepareReady,
+          secondaryLabel: advancedMode ? 'Hide raw payload' : 'Open raw payload',
+          secondaryAction: 'payload' as const
+        };
+      case 'preflight':
+        return {
+          label: 'Continue to review pipeline',
+          note: `Step ${activePhaseNumber} of ${PHASES.length} · ${preflightBlockerList.length === 0 ? 'Checks reviewed' : 'Fix blockers before launch'}`,
+          disabled: !prepareReady,
+          secondaryLabel: 'Back to source',
+          secondaryAction: 'prepare' as const
+        };
+      case 'pipeline':
+        return {
+          label: 'Continue to route preview',
+          note: `Step ${activePhaseNumber} of ${PHASES.length} · ${missingStageCount > 0 ? `${missingStageCount} stage${missingStageCount === 1 ? '' : 's'} still unrouted` : 'Pipeline inspected'}`,
+          disabled: false,
+          secondaryLabel: 'Open routing studio',
+          secondaryAction: 'routing' as const
+        };
+      case 'simulate':
+        return {
+          label: 'Continue to launch',
+          note: `Step ${activePhaseNumber} of ${PHASES.length} · ${simulationState === 'ready' ? 'Preview complete' : 'Run preview before launch if you need cost or route evidence'}`,
+          disabled: false,
+          secondaryLabel: 'Back to pipeline',
+          secondaryAction: 'pipeline' as const
+        };
+      case 'run':
+        return {
+          label: requestState === 'submitting' ? 'Queueing…' : activeProfile.launchLabel,
+          note: `Step ${activePhaseNumber} of ${PHASES.length} · ${canLaunch ? 'Ready to queue' : 'Confirm the launch checklist before queueing'}`,
+          disabled: !canLaunch,
+          secondaryLabel: 'Back to preview',
+          secondaryAction: 'simulate' as const
+        };
+      default:
+        return {
+          label: activeOperation ? 'Review pipeline again' : 'Start a new run',
+          note: `Step ${activePhaseNumber} of ${PHASES.length} · ${activeOperation ? 'Review complete' : 'No run selected yet'}`,
+          disabled: false,
+          secondaryLabel: activeOperation ? 'Retry selected run' : 'Back to source',
+          secondaryAction: activeOperation ? 'retry' as const : 'prepare' as const
+        };
+    }
   });
 
   function phaseSignal(id: WorkbenchPhaseId): PhaseSignal {
@@ -902,6 +1061,45 @@
     if (next) activePhase = next;
   }
 
+  async function handlePrimaryPhaseAction(): Promise<void> {
+    if (activePhase === 'run') {
+      await submitOperation();
+      return;
+    }
+
+    if (activePhase === 'review') {
+      activePhase = activeOperation ? 'pipeline' : 'prepare';
+      return;
+    }
+
+    advancePhase();
+  }
+
+  async function handleSecondaryPhaseAction(): Promise<void> {
+    switch (stickyAction.secondaryAction) {
+      case 'payload':
+        advancedMode = !advancedMode;
+        return;
+      case 'prepare':
+        activePhase = 'prepare';
+        return;
+      case 'pipeline':
+        activePhase = 'pipeline';
+        return;
+      case 'simulate':
+        activePhase = 'simulate';
+        return;
+      case 'routing':
+        await goto('/admin/ingestion-routing');
+        return;
+      case 'retry':
+        if (activeOperation) {
+          await triggerOperationAction(activeOperation.id, 'retry');
+        }
+        return;
+    }
+  }
+
   async function requestRecommendation(actionType: string): Promise<void> {
     recommendationState = 'requesting';
     recommendationMessage = '';
@@ -929,8 +1127,21 @@
         })
       });
 
-      if (body?.support?.reason) {
-        recommendationMessage = body.support.reason;
+      const recommendedAction =
+        body?.recommendation?.recommendedAction ??
+        body?.recommendation?.reason ??
+        body?.data?.recommendations?.[0]?.recommendedAction ??
+        body?.data?.recommendations?.[0]?.reason ??
+        body?.support?.reason;
+
+      const estimatedImpact =
+        body?.recommendation?.estimatedImpact ??
+        body?.data?.recommendations?.[0]?.estimatedImpact;
+
+      if (recommendedAction) {
+        recommendationMessage = estimatedImpact
+          ? `${recommendedAction} ${estimatedImpact}`
+          : String(recommendedAction);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Recommendation request failed';
@@ -1160,6 +1371,12 @@
     }
   });
 
+  $effect(() => {
+    if (activePhase !== 'run' && launchConfirmed) {
+      launchConfirmed = false;
+    }
+  });
+
   onMount(() => {
     if (!browser) return;
     try {
@@ -1218,58 +1435,49 @@
   });
 </script>
 
-<div class="min-h-screen bg-sophia-dark-bg text-sophia-dark-text">
-  <div class="mx-auto max-w-[94rem] px-6 py-8 space-y-8">
-    <section class="workbench-hero rounded border border-sophia-dark-border bg-sophia-dark-surface p-6 md:p-8">
-      <div class="grid gap-8 xl:grid-cols-[minmax(0,1.25fr)_22rem] xl:items-center">
-        <div class="space-y-5">
+<div class="admin-workbench min-h-screen bg-sophia-dark-bg text-sophia-dark-text">
+  <div class="mx-auto max-w-[100rem] px-5 py-8 space-y-8 md:px-6">
+    <section class="workbench-hero rounded border border-sophia-dark-border bg-sophia-dark-surface p-5 md:p-8">
+      <div class="hero-grid grid gap-6">
+        <div class="space-y-4">
           <div class="flex flex-wrap items-center gap-3">
-            <span class="rounded-full border border-sophia-dark-blue/35 bg-sophia-dark-blue/10 px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-blue">
+            <span class="rounded-full border border-sophia-dark-purple/35 bg-sophia-dark-purple/10 px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-purple">
               Admin Ingestion Workbench
             </span>
-            <span class="rounded-full border border-sophia-dark-border bg-sophia-dark-surface-raised/70 px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">
-              Guided operator flow
+            <span class={`rounded-full border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.16em] ${statusTone(systemStatus.tone)}`}>
+              {systemStatus.eyebrow}
             </span>
           </div>
 
           <div>
-            <h1 class="text-4xl font-serif leading-tight text-sophia-dark-text md:text-[3.35rem]">
-              Configure, check, preview, run, and review from one clear flow.
+            <h1 class="max-w-3xl text-[2.25rem] font-serif leading-[1.04] text-sophia-dark-text md:text-[2.85rem]">
+              Six steps from source to knowledge. The pipeline is yours to command.
             </h1>
-            <p class="mt-3 max-w-3xl text-base leading-7 text-sophia-dark-muted md:text-lg">
-              This workbench leads the operator through the ingestion journey in six steps. Start with the source,
-              review checks, confirm the stage pipeline, preview the route, then launch only when the signal is clear.
+            <p class="mt-3 max-w-2xl text-[0.96rem] leading-7 text-sophia-dark-muted md:text-[1.02rem]">
+              Start here, configure the run, inspect the route, and only queue the ingest when the checks and stage signals say it is safe to proceed.
             </p>
           </div>
 
-          <div class="grid gap-3 md:grid-cols-3">
-            <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-              <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">What you do here</div>
-              <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
-                Set up the source, inspect the routing plan, and decide when the run is safe to launch.
-              </p>
-            </div>
-            <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-              <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">What Sophia checks</div>
-              <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
-                Route coverage, provider visibility, and simulation stay in view without taking over the page.
-              </p>
-            </div>
-            <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-              <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Advanced control</div>
-              <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
-                Raw payload editing and route policy detail remain available when you need expert-level control.
-              </p>
-            </div>
+          <div class="flex flex-col gap-3 md:flex-row md:items-center">
+            <button
+              type="button"
+              onclick={() => (activePhase = 'prepare')}
+              class="rounded border border-sophia-dark-purple/45 bg-sophia-dark-purple/16 px-5 py-3 font-mono text-sm text-sophia-dark-text shadow-[0_0_0_1px_rgba(156,132,216,0.18)] hover:bg-sophia-dark-purple/24"
+            >
+              Configure your ingestion run →
+            </button>
+            <p class="max-w-2xl text-sm leading-6 text-sophia-dark-muted">
+              Use the left rail to move through the ritual sequence. Raw payload editing stays available when you need expert control.
+            </p>
           </div>
         </div>
 
-        <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/80 p-5">
+        <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/82 p-4 md:p-5">
           <div class="flex items-start justify-between gap-4">
             <div>
               <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Phase signal</div>
               <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
-                The triangle marks where you are in the workflow: setup, route review, then launch and confirmation.
+                The triangle tracks setup, route judgment, launch, and review without pushing raw infrastructure into the primary flow.
               </p>
             </div>
             <DialecticalTriangle
@@ -1282,18 +1490,20 @@
             />
           </div>
 
-          <div class="mt-5 space-y-3">
+          <div class="mt-5 grid gap-3">
             <div class="flex items-center justify-between rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/50 px-3 py-2">
               <span class="font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-dim">Current focus</span>
-              <span class="font-mono text-sm text-sophia-dark-text">{PHASES.find((phase) => phase.id === activePhase)?.title}</span>
+              <span class="font-mono text-sm text-sophia-dark-text">{activePhaseMeta.title}</span>
             </div>
             <div class="flex items-center justify-between rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/50 px-3 py-2">
-              <span class="font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-dim">Primary action</span>
-              <span class="font-mono text-sm text-sophia-dark-text">{activeProfile.launchLabel}</span>
+              <span class="font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-dim">Run queue</span>
+              <span class="font-mono text-sm text-sophia-dark-text">{operations.length} visible</span>
             </div>
             <div class="flex items-center justify-between rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/50 px-3 py-2">
-              <span class="font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-dim">Live records</span>
-              <span class="font-mono text-sm text-sophia-dark-text">{operations.length}</span>
+              <span class="font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-dim">System</span>
+              <span class={`rounded-full border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] ${statusTone(systemStatus.tone)}`}>
+                {phaseSignalLabel(systemStatus.tone)}
+              </span>
             </div>
           </div>
         </div>
@@ -1326,72 +1536,107 @@
     {/if}
 
     {#if pageState === 'ready'}
-      <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5">
-        <div class="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
-          <div class={`rounded border px-4 py-4 ${statusTone(dominantSignal.tone)}`}>
-            <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em]">Current signal</div>
-            <h2 class="mt-2 text-2xl font-serif text-sophia-dark-text">{dominantSignal.title}</h2>
-            <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{dominantSignal.detail}</p>
-            {#if dominantSignal.tone !== 'passed'}
-              <div class="mt-4 flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onclick={() => (activePhase = 'preflight')}
-                  class="rounded border border-sophia-dark-copper/35 bg-sophia-dark-surface px-3 py-2 font-mono text-xs text-sophia-dark-text hover:bg-sophia-dark-surface-raised"
-                >
-                  Review checks
-                </button>
-                <a
-                  href="/admin/ingestion-routing"
-                  class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-xs text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
-                >
-                  Open routing studio
-                </a>
-              </div>
-            {/if}
+      <section class={`system-status-bar rounded border px-4 py-3 ${statusTone(systemStatus.tone)}`}>
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em]">{systemStatus.eyebrow}</div>
+            <div class="mt-1 text-base font-semibold text-sophia-dark-text">{systemStatus.title}</div>
+            <p class="mt-1 text-sm leading-6 text-sophia-dark-muted">{systemStatus.detail}</p>
           </div>
-
-          <div class="grid gap-3 sm:grid-cols-2">
-            {#each criticalSignals as signal}
-              <div class={`rounded border px-4 py-4 ${statusTone(signal.tone)}`}>
-                <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em]">{signal.label}</div>
-                <div class="mt-2 font-mono text-xl text-sophia-dark-text">{signal.value}</div>
-                <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{signal.detail}</p>
-              </div>
-            {/each}
+          <div class="flex shrink-0 items-center gap-3">
+            {#if systemStatus.ctaHref}
+              <a
+                href={systemStatus.ctaHref}
+                class="rounded border border-current/25 bg-sophia-dark-surface px-4 py-2 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-text hover:bg-sophia-dark-surface-raised"
+              >
+                {systemStatus.ctaLabel} →
+              </a>
+            {:else if systemStatus.ctaAction}
+              <button
+                type="button"
+                onclick={() => (activePhase = systemStatus.ctaAction === 'pipeline' ? 'pipeline' : 'preflight')}
+                class="rounded border border-current/25 bg-sophia-dark-surface px-4 py-2 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-text hover:bg-sophia-dark-surface-raised"
+              >
+                {systemStatus.ctaLabel} →
+              </button>
+            {/if}
           </div>
         </div>
       </section>
 
-      <nav class="phase-rail rounded border border-sophia-dark-border bg-sophia-dark-surface px-4 py-4" aria-label="Ingestion walkthrough phases">
-        <div class="grid gap-3 lg:grid-cols-6">
-          {#each PHASES as phase}
-            <button
-              type="button"
-              class="phase-step rounded border px-4 py-4 text-left transition-colors"
-              class:is-active={phase.id === activePhase}
-              class:is-passed={phaseSignal(phase.id) === 'passed'}
-              class:is-attention={phaseSignal(phase.id) === 'attention'}
-              class:is-blocked={phaseSignal(phase.id) === 'blocked'}
-              class:is-locked={phaseSignal(phase.id) === 'not_started'}
-              onclick={() => (activePhase = phase.id)}
-            >
-              <div class="flex items-start justify-between gap-3">
-                <div>
-                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">{phase.cue}</div>
-                  <div class="mt-2 font-serif text-2xl leading-none text-sophia-dark-text">{phase.title}</div>
+      <div class="workbench-layout grid gap-6">
+        <nav class="phase-rail rounded border border-sophia-dark-border bg-sophia-dark-surface px-4 py-5" aria-label="Ingestion walkthrough phases">
+          <div class="phase-rail-steps space-y-3">
+            {#each PHASES as phase, index}
+              <button
+                type="button"
+                class="phase-step phase-step-rail rounded border px-4 py-4 text-left transition-colors"
+                class:is-active={phase.id === activePhase}
+                class:is-passed={phaseSignal(phase.id) === 'passed'}
+                class:is-attention={phaseSignal(phase.id) === 'attention'}
+                class:is-blocked={phaseSignal(phase.id) === 'blocked'}
+                class:is-locked={phaseSignal(phase.id) === 'not_started'}
+                onclick={() => (activePhase = phase.id)}
+              >
+                <div class="phase-step-connector" aria-hidden="true">
+                  <span class="phase-step-node">{index + 1}</span>
                 </div>
-                <span class={`rounded-full border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] ${statusTone(phaseSignal(phase.id))}`}>
-                  {phaseSignalLabel(phaseSignal(phase.id))}
-                </span>
-              </div>
-              <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">{phase.summary}</p>
-            </button>
-          {/each}
-        </div>
-      </nav>
+                <div class="ml-12">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                      <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">{phase.cue}</div>
+                      <div class="phase-step-title mt-2 font-serif leading-none text-sophia-dark-text">{phase.title}</div>
+                    </div>
+                  </div>
+                  <p class="phase-step-summary mt-2 hidden text-sm leading-6 text-sophia-dark-muted">{phase.summary}</p>
+                  <div class="mt-3">
+                    <span class={`rounded-full border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] ${statusTone(phaseSignal(phase.id))}`}>
+                      {phaseSignalLabel(phaseSignal(phase.id))}
+                    </span>
+                  </div>
+                </div>
+              </button>
+            {/each}
+          </div>
 
-      <div class="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_23rem]">
+          <div class="mt-5 rounded border border-sophia-dark-border bg-sophia-dark-bg/76 p-4">
+            <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Signal panel</div>
+            <div class="mt-4 space-y-3">
+              <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 px-3 py-3">
+                <div class="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Route</div>
+                <div class="mt-2 font-mono text-sm text-sophia-dark-text">{ingestProvider === 'auto' ? 'Automatic' : `${ingestProvider} override`}</div>
+              </div>
+              <div class={`rounded border px-3 py-3 ${statusTone(routeCoverageSummary.tone)}`}>
+                <div class="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Route coverage</div>
+                <div class="mt-2 flex flex-wrap items-center gap-2">
+                  <span class="rounded-full border border-sophia-dark-sage/35 bg-sophia-dark-sage/8 px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-sage">
+                    {dedicatedRouteCount} dedicated
+                  </span>
+                  <span class="rounded-full border border-sophia-dark-blue/35 bg-sophia-dark-blue/8 px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-blue">
+                    {sharedFallbackCount} shared
+                  </span>
+                  <span class={`rounded-full border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] ${missingStageCount > 0 ? 'text-sophia-dark-coral border-sophia-dark-coral/35 bg-sophia-dark-coral/8' : 'text-sophia-dark-dim border-sophia-dark-border bg-sophia-dark-surface-raised/30'}`}>
+                    {missingStageCount} missing
+                  </span>
+                </div>
+                <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                  {routeCoverageSummary.detail}
+                </p>
+              </div>
+              <div class={`rounded border px-3 py-3 ${providerHealthEntries.length === 0 ? 'border-sophia-dark-amber/35 bg-sophia-dark-amber/10' : 'border-sophia-dark-blue/35 bg-sophia-dark-blue/10'}`}>
+                <div class="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Health</div>
+                <div class="mt-2 font-mono text-sm text-sophia-dark-text">{providerHealthEntries.length === 0 ? 'Weak signal' : `${providerHealthSummary.healthy}/${providerHealthSummary.total} healthy`}</div>
+              </div>
+            </div>
+            <a
+              href="/admin/ingestion-routing"
+              class="mt-4 inline-flex rounded border border-sophia-dark-border px-3 py-2 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+            >
+              → Routing Studio
+            </a>
+          </div>
+        </nav>
+
         <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5 md:p-6">
           {#if activePhase === 'prepare'}
             <div class="space-y-6">
@@ -1399,12 +1644,12 @@
                 <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Phase 1</div>
                 <h2 class="mt-2 text-3xl font-serif text-sophia-dark-text">Configure the source and confirm the basics.</h2>
                 <p class="mt-3 max-w-3xl text-base leading-7 text-sophia-dark-muted">
-                  Start with the source, then choose the execution settings. The aim of this step is to make the run clear before you move on.
+                  Choose the source, confirm the run type, and set the execution defaults. This step should answer one question only: is the run clearly defined?
                 </p>
               </div>
 
-              <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+              <div class="workbench-split workbench-split-xl grid gap-5">
+                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/72 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
                   <div class="flex items-center justify-between gap-3">
                     <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Operation selection</div>
                     <span class="rounded-full border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
@@ -1424,25 +1669,25 @@
                     </select>
                   </label>
 
-                  <div class="mt-4 rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/40 p-4">
+                  <div class="mt-5 rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/40 p-4">
                     <div class="font-serif text-2xl text-sophia-dark-text">{activeProfile.title}</div>
                     <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{activeProfile.summary}</p>
                     <p class="mt-3 font-mono text-xs leading-6 text-sophia-dark-dim">{activeProfile.routeHint}</p>
                   </div>
                 </div>
 
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/72 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
                   <div class="flex items-center justify-between gap-3">
                     <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Source selection</div>
                     <span class="rounded-full border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
                       Required
                     </span>
                   </div>
-                  <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">Choose one source mode, then complete the fields for that mode.</p>
+                  <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">Choose one source mode, then complete only the fields that belong to that path.</p>
                   <div class="mt-4 inline-flex rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 p-1">
                     <button
                       type="button"
-                      class={`rounded px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] ${sourceMode === 'url' ? 'bg-sophia-dark-blue/15 text-sophia-dark-blue shadow-[inset_0_0_0_1px_rgba(122,167,190,0.35)]' : 'text-sophia-dark-muted'}`}
+                      class={`rounded px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] ${sourceMode === 'url' ? 'bg-sophia-dark-purple/16 text-sophia-dark-text shadow-[inset_0_0_0_1px_rgba(156,132,216,0.35)]' : 'text-sophia-dark-muted'}`}
                       onclick={() => (sourceMode = 'url')}
                       aria-pressed={sourceMode === 'url'}
                     >
@@ -1450,7 +1695,7 @@
                     </button>
                     <button
                       type="button"
-                      class={`rounded px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] ${sourceMode === 'file' ? 'bg-sophia-dark-blue/15 text-sophia-dark-blue shadow-[inset_0_0_0_1px_rgba(122,167,190,0.35)]' : 'text-sophia-dark-muted'}`}
+                      class={`rounded px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] ${sourceMode === 'file' ? 'bg-sophia-dark-purple/16 text-sophia-dark-text shadow-[inset_0_0_0_1px_rgba(156,132,216,0.35)]' : 'text-sophia-dark-muted'}`}
                       onclick={() => (sourceMode = 'file')}
                       aria-pressed={sourceMode === 'file'}
                     >
@@ -1508,9 +1753,9 @@
                 </div>
               </div>
 
-              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/72 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
                 <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Execution options</div>
-                <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">These settings control validation, dry runs, and any temporary routing overrides.</p>
+                <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">These settings control validation, run safety, and any temporary routing override.</p>
 
                 <div class="mt-4 grid gap-4 lg:grid-cols-4">
                   <label class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/20 p-4">
@@ -1552,7 +1797,7 @@
                 </div>
               </div>
 
-              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/72 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
                 <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Operator note</div>
                 <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">Leave a short note if someone else may inspect or continue this run later.</p>
                 <label class="mt-4 block space-y-2">
@@ -1565,30 +1810,6 @@
                   ></textarea>
                 </label>
               </div>
-
-              <div class="flex flex-wrap items-center justify-between gap-3 rounded border border-sophia-dark-border bg-sophia-dark-bg/70 px-4 py-3">
-                <div>
-                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Next step</div>
-                  <p class="mt-1 text-sm text-sophia-dark-muted">Move into review checks once the source and settings are clear.</p>
-                </div>
-                <div class="flex gap-3">
-                  <button
-                    type="button"
-                    onclick={advancePhase}
-                    disabled={!prepareReady}
-                    class="rounded border border-sophia-dark-blue/45 bg-sophia-dark-blue/12 px-5 py-2.5 font-mono text-sm text-sophia-dark-blue hover:bg-sophia-dark-blue/20 disabled:opacity-50"
-                  >
-                    Continue to review checks
-                  </button>
-                  <button
-                    type="button"
-                    onclick={() => (advancedMode = !advancedMode)}
-                    class="rounded border border-sophia-dark-border px-4 py-2 font-mono text-sm text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
-                  >
-                    {advancedMode ? 'Hide raw payload' : 'Open raw payload'}
-                  </button>
-                </div>
-              </div>
             </div>
           {:else if activePhase === 'preflight'}
             <div class="space-y-6">
@@ -1600,7 +1821,7 @@
                 </p>
               </div>
 
-              <div class="grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+              <div class="workbench-split workbench-split-lg grid gap-4">
                 <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
                   <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Blocking issues</div>
                   <div class="mt-4 space-y-3">
@@ -1702,6 +1923,28 @@
                 <p class="mt-3 max-w-3xl text-base leading-7 text-sophia-dark-muted">
                   Each stage shows whether it has a dedicated route, is borrowing a shared route, or still needs explicit routing. Select a stage to inspect the active and fallback steps.
                 </p>
+              </div>
+
+              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/72 p-4">
+                <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Stage procession</div>
+                <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+                  {#each stageDescriptors as descriptor, index}
+                    <button
+                      type="button"
+                      onclick={() => (selectedStage = descriptor.stage)}
+                      class={`rounded border px-3 py-3 text-left transition-colors ${descriptor.stage === selectedStage ? 'border-sophia-dark-purple/45 bg-sophia-dark-purple/10' : 'border-sophia-dark-border bg-sophia-dark-surface-raised/20 hover:bg-sophia-dark-surface-raised/30'}`}
+                    >
+                      <div class="flex items-center justify-between gap-2">
+                        <span class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">{index + 1}</span>
+                        <span class={`rounded-full border px-2 py-1 font-mono text-[0.62rem] uppercase tracking-[0.12em] ${routeModeTone(descriptor.mode)}`}>
+                          {descriptor.mode === 'missing' ? 'Unrouted' : descriptor.mode}
+                        </span>
+                      </div>
+                      <div class="mt-3 font-serif text-xl text-sophia-dark-text">{descriptor.title}</div>
+                      <p class="mt-2 text-xs leading-5 text-sophia-dark-muted">{descriptor.summary}</p>
+                    </button>
+                  {/each}
+                </div>
               </div>
 
               <div class="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
@@ -1839,7 +2082,7 @@
                 </p>
               </div>
 
-              <div class="grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+              <div class="workbench-split workbench-split-lg grid gap-4">
                 <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4 space-y-4">
                   <div>
                     <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Preview focus</div>
@@ -1951,63 +2194,121 @@
             <div class="space-y-6">
               <div>
                 <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Phase 5</div>
-                <h2 class="mt-2 text-3xl font-serif text-sophia-dark-text">Queue the job when the surface and subfloor both look right.</h2>
+                <h2 class="mt-2 text-3xl font-serif text-sophia-dark-text">Launch the run only when the source, route, and warnings all read cleanly.</h2>
                 <p class="mt-3 max-w-3xl text-base leading-7 text-sophia-dark-muted">
-                  You now have the source, the preflight result, the stage coverage, and the route preview. Launch only when the route is legible enough for the user who follows you.
+                  This is the final operator checkpoint. Make the route legible, make the risks explicit, then commit the run in one deliberate action.
                 </p>
               </div>
 
-              <div class="grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4 space-y-4">
-                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Launch verdict</div>
-                  <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 p-4">
+              <div class="launch-layout grid gap-5">
+                <div class="launch-chamber rounded border border-sophia-dark-border bg-sophia-dark-bg/72 p-5 md:p-6">
+                  <div class="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Launch verdict</div>
+                      <h3 class="mt-2 text-[2rem] font-serif leading-none text-sophia-dark-text">
+                        {canLaunch ? 'Ready to queue this ingestion run.' : 'One final confirmation is still required.'}
+                      </h3>
+                    </div>
                     <div class={`inline-flex rounded-full border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.14em] ${statusTone(phaseSignal('run'))}`}>
                       {phaseSignalLabel(phaseSignal('run'))}
                     </div>
-                    <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">
-                      {prepareReady
-                        ? 'The payload is structurally valid. Launch now or return to an earlier phase to refine the route.'
-                        : 'Resolve the blockers above before queueing this operation.'}
-                    </p>
                   </div>
 
-                  <div class="grid gap-3 md:grid-cols-2">
-                    <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 p-4">
-                      <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Primary route stance</div>
+                  <p class="mt-4 max-w-3xl text-sm leading-6 text-sophia-dark-muted">
+                    {prepareReady
+                      ? 'The payload is valid, the route is visible, and the run can proceed once you confirm the checklist below.'
+                      : 'Resolve the blockers above before queueing this operation.'}
+                  </p>
+
+                  <div class="launch-summary-grid mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-2">
+                    <div class="launch-summary-card rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/32 p-4">
+                      <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Source</div>
+                      <div class="mt-2 text-sm leading-6 text-sophia-dark-text break-all">
+                        {sourceMode === 'url' ? sourceUrl || 'Source URL required' : sourceFile || 'Source file required'}
+                      </div>
+                    </div>
+                    <div class="launch-summary-card rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/32 p-4">
+                      <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Route stance</div>
                       <div class="mt-2 font-mono text-sm text-sophia-dark-text">
                         {ingestProvider === 'auto' ? 'Automatic routing' : `${ingestProvider} override`}
                       </div>
+                      <p class="mt-2 text-xs leading-5 text-sophia-dark-muted">{routingAdvisory.routeFocus}</p>
                     </div>
-                    <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 p-4">
-                      <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Validation mode</div>
+                    <div class="launch-summary-card rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/32 p-4">
+                      <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Coverage</div>
+                      <div class="mt-2 font-mono text-sm text-sophia-dark-text">{routeCoverageSummary.label}</div>
+                      <p class="mt-2 text-xs leading-5 text-sophia-dark-muted">{routeCoverageSummary.detail}</p>
+                    </div>
+                    <div class="launch-summary-card rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/32 p-4">
+                      <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Preview</div>
                       <div class="mt-2 font-mono text-sm text-sophia-dark-text">
-                        {validateRun ? 'Validate after ingest' : 'Skip validation'}
+                        {simulationResult
+                          ? `${String(simulationResult.providerType ?? 'provider')} / ${String(simulationResult.modelId ?? 'model')}`
+                          : 'Preview not yet run'}
                       </div>
+                      <p class="mt-2 text-xs leading-5 text-sophia-dark-muted">
+                        {simulationResult
+                          ? `Estimated cost ${String(simulationResult.estimatedCostUsd ?? '—')} · ${((simulationResult.fallbackCandidates as Array<unknown> | undefined) ?? []).length} fallback candidate(s).`
+                          : 'Run preview first if you want route and pricing evidence before launch.'}
+                      </p>
                     </div>
                   </div>
 
-                  <div class="flex flex-wrap gap-3">
+                  <div class={`mt-5 rounded border px-4 py-4 ${statusTone(systemStatus.tone)}`}>
+                    <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em]">Launch notes</div>
+                    <p class="mt-2 text-sm leading-6 text-sophia-dark-text">{systemStatus.title}</p>
+                    <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{systemStatus.detail}</p>
+                  </div>
+
+                  <label class="mt-5 flex items-start gap-3 rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/28 px-4 py-4">
+                    <input
+                      bind:checked={launchConfirmed}
+                      type="checkbox"
+                      class="mt-1 h-4 w-4 rounded border-sophia-dark-border bg-sophia-dark-bg text-sophia-dark-purple focus:ring-sophia-dark-purple"
+                    />
+                    <span>
+                      <span class="font-mono text-[0.72rem] uppercase tracking-[0.14em] text-sophia-dark-text">
+                        Launch confirmation
+                      </span>
+                      <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                        I have reviewed the checks, route coverage, and current warning signals, and I am ready to queue this run.
+                      </p>
+                    </span>
+                  </label>
+
+                  <div class="launch-action-row mt-5 flex flex-wrap gap-3">
                     <button
                       type="button"
                       onclick={submitOperation}
                       disabled={!canLaunch}
-                      class="rounded border border-sophia-dark-blue/40 px-4 py-2 font-mono text-sm text-sophia-dark-blue hover:bg-sophia-dark-blue/10 disabled:opacity-50"
+                      class="launch-primary-button rounded border border-sophia-dark-purple/45 bg-sophia-dark-purple/16 px-5 py-3 font-mono text-sm text-sophia-dark-text shadow-[inset_0_0_0_1px_rgba(156,132,216,0.18)] hover:bg-sophia-dark-purple/24 disabled:opacity-50"
                     >
                       {requestState === 'submitting' ? 'Queueing…' : activeProfile.launchLabel}
                     </button>
                     <button
                       type="button"
                       onclick={() => (activePhase = 'simulate')}
-                      class="rounded border border-sophia-dark-border px-4 py-2 font-mono text-sm text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+                      class="rounded border border-sophia-dark-border px-4 py-3 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
                     >
-                      Back to simulate
+                      Back to preview
                     </button>
                   </div>
                 </div>
 
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Operation payload</div>
-                  <pre class="mt-4 max-h-[22rem] overflow-auto whitespace-pre-wrap break-words rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 p-4 font-mono text-xs text-sophia-dark-text">{payloadText}</pre>
+                <div class="space-y-4">
+                  <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                    <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Operation payload</div>
+                    <pre class="mt-4 max-h-[21rem] overflow-auto whitespace-pre-wrap break-words rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 p-4 font-mono text-xs text-sophia-dark-text">{payloadText}</pre>
+                  </div>
+
+                  <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                    <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Launch checklist</div>
+                    <ul class="mt-3 space-y-2 text-sm leading-6 text-sophia-dark-muted">
+                      <li>Source path is defined and payload JSON is valid.</li>
+                      <li>Routing stance is intentional: automatic by default, manual only for a deliberate test.</li>
+                      <li>Warnings about provider visibility or shared coverage are understood before queueing.</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2051,15 +2352,41 @@
                   </div>
                 </div>
 
-                <div class="grid gap-6 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+                <div class="review-layout grid gap-6">
                   <div class="space-y-4">
                     <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
                       <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Outcome summary</div>
                       <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">{activeOperation.result_summary ?? 'Job is still in progress.'}</p>
-                      {#if activeOperation.last_error}
+                      {#if activeOperation.last_error && activeOperation.last_error !== activeOperation.result_summary}
                         <p class="mt-3 font-mono text-xs text-sophia-dark-copper">{activeOperation.last_error}</p>
                       {/if}
                     </div>
+
+                    {#if activeOperation.route_decision}
+                      <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                        <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Route decision</div>
+                        <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                          <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/20 px-3 py-3">
+                            <div class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Route</div>
+                            <div class="mt-2 font-mono text-sm text-sophia-dark-text">{activeOperation.route_decision.routeName ?? '—'}</div>
+                          </div>
+                          <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/20 px-3 py-3">
+                            <div class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Model</div>
+                            <div class="mt-2 font-mono text-sm text-sophia-dark-text">
+                              {activeOperation.route_decision.providerType ?? 'provider'} / {activeOperation.route_decision.modelId ?? 'model'}
+                            </div>
+                          </div>
+                          <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/20 px-3 py-3">
+                            <div class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Switch reason</div>
+                            <div class="mt-2 font-mono text-sm text-sophia-dark-text">{activeOperation.route_decision.switchReasonCode ?? '—'}</div>
+                          </div>
+                          <div class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/20 px-3 py-3">
+                            <div class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Estimated cost</div>
+                            <div class="mt-2 font-mono text-sm text-sophia-dark-text">{activeOperation.route_decision.estimatedCostUsd ?? '—'}</div>
+                          </div>
+                        </div>
+                      </div>
+                    {/if}
 
                     <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
                       <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Run details</div>
@@ -2067,7 +2394,7 @@
                         <div class="flex justify-between gap-4"><dt>Action</dt><dd>{activeOperation.requested_action}</dd></div>
                         <div class="flex justify-between gap-4"><dt>Tool</dt><dd>{activeOperation.restormel_tool ?? 'adapter'}</dd></div>
                         <div class="flex justify-between gap-4"><dt>Hosted Run</dt><dd>{activeOperation.hosted_run_id ?? '—'}</dd></div>
-                        <div class="flex justify-between gap-4"><dt>Attempts</dt><dd>{activeOperation.attempts}</dd></div>
+                        <div class="flex justify-between gap-4"><dt>Attempts</dt><dd>{activeOperation.attempts ?? '—'}</dd></div>
                         <div class="flex justify-between gap-4"><dt>Created</dt><dd>{formatDate(activeOperation.created_at)}</dd></div>
                         <div class="flex justify-between gap-4"><dt>Started</dt><dd>{formatDate(activeOperation.started_at)}</dd></div>
                         <div class="flex justify-between gap-4"><dt>Completed</dt><dd>{formatDate(activeOperation.completed_at)}</dd></div>
@@ -2115,7 +2442,7 @@
                         {activeOperation.status}
                       </span>
                     </div>
-                    <pre class="mt-4 min-h-[24rem] overflow-auto whitespace-pre-wrap break-words rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 p-4 font-mono text-xs text-sophia-dark-text">{activeOperation.log_text || 'No logs captured yet.'}</pre>
+                    <pre class="mt-4 min-h-[24rem] overflow-auto whitespace-pre-wrap break-words rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 p-4 font-mono text-xs text-sophia-dark-text">{activeOperationLogText}</pre>
                   </div>
                 </div>
               {:else}
@@ -2123,6 +2450,35 @@
                   Queue or select an operation to review the run from here.
                 </div>
               {/if}
+            </div>
+          {/if}
+
+          {#if activePhase !== 'run'}
+            <div class="sticky-action-bar mt-6 rounded border border-sophia-dark-purple/30 bg-sophia-dark-surface-raised/90 px-4 py-4 shadow-[0_-12px_30px_rgba(0,0,0,0.28)] backdrop-blur">
+              <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Next action</div>
+                  <div class="mt-1 text-base font-semibold text-sophia-dark-text">{stickyAction.label}</div>
+                  <p class="mt-1 text-sm leading-6 text-sophia-dark-muted">{stickyAction.note}</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onclick={() => void handlePrimaryPhaseAction()}
+                    disabled={stickyAction.disabled}
+                    class="rounded border border-sophia-dark-purple/45 bg-sophia-dark-purple/16 px-5 py-3 font-mono text-sm text-sophia-dark-text shadow-[inset_0_0_0_1px_rgba(156,132,216,0.18)] hover:bg-sophia-dark-purple/24 disabled:opacity-50"
+                  >
+                    ✦ {stickyAction.label}
+                  </button>
+                  <button
+                    type="button"
+                    onclick={() => void handleSecondaryPhaseAction()}
+                    class="rounded border border-sophia-dark-border px-4 py-3 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-muted hover:bg-sophia-dark-surface"
+                  >
+                    {stickyAction.secondaryLabel}
+                  </button>
+                </div>
+              </div>
             </div>
           {/if}
 
@@ -2143,17 +2499,46 @@
           </details>
         </section>
 
-        <aside class="space-y-6">
+        <aside class="decision-sidebar space-y-4">
           <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5">
-            <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Status dashboard</div>
-            <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+            <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Needs attention</div>
+            <div class={`mt-4 rounded border px-4 py-4 ${statusTone(systemStatus.tone)}`}>
+              <div class="flex items-center justify-between gap-3">
+                <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em]">{systemStatus.eyebrow}</div>
+                <span class={`rounded-full border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] ${statusTone(systemStatus.tone)}`}>
+                  {phaseSignalLabel(systemStatus.tone)}
+                </span>
+              </div>
+              <p class="mt-3 text-sm leading-6 text-sophia-dark-text">{systemStatus.title}</p>
+              <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{systemStatus.detail}</p>
+              <div class="mt-4 flex flex-wrap gap-3">
+                {#if systemStatus.ctaHref}
+                  <a
+                    href={systemStatus.ctaHref}
+                    class="rounded border border-current/25 bg-sophia-dark-surface px-3 py-2 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-text hover:bg-sophia-dark-surface-raised"
+                  >
+                    {systemStatus.ctaLabel}
+                  </a>
+                {:else if systemStatus.ctaAction}
+                  <button
+                    type="button"
+                    onclick={() => (activePhase = systemStatus.ctaAction === 'pipeline' ? 'pipeline' : 'preflight')}
+                    class="rounded border border-current/25 bg-sophia-dark-surface px-3 py-2 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-text hover:bg-sophia-dark-surface-raised"
+                  >
+                    {systemStatus.ctaLabel}
+                  </button>
+                {/if}
+              </div>
+            </div>
+
+            <div class="mt-4 grid gap-3">
               {#each criticalSignals as signal}
-                <div class={`rounded border px-4 py-4 ${statusTone(signal.tone)}`}>
+                <div class={`rounded border px-4 py-3 ${statusTone(signal.tone)}`}>
                   <div class="flex items-center justify-between gap-3">
                     <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em]">{signal.label}</div>
                     <div class="font-mono text-sm text-sophia-dark-text">{signal.value}</div>
                   </div>
-                  <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{signal.detail}</p>
+                  <p class="mt-2 text-xs leading-5 text-sophia-dark-muted">{signal.detail}</p>
                 </div>
               {/each}
             </div>
@@ -2175,8 +2560,8 @@
                 <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">{selectedStageDescriptor?.summary ?? 'Choose a stage to inspect its route and controls.'}</p>
               </div>
 
-              <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+              <div class="decision-metric-grid grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                <div class="decision-metric-card rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
                   <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Route summary</div>
                   <div class="mt-2 font-mono text-sm text-sophia-dark-text break-all">
                     {selectedStageDescriptor?.route ? selectedStageDescriptor.route.name ?? selectedStageDescriptor.route.id : 'No route bound'}
@@ -2186,13 +2571,13 @@
                   </p>
                 </div>
 
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                <div class="decision-metric-card rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
                   <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Policy summary</div>
                   <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{selectedRoutePolicySummary}</p>
-                  <p class="mt-3 font-mono text-xs text-sophia-dark-dim">{routingAdvisory.policyFocus}</p>
+                  <p class="mt-3 font-mono text-xs text-sophia-dark-muted">{routingAdvisory.policyFocus}</p>
                 </div>
 
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                <div class="decision-metric-card rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
                   <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Estimated cost</div>
                   <div class="mt-2 font-mono text-sm text-sophia-dark-text">
                     {simulationResult?.estimatedCostUsd ?? 'Run preview to price this stage'}
@@ -2204,7 +2589,7 @@
                   </p>
                 </div>
 
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                <div class="decision-metric-card rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
                   <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Provider health</div>
                   <div class="mt-2 font-mono text-sm text-sophia-dark-text">
                     {providerHealthSummary.healthy}/{providerHealthSummary.total || 0} healthy
@@ -2220,7 +2605,7 @@
                   </p>
                 </div>
 
-                <div class={`rounded border px-4 py-4 ${statusTone(selectedRouteSyncState.tone)}`}>
+                <div class={`decision-metric-card rounded border px-4 py-4 ${statusTone(selectedRouteSyncState.tone)}`}>
                   <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em]">Route sync</div>
                   <div class="mt-2 font-mono text-sm text-sophia-dark-text">{selectedRouteSyncState.label}</div>
                   <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{selectedRouteSyncState.detail}</p>
@@ -2234,7 +2619,7 @@
                   {/if}
                 </div>
 
-                <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                <div class="decision-metric-card rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
                   <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">Recent route history</div>
                   {#if selectedRouteHistory.length > 0}
                     <div class="mt-3 space-y-3">
@@ -2264,7 +2649,7 @@
                 <div class={`inline-flex rounded-full border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.14em] ${statusTone(routingAdvisory.tone)}`}>
                   {phaseSignalLabel(routingAdvisory.tone)}
                 </div>
-                <h3 class="mt-3 text-2xl font-serif text-sophia-dark-text">{routingAdvisory.title}</h3>
+                <h3 class="mt-3 text-xl font-serif text-sophia-dark-text">{routingAdvisory.title}</h3>
                 <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">{routingAdvisory.body}</p>
                 <div class="mt-4 flex flex-wrap gap-3">
                   {#if ingestProvider !== 'auto'}
@@ -2285,12 +2670,17 @@
                 </div>
               </div>
 
-              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-                <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">One-click fixes</div>
-                <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
-                  These actions are wired for the future Restormel recommendation API. Once that surface is live, Sophia will be able to request stage-specific route and policy fixes from here.
+              <details class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                <summary class="flex cursor-pointer items-center justify-between gap-3 list-none">
+                  <span class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-dim">One-click fixes</span>
+                  <span class="rounded-full border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
+                    {recommendationSupport.available ? 'Ready' : 'Waiting'}
+                  </span>
+                </summary>
+                <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">
+                  Ask Restormel for a safer, cheaper, or more reliable route adjustment. Sophia will keep the suggestion in the operator flow instead of forcing a context switch.
                 </p>
-                <div class="mt-4 flex flex-wrap gap-3">
+                <div class="mt-4 grid gap-3 sm:grid-cols-2">
                   <button
                     type="button"
                     disabled={!recommendationSupport.available || recommendationState === 'requesting'}
@@ -2340,38 +2730,13 @@
                 {#if recommendationMessage}
                   <p class="mt-2 font-mono text-xs text-sophia-dark-dim">{recommendationMessage}</p>
                 {/if}
-              </div>
+              </details>
             </div>
           </section>
 
-          <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5">
-            <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Provider health</div>
-            <div class="mt-4 space-y-3">
-              {#if providerHealthEntries.length > 0}
-                {#each providerHealthEntries as provider}
-                  <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 px-4 py-3">
-                    <div class="flex items-center justify-between gap-3">
-                      <div class="font-mono text-sm text-sophia-dark-text">{provider.providerType ?? 'provider'}</div>
-                      <span class={`rounded-full border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] ${providerStateTone(provider.status)}`}>
-                        {provider.status ?? 'unknown'}
-                      </span>
-                    </div>
-                    <p class="mt-2 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
-                      {provider.source ?? 'source unavailable'}
-                    </p>
-                  </div>
-                {/each}
-              {:else}
-                <div class="rounded border border-sophia-dark-amber/35 bg-sophia-dark-amber/8 px-4 py-3 text-sm leading-6 text-sophia-dark-amber">
-                  Provider health is not surfacing configured providers for this project yet. Routing can still exist, but reliability guidance is weaker than it should be.
-                </div>
-              {/if}
-            </div>
-          </section>
-
-          <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5">
+          <section class="recent-runs-panel rounded border border-sophia-dark-border bg-sophia-dark-surface p-5">
             <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Recent runs</div>
-            <div class="mt-4 space-y-3 max-h-[28rem] overflow-auto pr-1">
+            <div class="mt-4 space-y-2 max-h-[26rem] overflow-auto pr-1">
               {#each operations as operation}
                 <button
                   type="button"
@@ -2379,21 +2744,21 @@
                     void loadOperation(operation.id);
                     activePhase = 'review';
                   }}
-                  class="w-full rounded border px-4 py-3 text-left transition-colors {selectedId === operation.id ? 'border-sophia-dark-blue/50 bg-sophia-dark-blue/10' : 'border-sophia-dark-border bg-sophia-dark-bg hover:bg-sophia-dark-surface-raised'}"
+                  class="recent-run-card w-full rounded border px-3 py-3 text-left transition-colors {selectedId === operation.id ? 'border-sophia-dark-blue/50 bg-sophia-dark-blue/10' : 'border-sophia-dark-border bg-sophia-dark-bg hover:bg-sophia-dark-surface-raised'}"
                 >
                   <div class="flex items-start justify-between gap-3">
                     <div>
                       <div class="font-mono text-sm text-sophia-dark-text">{operation.requested_action}</div>
-                      <div class="mt-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">{operation.kind}</div>
+                      <div class="mt-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-muted">{operation.kind}</div>
                     </div>
                     <span class={`px-2 py-1 text-[0.68rem] font-mono border rounded uppercase tracking-[0.12em] ${badgeClass(operation.status)}`}>
                       {operation.status}
                     </span>
                   </div>
-                  <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">
+                  <p class="recent-run-summary mt-2 text-sm leading-6 text-sophia-dark-muted">
                     {operation.result_summary ?? operation.last_error ?? 'Open this run to inspect status, logs, and next action.'}
                   </p>
-                  <div class="mt-3 flex items-center justify-between gap-3 font-mono text-xs text-sophia-dark-dim">
+                  <div class="mt-2 flex items-center justify-between gap-3 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
                     <span>{operation.requested_by_uid}</span>
                     <span>{formatDate(operation.created_at)}</span>
                   </div>
@@ -2431,12 +2796,20 @@
 </div>
 
 <style>
+  .admin-workbench :is(p, label, input, select, textarea, summary, li, dt, dd) {
+    font-family: var(--font-ui);
+  }
+
+  .admin-workbench :is(h1, h2, h3, .font-serif) {
+    font-family: var(--font-display);
+  }
+
   .workbench-hero {
     position: relative;
     overflow: hidden;
     background:
-      radial-gradient(820px 360px at 14% 0%, rgba(127, 163, 131, 0.12), transparent 65%),
-      radial-gradient(760px 300px at 84% 0%, rgba(111, 163, 212, 0.12), transparent 70%),
+      radial-gradient(760px 300px at 14% 0%, rgba(127, 163, 131, 0.1), transparent 68%),
+      radial-gradient(720px 260px at 84% 0%, rgba(156, 132, 216, 0.16), transparent 72%),
       linear-gradient(180deg, rgba(32, 31, 29, 0.95), rgba(20, 19, 18, 0.98));
   }
 
@@ -2458,12 +2831,54 @@
   .phase-rail {
     position: relative;
     overflow: hidden;
+    background:
+      linear-gradient(180deg, rgba(23, 22, 21, 0.98), rgba(18, 17, 16, 0.98)),
+      radial-gradient(160px 200px at 50% 0%, rgba(156, 132, 216, 0.08), transparent 75%);
   }
 
   .phase-step {
     position: relative;
     background: linear-gradient(180deg, rgba(20, 19, 18, 0.42), rgba(17, 17, 16, 0.76));
     border-color: var(--color-border);
+  }
+
+  .phase-step-rail {
+    min-height: 8.75rem;
+  }
+
+  .phase-step-rail::after {
+    content: '';
+    position: absolute;
+    left: 29px;
+    top: calc(100% - 0.5rem);
+    width: 2px;
+    height: 1.2rem;
+    background: linear-gradient(180deg, rgba(156, 132, 216, 0.45), rgba(111, 163, 212, 0.05));
+  }
+
+  .phase-step-rail:last-child::after {
+    display: none;
+  }
+
+  .phase-step-connector {
+    position: absolute;
+    left: 0.95rem;
+    top: 1rem;
+  }
+
+  .phase-step-node {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.85rem;
+    height: 1.85rem;
+    border-radius: 999px;
+    border: 1px solid rgba(156, 132, 216, 0.35);
+    background: rgba(17, 17, 16, 0.92);
+    color: var(--color-text);
+    font-family: var(--font-ui);
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
   }
 
   .phase-step::before {
@@ -2476,8 +2891,17 @@
   }
 
   .phase-step.is-active {
-    border-color: rgba(111, 163, 212, 0.42);
-    background: linear-gradient(180deg, rgba(25, 33, 41, 0.7), rgba(18, 21, 24, 0.88));
+    border-color: rgba(156, 132, 216, 0.42);
+    background: linear-gradient(180deg, rgba(34, 29, 47, 0.78), rgba(20, 20, 24, 0.94));
+    box-shadow:
+      inset 0 0 0 1px rgba(156, 132, 216, 0.12),
+      0 0 0 1px rgba(156, 132, 216, 0.04);
+  }
+
+  .phase-step.is-active .phase-step-node {
+    border-color: rgba(156, 132, 216, 0.7);
+    background: rgba(156, 132, 216, 0.18);
+    box-shadow: 0 0 18px rgba(156, 132, 216, 0.22);
   }
 
   .phase-step.is-passed::before {
@@ -2502,6 +2926,21 @@
 
   .phase-step.is-locked {
     opacity: 0.78;
+  }
+
+  .phase-step.is-passed .phase-step-node {
+    border-color: rgba(127, 163, 131, 0.7);
+    background: rgba(127, 163, 131, 0.16);
+  }
+
+  .phase-step.is-attention .phase-step-node {
+    border-color: rgba(212, 147, 111, 0.7);
+    background: rgba(212, 147, 111, 0.16);
+  }
+
+  .phase-step.is-blocked .phase-step-node {
+    border-color: rgba(214, 98, 98, 0.75);
+    background: rgba(214, 98, 98, 0.18);
   }
 
   .route-chamber {
@@ -2546,5 +2985,235 @@
 
   details summary::-webkit-details-marker {
     display: none;
+  }
+
+  .system-status-bar {
+    background:
+      linear-gradient(90deg, rgba(156, 132, 216, 0.1), rgba(20, 19, 18, 0.9) 24%, rgba(20, 19, 18, 0.98)),
+      linear-gradient(180deg, rgba(32, 31, 29, 0.96), rgba(20, 19, 18, 0.98));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+
+  .launch-chamber {
+    position: relative;
+    overflow: hidden;
+    background:
+      radial-gradient(580px 220px at 8% 0%, rgba(196, 168, 130, 0.08), transparent 70%),
+      radial-gradient(460px 220px at 100% 0%, rgba(156, 132, 216, 0.12), transparent 72%),
+      linear-gradient(180deg, rgba(24, 22, 21, 0.96), rgba(17, 17, 16, 0.98));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.03),
+      inset 0 0 0 1px rgba(156, 132, 216, 0.04);
+  }
+
+  .launch-chamber::after {
+    content: '';
+    position: absolute;
+    inset: auto 1.25rem 0 1.25rem;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(196, 168, 130, 0), rgba(196, 168, 130, 0.44), rgba(156, 132, 216, 0.44), rgba(196, 168, 130, 0));
+    opacity: 0.8;
+  }
+
+  .hero-grid,
+  .workbench-layout,
+  .workbench-split,
+  .launch-layout,
+  .review-layout {
+    align-items: start;
+  }
+
+  .phase-step-summary {
+    display: none;
+  }
+
+  .phase-step-title {
+    font-size: clamp(1.18rem, 1.08rem + 0.42vw, 1.4rem);
+  }
+
+  .decision-sidebar {
+    align-self: start;
+    gap: 1rem;
+  }
+
+  .decision-sidebar section,
+  .decision-sidebar details {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  }
+
+  .decision-sidebar > section {
+    padding: 1rem;
+  }
+
+  .decision-metric-grid {
+    gap: 0.75rem;
+  }
+
+  .decision-metric-card {
+    padding: 0.9rem;
+  }
+
+  .decision-metric-card p {
+    font-size: 0.84rem;
+    line-height: 1.5;
+  }
+
+  .launch-summary-card {
+    min-height: 8.5rem;
+  }
+
+  .launch-action-row {
+    align-items: stretch;
+  }
+
+  .launch-primary-button {
+    min-width: 15rem;
+    min-height: 3.35rem;
+    background: linear-gradient(135deg, rgba(92, 80, 173, 0.92), rgba(56, 50, 116, 0.98));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.08),
+      0 14px 32px rgba(43, 35, 82, 0.34);
+  }
+
+  .recent-runs-panel .recent-run-card {
+    padding: 0.75rem 0.8rem;
+  }
+
+  .recent-run-card {
+    overflow: hidden;
+  }
+
+  .recent-run-summary {
+    display: -webkit-box;
+    line-clamp: 2;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .sticky-action-bar {
+    position: sticky;
+    bottom: 1rem;
+    z-index: 20;
+    box-shadow:
+      0 -12px 30px rgba(0, 0, 0, 0.24),
+      inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+
+  @media (min-width: 1024px) {
+    .workbench-split-lg {
+      grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+    }
+
+    .decision-sidebar {
+      position: sticky;
+      top: 6rem;
+    }
+  }
+
+  @media (min-width: 1280px) {
+    .hero-grid {
+      grid-template-columns: minmax(0, 1fr) 15.5rem;
+      align-items: center;
+    }
+
+    .workbench-layout {
+      grid-template-columns: 13.5rem minmax(0, 1fr) 21.5rem;
+    }
+
+    .workbench-split-xl {
+      grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+    }
+
+    .launch-layout {
+      grid-template-columns: minmax(0, 1.12fr) 20rem;
+    }
+
+    .review-layout {
+      grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+    }
+
+    .phase-step.is-active .phase-step-summary {
+      display: block;
+    }
+  }
+
+  @media (max-width: 1279px) {
+    .phase-step-rail {
+      min-height: auto;
+    }
+
+    .phase-step-rail::after,
+    .phase-step-connector {
+      display: none;
+    }
+
+    .sticky-action-bar {
+      bottom: 0;
+    }
+  }
+
+  @media (max-width: 767px) {
+    .admin-workbench .workbench-hero h1 {
+      font-size: clamp(1.95rem, 8.9vw, 2.55rem);
+      line-height: 0.98;
+    }
+
+    .phase-rail-steps {
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(10.5rem, 72vw);
+      gap: 0.75rem;
+      overflow-x: auto;
+      padding-bottom: 0.25rem;
+      scrollbar-width: thin;
+    }
+
+    .phase-step {
+      min-height: 0;
+    }
+
+    .phase-step-title {
+      font-size: 1.12rem;
+    }
+
+    .phase-step .ml-12 {
+      margin-left: 0;
+    }
+
+    .phase-step-node {
+      width: 1.6rem;
+      height: 1.6rem;
+      font-size: 0.64rem;
+    }
+
+    .launch-summary-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .launch-summary-card {
+      min-height: auto;
+    }
+
+    .launch-action-row {
+      display: grid;
+      grid-template-columns: 1fr;
+    }
+
+    .launch-primary-button {
+      width: 100%;
+      justify-content: center;
+    }
+
+    .decision-sidebar {
+      gap: 1rem;
+    }
+
+    .workbench-hero {
+      background:
+        radial-gradient(460px 180px at 16% 0%, rgba(127, 163, 131, 0.1), transparent 72%),
+        radial-gradient(360px 180px at 84% 0%, rgba(156, 132, 216, 0.12), transparent 72%),
+        linear-gradient(180deg, rgba(32, 31, 29, 0.95), rgba(20, 19, 18, 0.99));
+    }
   }
 </style>

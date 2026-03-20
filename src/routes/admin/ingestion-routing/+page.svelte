@@ -70,6 +70,7 @@
   }
 
   type PageState = 'loading' | 'ready' | 'forbidden';
+  type RouteCoverageMode = 'dedicated' | 'shared' | 'missing';
   type BusyAction =
     | ''
     | 'context'
@@ -117,12 +118,24 @@
   const selectedRoute = $derived(
     routes.find((route) => route.id === selectedRouteId) ?? null
   );
+  const sharedRoute = $derived.by(
+    () => routes.find((route) => !route.stage && route.enabled !== false) ?? null
+  );
 
   const routeStageCoverage = $derived.by(() => {
     const stages = capabilities?.stages ?? [];
     return stages.map((stage) => ({
       stage,
-      route: routes.find((route) => route.stage === stage) ?? null
+      route:
+        routes.find((route) => route.stage === stage && route.enabled !== false) ??
+        sharedRoute ??
+        null,
+      mode:
+        routes.find((route) => route.stage === stage && route.enabled !== false) !== undefined
+          ? ('dedicated' as RouteCoverageMode)
+          : sharedRoute
+            ? ('shared' as RouteCoverageMode)
+            : ('missing' as RouteCoverageMode)
     }));
   });
 
@@ -140,6 +153,17 @@
   function formatContextError(error: ContextError | null): string {
     if (!error) return '';
     return `[${error.status} ${error.code}] ${error.detail}${error.endpoint ? ` (${error.endpoint})` : ''}`;
+  }
+
+  function routeModeLabel(mode: RouteCoverageMode): string {
+    switch (mode) {
+      case 'dedicated':
+        return 'Dedicated route';
+      case 'shared':
+        return 'Shared route';
+      default:
+        return 'Needs routing';
+    }
   }
 
   async function authorizedJson(url: string, init?: RequestInit): Promise<any> {
@@ -165,11 +189,9 @@
 
   function buildDefaultScenario(route: AdminRouteRecord | null): Record<string, unknown> {
     const stage = route?.stage ?? 'ingestion_extraction';
-    return {
+    const scenario: Record<string, unknown> = {
       environmentId: DEFAULT_ENVIRONMENT_ID,
       routeId: route?.id ?? undefined,
-      workload: route?.workload ?? 'ingestion',
-      stage,
       task: stage === 'ingestion_embedding' ? 'embedding' : 'completion',
       attempt: 1,
       estimatedInputTokens: 12000,
@@ -180,6 +202,13 @@
         maxCost: 0.25
       }
     };
+
+    if (route?.stage || route?.workload) {
+      scenario.workload = route?.workload ?? 'ingestion';
+      scenario.stage = route?.stage ?? stage;
+    }
+
+    return scenario;
   }
 
   function syncDraftsFromRoute(route: AdminRouteRecord | null): void {
@@ -553,7 +582,12 @@
                     onclick={() => entry.route && selectRoute(entry.route.id)}
                     disabled={!entry.route}
                   >
-                    <div class="mb-1 uppercase tracking-[0.08em] text-sophia-dark-muted">{entry.stage}</div>
+                    <div class="mb-1 flex items-center justify-between gap-2">
+                      <span class="uppercase tracking-[0.08em] text-sophia-dark-muted">{entry.stage}</span>
+                      <span class="rounded border border-sophia-dark-border px-2 py-1 text-[0.68rem] uppercase tracking-[0.12em] {entry.mode === 'dedicated' ? 'text-sophia-dark-sage' : entry.mode === 'shared' ? 'text-sophia-dark-blue' : 'text-sophia-dark-copper'}">
+                        {routeModeLabel(entry.mode)}
+                      </span>
+                    </div>
                     {#if entry.route}
                       <div>{entry.route.name ?? entry.route.id}</div>
                       <div class="mt-1 text-sophia-dark-dim">v{entry.route.version ?? '—'} / published {entry.route.publishedVersion ?? '—'}</div>

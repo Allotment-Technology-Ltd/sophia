@@ -338,9 +338,37 @@ async function resolveRoute(options: {
   });
 
   if (!hasProviderAccess(decision.provider, options.providerApiKeys)) {
-    throw new Error(
-      `${decision.provider} provider requested but no BYOK key or platform API key is configured`
-    );
+    const missingProviderMessage =
+      `${decision.provider} provider requested but no BYOK key or platform API key is configured`;
+
+    if (options.failureMode !== 'error' && decision.source === 'restormel') {
+      console.warn(
+        '[restormel] Selected provider is unavailable locally; using degraded default route',
+        {
+          routeId: decision.routeId,
+          provider: decision.provider,
+          model: decision.model,
+          selectedStepId: decision.selectedStepId
+        }
+      );
+
+      return {
+        ...buildRouteForProvider(safeDefault.provider, safeDefault.model, options.providerApiKeys),
+        routingSource: 'degraded_default',
+        resolvedRouteId: decision.routeId ?? null,
+        resolvedExplanation:
+          `${missingProviderMessage}. Using the ${safeDefault.provider}/${safeDefault.model} degraded default instead.`,
+        resolvedFailureKind: 'no_key_available',
+        resolvedStepId: null,
+        resolvedOrderIndex: null,
+        resolvedSwitchReasonCode: null,
+        resolvedEstimatedCostUsd: null,
+        resolvedMatchedCriteria: null,
+        resolvedFallbackCandidates: decision.fallbackCandidates ?? null
+      };
+    }
+
+    throw new Error(missingProviderMessage);
   }
 
   const modelId =

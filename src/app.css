@@ -1,10 +1,10 @@
+@import "tailwindcss";
 @import './styles/design-tokens.css';
 @import './styles/base.css';
 @import './styles/animations.css';
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@config "../tailwind.config.js";
+@source "./routes/admin/**/*.{svelte,ts}";
 
 @layer base {
   *, *::before, *::after {

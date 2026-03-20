@@ -49,8 +49,6 @@ describe('planIngestionStage', () => {
       routeId: 'interactive',
       failureMode: 'degraded_default',
       restormelContext: {
-        workload: 'ingestion',
-        stage: 'ingestion_extraction',
         task: 'completion',
         attempt: 1,
         estimatedInputTokens: 9_500,
