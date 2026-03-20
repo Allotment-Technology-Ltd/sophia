@@ -5,6 +5,7 @@
   import { auth, getIdToken, onAuthChange } from '$lib/firebase';
   import type { PageData } from './$types';
   import type { AdminOperationRecord } from '$lib/server/adminOperations';
+  import { listEnabledSharedRoutes, resolveStageRoutes } from '$lib/utils/ingestionRouting';
 
   let { data }: { data: PageData } = $props();
   type OperationKind = PageData['operationKinds'][number];
@@ -266,6 +267,7 @@
   let routeStepErrors = $state<Record<string, string>>({});
   let routeHistoryById = $state<Record<string, AdminHistoryEntry[]>>({});
   let routeHistoryErrors = $state<Record<string, string>>({});
+  let preferredSharedRouteId = $state('');
   let selectedStage = $state('ingestion_extraction');
   let simulationState = $state<'idle' | 'running' | 'ready' | 'failed'>('idle');
   let simulationResult = $state<Record<string, unknown> | null>(null);
@@ -296,22 +298,17 @@
   const routingStages = $derived.by(
     () => routingContext?.capabilities?.stages ?? Object.keys(STAGE_META)
   );
-  const sharedRoute = $derived.by(
-    () => routingContext?.routes.find((route) => !route.stage && route.enabled !== false) ?? null
-  );
+  const sharedRoutes = $derived.by(() => listEnabledSharedRoutes(routingContext?.routes ?? []));
   const stageDescriptors = $derived.by<StageDescriptor[]>(() =>
-    routingStages.map((stage) => {
-      const dedicatedRoute =
-        routingContext?.routes.find((route) => route.stage === stage && route.enabled !== false) ?? null;
-      const route = dedicatedRoute ?? sharedRoute ?? null;
-      return {
-        stage,
-        title: STAGE_META[stage]?.title ?? stage.replace(/^ingestion_/, '').replaceAll('_', ' '),
-        summary: STAGE_META[stage]?.summary ?? 'Stage detail not yet documented.',
-        route,
-        mode: dedicatedRoute ? 'dedicated' : route ? 'shared' : 'missing'
-      };
-    })
+    resolveStageRoutes(routingContext?.routes ?? [], routingStages, preferredSharedRouteId).map(
+      (entry) => ({
+        stage: entry.stage,
+        title: STAGE_META[entry.stage]?.title ?? entry.stage.replace(/^ingestion_/, '').replaceAll('_', ' '),
+        summary: STAGE_META[entry.stage]?.summary ?? 'Stage detail not yet documented.',
+        route: entry.route,
+        mode: entry.mode as RouteCoverageMode
+      })
+    )
   );
   const selectedStageDescriptor = $derived.by(
     () => stageDescriptors.find((descriptor) => descriptor.stage === selectedStage) ?? stageDescriptors[0] ?? null
@@ -833,6 +830,7 @@
     }
     payload.validate = validateRun;
     if (ingestProvider !== 'auto') payload.ingest_provider = ingestProvider;
+    if (preferredSharedRouteId) payload.restormel_ingest_route_id = preferredSharedRouteId;
     if (domain.trim()) payload.domain = domain.trim();
     if (dryRun) payload.dry_run = true;
     if (notes.trim()) payload.notes = notes.trim();
@@ -852,10 +850,28 @@
     domain = typeof payload.domain === 'string' ? payload.domain : '';
     dryRun = Boolean(payload.dry_run);
     notes = typeof payload.notes === 'string' ? payload.notes : '';
+    preferredSharedRouteId =
+      typeof payload.restormel_ingest_route_id === 'string'
+        ? payload.restormel_ingest_route_id
+        : preferredSharedRouteId;
     ingestProvider =
       payload.ingest_provider === 'vertex' || payload.ingest_provider === 'anthropic'
         ? payload.ingest_provider
         : 'auto';
+  }
+
+  function routeOptionLabel(route: AdminRouteRecord): string {
+    const shortId = route.id.slice(0, 8);
+    return route.name?.trim() ? `${route.name} · ${shortId}` : route.id;
+  }
+
+  function applySharedRouteOverride(routeId: string): void {
+    preferredSharedRouteId = routeId;
+    recommendationMessage = '';
+    simulationResult = null;
+    simulationError = '';
+    simulationState = 'idle';
+    initializeGuidedFlow();
   }
 
   function handleKindChange(kind: string): void {
@@ -1376,6 +1392,10 @@
     routingState = 'loading';
     const body = (await authorizedJson('/api/admin/ingestion-routing/context')) as RoutingContextPayload;
     routingContext = body;
+    const nextSharedRoutes = listEnabledSharedRoutes(body.routes ?? []);
+    if (!nextSharedRoutes.some((route) => route.id === preferredSharedRouteId)) {
+      preferredSharedRouteId = nextSharedRoutes[0]?.id ?? '';
+    }
 
     const uniqueRouteIds = Array.from(
       new Set((body.routes ?? []).map((route) => route.id).filter((id): id is string => Boolean(id)))
@@ -1658,6 +1678,16 @@
       hydrateIngestFormFromPayload(JSON.parse(templateFor('ingest_import')));
     } catch {
       // keep defaults
+    }
+    try {
+      const currentRun = JSON.parse(
+        sessionStorage.getItem('sophia.admin.ingestion.current') ?? 'null'
+      ) as { routeId?: unknown } | null;
+      if (typeof currentRun?.routeId === 'string' && currentRun.routeId.trim()) {
+        preferredSharedRouteId = currentRun.routeId;
+      }
+    } catch {
+      // ignore malformed stored state
     }
 
     let interval: number | null = null;
@@ -2231,6 +2261,24 @@
                     </div>
                   </div>
                 </div>
+
+                {#if sharedRoutes.length > 1}
+                  <label class="mt-4 block space-y-2">
+                    <span class="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Shared ingestion route</span>
+                    <select
+                      value={preferredSharedRouteId}
+                      onchange={(event) => applySharedRouteOverride((event.currentTarget as HTMLSelectElement).value)}
+                      class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-sm text-sophia-dark-text"
+                    >
+                      {#each sharedRoutes as route}
+                        <option value={route.id}>{routeOptionLabel(route)}</option>
+                      {/each}
+                    </select>
+                    <span class="text-xs text-sophia-dark-muted">
+                      Stages without dedicated bindings use this shared Restormel route for guidance, preview, and queued ingestion runs.
+                    </span>
+                  </label>
+                {/if}
 
                 <div class="mt-4 rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/20 px-4 py-3">
                   <div class="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Sophia guidance</div>

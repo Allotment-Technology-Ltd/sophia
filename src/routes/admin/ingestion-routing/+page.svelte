@@ -3,6 +3,11 @@
   import { browser } from '$app/environment';
   import { onMount } from 'svelte';
   import { auth, getIdToken, onAuthChange } from '$lib/firebase';
+  import {
+    listEnabledSharedRoutes,
+    resolveRouteForStage,
+    resolveStageRoutes
+  } from '$lib/utils/ingestionRouting';
 
   interface AdminRouteRecord {
     id: string;
@@ -57,6 +62,7 @@
   }
 
   interface ContextPayload {
+    environmentId?: string;
     capabilities: { workloads?: string[]; stages?: string[] } | null;
     switchCriteria: Record<string, unknown> | null;
     providersHealth: ProvidersHealthPayload | null;
@@ -114,6 +120,7 @@
   let switchCriteria = $state<Record<string, unknown> | null>(null);
   let providersHealth = $state<ProvidersHealthPayload | null>(null);
   let routes = $state<AdminRouteRecord[]>([]);
+  let routingEnvironmentId = $state(DEFAULT_ENVIRONMENT_ID);
   let contextErrors = $state<ContextPayload['errors']>({
     capabilities: null,
     switchCriteria: null,
@@ -136,9 +143,7 @@
   let resolveResult = $state<Record<string, unknown> | null>(null);
 
   const selectedRoute = $derived(routes.find((route) => route.id === selectedRouteId) ?? null);
-  const sharedRoute = $derived.by(
-    () => routes.find((route) => !route.stage && route.enabled !== false) ?? null
-  );
+  const sharedRoutes = $derived.by(() => listEnabledSharedRoutes(routes));
   const providerHealthEntries = $derived.by(() => providersHealth?.providers ?? []);
   const stageList = $derived.by(
     () => capabilities?.stages ?? Object.keys(STAGE_LABELS)
@@ -156,24 +161,13 @@
   );
 
   const routeStageCoverage = $derived.by(() => {
-    return stageList.map((stage) => {
-      const dedicatedRoute =
-        routes.find((route) => route.stage === stage && route.enabled !== false) ?? null;
-      const route = dedicatedRoute ?? sharedRoute ?? null;
-      const mode: RouteCoverageMode = dedicatedRoute
-        ? 'dedicated'
-        : route
-          ? 'shared'
-          : 'missing';
-
-      return {
-        stage,
-        title: stageTitle(stage),
-        description: stageDescription(stage),
-        route,
-        mode
-      };
-    });
+    return resolveStageRoutes(routes, stageList, selectedRouteId).map((entry) => ({
+      stage: entry.stage,
+      title: stageTitle(entry.stage),
+      description: stageDescription(entry.stage),
+      route: entry.route,
+      mode: entry.mode as RouteCoverageMode
+    }));
   });
 
   const selectedCoverageEntry = $derived.by(() => {
@@ -259,6 +253,11 @@
     return `Draft v${route.version ?? '—'} · Published v${route.publishedVersion ?? '—'}`;
   }
 
+  function routeOptionLabel(route: AdminRouteRecord): string {
+    const shortId = route.id.slice(0, 8);
+    return route.name?.trim() ? `${route.name} · ${shortId}` : route.id;
+  }
+
   function modelLabel(step: AdminStepRecord): string {
     const provider = step.providerPreference?.trim();
     const model = step.modelId?.trim();
@@ -337,7 +336,7 @@
   function buildDefaultScenario(route: AdminRouteRecord | null, stageOverride: string | null): Record<string, unknown> {
     const stage = stageOverride ?? route?.stage ?? 'ingestion_extraction';
     const scenario: Record<string, unknown> = {
-      environmentId: DEFAULT_ENVIRONMENT_ID,
+      environmentId: route?.environmentId ?? routingEnvironmentId,
       routeId: route?.id ?? undefined,
       workload: route?.workload ?? 'ingestion',
       stage,
@@ -439,25 +438,22 @@
     try {
       const body = (await authorizedJson('/api/admin/ingestion-routing/context')) as ContextPayload;
       const nextRoutes = Array.isArray(body.routes) ? body.routes : [];
-      const nextSharedRoute =
-        nextRoutes.find((route) => !route.stage && route.enabled !== false) ?? null;
       const nextStages = body.capabilities?.stages ?? Object.keys(STAGE_LABELS);
       const nextSelectedStage =
         selectedStage && nextStages.includes(selectedStage)
           ? selectedStage
           : nextStages[0] ?? nextRoutes.find((route) => route.stage)?.stage ?? null;
       const routeForStage =
-        (nextSelectedStage
-          ? nextRoutes.find((route) => route.stage === nextSelectedStage && route.enabled !== false) ?? null
-          : null) ??
-        nextSharedRoute ??
-        nextRoutes[0] ??
-        null;
+        resolveRouteForStage(nextRoutes, nextSelectedStage, selectedRouteId) ?? nextRoutes[0] ?? null;
 
       capabilities = body.capabilities;
       switchCriteria = body.switchCriteria;
       providersHealth = body.providersHealth;
       routes = nextRoutes;
+      routingEnvironmentId =
+        typeof body.environmentId === 'string' && body.environmentId.trim().length > 0
+          ? body.environmentId
+          : DEFAULT_ENVIRONMENT_ID;
       contextErrors = body.errors ?? contextErrors;
       selectedStage = nextSelectedStage;
       selectedRouteId = routeForStage?.id ?? null;
@@ -601,7 +597,7 @@
       await authorizedJson(`/api/admin/ingestion-routing/routes/${selectedRouteId}/publish`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ environmentId: DEFAULT_ENVIRONMENT_ID })
+        body: JSON.stringify({ environmentId: routingEnvironmentId })
       });
       pageMessage = `Publish requested for ${selectedRouteId}.`;
       await loadRouteArtifacts(selectedRouteId);
@@ -623,7 +619,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          environmentId: DEFAULT_ENVIRONMENT_ID,
+          environmentId: routingEnvironmentId,
           ...(toVersion ? { toVersion } : {})
         })
       });
@@ -918,11 +914,20 @@
                   }}
                 >
                   {#each routes as route}
-                    <option value={route.id}>{route.name ?? route.id}</option>
+                    <option value={route.id}>{routeOptionLabel(route)}</option>
                   {/each}
                 </select>
               </label>
             </div>
+
+            {#if sharedRoutes.length > 1}
+              <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-4">
+                <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Shared route coverage</div>
+                <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+                  Multiple shared Restormel routes are available. The route selector above determines which shared route the stage cards use when a stage has no dedicated binding.
+                </p>
+              </div>
+            {/if}
 
             <div class="grid gap-4 md:grid-cols-3">
               <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg p-5">

@@ -26,6 +26,7 @@ describe('AdminOperationRequestSchema', () => {
       payload: {
         source_url: 'https://plato.stanford.edu/entries/ethics-deontological/',
         source_type: 'sep_entry',
+        restormel_ingest_route_id: 'route-shared-1',
         validate: true
       }
     });
@@ -35,6 +36,7 @@ describe('AdminOperationRequestSchema', () => {
       throw new Error('Expected ingest_import payload');
     }
     expect(parsed.payload.source_type).toBe('sep_entry');
+    expect(parsed.payload.restormel_ingest_route_id).toBe('route-shared-1');
   });
 
   it('rejects ingest_import source_url without source_type', () => {

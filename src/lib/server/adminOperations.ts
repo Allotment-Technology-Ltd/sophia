@@ -46,6 +46,7 @@ const IngestImportPayloadSchema = z.object({
   source_file: z.string().min(1).optional(),
   validate: z.boolean().optional(),
   ingest_provider: z.enum(['vertex', 'anthropic']).optional(),
+  restormel_ingest_route_id: z.string().min(1).optional(),
   domain: z.string().min(1).optional(),
   dry_run: z.boolean().optional(),
   notes: z.string().max(2000).optional()
@@ -514,8 +515,14 @@ async function executeIngestImportOperation(
   logText: string
 ): Promise<{ logText: string; status: AdminOperationStatus; summary: string; validationStatus: AdminOperationRecord['validation_status']; syncStatus: AdminOperationRecord['sync_status'] }> {
   const tsxArgs = ['tsx', ...buildEnvFileArgs()];
+  const env: NodeJS.ProcessEnv = {};
   let nextLog = logText;
   let sourceFile = payload.source_file ? normalizeTextFilePath(payload.source_file) : null;
+
+  if (payload.restormel_ingest_route_id) {
+    env.RESTORMEL_INGEST_ROUTE_ID = payload.restormel_ingest_route_id;
+    nextLog = `${nextLog}[INGEST] Using shared Restormel route ${payload.restormel_ingest_route_id}\n`;
+  }
 
   if (payload.source_url) {
     nextLog = `${nextLog}[INGEST] Fetching ${payload.source_url}\n`;
@@ -564,7 +571,8 @@ async function executeIngestImportOperation(
       id,
       command: 'npx',
       args,
-      logText: nextLog
+      logText: nextLog,
+      env
     });
     nextLog = ingestResult.logText;
     if (ingestResult.status !== 0) {

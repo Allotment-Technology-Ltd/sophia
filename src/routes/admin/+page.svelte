@@ -265,6 +265,11 @@
     modelChain = [options[0] ?? '', options[1] ?? options[0] ?? '', options[2] ?? options[1] ?? options[0] ?? ''];
   }
 
+  function routeOptionLabel(route: RouteRecord): string {
+    const shortId = route.id.slice(0, 8);
+    return route.name?.trim() ? `${route.name} · ${shortId}` : route.id;
+  }
+
   async function loadRouteSteps(routeId: string): Promise<void> {
     const body = await authorizedJson(`/api/admin/ingestion-routing/routes/${routeId}/steps`);
     const steps = Array.isArray(body.steps) ? (body.steps as StepRecord[]) : [];
@@ -742,7 +747,7 @@
                 >
                   <option value="">Select route</option>
                   {#each routes as route}
-                    <option value={route.id}>{route.name ?? route.id}</option>
+                    <option value={route.id}>{routeOptionLabel(route)}</option>
                   {/each}
                 </select>
                 <p class="text-xs text-sophia-dark-muted">
