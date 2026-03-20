@@ -1375,6 +1375,24 @@
     return body;
   }
 
+  /** POST …/routes/:id/simulate often 404s when the route is gone or Restormel has not shipped simulate for this project. */
+  function isRestormelSimulateUnavailableError(message: string): boolean {
+    const m = message.toLowerCase();
+    return (
+      m.includes('no_route') ||
+      (m.includes('404') && m.includes('/simulate')) ||
+      (m.includes('404') && m.includes('not_found') && m.includes('routes/'))
+    );
+  }
+
+  const SIMULATION_SKIPPED_PLACEHOLDER: Record<string, unknown> = {
+    skippedDueToRestormel: true,
+    providerType: '—',
+    modelId: '—',
+    estimatedCostUsd: null,
+    wouldRun: false
+  };
+
   async function refreshOperations(): Promise<void> {
     const body = await authorizedJson('/api/admin/operations?limit=25');
     operations = Array.isArray(body.operations) ? body.operations : [];
@@ -1539,8 +1557,16 @@
       simulationState = 'ready';
       activePhase = 'simulate';
     } catch (error) {
-      simulationError = error instanceof Error ? error.message : 'Failed to simulate route';
-      simulationState = 'failed';
+      const message = error instanceof Error ? error.message : 'Failed to simulate route';
+      if (isRestormelSimulateUnavailableError(message)) {
+        simulationResult = SIMULATION_SKIPPED_PLACEHOLDER;
+        simulationState = 'ready';
+        simulationError = '';
+        activePhase = 'simulate';
+      } else {
+        simulationError = message;
+        simulationState = 'failed';
+      }
     }
   }
 
@@ -1565,11 +1591,35 @@
       guidedFlowMessage = `${descriptor.title} is ready. Run this phase to move to the next gate.`;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Pre-scan failed for this stage.';
+      if (isRestormelSimulateUnavailableError(message)) {
+        simulationResult = SIMULATION_SKIPPED_PLACEHOLDER;
+        simulationState = 'ready';
+        simulationError = '';
+        let recNote = '';
+        try {
+          recNote = await requestRecommendationForStage(descriptor, 'use_recommended_route');
+        } catch (recErr) {
+          recNote =
+            recErr instanceof Error
+              ? recErr.message
+              : 'Recommendation unavailable — check Restormel route IDs in the routing studio.';
+        }
+        guidedStageNotes = {
+          ...guidedStageNotes,
+          [descriptor.stage]:
+            recNote ||
+            'Restormel route preview (simulate) is not available for this route (404). Continuing from route steps only.'
+        };
+        guidedStageFailures = { ...guidedStageFailures, [descriptor.stage]: '' };
+        guidedStageStatus = { ...guidedStageStatus, [descriptor.stage]: 'ready' };
+        guidedFlowMessage = `${descriptor.title}: Restormel simulate returned 404 (no_route or missing route). Pre-scan skipped — you can still run this phase and queue ingestion; confirm the route exists in Restormel Keys or pick another shared route.`;
+        return;
+      }
       simulationState = 'failed';
       simulationError = message;
       guidedStageFailures = { ...guidedStageFailures, [descriptor.stage]: message };
       guidedStageStatus = { ...guidedStageStatus, [descriptor.stage]: 'failed' };
-      guidedFlowMessage = `${descriptor.title} failed pre-scan. Ask Sophia for an alternative route before retrying.`;
+      guidedFlowMessage = `${descriptor.title} failed pre-scan. Check the error below or use the routing studio.`;
     }
   }
 
@@ -2591,6 +2641,14 @@
                   {#if simulationError}
                     <div class="rounded border border-sophia-dark-copper/35 bg-sophia-dark-copper/8 px-4 py-3 font-mono text-xs text-sophia-dark-copper">
                       {simulationError}
+                    </div>
+                  {/if}
+                  {#if simulationResult?.skippedDueToRestormel}
+                    <div
+                      class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/25 px-4 py-3 text-sm leading-6 text-sophia-dark-muted"
+                    >
+                      Restormel returned no simulate result for this route (often <span class="font-mono text-sophia-dark-dim">404 no_route</span>). You can
+                      still continue to launch — Sophia will use the route’s configured steps; fix the route in Restormel Keys if previews should work.
                     </div>
                   {/if}
                 </div>
