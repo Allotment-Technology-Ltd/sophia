@@ -1,6 +1,6 @@
 import { generateText } from 'ai';
 import { z } from 'zod';
-import { getReasoningModel, trackTokens } from './vertex';
+import { resolveReasoningModelRoute, trackTokens } from './vertex';
 import type { ProviderApiKeys } from './byok/types';
 import {
   ReasoningScoreSchema,
@@ -45,20 +45,37 @@ function parseScores(text: string): z.infer<typeof ReasoningScoreSchema>[] {
   return ReasoningScoresArraySchema.parse(parsed);
 }
 
+export interface ReasoningEvaluationResult {
+  evaluation: ReasoningEvaluation;
+  route: {
+    provider: string;
+    modelId: string;
+    routeId: string | null;
+    reason: string | null;
+  };
+}
+
 export async function evaluateReasoning(
   claims: ExtractedClaim[],
   relations: ExtractedRelation[],
   request: VerificationRequest,
   options?: { providerApiKeys?: ProviderApiKeys }
-): Promise<ReasoningEvaluation> {
+): Promise<ReasoningEvaluationResult> {
   const originalText = [request.question, request.answer, request.text].filter(Boolean).join('\n\n');
   const prompt = buildReasoningEvalUserPrompt(claims, relations, originalText);
+  const route = await resolveReasoningModelRoute({
+    pass: 'verification',
+    depthMode: request.depth ?? 'standard',
+    routeId: process.env.RESTORMEL_VERIFY_ROUTE_ID?.trim() || undefined,
+    providerApiKeys: options?.providerApiKeys,
+    failureMode: 'error'
+  });
 
   let responseText = '';
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const result = await generateText({
-      model: getReasoningModel({ providerApiKeys: options?.providerApiKeys }),
+      model: route.model,
       system: REASONING_EVAL_SYSTEM_PROMPT,
       prompt: attempt === 0 ? prompt : `${prompt}\n\nReturn ONLY valid JSON.`,
       maxOutputTokens: 1200
@@ -71,8 +88,16 @@ export async function evaluateReasoning(
     try {
       const dimensions = parseScores(responseText);
       return {
-        overall_score: computeOverallScore(dimensions),
-        dimensions
+        evaluation: {
+          overall_score: computeOverallScore(dimensions),
+          dimensions
+        },
+        route: {
+          provider: route.provider,
+          modelId: route.modelId,
+          routeId: route.resolvedRouteId ?? null,
+          reason: route.resolvedExplanation ?? null
+        }
       };
     } catch {
       if (attempt === 1) {

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { ClaimType, ConstitutionalCheck, ConstitutionRule, RuleEvaluation } from '@restormel/contracts/constitution';
 import { ConstitutionalCheckSchema, RuleEvaluationSchema } from '@restormel/contracts/constitution';
 import type { ExtractedClaim, ExtractedRelation } from '$lib/types/verification';
-import { getReasoningModel, trackTokens } from '$lib/server/vertex';
+import { resolveReasoningModelRoute, trackTokens } from '$lib/server/vertex';
 import type { ProviderApiKeys } from '$lib/server/byok/types';
 import {
   buildConstitutionEvalUserPrompt,
@@ -42,6 +42,9 @@ interface LlmEvaluationBatchResult {
   outputTokens: number;
   llmCalled: boolean;
   llmFailed: boolean;
+  provider?: string;
+  modelId?: string;
+  routeReason?: string | null;
 }
 
 export interface ConstitutionEvaluationTelemetry {
@@ -50,6 +53,9 @@ export interface ConstitutionEvaluationTelemetry {
   constitution_llm_called: boolean;
   constitution_llm_failed: boolean;
   constitution_rule_violations: string[];
+  constitution_provider?: string;
+  constitution_model?: string;
+  constitution_route_reason?: string | null;
 }
 
 export interface ConstitutionEvaluationResult {
@@ -258,10 +264,17 @@ async function evaluateLlmRules(
   };
 
   const prompt = buildConstitutionEvalUserPrompt(claims, relations, llmRules, originalText, heuristics);
+  const route = await resolveReasoningModelRoute({
+    pass: 'verification',
+    depthMode: 'standard',
+    routeId: process.env.RESTORMEL_VERIFY_ROUTE_ID?.trim() || undefined,
+    providerApiKeys: options?.providerApiKeys,
+    failureMode: 'error'
+  });
 
   try {
     const result = await generateText({
-      model: getReasoningModel({ providerApiKeys: options?.providerApiKeys }),
+      model: route.model,
       system: CONSTITUTION_EVAL_SYSTEM_PROMPT,
       prompt,
       maxOutputTokens: 1400
@@ -299,7 +312,10 @@ async function evaluateLlmRules(
       inputTokens: result.usage?.inputTokens ?? 0,
       outputTokens: result.usage?.outputTokens ?? 0,
       llmCalled: true,
-      llmFailed: false
+      llmFailed: false,
+      provider: route.provider,
+      modelId: route.modelId,
+      routeReason: route.resolvedExplanation ?? null
     };
   } catch (error) {
     return {
@@ -310,7 +326,10 @@ async function evaluateLlmRules(
       inputTokens: 0,
       outputTokens: 0,
       llmCalled: true,
-      llmFailed: true
+      llmFailed: true,
+      provider: route.provider,
+      modelId: route.modelId,
+      routeReason: route.resolvedExplanation ?? null
     };
   }
 }
@@ -730,7 +749,10 @@ export async function evaluateConstitutionWithTelemetry(
       constitution_output_tokens: llmBatchResult.outputTokens,
       constitution_llm_called: llmBatchResult.llmCalled,
       constitution_llm_failed: llmBatchResult.llmFailed,
-      constitution_rule_violations: constitutionRuleViolations
+      constitution_rule_violations: constitutionRuleViolations,
+      constitution_provider: llmBatchResult.provider,
+      constitution_model: llmBatchResult.modelId,
+      constitution_route_reason: llmBatchResult.routeReason ?? null
     }
   };
 }

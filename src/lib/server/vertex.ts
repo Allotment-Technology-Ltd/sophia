@@ -2,9 +2,6 @@ import { createVertex } from '@ai-sdk/google-vertex';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
-import { loadServerEnv } from './env';
-import type { ProviderApiKeys } from './byok/types';
-import { resolveProviderDecision } from './resolve-provider';
 import {
   DEFAULT_MODEL_CATALOG,
   REASONING_PROVIDER_BASE_URL_ENV,
@@ -12,10 +9,12 @@ import {
   REASONING_PROVIDER_ORDER,
   REASONING_PROVIDER_PLATFORM_API_KEY_ENV,
   getModelProviderLabel,
-  isReasoningProvider,
   type ModelProvider,
   type ReasoningProvider
 } from '@restormel/contracts/providers';
+import { loadServerEnv } from './env';
+import type { ProviderApiKeys } from './byok/types';
+import { resolveProviderDecision, type ResolveFailureKind } from './resolve-provider';
 
 // Lazy initialization - create vertex client only when first called
 let vertexInstance: ReturnType<typeof createVertex> | null = null;
@@ -98,7 +97,10 @@ function getProviderBaseUrl(provider: Exclude<ReasoningProvider, 'vertex' | 'ant
   return fromEnv || REASONING_PROVIDER_DEFAULT_BASE_URL[provider];
 }
 
-function getOpenAICompatibleForProvider(provider: Exclude<ReasoningProvider, 'vertex' | 'anthropic'>, apiKey?: string) {
+function getOpenAICompatibleForProvider(
+  provider: Exclude<ReasoningProvider, 'vertex' | 'anthropic'>,
+  apiKey?: string
+) {
   const resolvedApiKey = apiKey?.trim() || getPlatformApiKey(provider);
   if (!resolvedApiKey) {
     throw new Error(`${provider} provider requested but no API key is configured`);
@@ -117,97 +119,6 @@ function getOpenAICompatibleForProvider(provider: Exclude<ReasoningProvider, 've
   return instance;
 }
 
-interface RuntimeRoutingConfig {
-  reasoningModelId: string;
-  extractionModelId: string;
-  deepReasoningModelId: string;
-  deepAnalysisModelId: string;
-  deepCritiqueModelId: string;
-  deepSynthesisModelId: string;
-  deepVerificationModelId: string;
-  deepRoutingEnabled: boolean;
-  deepProvider: ReasoningProvider;
-  deepModelPasses: Set<string>;
-  providerReasoningModelIds: Partial<Record<Exclude<ReasoningProvider, 'vertex'>, string>>;
-  providerDeepModelIds: Partial<Record<Exclude<ReasoningProvider, 'vertex'>, string>>;
-  providerExtractionModelIds: Partial<Record<Exclude<ReasoningProvider, 'vertex'>, string>>;
-  platformProviderEnabled: Partial<Record<ReasoningProvider, boolean>>;
-}
-
-function envModelId(provider: Exclude<ReasoningProvider, 'vertex'>, kind: 'REASONING_MODEL' | 'DEEP_MODEL' | 'EXTRACTION_MODEL'): string | undefined {
-  const prefix = provider.toUpperCase();
-  return process.env[`${prefix}_${kind}`]?.trim() || undefined;
-}
-
-function getRuntimeRoutingConfig(): RuntimeRoutingConfig {
-  loadServerEnv();
-  const reasoningModelId = process.env.GEMINI_REASONING_MODEL || 'gemini-2.5-flash';
-  const extractionModelId = process.env.GEMINI_EXTRACTION_MODEL || 'gemini-2.5-flash';
-  const deepReasoningModelId = process.env.GEMINI_DEEP_REASONING_MODEL || 'gemini-2.5-pro';
-  const deepAnalysisModelId = process.env.GEMINI_DEEP_ANALYSIS_MODEL || deepReasoningModelId;
-  const deepCritiqueModelId = process.env.GEMINI_DEEP_CRITIQUE_MODEL || deepReasoningModelId;
-  const deepSynthesisModelId = process.env.GEMINI_DEEP_SYNTHESIS_MODEL || deepReasoningModelId;
-  const deepVerificationModelId = process.env.GEMINI_DEEP_VERIFICATION_MODEL || deepReasoningModelId;
-  const deepRoutingEnabled = (process.env.ENABLE_DEEP_MODEL_ROUTING ?? 'true').toLowerCase() === 'true';
-  const deepProvider =
-    isReasoningProvider(process.env.DEEP_MODEL_PROVIDER)
-      ? (process.env.DEEP_MODEL_PROVIDER!.toLowerCase() as ReasoningProvider)
-      : 'vertex';
-  const deepModelPasses = new Set(
-    (process.env.DEEP_MODEL_PASSES ?? 'critique,synthesis')
-      .split(',')
-      .map((value) => value.trim().toLowerCase())
-      .filter(Boolean)
-  );
-
-  const providerReasoningModelIds: Partial<Record<Exclude<ReasoningProvider, 'vertex'>, string>> = {};
-  const providerDeepModelIds: Partial<Record<Exclude<ReasoningProvider, 'vertex'>, string>> = {};
-  const providerExtractionModelIds: Partial<Record<Exclude<ReasoningProvider, 'vertex'>, string>> = {};
-  const platformProviderEnabled: Partial<Record<ReasoningProvider, boolean>> = {
-    vertex: true
-  };
-
-  for (const provider of REASONING_PROVIDER_ORDER) {
-    if (provider === 'vertex') continue;
-
-    const defaults = DEFAULT_MODEL_CATALOG[provider];
-    if (provider === 'anthropic') {
-      const reasoning = envModelId(provider, 'REASONING_MODEL') || process.env.CLAUDE_MODEL || defaults[1] || defaults[0];
-      const deep = envModelId(provider, 'DEEP_MODEL') || process.env.ANTHROPIC_DEEP_MODEL || reasoning;
-      providerReasoningModelIds[provider] = reasoning;
-      providerDeepModelIds[provider] = deep;
-      providerExtractionModelIds[provider] = envModelId(provider, 'EXTRACTION_MODEL') || reasoning;
-      platformProviderEnabled[provider] = !!process.env.ANTHROPIC_API_KEY;
-      continue;
-    }
-
-    const reasoning = envModelId(provider, 'REASONING_MODEL') || defaults[0];
-    const deep = envModelId(provider, 'DEEP_MODEL') || reasoning;
-    const extraction = envModelId(provider, 'EXTRACTION_MODEL') || reasoning;
-    providerReasoningModelIds[provider] = reasoning;
-    providerDeepModelIds[provider] = deep;
-    providerExtractionModelIds[provider] = extraction;
-    platformProviderEnabled[provider] = !!getPlatformApiKey(provider);
-  }
-
-  return {
-    reasoningModelId,
-    extractionModelId,
-    deepReasoningModelId,
-    deepAnalysisModelId,
-    deepCritiqueModelId,
-    deepSynthesisModelId,
-    deepVerificationModelId,
-    deepRoutingEnabled,
-    deepProvider,
-    deepModelPasses,
-    providerReasoningModelIds,
-    providerDeepModelIds,
-    providerExtractionModelIds,
-    platformProviderEnabled
-  };
-}
-
 type RoutingPass = 'analysis' | 'critique' | 'synthesis' | 'verification' | 'generic';
 type RequestedProvider = ModelProvider;
 
@@ -217,9 +128,10 @@ export interface ReasoningModelRoute {
   modelId: string;
   supportsGrounding: boolean;
   credentialSource: 'byok' | 'platform';
-  routingSource?: 'restormel' | 'legacy';
+  routingSource?: 'restormel' | 'requested' | 'degraded_default';
   resolvedRouteId?: string | null;
   resolvedExplanation?: string | null;
+  resolvedFailureKind?: ResolveFailureKind;
 }
 
 export interface AvailableModelOption {
@@ -230,124 +142,54 @@ export interface AvailableModelOption {
   credential_source?: 'byok' | 'platform';
 }
 
-function parseCatalog(raw: string | undefined): string[] {
-  return (raw ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
+const DEFAULT_STANDARD_PROVIDER: ReasoningProvider = 'vertex';
+const DEFAULT_STANDARD_MODEL_ID =
+  DEFAULT_MODEL_CATALOG.vertex[1] ?? DEFAULT_MODEL_CATALOG.vertex[0] ?? 'gemini-2.5-flash';
+const DEFAULT_DEEP_MODEL_ID =
+  DEFAULT_MODEL_CATALOG.vertex[0] ?? DEFAULT_STANDARD_MODEL_ID;
+const DEFAULT_EXTRACTION_MODEL_ID = DEFAULT_STANDARD_MODEL_ID;
 
 function uniqueModelIds(values: Array<string | undefined>): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const value of values) {
     const modelId = value?.trim();
-    if (!modelId) continue;
-    if (seen.has(modelId)) continue;
+    if (!modelId || seen.has(modelId)) continue;
     seen.add(modelId);
     out.push(modelId);
   }
   return out;
 }
 
-function getProviderModelCatalog(
+function getDefaultReasoningModelId(
   provider: ReasoningProvider,
-  config: RuntimeRoutingConfig,
-  pass?: RoutingPass
-): string[] {
+  depthMode: 'quick' | 'standard' | 'deep' = 'standard',
+  pass: RoutingPass = 'generic'
+): string {
+  const catalog = DEFAULT_MODEL_CATALOG[provider];
+  if (!catalog || catalog.length === 0) {
+    return provider === 'vertex' ? DEFAULT_STANDARD_MODEL_ID : DEFAULT_STANDARD_MODEL_ID;
+  }
+
   if (provider === 'vertex') {
-    return uniqueModelIds([
-      config.reasoningModelId,
-      config.deepReasoningModelId,
-      config.deepAnalysisModelId,
-      config.deepCritiqueModelId,
-      config.deepSynthesisModelId,
-      config.deepVerificationModelId,
-      ...parseCatalog(process.env.VERTEX_MODEL_CATALOG),
-      ...DEFAULT_MODEL_CATALOG.vertex
-    ]);
+    return depthMode === 'deep' || pass === 'verification'
+      ? DEFAULT_DEEP_MODEL_ID
+      : DEFAULT_STANDARD_MODEL_ID;
   }
 
-  const prefix = provider.toUpperCase();
-  const reasoning = config.providerReasoningModelIds[provider];
-  const deep = config.providerDeepModelIds[provider] || reasoning;
-  let passSpecific: Array<string | undefined> = [];
   if (provider === 'anthropic') {
-    if (pass && pass !== 'generic') {
-      passSpecific = [
-        pass === 'analysis' ? process.env.ANTHROPIC_DEEP_ANALYSIS_MODEL : undefined,
-        pass === 'critique' ? process.env.ANTHROPIC_DEEP_CRITIQUE_MODEL : undefined,
-        pass === 'synthesis' ? process.env.ANTHROPIC_DEEP_SYNTHESIS_MODEL : undefined,
-        pass === 'verification' ? process.env.ANTHROPIC_DEEP_VERIFICATION_MODEL : undefined
-      ];
+    if (depthMode === 'deep') {
+      return catalog[0] ?? catalog[1] ?? DEFAULT_STANDARD_MODEL_ID;
     }
+    return catalog[1] ?? catalog[0] ?? DEFAULT_STANDARD_MODEL_ID;
   }
 
-  return uniqueModelIds([
-    reasoning,
-    deep,
-    ...passSpecific,
-    ...parseCatalog(process.env[`${prefix}_MODEL_CATALOG`]),
-    ...DEFAULT_MODEL_CATALOG[provider]
-  ]);
+  return catalog[0] ?? DEFAULT_STANDARD_MODEL_ID;
 }
 
-export function getReasoningModel(options?: {
-  providerApiKeys?: ProviderApiKeys;
-  requestedProvider?: RequestedProvider;
-}) {
-  const route = getReasoningModelRoute({
-    pass: 'generic',
-    requestedProvider: options?.requestedProvider,
-    providerApiKeys: options?.providerApiKeys
-  });
-  return route.model;
-}
-
-export function getExtractionModelRoute(options?: {
-  providerApiKeys?: ProviderApiKeys;
-}): ReasoningModelRoute {
-  const config = getRuntimeRoutingConfig();
-
-  const byokVertexKey = options?.providerApiKeys?.vertex?.trim();
-  if (byokVertexKey) {
-    return buildVertexRoute(config.extractionModelId, byokVertexKey);
-  }
-
-  for (const provider of REASONING_PROVIDER_ORDER) {
-    if (provider === 'vertex') continue;
-    const key = options?.providerApiKeys?.[provider]?.trim();
-    if (!key) continue;
-
-    if (provider === 'anthropic') {
-      return buildAnthropicRoute(
-        config.providerExtractionModelIds.anthropic || config.providerReasoningModelIds.anthropic!,
-        key
-      );
-    }
-
-    return buildOpenAICompatibleRoute(
-      provider,
-      config.providerExtractionModelIds[provider] || config.providerReasoningModelIds[provider]!,
-      key
-    );
-  }
-
-  return buildVertexRoute(config.extractionModelId);
-}
-
-export function getExtractionModel(options?: {
-  providerApiKeys?: ProviderApiKeys;
-}) {
-  return getExtractionModelRoute(options).model;
-}
-
-function getDeepVertexModelId(config: RuntimeRoutingConfig, pass: RoutingPass): string {
-  if (pass === 'analysis') return config.deepAnalysisModelId;
-  if (pass === 'critique') return config.deepCritiqueModelId;
-  if (pass === 'synthesis') return config.deepSynthesisModelId;
-  if (pass === 'verification') return config.deepVerificationModelId;
-  return config.deepReasoningModelId;
+function getDefaultExtractionModelId(provider: ReasoningProvider): string {
+  if (provider === 'vertex') return DEFAULT_EXTRACTION_MODEL_ID;
+  return DEFAULT_MODEL_CATALOG[provider][0] ?? DEFAULT_STANDARD_MODEL_ID;
 }
 
 function buildVertexRoute(modelId: string, byokVertexKey?: string): ReasoningModelRoute {
@@ -404,7 +246,7 @@ function buildOpenAICompatibleRoute(
   };
 }
 
-function getRouteForProvider(
+function buildRouteForProvider(
   provider: ReasoningProvider,
   modelId: string,
   providerApiKeys?: ProviderApiKeys
@@ -422,101 +264,71 @@ function getRouteForProvider(
 
 function hasProviderAccess(
   provider: ReasoningProvider,
-  config: RuntimeRoutingConfig,
   providerApiKeys?: ProviderApiKeys
 ): boolean {
-  const byokKey = providerApiKeys?.[provider]?.trim();
-  if (byokKey) return true;
+  if (providerApiKeys?.[provider]?.trim()) return true;
   if (provider === 'vertex') return true;
-  return !!config.platformProviderEnabled[provider];
+  return Boolean(getPlatformApiKey(provider));
 }
 
-function getReasoningModelIdForProvider(provider: ReasoningProvider, config: RuntimeRoutingConfig): string {
-  if (provider === 'vertex') return config.reasoningModelId;
-  return config.providerReasoningModelIds[provider] || DEFAULT_MODEL_CATALOG[provider][0];
+function buildSafeDefaultDecision(
+  type: 'reasoning' | 'extraction',
+  depthMode: 'quick' | 'standard' | 'deep',
+  pass: RoutingPass
+): { provider: ReasoningProvider; model: string; explanation: string } {
+  const provider = DEFAULT_STANDARD_PROVIDER;
+  const model =
+    type === 'extraction'
+      ? getDefaultExtractionModelId(provider)
+      : getDefaultReasoningModelId(provider, depthMode, pass);
+
+  return {
+    provider,
+    model,
+    explanation: `Restormel resolve was unavailable, so Sophia used the ${provider}/${model} degraded default.`
+  };
 }
 
-function getDeepModelIdForProvider(provider: ReasoningProvider, config: RuntimeRoutingConfig, pass: RoutingPass): string {
-  if (provider === 'vertex') return getDeepVertexModelId(config, pass);
-
-  if (provider === 'anthropic') {
-    if (pass === 'analysis') return process.env.ANTHROPIC_DEEP_ANALYSIS_MODEL || config.providerDeepModelIds.anthropic || config.providerReasoningModelIds.anthropic!;
-    if (pass === 'critique') return process.env.ANTHROPIC_DEEP_CRITIQUE_MODEL || config.providerDeepModelIds.anthropic || config.providerReasoningModelIds.anthropic!;
-    if (pass === 'synthesis') return process.env.ANTHROPIC_DEEP_SYNTHESIS_MODEL || config.providerDeepModelIds.anthropic || config.providerReasoningModelIds.anthropic!;
-    if (pass === 'verification') return process.env.ANTHROPIC_DEEP_VERIFICATION_MODEL || config.providerDeepModelIds.anthropic || config.providerReasoningModelIds.anthropic!;
-  }
-
-  return config.providerDeepModelIds[provider] || config.providerReasoningModelIds[provider] || DEFAULT_MODEL_CATALOG[provider][0];
-}
-
-export function getReasoningModelRoute(options?: {
+async function resolveRoute(options: {
+  type: 'reasoning' | 'extraction';
   depthMode?: 'quick' | 'standard' | 'deep';
   pass?: RoutingPass;
   requestedProvider?: RequestedProvider;
   requestedModelId?: string;
   providerApiKeys?: ProviderApiKeys;
-}): ReasoningModelRoute {
-  const config = getRuntimeRoutingConfig();
-  const depthMode = options?.depthMode ?? 'standard';
-  const pass = options?.pass ?? 'generic';
-  const requestedProvider = options?.requestedProvider ?? 'auto';
-  const requestedModelId = options?.requestedModelId?.trim();
+  routeId?: string;
+  failureMode?: 'degraded_default' | 'error';
+}): Promise<ReasoningModelRoute> {
+  const depthMode = options.depthMode ?? 'standard';
+  const pass = options.pass ?? 'generic';
+  const safeDefault = buildSafeDefaultDecision(options.type, depthMode, pass);
+  const decision = await resolveProviderDecision({
+    preferredProvider: options.requestedProvider,
+    preferredModel: options.requestedModelId,
+    routeId: options.routeId,
+    safeDefault,
+    failureMode: options.failureMode ?? 'degraded_default'
+  });
 
-  if (requestedProvider !== 'auto') {
-    if (!hasProviderAccess(requestedProvider, config, options?.providerApiKeys)) {
-      throw new Error(`${requestedProvider} provider requested but no BYOK key or platform API key is configured`);
-    }
-    const modelId =
-      requestedModelId ||
-      (depthMode === 'deep'
-        ? getDeepModelIdForProvider(requestedProvider, config, pass)
-        : getReasoningModelIdForProvider(requestedProvider, config));
-    return getRouteForProvider(requestedProvider, modelId, options?.providerApiKeys);
-  }
-
-  const shouldEscalate =
-    depthMode === 'deep' &&
-    config.deepRoutingEnabled &&
-    config.deepModelPasses.has(pass);
-
-  if (!shouldEscalate) {
-    const autoPriority: ReasoningProvider[] = [
-      'vertex',
-      'openai',
-      'xai',
-      'groq',
-      'mistral',
-      'deepseek',
-      'together',
-      'openrouter',
-      'perplexity',
-      'anthropic'
-    ];
-    for (const provider of autoPriority) {
-      const key = options?.providerApiKeys?.[provider]?.trim();
-      if (provider === 'vertex' && !key) continue;
-      if (!key) continue;
-      return getRouteForProvider(provider, getReasoningModelIdForProvider(provider, config), options?.providerApiKeys);
-    }
-    return buildVertexRoute(config.reasoningModelId);
-  }
-
-  if (hasProviderAccess(config.deepProvider, config, options?.providerApiKeys)) {
-    return getRouteForProvider(
-      config.deepProvider,
-      getDeepModelIdForProvider(config.deepProvider, config, pass),
-      options?.providerApiKeys
+  if (!hasProviderAccess(decision.provider, options.providerApiKeys)) {
+    throw new Error(
+      `${decision.provider} provider requested but no BYOK key or platform API key is configured`
     );
   }
 
-  for (const provider of REASONING_PROVIDER_ORDER) {
-    if (provider === 'vertex') continue;
-    const key = options?.providerApiKeys?.[provider]?.trim();
-    if (!key) continue;
-    return getRouteForProvider(provider, getDeepModelIdForProvider(provider, config, pass), options?.providerApiKeys);
-  }
+  const modelId =
+    decision.model?.trim() ||
+    (options.type === 'extraction'
+      ? getDefaultExtractionModelId(decision.provider)
+      : getDefaultReasoningModelId(decision.provider, depthMode, pass));
 
-  return buildVertexRoute(getDeepVertexModelId(config, pass));
+  return {
+    ...buildRouteForProvider(decision.provider, modelId, options.providerApiKeys),
+    routingSource: decision.source,
+    resolvedRouteId: decision.routeId ?? null,
+    resolvedExplanation: decision.explanation ?? null,
+    resolvedFailureKind: decision.failureKind
+  };
 }
 
 export async function resolveReasoningModelRoute(options?: {
@@ -526,39 +338,31 @@ export async function resolveReasoningModelRoute(options?: {
   requestedModelId?: string;
   providerApiKeys?: ProviderApiKeys;
   routeId?: string;
+  failureMode?: 'degraded_default' | 'error';
 }): Promise<ReasoningModelRoute> {
-  const legacyRoute = getReasoningModelRoute(options);
-  const config = getRuntimeRoutingConfig();
-  const decision = await resolveProviderDecision({
-    preferredProvider: options?.requestedProvider,
-    preferredModel: options?.requestedModelId,
-    routeId: options?.routeId,
-    legacy: () => ({
-      provider: legacyRoute.provider,
-      model: legacyRoute.modelId,
-      source: 'legacy'
-    })
+  return resolveRoute({
+    type: 'reasoning',
+    ...options
   });
+}
 
-  if (decision.source === 'legacy') {
-    return {
-      ...legacyRoute,
-      routingSource: 'legacy',
-      resolvedRouteId: null,
-      resolvedExplanation: null
-    };
-  }
-
-  const modelId =
-    decision.model?.trim() ||
-    getReasoningModelIdForProvider(decision.provider, config);
-
-  return {
-    ...getRouteForProvider(decision.provider, modelId, options?.providerApiKeys),
-    routingSource: 'restormel',
-    resolvedRouteId: decision.routeId ?? null,
-    resolvedExplanation: decision.explanation ?? null
-  };
+export async function resolveExtractionModelRoute(options?: {
+  requestedProvider?: RequestedProvider;
+  requestedModelId?: string;
+  providerApiKeys?: ProviderApiKeys;
+  routeId?: string;
+  failureMode?: 'degraded_default' | 'error';
+}): Promise<ReasoningModelRoute> {
+  return resolveRoute({
+    type: 'extraction',
+    pass: 'generic',
+    depthMode: 'standard',
+    requestedProvider: options?.requestedProvider ?? 'auto',
+    requestedModelId: options?.requestedModelId,
+    providerApiKeys: options?.providerApiKeys,
+    routeId: options?.routeId,
+    failureMode: options?.failureMode ?? 'error'
+  });
 }
 
 export function getAvailableReasoningModels(options?: {
@@ -566,22 +370,21 @@ export function getAvailableReasoningModels(options?: {
   includePlatformProviders?: boolean;
   allowedProviders?: ReasoningProvider[];
 }): AvailableModelOption[] {
-  const config = getRuntimeRoutingConfig();
   const includePlatformProviders = options?.includePlatformProviders ?? true;
   const allowedProviders = new Set(options?.allowedProviders ?? REASONING_PROVIDER_ORDER);
-
   const optionsOut: AvailableModelOption[] = [];
 
   for (const provider of REASONING_PROVIDER_ORDER) {
     if (!allowedProviders.has(provider)) continue;
 
     const byokKey = options?.providerApiKeys?.[provider]?.trim();
-    const canUseByok = !!byokKey;
-    const canUsePlatform = includePlatformProviders && (provider === 'vertex' ? true : !!config.platformProviderEnabled[provider]);
+    const canUseByok = Boolean(byokKey);
+    const canUsePlatform =
+      includePlatformProviders && (provider === 'vertex' ? true : Boolean(getPlatformApiKey(provider)));
 
     if (!canUseByok && !canUsePlatform) continue;
 
-    const catalog = getProviderModelCatalog(provider, config);
+    const catalog = uniqueModelIds(DEFAULT_MODEL_CATALOG[provider]);
     const providerLabel = getModelProviderLabel(provider);
     for (const id of catalog) {
       optionsOut.push({

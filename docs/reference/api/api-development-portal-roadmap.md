@@ -113,7 +113,7 @@ BYOK (Bring Your Own Key) is a subsequent engineering stream for the platform af
 ### Phase 1b — OpenAI expansion
 
 - Add OpenAI credential support and validation flows.
-- Extend `/api/models` to user-contextual provider/model availability once BYOK is active.
+- Extend `/api/allowed-models` to user-contextual provider/model availability once BYOK is active.
 - Keep provider error handling normalized across Vertex/Anthropic/OpenAI.
 
 ### Phase 1c — Additional providers (plugin expansion)

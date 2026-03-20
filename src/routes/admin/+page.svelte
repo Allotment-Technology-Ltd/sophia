@@ -60,6 +60,12 @@
 			metric: `${dashboard.recentIngestions.length} recent ingestion runs`
 		},
 		{
+			title: 'Ingestion Routing',
+			description: 'Track the Restormel control-plane requirements for the stage-by-stage mixer.',
+			href: '/admin/ingestion-routing',
+			metric: 'Spec-first until public Dashboard APIs expand'
+		},
+		{
 			title: 'Review Queue',
 			description: 'Promote trusted claims and relations into the serving graph.',
 			href: '/admin/review',
@@ -246,6 +252,12 @@
 					class="rounded border border-sophia-dark-blue/40 bg-sophia-dark-blue/10 px-4 py-2 font-mono text-sm text-sophia-dark-blue hover:bg-sophia-dark-blue/20"
 				>
 					Operations Console
+				</a>
+				<a
+					href="/admin/ingestion-routing"
+					class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised px-4 py-2 font-mono text-sm hover:bg-sophia-dark-surface"
+				>
+					Ingestion Routing
 				</a>
 				<a
 					href="/admin/review"

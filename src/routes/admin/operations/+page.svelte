@@ -257,6 +257,12 @@
       </div>
       <div class="flex gap-3">
         <a
+          href="/admin/ingestion-routing"
+          class="px-4 py-2 bg-sophia-dark-surface-raised border border-sophia-dark-border rounded hover:bg-sophia-dark-surface transition-colors font-mono text-sm"
+        >
+          Ingestion Routing
+        </a>
+        <a
           href="/admin"
           class="px-4 py-2 bg-sophia-dark-surface-raised border border-sophia-dark-border rounded hover:bg-sophia-dark-surface transition-colors font-mono text-sm"
         >
@@ -297,6 +303,13 @@
           <p class="text-sm text-sophia-dark-muted">
             This is a power console. Payloads are explicit JSON and map directly to admin job handlers.
           </p>
+        </div>
+
+        <div class="rounded border border-sophia-dark-copper/40 bg-sophia-dark-copper/10 px-4 py-3 font-mono text-xs text-sophia-dark-copper">
+          Full stage-by-stage ingestion routing is not configured here. The current optional
+          <code class="mx-1">ingest_provider</code>
+          payload field remains a coarse bootstrap or manual fallback hint until Restormel publishes
+          public route CRUD, stage-aware resolve, simulation, and publish/rollback APIs.
         </div>
 
         <label class="block space-y-2">

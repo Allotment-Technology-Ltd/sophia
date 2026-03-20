@@ -96,6 +96,8 @@ Use `docs/sophia/` for the current SOPHIA product narrative and `docs/restormel/
 
 ```bash
 pnpm install
+pnpm python:venv
+pnpm python:deps
 cp .env.example .env
 pnpm dev
 ```
@@ -104,5 +106,8 @@ Useful commands:
 - `pnpm check`
 - `pnpm test`
 - `pnpm dev:prod-db`
+- `pnpm python:venv`
+- `pnpm python:deps`
+- `pnpm python:check`
 
 For operational runbooks, API reference, and deeper implementation notes, use [docs/README.md](docs/README.md).

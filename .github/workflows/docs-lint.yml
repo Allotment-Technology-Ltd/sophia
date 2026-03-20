@@ -44,6 +44,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install Python requirements
+        run: python3 -m pip install -r requirements-python.txt
+
       - name: Check generated repo docs blocks
         run: python3 scripts/restormel/update_repo_docs.py --check
 

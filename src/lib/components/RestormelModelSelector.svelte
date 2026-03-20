@@ -79,29 +79,36 @@
     {/if}
   </div>
 
-  {#if loading}
-    <div class="restormel-model-state" role="status">Loading policy-filtered models…</div>
-  {:else if !hasProviders}
-    <div class="restormel-model-state" role="status">
-      {emptyMessage || 'No explicit models are currently available for this key source.'}
+  {#if showFallbackWarning}
+    <div class="restormel-model-state warning" role="status" aria-live="polite">
+      <span>{errorMessage}</span>
+      {#if onRetry}
+        <button type="button" class="restormel-retry-btn" onclick={onRetry}>Retry</button>
+      {/if}
     </div>
-  {:else}
-    {#if showFallbackWarning}
-      <div class="restormel-model-state warning" role="status" aria-live="polite">
-        <span>{errorMessage}</span>
-        {#if onRetry}
-          <button type="button" class="restormel-retry-btn" onclick={onRetry}>Retry</button>
-        {/if}
-      </div>
-    {/if}
+  {/if}
+
+  <div class="restormel-theme-shell" class:is-disabled={disabled}>
     {#if canRenderSelector}
-      <div class="restormel-theme-shell" class:is-disabled={disabled}>
-        <RestormelModelSelector {keys} {providers} onSelect={handleSelect} />
+      <RestormelModelSelector {keys} {providers} onSelect={handleSelect} />
+    {:else}
+      <div class="restormel-placeholder" role="status" aria-live="polite">
+        <div class="restormel-placeholder-chip"></div>
+        <div class="restormel-placeholder-line wide"></div>
+        <div class="restormel-placeholder-line"></div>
+        <div class="restormel-model-state">
+          {#if loading}
+            Loading policy-filtered models…
+          {:else}
+            {emptyMessage || 'No explicit models are currently available for this key source.'}
+          {/if}
+        </div>
       </div>
     {/if}
-    {#if emptyMessage}
-      <div class="restormel-model-state" role="status">{emptyMessage}</div>
-    {/if}
+  </div>
+
+  {#if emptyMessage && canRenderSelector}
+    <div class="restormel-model-state" role="status">{emptyMessage}</div>
   {/if}
 </div>
 
@@ -185,11 +192,39 @@
     border-radius: 10px;
     padding: 0.7rem;
     background: color-mix(in oklab, var(--color-surface) 90%, transparent);
+    min-height: 118px;
   }
 
   .restormel-theme-shell.is-disabled {
     opacity: 0.6;
     pointer-events: none;
+  }
+
+  .restormel-placeholder {
+    display: grid;
+    gap: 0.6rem;
+    align-content: start;
+  }
+
+  .restormel-placeholder-chip,
+  .restormel-placeholder-line {
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--color-border) 55%, transparent);
+    opacity: 0.7;
+  }
+
+  .restormel-placeholder-chip {
+    width: 6rem;
+    height: 0.85rem;
+  }
+
+  .restormel-placeholder-line {
+    width: 60%;
+    height: 0.85rem;
+  }
+
+  .restormel-placeholder-line.wide {
+    width: 88%;
   }
 
   @media (max-width: 720px) {

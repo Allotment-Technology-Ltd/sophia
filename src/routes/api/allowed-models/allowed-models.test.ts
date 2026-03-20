@@ -89,7 +89,7 @@ describe('/api/allowed-models', () => {
     expect(body.allowed_by_provider.openai).not.toContain('gpt-4o');
   });
 
-  it('returns local fallback models with a warning when policy evaluation fails', async () => {
+  it('returns a degraded empty explicit-model set when policy evaluation fails', async () => {
     mockRestormelEvaluatePolicies.mockRejectedValue(new Error('gateway unavailable'));
 
     const { GET } = await import('./+server');
@@ -106,20 +106,7 @@ describe('/api/allowed-models', () => {
       routeId: 'interactive'
     });
     expect(body.error).toContain('Policy-filtered models are temporarily unavailable');
-    expect(body.models).toEqual([
-      {
-        id: 'claude-3-5-sonnet',
-        provider: 'anthropic',
-        label: 'Anthropic · claude-3-5-sonnet',
-        description: 'User BYOK Anthropic model'
-      },
-      {
-        id: 'gpt-4o',
-        provider: 'openai',
-        label: 'OpenAI · gpt-4o',
-        description: 'User BYOK OpenAI model'
-      }
-    ]);
+    expect(body.models).toEqual([]);
   });
 
   it('keeps partial policy-filtered results when only some model evaluations fail', async () => {

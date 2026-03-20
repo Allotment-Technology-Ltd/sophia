@@ -3,27 +3,27 @@
  *
  * Ingest multiple sources from the curated source list.
  *
- * Usage: npx tsx --env-file=.env scripts/ingest-batch.ts [--wave 1|2|3] [--validate] [--dry-run] [--status] [--retry] [--fast] [--fail-fast] [--domain <domain>] [--ingest-provider <vertex|anthropic>] [--source-list <path>] [--yes]
+ * Usage: npx tsx --env-file=.env scripts/ingest-batch.ts [--wave 1|2|3] [--validate] [--dry-run] [--status] [--retry] [--fast] [--fail-fast] [--domain <domain>] [--ingest-provider <auto|vertex|anthropic>] [--source-list <path>] [--yes]
  *
  * Flags:
  *   --wave N                Only ingest sources from wave N (1, 2, or 3)
- *   --validate              Optional: run Gemini cross-validation (default is off)
+ *   --validate              Optional: run cross-model validation (default is off)
  *   --dry-run               Show what would be ingested without actually doing it
  *   --status                Print current ingestion progress and exit (no ingestion)
  *   --retry                 Retry sources that previously failed
  *   --fast                  Fast extraction mode (no validation, detailed error logging)
  *   --fail-fast             Stop launching new sources after first failure
  *   --domain <domain>       Override claim domain tag for all sources (e.g. philosophy_of_mind)
- *   --ingest-provider <p>   Extraction provider for stages 1-3: vertex | anthropic (default: vertex)
+ *   --ingest-provider <p>   Provider hint for Restormel planning: auto | vertex | anthropic (default: auto)
  *   --source-list <path>    Path to source list JSON (default: ./data/source-list-3a.json)
  *   --yes                   Skip cost confirmation prompt (for CI / automated runs)
  *
  * Pipeline mode (default):
  *   Phase A (stages 1-4, extraction + embeddings) runs in parallel — up to PHASE_A_CONCURRENCY.
- *   Phase B (stage 5 optional Gemini + stage 6 Store) runs async — up to GEMINI_CONCURRENCY in parallel.
+ *   Phase B (stage 5 optional validation + stage 6 Store) runs async — up to GEMINI_CONCURRENCY in parallel.
  *   When each Phase A finishes, Phase B starts in the background.
  *   Set PHASE_A_CONCURRENCY env var to control parallel extraction workers (default: 4).
- *   Set GEMINI_CONCURRENCY env var to control parallel Gemini processes (default: 2).
+ *   Set GEMINI_CONCURRENCY env var to control parallel validation/store processes (default: 2).
  */
 
 import * as fs from 'fs';
@@ -45,7 +45,7 @@ const SURREAL_NAMESPACE = process.env.SURREAL_NAMESPACE || 'sophia';
 const SURREAL_DATABASE = process.env.SURREAL_DATABASE || 'sophia';
 const GEMINI_CONCURRENCY = parseInt(process.env.GEMINI_CONCURRENCY || '2', 10);
 const PHASE_A_CONCURRENCY = parseInt(process.env.PHASE_A_CONCURRENCY || '4', 10);
-const INGEST_PROVIDER_DEFAULT = (process.env.INGEST_PROVIDER || 'vertex').toLowerCase();
+const INGEST_PROVIDER_DEFAULT = (process.env.INGEST_PROVIDER || 'auto').toLowerCase();
 
 // Pass --env-file args to child tsx processes so they inherit the same env.
 // Supports split env files (e.g. .env for infra, .env.local for API keys).
@@ -108,11 +108,12 @@ interface IngestionLogRecord {
 	cost_usd?: number;
 }
 
-type IngestProvider = 'vertex' | 'anthropic';
+type IngestProvider = 'auto' | 'vertex' | 'anthropic';
 
 function parseIngestProvider(value: string | undefined): IngestProvider {
-	if (!value) return 'vertex';
+	if (!value) return 'auto';
 	const normalized = value.toLowerCase().trim();
+	if (normalized === 'auto') return 'auto';
 	return normalized === 'anthropic' ? 'anthropic' : 'vertex';
 }
 
@@ -312,7 +313,7 @@ async function runPhaseA(
 }
 
 /**
- * Run ingest.ts Phase B: stage 5 (Gemini validation) + stage 6 (Store).
+ * Run ingest.ts Phase B: stage 5 (validation) + stage 6 (Store).
  * Resumes from wherever Phase A left off (stage_completed: 'embedding').
  */
 async function runPhaseB(
@@ -328,7 +329,7 @@ async function runPhaseB(
 	args.push('--ingest-provider', ingestProvider);
 	if (domain) { args.push('--domain'); args.push(domain); }
 
-	console.log(`  [PHASE B] Running stages 5-6 (Gemini+Store): ${label}`);
+	console.log(`  [PHASE B] Running stages 5-6 (Validation+Store): ${label}`);
 	const result = await spawnAsync(args, slug);
 
 	if (result.stdout) process.stdout.write(result.stdout);

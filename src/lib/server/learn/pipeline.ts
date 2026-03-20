@@ -11,7 +11,7 @@ import {
   type SkillScores
 } from '$lib/types/learn';
 import type { ProviderApiKeys } from '$lib/server/byok/types';
-import { getReasoningModelRoute } from '$lib/server/vertex';
+import { resolveReasoningModelRoute } from '$lib/server/vertex';
 import {
   LEARN_ANALYSIS_SYSTEM_PROMPT,
   LEARN_BREAKDOWN_SYSTEM_PROMPT,
@@ -83,12 +83,13 @@ async function generateStructuredWithRetry<T extends z.ZodTypeAny>(
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const route = getReasoningModelRoute({
+      const route = await resolveReasoningModelRoute({
         pass,
         depthMode: opts.depthMode ?? 'standard',
         requestedProvider,
         requestedModelId: opts.modelId,
-        providerApiKeys: opts.providerApiKeys
+        providerApiKeys: opts.providerApiKeys,
+        failureMode: 'error'
       });
 
       const result = await generateObject({
@@ -222,7 +223,11 @@ export async function generateProgressRecommendation(input: {
   completedUnits: number;
   essayCount: number;
 }): Promise<string> {
-  const route = getReasoningModelRoute({ pass: 'synthesis', depthMode: 'quick' });
+  const route = await resolveReasoningModelRoute({
+    pass: 'synthesis',
+    depthMode: 'quick',
+    failureMode: 'error'
+  });
   try {
     const result = await generateObject({
       model: route.model,

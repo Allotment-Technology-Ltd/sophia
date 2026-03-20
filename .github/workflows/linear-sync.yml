@@ -48,6 +48,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install Python requirements
+        run: python3 -m pip install -r requirements-python.txt
+
       - name: Resolve mode
         id: mode
         run: |

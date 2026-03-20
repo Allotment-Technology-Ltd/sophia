@@ -1,36 +1,46 @@
 import { isReasoningProvider, type ModelProvider, type ReasoningProvider } from '@restormel/contracts/providers';
 import { RestormelResolveError, restormelResolve } from './restormel';
 
-function parseBooleanFlag(value: string | undefined, defaultValue: boolean): boolean {
-  if (value === undefined) return defaultValue;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'true') return true;
-  if (normalized === 'false') return false;
-  return defaultValue;
-}
-
-export const USE_RESTORMEL_KEYS = parseBooleanFlag(
-  process.env.USE_RESTORMEL_KEYS,
-  false
-);
-
 const RESTORMEL_ENVIRONMENT_ID =
   process.env.RESTORMEL_ENVIRONMENT_ID?.trim() || 'production';
 
 export interface ProviderDecision {
   provider: ReasoningProvider;
   model: string | null;
-  source: 'restormel' | 'legacy';
+  source: 'restormel' | 'requested' | 'degraded_default';
   routeId?: string | null;
   explanation?: string | null;
+  failureKind?: ResolveFailureKind;
 }
 
-type ResolveFailureKind =
+export type ResolveFailureKind =
   | 'budget_cap'
   | 'no_key_available'
   | 'policy_blocked'
   | 'network_or_auth'
   | 'unknown';
+
+export class ProviderResolutionFailure extends Error {
+  readonly kind: ResolveFailureKind;
+  readonly userMessage: string;
+  readonly logContext: Record<string, unknown>;
+
+  constructor(options: {
+    kind: ResolveFailureKind;
+    userMessage: string;
+    logContext: Record<string, unknown>;
+    cause?: unknown;
+  }) {
+    super(options.userMessage);
+    this.name = 'ProviderResolutionFailure';
+    this.kind = options.kind;
+    this.userMessage = options.userMessage;
+    this.logContext = options.logContext;
+    if (options.cause !== undefined) {
+      this.cause = options.cause;
+    }
+  }
+}
 
 function normalizeRestormelProvider(providerType: string | null): ReasoningProvider | null {
   const normalized = providerType?.trim().toLowerCase();
@@ -100,17 +110,26 @@ export function classifyResolveFailure(error: unknown): {
 }
 
 export async function resolveProviderDecision(options: {
-  legacy: () => ProviderDecision;
   preferredProvider?: ModelProvider;
   preferredModel?: string;
   routeId?: string;
+  safeDefault?: {
+    provider: ReasoningProvider;
+    model: string | null;
+    explanation?: string | null;
+  };
+  failureMode?: 'degraded_default' | 'error';
 }): Promise<ProviderDecision> {
-  if (!USE_RESTORMEL_KEYS) {
-    return options.legacy();
-  }
-
   if (options.preferredProvider && options.preferredProvider !== 'auto') {
-    return options.legacy();
+    return {
+      provider: options.preferredProvider,
+      model: options.preferredModel?.trim() || null,
+      source: 'requested',
+      routeId: options.routeId ?? null,
+      explanation: options.preferredModel?.trim()
+        ? `User selected ${options.preferredProvider}/${options.preferredModel.trim()}.`
+        : `User selected ${options.preferredProvider}.`
+    };
   }
 
   try {
@@ -120,11 +139,11 @@ export async function resolveProviderDecision(options: {
     });
     const providerType = normalizeRestormelProvider(result.data.providerType);
     if (!providerType) {
-      console.error(
-        '[restormel] Resolve returned an unsupported provider, falling back to legacy:',
-        result.data.providerType
-      );
-      return options.legacy();
+      throw new ProviderResolutionFailure({
+        kind: 'unknown',
+        userMessage: 'AI model routing returned an unsupported provider.',
+        logContext: { providerType: result.data.providerType }
+      });
     }
 
     return {
@@ -135,29 +154,46 @@ export async function resolveProviderDecision(options: {
       explanation: result.data.explanation
     };
   } catch (error) {
-    const failure = classifyResolveFailure(error);
+    const failure =
+      error instanceof ProviderResolutionFailure
+        ? {
+            kind: error.kind,
+            userMessage: error.userMessage,
+            logContext: error.logContext
+          }
+        : classifyResolveFailure(error);
+    const logger = failure.kind === 'budget_cap' || failure.kind === 'unknown'
+      ? console.error
+      : console.warn;
+
     if (failure.kind === 'budget_cap') {
-      console.error(
-        '[restormel] Usage policy blocked model routing; using legacy fallback',
-        failure.logContext
-      );
-      // Hook alerts here if budget or token caps should page operators during rollout.
+      logger('[restormel] Usage policy blocked model routing; evaluating degraded fallback', failure.logContext);
     } else if (failure.kind === 'no_key_available') {
-      console.warn(
-        '[restormel] No provider key available for Restormel route; using legacy fallback',
-        failure.logContext
-      );
+      logger('[restormel] No provider key available for Restormel route; evaluating degraded fallback', failure.logContext);
     } else if (failure.kind === 'policy_blocked') {
-      console.warn(
-        '[restormel] Policy blocked all Restormel route steps; using legacy fallback',
-        failure.logContext
-      );
+      logger('[restormel] Policy blocked all Restormel route steps; evaluating degraded fallback', failure.logContext);
     } else {
-      console.error(
-        '[restormel] Resolve failed before a safe route was selected; using legacy fallback',
-        failure.logContext
-      );
+      logger('[restormel] Resolve failed before a safe route was selected', failure.logContext);
     }
-    return options.legacy();
+
+    if (options.failureMode !== 'error' && options.safeDefault) {
+      return {
+        provider: options.safeDefault.provider,
+        model: options.safeDefault.model,
+        source: 'degraded_default',
+        routeId: null,
+        explanation:
+          options.safeDefault.explanation ??
+          `${failure.userMessage} Using Sophia's degraded default route.`,
+        failureKind: failure.kind
+      };
+    }
+
+    throw new ProviderResolutionFailure({
+      kind: failure.kind,
+      userMessage: failure.userMessage,
+      logContext: failure.logContext,
+      cause: error
+    });
   }
 }

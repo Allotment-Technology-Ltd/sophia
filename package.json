@@ -11,6 +11,9 @@
   "scripts": {
     "dev": "vite dev",
     "dev:prod-db": "bash scripts/dev-prod-db.sh",
+    "python:venv": "python3 -m venv .venv",
+    "python:deps": "./.venv/bin/python -m pip install -r requirements-python.txt",
+    "python:check": "./.venv/bin/python scripts/check_python_yaml.py",
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",
@@ -19,9 +22,11 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "mcp:restormel": "pnpm exec restormel-mcp",
     "monitor:wave": "tsx --env-file=.env scripts/monitor-wave.ts --once",
     "monitor:wave:watch": "tsx --env-file=.env scripts/monitor-wave.ts --interval-sec 120",
     "smoke:restormel": "bash scripts/smoke-test-restormel.sh",
+    "smoke:restormel:mcp": "bash scripts/smoke-test-restormel-mcp.sh",
     "audit:gates": "tsx --env-file=.env scripts/phase1-closeout.ts --dry-run",
     "ingest:safe": "tsx --env-file=.env scripts/run-ingestion-safe.ts",
     "ingest:wave1:retry": "tsx --env-file=.env scripts/ingest-batch.ts --wave 1 --retry --fail-fast --pre-scan",
@@ -35,6 +40,8 @@
     "migrate": "bash scripts/migrate-to-europe-west2.sh"
   },
   "dependencies": {
+    "@restormel/aaif": "workspace:*",
+    "@restormel/contracts": "workspace:*",
     "@ai-sdk/anthropic": "^3.0.58",
     "@ai-sdk/google": "^3.0.43",
     "@ai-sdk/google-vertex": "^4.0.68",
@@ -56,7 +63,9 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@playwright/test": "^1.58.2",
+    "@restormel/mcp": "^0.1.1",
     "@sveltejs/adapter-node": "^5.0.0",
     "@sveltejs/kit": "^2.53.4",
     "@sveltejs/vite-plugin-svelte": "^4.0.4",

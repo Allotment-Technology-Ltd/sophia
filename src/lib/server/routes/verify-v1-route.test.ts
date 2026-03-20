@@ -45,15 +45,23 @@ vi.mock('$lib/server/extraction', () => ({
 
 vi.mock('$lib/server/reasoningEval', () => ({
   evaluateReasoning: vi.fn(async () => ({
-    overall_score: 0.4,
-    dimensions: [
-      { dimension: 'logical_structure', score: 0.4, explanation: 'ok' },
-      { dimension: 'evidence_grounding', score: 0.4, explanation: 'ok' },
-      { dimension: 'counterargument_coverage', score: 0.4, explanation: 'ok' },
-      { dimension: 'scope_calibration', score: 0.4, explanation: 'ok' },
-      { dimension: 'assumption_transparency', score: 0.4, explanation: 'ok' },
-      { dimension: 'internal_consistency', score: 0.4, explanation: 'ok' }
-    ]
+    evaluation: {
+      overall_score: 0.4,
+      dimensions: [
+        { dimension: 'logical_structure', score: 0.4, explanation: 'ok' },
+        { dimension: 'evidence_grounding', score: 0.4, explanation: 'ok' },
+        { dimension: 'counterargument_coverage', score: 0.4, explanation: 'ok' },
+        { dimension: 'scope_calibration', score: 0.4, explanation: 'ok' },
+        { dimension: 'assumption_transparency', score: 0.4, explanation: 'ok' },
+        { dimension: 'internal_consistency', score: 0.4, explanation: 'ok' }
+      ]
+    },
+    route: {
+      provider: 'vertex',
+      modelId: 'gemini-2.5-flash',
+      routeId: 'verify',
+      reason: 'Restormel route'
+    }
   }))
 }));
 

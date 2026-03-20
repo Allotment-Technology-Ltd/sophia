@@ -66,15 +66,23 @@ describe('runVerificationPipeline', () => {
     } as never);
 
     mockedEvaluateReasoning.mockResolvedValue({
-      overall_score: 0.5,
-      dimensions: [
-        { dimension: 'logical_structure', score: 0.5, explanation: 'ok' },
-        { dimension: 'evidence_grounding', score: 0.5, explanation: 'ok' },
-        { dimension: 'counterargument_coverage', score: 0.5, explanation: 'ok' },
-        { dimension: 'scope_calibration', score: 0.5, explanation: 'ok' },
-        { dimension: 'assumption_transparency', score: 0.5, explanation: 'ok' },
-        { dimension: 'internal_consistency', score: 0.5, explanation: 'ok' }
-      ]
+      evaluation: {
+        overall_score: 0.5,
+        dimensions: [
+          { dimension: 'logical_structure', score: 0.5, explanation: 'ok' },
+          { dimension: 'evidence_grounding', score: 0.5, explanation: 'ok' },
+          { dimension: 'counterargument_coverage', score: 0.5, explanation: 'ok' },
+          { dimension: 'scope_calibration', score: 0.5, explanation: 'ok' },
+          { dimension: 'assumption_transparency', score: 0.5, explanation: 'ok' },
+          { dimension: 'internal_consistency', score: 0.5, explanation: 'ok' }
+        ]
+      },
+      route: {
+        provider: 'vertex',
+        modelId: 'gemini-2.5-flash',
+        routeId: 'verify',
+        reason: 'Restormel route'
+      }
     } as never);
 
     mockedEvaluateConstitution.mockResolvedValue({

@@ -1,7 +1,7 @@
 import { generateText } from 'ai';
 import { z } from 'zod';
 import { extractSophiaMetaBlock } from './engine';
-import { getExtractionModelRoute, trackTokens } from './vertex';
+import { resolveExtractionModelRoute, trackTokens } from './vertex';
 import type { ProviderApiKeys } from './byok/types';
 import {
   ExtractionResultSchema,
@@ -35,8 +35,10 @@ export async function extractClaims(
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
     try {
-      const extractionRoute = getExtractionModelRoute({
-        providerApiKeys: options?.providerApiKeys
+      const extractionRoute = await resolveExtractionModelRoute({
+        providerApiKeys: options?.providerApiKeys,
+        routeId: process.env.RESTORMEL_VERIFY_ROUTE_ID?.trim() || undefined,
+        failureMode: 'error'
       });
       const result = await generateText({
         model: extractionRoute.model,

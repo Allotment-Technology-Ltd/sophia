@@ -124,10 +124,10 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   if (successfulEvaluations === 0 && candidateModels.length > 0) {
     return json({
       defaults: { mode: 'auto' },
-      models: candidateModels,
+      models: [],
       allowed_by_provider: {},
       filtering: { active: false, degraded: true, routeId: routeId ?? null },
-      error: 'Policy-filtered models are temporarily unavailable. Showing the local fallback list.'
+      error: 'Policy-filtered models are temporarily unavailable. Automatic routing remains available.'
     });
   }
 

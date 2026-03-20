@@ -30,7 +30,6 @@ function buildHeaders(requestId: string, processingTimeMs: number, tokenUsage?: 
 function buildVerificationResult(
   requestId: string,
   processingTimeMs: number,
-  model: string,
   pipeline: Awaited<ReturnType<typeof runVerificationPipeline>>
 ): VerificationResult {
   return {
@@ -47,7 +46,7 @@ function buildVerificationResult(
       constitution_output_tokens: pipeline.constitution_output_tokens,
       constitution_rule_violations: pipeline.constitution_rule_violations,
       input_length: pipeline.inputText.length,
-      model,
+      model: pipeline.reasoning_model?.modelId ?? 'unknown',
       retrieval: pipeline.retrieval,
       tokens_used: {
         extraction_input: pipeline.extraction_input_tokens,
@@ -156,7 +155,6 @@ export const POST: RequestHandler = async ({ request }) => {
       const response = buildVerificationResult(
         requestId,
         processingTimeMs,
-        process.env.GEMINI_REASONING_MODEL || 'gemini-2.5-flash',
         pipeline
       );
 
@@ -307,7 +305,6 @@ export const POST: RequestHandler = async ({ request }) => {
         const result = buildVerificationResult(
           requestId,
           processingTimeMs,
-          process.env.GEMINI_REASONING_MODEL || 'gemini-2.5-flash',
           pipeline
         );
         send({ type: 'verification_complete', result });

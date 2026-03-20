@@ -51,7 +51,6 @@
     toSophiaSelectorProviderId
   } from '$lib/restormel/model-selector';
   import {
-    DEFAULT_MODEL_CATALOG,
     PROVIDER_UI_META,
     getModelProviderLabel,
     isReasoningProvider,
@@ -125,17 +124,16 @@
   }
 
   let modelOptions = $state<ModelOption[]>([]);
-  let allowedModelIdsByProvider = $state<Partial<Record<ReasoningProvider, string[]>>>({});
   let byokProviders = $state<ByokProviderStatus[]>([]);
   let keySource = $state<QueryKeySource>('platform');
   let byokStatusError = $state('');
   let modelOptionsLoading = $state(false);
   let modelOptionsError = $state('');
   let modelPolicyFilteringActive = $state(false);
+  let modelOptionsDegraded = $state(false);
   let selectedModelValue = $state<string>('auto');
   let customModelId = $state('');
   let previousKeySource: QueryKeySource = 'platform';
-  const FALLBACK_MODELS = DEFAULT_MODEL_CATALOG;
   let selectedDepth = $state<'quick' | 'standard' | 'deep'>('standard');
   let userLinksInput = $state('');
   let ingestSelections = $state<Record<string, boolean>>({});
@@ -279,80 +277,43 @@
   const restormelModelSelectorKeys = $derived.by(() =>
     createSophiaModelSelectorKeys(byokProviders, restormelModelSelectorProviders, keySource)
   );
-  const modelSelectOptions = $derived.by(() => {
-    const dynamicOptions = selectableModelOptions.map((option) => ({
-      value: option.value,
-      label: option.label,
-      description: option.description,
-      disabled: false
-    }));
-    if (keySource !== 'platform') {
-      return [
-        { value: 'auto', label: 'Auto', description: 'Default depth-aware routing', disabled: false },
-        ...dynamicOptions
-      ];
-    }
-
-    const byokOnlyProviderRows = queryKeyProviderOrder
-      .filter((provider) => provider !== 'vertex')
-      .map((provider) => ({
-        provider,
-        labelPrefix: getModelProviderLabel(provider),
-        byokLabel: PROVIDER_UI_META[provider].label,
-        ids: modelPolicyFilteringActive
-          ? [...(allowedModelIdsByProvider[provider] ?? [])]
-          : [
-              ...modelOptions.filter((option) => option.provider === provider).map((option) => option.id),
-              ...(FALLBACK_MODELS[provider] ?? [])
-            ]
-      }));
-    const byokOnly = byokOnlyProviderRows.flatMap((row) =>
-      row.ids
-        .filter((id, idx, arr) => arr.indexOf(id) === idx)
-        .map((id) => ({
-          value: `${row.provider}::${id}`,
-          label: `${row.labelPrefix} · ${id} (BYOK only)`,
-          description: `Requires an active ${row.byokLabel} BYOK key`,
-          disabled: true
-        }))
-    );
-
-    return [
-      { value: 'auto', label: 'Auto', description: 'Default depth-aware routing', disabled: false },
-      ...dynamicOptions,
-      ...byokOnly
-    ];
-  });
+  const selectableModelValues = $derived.by(() =>
+    new Set(selectableModelOptions.map((option) => option.value))
+  );
   const modelSelectorEmptyMessage = $derived.by(() => {
-    if (modelOptionsLoading || modelOptionsError) return '';
+    if (modelOptionsLoading) return '';
     if (selectableModelOptions.length > 0) return '';
+    if (modelOptionsDegraded) {
+      return 'Explicit model selection is temporarily unavailable. Automatic routing still works.';
+    }
     if (modelPolicyFilteringActive) {
       return 'No explicit models are allowed for this key source right now. Auto remains available.';
     }
     return '';
   });
-  const customModelOverrideAllowed = $derived(!modelPolicyFilteringActive);
-
-  function buildFallbackModelOptions(source: QueryKeySource): ModelOption[] {
-    const fallback: ModelOption[] = [];
-    const providersToInclude = source === 'platform' ? (['vertex'] as ReasoningProvider[]) : [source];
-    for (const provider of providersToInclude) {
-      for (const id of FALLBACK_MODELS[provider] ?? []) {
-        const providerLabel = getModelProviderLabel(provider);
-        fallback.push({
-          value: `${provider}::${id}`,
-          label: `${providerLabel} · ${id}`,
-          description: source === provider ? `User BYOK ${providerLabel} model` : `${providerLabel} model`,
-          provider,
-          id
-        });
-      }
-    }
-    return fallback;
-  }
+  const customModelOverrideAllowed = $derived(!modelPolicyFilteringActive && !modelOptionsDegraded);
+  const thinkingEngineState = $derived.by(() => ({
+    keySource,
+    provider:
+      selectedModel.provider === 'auto'
+        ? keySource === 'platform'
+          ? 'auto'
+          : keySource
+        : selectedModel.provider,
+    modelMode: selectedModelValue === 'auto' ? 'auto' : 'explicit',
+    policyFilteringStatus: modelOptionsLoading
+      ? 'loading'
+      : modelOptionsDegraded
+        ? 'degraded'
+        : modelPolicyFilteringActive
+          ? 'active'
+          : 'inactive',
+    degraded: modelOptionsDegraded,
+    error: modelOptionsError
+  }));
 
   function customModelPlaceholder(provider: ReasoningProvider): string {
-    return (FALLBACK_MODELS[provider] ?? [])[0] ?? 'model-id';
+    return `${provider}-model-id`;
   }
 
   function resetQuoteCardState(): void {
@@ -454,8 +415,8 @@
           id: item.id
         };
       });
-    allowedModelIdsByProvider = payload.allowed_by_provider ?? {};
     modelPolicyFilteringActive = payload.filtering?.active === true;
+    modelOptionsDegraded = payload.filtering?.degraded === true;
     modelOptionsError = payload.error ?? '';
     return payload;
   }
@@ -468,10 +429,10 @@
     try {
       await loadModelOptions(token, source);
     } catch {
-      modelOptions = buildFallbackModelOptions(source);
-      allowedModelIdsByProvider = {};
+      modelOptions = [];
       modelPolicyFilteringActive = false;
-      modelOptionsError = 'Policy-filtered models are temporarily unavailable. Showing the local fallback list.';
+      modelOptionsDegraded = true;
+      modelOptionsError = 'Policy-filtered models are temporarily unavailable. Automatic routing still works.';
     } finally {
       modelOptionsLoading = false;
     }
@@ -487,10 +448,10 @@
         }
         await refreshModelOptions(token, keySource);
       } catch {
-        modelOptions = buildFallbackModelOptions(keySource);
-        allowedModelIdsByProvider = {};
+        modelOptions = [];
         modelPolicyFilteringActive = false;
-        modelOptionsError = 'Policy-filtered models are temporarily unavailable. Showing the local fallback list.';
+        modelOptionsDegraded = true;
+        modelOptionsError = 'Policy-filtered models are temporarily unavailable. Automatic routing still works.';
       }
     })();
   });
@@ -516,9 +477,14 @@
 
   const keySourceDescription = $derived.by(() => {
     if (keySource === 'platform') {
-      return 'Use platform-funded capacity (quick/standard only, daily budget applies).';
+      return thinkingEngineState.degraded
+        ? 'Use platform-funded capacity. Explicit model choices are temporarily unavailable, but automatic routing still works.'
+        : 'Use platform-funded capacity (quick/standard only, daily budget applies).';
     }
     const providerLabel = PROVIDER_UI_META[keySource].label;
+    if (thinkingEngineState.degraded) {
+      return `Use your ${providerLabel} key. Explicit model choices are temporarily unavailable, but automatic routing still works.`;
+    }
     return canRunDeepWithCurrentKey
       ? `Use your ${providerLabel} key for this run.`
       : `${providerLabel} key not active yet. Configure it in Settings first.`;
@@ -547,10 +513,8 @@
   });
 
   $effect(() => {
-    if (modelSelectOptions.length === 0) return;
     if (selectedModelValue === 'auto') return;
-    const selectedOption = modelSelectOptions.find((option) => option.value === selectedModelValue);
-    if (selectedOption && !selectedOption.disabled) return;
+    if (selectableModelValues.has(selectedModelValue)) return;
     selectedModelValue = 'auto';
   });
 
@@ -1771,7 +1735,19 @@
                 <div class="key-model-frame">
                   <div class="frame-title">Thinking Engine</div>
                   <p class="frame-copy">
-                    Choose which reasoning engine to use for this inquiry.
+                    Choose the key source and routing mode for this inquiry.
+                  </p>
+                  <p class="key-source-hint key-source-hint-state">
+                    Status:
+                    {#if thinkingEngineState.policyFilteringStatus === 'loading'}
+                      Refreshing policy-filtered model options.
+                    {:else if thinkingEngineState.policyFilteringStatus === 'degraded'}
+                      Restormel model availability is temporarily degraded. Automatic routing remains available.
+                    {:else if thinkingEngineState.modelMode === 'auto'}
+                      Automatic routing is active for this run.
+                    {:else}
+                      Explicit model selection is active for this run.
+                    {/if}
                   </p>
                   <div class="credential-stack">
                     <div class="key-source-row">
@@ -1815,17 +1791,16 @@
                       <p class="custom-model-hint">
                         Custom model ids are sent directly with your {PROVIDER_UI_META[keySource].label} key.
                       </p>
-                    {:else if keySource !== 'platform' && modelPolicyFilteringActive}
+                    {:else if keySource !== 'platform' && (modelPolicyFilteringActive || modelOptionsDegraded)}
                       <p class="custom-model-hint">
-                        Custom model overrides are disabled while Restormel policy filtering is active.
+                        Custom model overrides are unavailable while Restormel model policy data is constrained.
                       </p>
                     {/if}
                   </div>
                   <p class="key-source-hint">{keySourceDescription}</p>
                   <div class="byok-shortcuts">
                     <p class="byok-shortcuts-copy">
-                      Need your own model key? Configure BYOK first, then keep wallet credit available
-                      for BYOK handling charges.
+                      Need a different key source? Configure BYOK or top up wallet credit before your next run.
                     </p>
                     <div class="byok-shortcuts-actions">
                       <button
@@ -2299,7 +2274,7 @@
                     {/each}
                   </select>
                 </div>
-                <div class="rerun-field rerun-field-model">
+              <div class="rerun-field rerun-field-model">
                   <RestormelModelSelector
                     bind:value={selectedModelValue}
                     keys={restormelModelSelectorKeys}
@@ -2327,12 +2302,12 @@
                     disabled={conversation.isLoading}
                     placeholder={customModelPlaceholder(keySource)}
                     spellcheck="false"
-                    autocomplete="off"
-                  />
-                </div>
-              {:else if keySource !== 'platform' && modelPolicyFilteringActive}
+                  autocomplete="off"
+                />
+              </div>
+              {:else if keySource !== 'platform' && (modelPolicyFilteringActive || modelOptionsDegraded)}
                 <p class="custom-model-hint rerun-custom-model">
-                  Custom model overrides are disabled while Restormel policy filtering is active.
+                  Custom model overrides are unavailable while Restormel model policy data is constrained.
                 </p>
               {/if}
               <div class="ingestion-budget compact">
@@ -2878,6 +2853,13 @@
     letter-spacing: 0;
   }
 
+  .key-source-hint-state {
+    padding: 6px 8px;
+    border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--color-surface-raised) 62%, transparent);
+  }
+
   .key-source-error {
     margin: 0;
     font-family: var(--font-ui);
@@ -2891,10 +2873,10 @@
   .byok-shortcuts {
     display: grid;
     gap: 8px;
-    padding: 8px 10px;
-    border: 1px solid var(--color-border);
+    padding: 6px 8px;
+    border: 1px dashed color-mix(in srgb, var(--color-border) 85%, transparent);
     border-radius: 4px;
-    background: color-mix(in srgb, var(--color-surface-raised) 70%, transparent);
+    background: color-mix(in srgb, var(--color-surface-raised) 42%, transparent);
   }
 
   .byok-shortcuts-copy {

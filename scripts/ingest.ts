@@ -15,13 +15,17 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import Anthropic from '@anthropic-ai/sdk';
 import { Surreal } from 'surrealdb';
 import { generateText } from 'ai';
-import { createVertex } from '@ai-sdk/google-vertex';
+import { estimateCost as estimateRestormelCost, defaultProviders } from '@restormel/keys';
 import { embedTexts, EMBEDDING_DIMENSIONS } from '../src/lib/server/embeddings.js';
 import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.js';
 import { z } from 'zod';
+import {
+	planIngestionStage,
+	type IngestionStagePlan,
+	type IngestProviderPreference
+} from '../src/lib/server/aaif/ingestion-plan.js';
 import { startSpinner } from './progress.js';
 
 // ─── Prompt imports (relative paths for standalone script) ─────────────────
@@ -69,54 +73,13 @@ import type {
 } from '../src/lib/server/ingestion/contracts.js';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
-const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5-20250929';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-const INGEST_VERTEX_MODEL = process.env.INGEST_VERTEX_MODEL || 'gemini-2.0-flash';
-const INGEST_PROVIDER_DEFAULT = (process.env.INGEST_PROVIDER || 'vertex').toLowerCase();
-const EXTRACTION_MODEL_PROFILE_ENV =
-	process.env.EXTRACTION_MODEL_PROFILE ?? process.env.extraction_model_profile ?? '';
-const RELATION_MODEL_PROFILE_ENV =
-	process.env.RELATION_MODEL_PROFILE ?? process.env.relation_model_profile ?? '';
-const GROUPING_MODEL_PROFILE_ENV =
-	process.env.GROUPING_MODEL_PROFILE ?? process.env.grouping_model_profile ?? '';
-const VALIDATION_MODEL_PROFILE_ENV =
-	process.env.VALIDATION_MODEL_PROFILE ?? process.env.validation_model_profile ?? '';
-const EMBEDDING_MODEL_PROFILE_ENV =
-	process.env.EMBEDDING_MODEL_PROFILE ?? process.env.embedding_model_profile ?? '';
-const JSON_REPAIR_MODEL_PROFILE_ENV =
-	process.env.JSON_REPAIR_MODEL_PROFILE ?? process.env.json_repair_model_profile ?? '';
-const EXTRACTION_MODEL_DEFAULT = process.env.EXTRACTION_MODEL || 'gemini-2.5-flash-lite';
-const RELATION_MODEL_DEFAULT = process.env.RELATION_MODEL || 'gemini-2.5-flash-lite';
-const GROUPING_MODEL_DEFAULT = process.env.GROUPING_MODEL || 'claude-sonnet-4-5-20250929';
-const VALIDATION_MODEL_DEFAULT = process.env.VALIDATION_MODEL || 'claude-sonnet-4-5-20250929';
-const JSON_REPAIR_MODEL_DEFAULT = process.env.JSON_REPAIR_MODEL || 'gemini-2.5-pro';
-
-const CLAUDE_MODELS = parseModelList(process.env.CLAUDE_MODELS, [
-	CLAUDE_MODEL,
-	'claude-sonnet-4-5-20250929'
-]);
-
-const INGEST_VERTEX_MODELS = parseModelList(process.env.INGEST_VERTEX_MODELS, [
-	INGEST_VERTEX_MODEL,
-	'gemini-2.0-flash',
-	'gemini-2.5-flash',
-	'gemini-2.5-pro'
-]);
-
-const GEMINI_MODELS = parseModelList(process.env.GEMINI_MODELS, [
-	GEMINI_MODEL,
-	'gemini-2.5-flash',
-	'gemini-2.0-flash-001',
-	'gemini-flash-latest',
-	'gemini-2.5-pro'
-]);
+const INGEST_PROVIDER_DEFAULT = (process.env.INGEST_PROVIDER || 'auto').toLowerCase();
 
 const SURREAL_URL = process.env.SURREAL_URL || 'http://localhost:8000/rpc';
 const SURREAL_USER = process.env.SURREAL_USER || 'root';
 const SURREAL_PASS = process.env.SURREAL_PASS || 'root';
 const SURREAL_NAMESPACE = process.env.SURREAL_NAMESPACE || 'sophia';
 const SURREAL_DATABASE = process.env.SURREAL_DATABASE || 'sophia';
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const GOOGLE_VERTEX_PROJECT = process.env.GOOGLE_VERTEX_PROJECT || process.env.GCP_PROJECT_ID || '';
 const GOOGLE_VERTEX_LOCATION = process.env.GOOGLE_VERTEX_LOCATION || process.env.GCP_LOCATION || 'us-central1';
 const DB_CONNECT_MAX_RETRIES = Number(process.env.DB_CONNECT_MAX_RETRIES || '4');
@@ -169,51 +132,63 @@ function shouldRunStage(stage: string, lastCompleted: string | null | undefined)
 
 // ─── Cost tracking ─────────────────────────────────────────────────────────
 interface CostTracker {
-	claudeInputTokens: number;
-	claudeOutputTokens: number;
-	vertexChars: number; // Vertex AI text-embedding-005 is character-based
-	geminiTokens: number;
+	totalInputTokens: number;
+	totalOutputTokens: number;
+	vertexChars: number;
+	totalUsd: number;
 }
 
 const costs: CostTracker = {
-	claudeInputTokens: 0,
-	claudeOutputTokens: 0,
+	totalInputTokens: 0,
+	totalOutputTokens: 0,
 	vertexChars: 0,
-	geminiTokens: 0
+	totalUsd: 0
 };
 
 function estimateCost(): string {
-	// Claude Sonnet 4.5: $3/1M input, $15/1M output
-	const claudeInput = (costs.claudeInputTokens / 1_000_000) * 3;
-	const claudeOutput = (costs.claudeOutputTokens / 1_000_000) * 15;
-	// Vertex AI text-embedding-005: $0.025/1M characters
-	const vertex = (costs.vertexChars / 1_000_000) * 0.025;
-	// Gemini 2.0 Flash: $0.075/1M input, $0.30/1M output (estimate 50/50)
-	const gemini = (costs.geminiTokens / 1_000_000) * 0.19;
-
-	const total = claudeInput + claudeOutput + vertex + gemini;
-	// Convert to GBP (rough rate)
-	const gbp = total * 0.79;
-	return gbp.toFixed(4);
+	return (costs.totalUsd * 0.79).toFixed(4);
 }
 
 function estimateCostUsd(): string {
-	const claudeInput = (costs.claudeInputTokens / 1_000_000) * 3;
-	const claudeOutput = (costs.claudeOutputTokens / 1_000_000) * 15;
-	const vertex = (costs.vertexChars / 1_000_000) * 0.025;
-	const gemini = (costs.geminiTokens / 1_000_000) * 0.19;
-	return (claudeInput + claudeOutput + vertex + gemini).toFixed(4);
+	return costs.totalUsd.toFixed(4);
 }
 
-function logExtractionCost(label: string, provider: IngestProvider) {
-	if (provider === 'anthropic') {
+function estimateUsageCostUsd(modelId: string, inputTokens: number, outputTokens: number): number {
+	const estimate = estimateRestormelCost(modelId, defaultProviders);
+	if (!estimate) return 0;
+	return (
+		((estimate.inputPerMillion ?? 0) * inputTokens + (estimate.outputPerMillion ?? 0) * outputTokens) /
+		1_000_000
+	);
+}
+
+function trackReasoningCost(modelId: string, inputTokens: number, outputTokens: number): number {
+	const usageCostUsd = estimateUsageCostUsd(modelId, inputTokens, outputTokens);
+	costs.totalInputTokens += inputTokens;
+	costs.totalOutputTokens += outputTokens;
+	costs.totalUsd += usageCostUsd;
+	return usageCostUsd;
+}
+
+function trackEmbeddingCost(totalChars: number): number {
+	const usageCostUsd = (totalChars / 1_000_000) * 0.025;
+	costs.vertexChars += totalChars;
+	costs.totalUsd += usageCostUsd;
+	return usageCostUsd;
+}
+
+function logStageCost(label: string, tracker: StageUsageTracker, plan: IngestionStagePlan) {
+	const inputDelta = currentInputTokens() - tracker.startInputTokens;
+	const outputDelta = currentOutputTokens() - tracker.startOutputTokens;
+	const usdDelta = Number(estimateCostUsd()) - tracker.startUsd;
+	if (plan.stage === 'embedding') {
 		console.log(
-			`  [COST] ${label}: Claude tokens — input: ${costs.claudeInputTokens.toLocaleString()}, output: ${costs.claudeOutputTokens.toLocaleString()} (running total: $${estimateCostUsd()})`
+			`  [COST] ${label}: ${plan.provider}/${plan.model} chars=${costs.vertexChars.toLocaleString()} stage=$${usdDelta.toFixed(4)} total=$${estimateCostUsd()}`
 		);
 		return;
 	}
 	console.log(
-		`  [COST] ${label}: Gemini tokens — ${costs.geminiTokens.toLocaleString()} (running total: $${estimateCostUsd()})`
+		`  [COST] ${label}: ${plan.provider}/${plan.model} input=${inputDelta.toLocaleString()} output=${outputDelta.toLocaleString()} stage=$${usdDelta.toFixed(4)} total=$${estimateCostUsd()}`
 	);
 }
 
@@ -351,13 +326,8 @@ function isModelUnavailableError(error: unknown): boolean {
 	);
 }
 
-type IngestProvider = 'vertex' | 'anthropic';
+type IngestProvider = IngestProviderPreference;
 type StageKey = 'extraction' | 'relations' | 'grouping' | 'validation' | 'embedding' | 'json_repair';
-
-interface ModelRoute {
-	provider: IngestProvider;
-	model: string;
-}
 
 interface StageBudget {
 	maxInputTokens?: number;
@@ -376,13 +346,10 @@ interface StageUsageTracker {
 }
 
 function parseIngestProvider(value: string | undefined): IngestProvider {
-	if (!value) return 'vertex';
+	if (!value) return 'auto';
 	const normalized = value.toLowerCase().trim();
+	if (normalized === 'auto') return 'auto';
 	return normalized === 'anthropic' ? 'anthropic' : 'vertex';
-}
-
-function getProviderLabel(provider: IngestProvider): string {
-	return provider === 'anthropic' ? 'Claude' : 'Vertex Gemini';
 }
 
 function parsePositiveInt(value: string | undefined): number | undefined {
@@ -399,94 +366,6 @@ function parsePositiveFloat(value: string | undefined): number | undefined {
 	return parsed;
 }
 
-function parseModelProfile(rawProfile: string): ModelRoute[] {
-	if (!rawProfile.trim()) return [];
-	const routes: ModelRoute[] = [];
-	for (const token of rawProfile.split(',')) {
-		const trimmed = token.trim();
-		if (!trimmed) continue;
-		const [providerRaw, ...modelParts] = trimmed.split(':');
-		if (modelParts.length === 0) {
-			routes.push({ provider: 'vertex', model: providerRaw.trim() });
-			continue;
-		}
-		const provider = parseIngestProvider(providerRaw);
-		const model = modelParts.join(':').trim();
-		if (!model) continue;
-		routes.push({ provider, model });
-	}
-	return routes;
-}
-
-function normalizeRouteModel(provider: IngestProvider, model: string): string {
-	const normalized = model.trim().toLowerCase();
-	if (provider === 'anthropic') {
-		if (normalized === 'claude-sonnet-4.5' || normalized === 'claude-sonnet-4-5') {
-			return 'claude-sonnet-4-5-20250929';
-		}
-	}
-	return model.trim();
-}
-
-function uniqueRoutes(routes: ModelRoute[]): ModelRoute[] {
-	const out: ModelRoute[] = [];
-	const seen = new Set<string>();
-	for (const route of routes) {
-		const key = `${route.provider}:${route.model}`;
-		if (seen.has(key)) continue;
-		seen.add(key);
-		out.push(route);
-	}
-	return out;
-}
-
-function profileRequiresAnthropic(routes: ModelRoute[]): boolean {
-	return routes.some((route) => route.provider === 'anthropic');
-}
-
-function defaultProfileForStage(stage: StageKey, preferredProvider: IngestProvider): ModelRoute[] {
-	if (stage === 'embedding') {
-		return [{ provider: 'vertex', model: process.env.EMBEDDING_MODEL || 'text-embedding-005' }];
-	}
-	if (stage === 'extraction') {
-		return [{ provider: 'vertex', model: normalizeRouteModel('vertex', EXTRACTION_MODEL_DEFAULT) }];
-	}
-	if (stage === 'relations') {
-		return [{ provider: 'vertex', model: normalizeRouteModel('vertex', RELATION_MODEL_DEFAULT) }];
-	}
-	if (stage === 'grouping') {
-		return [{ provider: 'anthropic', model: normalizeRouteModel('anthropic', GROUPING_MODEL_DEFAULT) }];
-	}
-	if (stage === 'validation') {
-		return [{ provider: 'anthropic', model: normalizeRouteModel('anthropic', VALIDATION_MODEL_DEFAULT) }];
-	}
-	if (stage === 'json_repair') {
-		return [{ provider: 'vertex', model: normalizeRouteModel('vertex', JSON_REPAIR_MODEL_DEFAULT) }];
-	}
-	return [{ provider: preferredProvider, model: normalizeRouteModel(preferredProvider, EXTRACTION_MODEL_DEFAULT) }];
-}
-
-function resolveStageProfile(
-	stage: StageKey,
-	preferredProvider: IngestProvider,
-	envProfile: string
-): ModelRoute[] {
-	const fromEnv = parseModelProfile(envProfile);
-	if (fromEnv.length > 0) {
-		const normalized = uniqueRoutes(
-			fromEnv.map((route) => ({
-				provider: route.provider,
-				model: normalizeRouteModel(route.provider, route.model)
-			}))
-		);
-		if (stage === 'embedding') {
-			return normalized.filter((route) => route.provider === 'vertex').slice(0, 1);
-		}
-		return normalized;
-	}
-	return defaultProfileForStage(stage, preferredProvider);
-}
-
 function makeStageBudget(stage: StageKey): StageBudget {
 	const upper = stage.toUpperCase();
 	const timeoutFallback = stage === 'validation' ? VALIDATION_MODEL_TIMEOUT_MS : INGEST_MODEL_TIMEOUT_MS;
@@ -500,11 +379,11 @@ function makeStageBudget(stage: StageKey): StageBudget {
 }
 
 function currentInputTokens(): number {
-	return costs.claudeInputTokens + costs.geminiTokens;
+	return costs.totalInputTokens;
 }
 
 function currentOutputTokens(): number {
-	return costs.claudeOutputTokens;
+	return costs.totalOutputTokens;
 }
 
 function startStageUsage(stage: StageKey): StageUsageTracker {
@@ -1383,106 +1262,82 @@ function assertRelationIntegrity(relations: PhaseOneRelation[], claims: PhaseOne
 
 async function callStageModel(params: {
 	stage: StageKey;
-	profile: ModelRoute[];
+	plan: IngestionStagePlan;
 	budget: StageBudget;
 	tracker: StageUsageTracker;
-	client: Anthropic | null;
-	vertex: ReturnType<typeof createVertex> | null;
 	systemPrompt: string;
 	userMessage: string;
 	maxTokens?: number;
 }): Promise<string> {
-	const { stage, profile, budget, tracker, client, vertex, systemPrompt, userMessage, maxTokens = 32768 } = params;
+	const { stage, plan, budget, tracker, systemPrompt, userMessage, maxTokens = 32768 } = params;
 	let lastError: Error | null = null;
 
-	for (let routeIndex = 0; routeIndex < profile.length; routeIndex++) {
-		const route = profile[routeIndex];
-		if (routeIndex > 0) {
-			console.log(`  [MODEL] ${stage} fallback -> ${route.provider}:${route.model}`);
-		}
-
-		for (let attempt = 0; attempt <= budget.maxRetries; attempt++) {
-			try {
-				if (attempt > 0) {
-					if (tracker.retries >= budget.maxRetries) {
-						throw new Error(`[BUDGET] ${stage} exceeded retry cap (${budget.maxRetries})`);
-					}
-					tracker.retries += 1;
-					const delayMs = 1000 * Math.pow(2, attempt - 1);
-					console.log(`  [RETRY] ${stage} attempt ${attempt + 1}/${budget.maxRetries + 1} (${delayMs}ms backoff)`);
-					await sleep(delayMs);
+	for (let attempt = 0; attempt <= budget.maxRetries; attempt++) {
+		try {
+			if (attempt > 0) {
+				if (tracker.retries >= budget.maxRetries) {
+					throw new Error(`[BUDGET] ${stage} exceeded retry cap (${budget.maxRetries})`);
 				}
-
-				if (route.provider === 'anthropic') {
-					if (!client) throw new Error('Anthropic client unavailable');
-					const response = await withTimeout(
-						client.messages.create({
-							model: route.model,
-							max_tokens: maxTokens,
-							system: systemPrompt,
-							messages: [{ role: 'user', content: userMessage }]
-						}),
-						budget.timeoutMs,
-						`${stage} ${route.provider}:${route.model}`
-					);
-					if (response.usage) {
-						costs.claudeInputTokens += response.usage.input_tokens;
-						costs.claudeOutputTokens += response.usage.output_tokens;
-					}
-					if (response.stop_reason === 'max_tokens') {
-						throw new Error('Model output was truncated (max_tokens reached)');
-					}
-					const textBlock = response.content.find((block) => block.type === 'text');
-					if (!textBlock || textBlock.type !== 'text') {
-						throw new Error('No text block in model response');
-					}
-					assertStageBudget(budget, tracker);
-					return textBlock.text;
-				}
-
-				if (!vertex) throw new Error('Vertex client unavailable');
-				const { text, usage } = await withTimeout(
-					generateText({
-						model: vertex(route.model),
-						system: systemPrompt,
-						messages: [{ role: 'user', content: userMessage }],
-						temperature: 0.1
-					}),
-					budget.timeoutMs,
-					`${stage} ${route.provider}:${route.model}`
+				tracker.retries += 1;
+				const delayMs = 1000 * Math.pow(2, attempt - 1);
+				console.log(
+					`  [RETRY] ${stage} ${plan.provider}:${plan.model} attempt ${attempt + 1}/${budget.maxRetries + 1} (${delayMs}ms backoff)`
 				);
-				if (usage) {
-					costs.geminiTokens += (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
-				}
-				assertStageBudget(budget, tracker);
-				return text;
-			} catch (error) {
-				lastError = error instanceof Error ? error : new Error(String(error));
-				const retryable =
-					lastError.message.includes('429') ||
-					lastError.message.includes('529') ||
-					lastError.message.includes('500') ||
-					lastError.message.includes('overloaded') ||
-					lastError.message.includes('timeout') ||
-					lastError.message.includes('prompt_too_long') ||
-					lastError.message.includes('context_length');
-				console.warn(`  [WARN] ${stage} ${route.provider}:${route.model} failed: ${lastError.message}`);
-				if (isModelUnavailableError(lastError)) break;
-				if (!retryable) break;
+				await sleep(delayMs);
 			}
+
+			if (!plan.route) {
+				throw new Error(`No executable route available for ${stage}`);
+			}
+
+			const result = await withTimeout(
+				generateText({
+					model: plan.route.model,
+					system: systemPrompt,
+					messages: [{ role: 'user', content: userMessage }],
+					temperature: 0.1,
+					maxOutputTokens: maxTokens
+				}),
+				budget.timeoutMs,
+				`${stage} ${plan.provider}:${plan.model}`
+			);
+			const inputTokens = result.usage?.inputTokens ?? 0;
+			const outputTokens = result.usage?.outputTokens ?? 0;
+			const usageCostUsd = trackReasoningCost(plan.model, inputTokens, outputTokens);
+			if (result.finishReason === 'length') {
+				throw new Error('Model output was truncated (max_tokens reached)');
+			}
+			console.log(
+				`  [ROUTE] ${stage}: ${plan.provider}/${plan.model} source=${plan.routingSource} cost~$${usageCostUsd.toFixed(4)}`
+			);
+			assertStageBudget(budget, tracker);
+			return result.text;
+		} catch (error) {
+			lastError = error instanceof Error ? error : new Error(String(error));
+			const retryable =
+				lastError.message.includes('429') ||
+				lastError.message.includes('529') ||
+				lastError.message.includes('500') ||
+				lastError.message.includes('overloaded') ||
+				lastError.message.includes('timeout') ||
+				lastError.message.includes('prompt_too_long') ||
+				lastError.message.includes('context_length');
+			console.warn(`  [WARN] ${stage} ${plan.provider}:${plan.model} failed: ${lastError.message}`);
+			if (isModelUnavailableError(lastError)) break;
+			if (!retryable) break;
 		}
 	}
 
-	throw new Error(`[${stage}] All provider/model fallbacks exhausted: ${lastError?.message || 'Unknown error'}`);
+	throw new Error(
+		`[${stage}] Planned route exhausted (${plan.provider}:${plan.model}): ${lastError?.message || 'Unknown error'}`
+	);
 }
 
 async function callStageModelWithProgress(params: {
 	stage: StageKey;
-	profile: ModelRoute[];
+	plan: IngestionStagePlan;
 	budget: StageBudget;
 	tracker: StageUsageTracker;
-	client: Anthropic | null;
-	vertex: ReturnType<typeof createVertex> | null;
 	systemPrompt: string;
 	userMessage: string;
 	label: string;
@@ -1500,16 +1355,14 @@ async function callStageModelWithProgress(params: {
 }
 
 async function fixJsonWithModel(
-	client: Anthropic | null,
-	vertex: ReturnType<typeof createVertex> | null,
-	repairProfile: ModelRoute[],
+	repairPlan: IngestionStagePlan,
 	repairBudget: StageBudget,
 	repairTracker: StageUsageTracker,
 	originalJson: string,
 	parseError: string,
 	schema: string
 ): Promise<string> {
-	console.log(`  [FIX] Repair fallback chain: ${repairProfile.map((r) => `${r.provider}:${r.model}`).join(' -> ')}`);
+	console.log(`  [FIX] Repair route: ${repairPlan.provider}:${repairPlan.model}`);
 
 	const fixPrompt = `The following JSON output was malformed. Please fix it so it is valid JSON matching this schema:
 
@@ -1524,11 +1377,9 @@ Respond ONLY with the corrected JSON array. No explanation, no markdown backtick
 
 	return callStageModelWithProgress({
 		stage: 'json_repair',
-		profile: repairProfile,
+		plan: repairPlan,
 		budget: repairBudget,
 		tracker: repairTracker,
-		client,
-		vertex,
 		systemPrompt:
 			'You are a JSON repair assistant. Fix the malformed JSON to be valid. Respond with only the corrected JSON.',
 		userMessage: fixPrompt,
@@ -1773,16 +1624,6 @@ async function main() {
 	const ingestProviderFlagIdx = args.findIndex((a) => a === '--ingest-provider');
 	const ingestProviderFlag = ingestProviderFlagIdx !== -1 ? args[ingestProviderFlagIdx + 1] : undefined;
 	const ingestProvider = parseIngestProvider(ingestProviderFlag ?? INGEST_PROVIDER_DEFAULT);
-	const extractionModelProfile = resolveStageProfile('extraction', ingestProvider, EXTRACTION_MODEL_PROFILE_ENV);
-	const relationModelProfile = resolveStageProfile('relations', ingestProvider, RELATION_MODEL_PROFILE_ENV);
-	const groupingModelProfile = resolveStageProfile('grouping', ingestProvider, GROUPING_MODEL_PROFILE_ENV);
-	const validationModelProfile = resolveStageProfile('validation', ingestProvider, VALIDATION_MODEL_PROFILE_ENV);
-	const embeddingModelProfile = resolveStageProfile('embedding', ingestProvider, EMBEDDING_MODEL_PROFILE_ENV);
-	const jsonRepairModelProfile = resolveStageProfile(
-		'json_repair',
-		ingestProvider,
-		JSON_REPAIR_MODEL_PROFILE_ENV
-	);
 	const extractionBudget = makeStageBudget('extraction');
 	const relationBudget = makeStageBudget('relations');
 	const groupingBudget = makeStageBudget('grouping');
@@ -1813,27 +1654,17 @@ async function main() {
 		console.error('\nFlags:');
 		console.error('  --validate              Optional spot-check: run Gemini cross-model validation');
 		console.error('  --domain <domain>       Override claim domain tag (e.g. philosophy_of_mind)');
-		console.error('  --ingest-provider <p>   Extraction provider: vertex | anthropic (default: vertex)');
+		console.error('  --ingest-provider <p>   Provider hint: auto | vertex | anthropic (default: auto)');
 		console.error('  --force-stage <stage>   Re-run from this stage onwards, ignoring saved progress');
 		console.error(`                          Valid stages: ${STAGES_ORDER.join(', ')}`);
-		console.error('\nModel profile env vars (comma-separated provider:model chain):');
-		console.error('  EXTRACTION_MODEL_PROFILE, RELATION_MODEL_PROFILE, GROUPING_MODEL_PROFILE');
-		console.error('  VALIDATION_MODEL_PROFILE, EMBEDDING_MODEL_PROFILE, JSON_REPAIR_MODEL_PROFILE');
+		console.error('\nRestormel route env vars (optional):');
+		console.error('  RESTORMEL_INGEST_ROUTE_ID, RESTORMEL_INGEST_VALIDATION_ROUTE_ID');
+		console.error('  RESTORMEL_INGEST_EXTRACTION_ROUTE_ID, RESTORMEL_INGEST_RELATIONS_ROUTE_ID, RESTORMEL_INGEST_GROUPING_ROUTE_ID, RESTORMEL_INGEST_JSON_REPAIR_ROUTE_ID');
 		console.error('\nResume is automatic — re-run the same source to pick up where it left off.');
 		process.exit(1);
 	}
 
 	// Validate environment
-	const anyAnthropicProfile =
-		profileRequiresAnthropic(extractionModelProfile) ||
-		profileRequiresAnthropic(relationModelProfile) ||
-		profileRequiresAnthropic(groupingModelProfile) ||
-		profileRequiresAnthropic(validationModelProfile) ||
-		profileRequiresAnthropic(jsonRepairModelProfile);
-	if (anyAnthropicProfile && !ANTHROPIC_API_KEY) {
-		console.error('[ERROR] Anthropic appears in model profiles but ANTHROPIC_API_KEY is not configured');
-		process.exit(1);
-	}
 	if (!GOOGLE_VERTEX_PROJECT) {
 		console.error('[ERROR] GOOGLE_VERTEX_PROJECT (or GCP_PROJECT_ID) is required');
 		process.exit(1);
@@ -1941,6 +1772,21 @@ async function main() {
 		partial = { source: sourceMeta, stage_completed: 'none' };
 	}
 
+	const estimatedSourceTokens = estimateTokens(sourceText);
+	const basePlanningContext = {
+		sourceTitle: sourceMeta.title,
+		sourceType: sourceMeta.source_type,
+		estimatedTokens: estimatedSourceTokens,
+		sourceLengthChars: sourceText.length,
+		preferredProvider: ingestProvider
+	} as const;
+	let extractionPlan = await planIngestionStage('extraction', basePlanningContext);
+	let relationPlan = await planIngestionStage('relations', basePlanningContext);
+	let groupingPlan = await planIngestionStage('grouping', basePlanningContext);
+	let validationPlan = await planIngestionStage('validation', basePlanningContext);
+	let embeddingPlan = await planIngestionStage('embedding', basePlanningContext);
+	let jsonRepairPlan = await planIngestionStage('json_repair', basePlanningContext);
+
 	console.log('╔══════════════════════════════════════════════════════════════╗');
 	console.log('║              SOPHIA — INGESTION PIPELINE                    ║');
 	console.log('╚══════════════════════════════════════════════════════════════╝');
@@ -1949,23 +1795,20 @@ async function main() {
 	console.log(`Author: ${sourceMeta.author.join(', ') || 'Unknown'}`);
 	console.log(`Type:   ${sourceMeta.source_type}`);
 	console.log(`Words:  ${sourceMeta.word_count.toLocaleString()}`);
-	console.log(`Est. tokens: ~${estimateTokens(sourceText).toLocaleString()}`);
+	console.log(`Est. tokens: ~${estimatedSourceTokens.toLocaleString()}`);
 	console.log(`Passages: ${passages.length} (${extractionBatches.length} extraction batch${extractionBatches.length === 1 ? '' : 'es'})`);
 	console.log(`Ingest provider hint: ${ingestProvider}`);
-	console.log(`Extraction profile: ${extractionModelProfile.map((r) => `${r.provider}:${r.model}`).join(' -> ')}`);
-	console.log(`Relations profile:  ${relationModelProfile.map((r) => `${r.provider}:${r.model}`).join(' -> ')}`);
-	console.log(`Grouping profile:   ${groupingModelProfile.map((r) => `${r.provider}:${r.model}`).join(' -> ')}`);
-	console.log(`Validation profile: ${validationModelProfile.map((r) => `${r.provider}:${r.model}`).join(' -> ')}`);
-	console.log(`Embedding profile:  ${embeddingModelProfile.map((r) => `${r.provider}:${r.model}`).join(' -> ')}`);
+	console.log(`Extraction route: ${extractionPlan.provider}:${extractionPlan.model} (${extractionPlan.routingSource})`);
+	console.log(`Relations route:  ${relationPlan.provider}:${relationPlan.model} (${relationPlan.routingSource})`);
+	console.log(`Grouping route:   ${groupingPlan.provider}:${groupingPlan.model} (${groupingPlan.routingSource})`);
+	console.log(`Validation route: ${validationPlan.provider}:${validationPlan.model} (${validationPlan.routingSource})`);
+	console.log(`Embedding route:  ${embeddingPlan.provider}:${embeddingPlan.model} (${embeddingPlan.routingSource})`);
+	console.log(`Repair route:     ${jsonRepairPlan.provider}:${jsonRepairPlan.model} (${jsonRepairPlan.routingSource})`);
 	console.log(`Validate: ${shouldValidate ? 'YES (Gemini)' : 'No'}`);
 	if (resumeFromStage) {
 		console.log(`Resume from: ${resumeFromStage}`);
 	}
 	console.log('');
-
-	// Initialize model clients
-	const claude = anyAnthropicProfile ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
-	const vertexIngestClient = createVertex({ project: GOOGLE_VERTEX_PROJECT, location: GOOGLE_VERTEX_LOCATION });
 
 	try {
 		// ═══════════════════════════════════════════════════════════════
@@ -2039,11 +1882,9 @@ async function main() {
 					try {
 						rawResponse = await callStageModelWithProgress({
 							stage: 'extraction',
-							profile: extractionModelProfile,
+							plan: extractionPlan,
 							budget: extractionBudget,
 							tracker: extractionTracker,
-							client: claude,
-							vertex: vertexIngestClient,
 							systemPrompt: EXTRACTION_SYSTEM,
 							userMessage: userMsg,
 							label: `Extracting batch ${batchLabel}`
@@ -2061,7 +1902,7 @@ async function main() {
 						}
 						throw apiError;
 					}
-					logExtractionCost('Extraction', extractionModelProfile[0]?.provider ?? ingestProvider);
+					logStageCost('Extraction', extractionTracker, extractionPlan);
 
 					try {
 						const parsed = parseJsonResponse(rawResponse);
@@ -2091,9 +1932,7 @@ async function main() {
 						let fixedResponse: string;
 						try {
 							fixedResponse = await fixJsonWithModel(
-								claude,
-								vertexIngestClient,
-								jsonRepairModelProfile,
+								jsonRepairPlan,
 								jsonRepairBudget,
 								repairTracker,
 								rawResponse,
@@ -2170,6 +2009,23 @@ async function main() {
 			}
 
 			assertClaimIntegrity(allClaims);
+			relationPlan = await planIngestionStage('relations', {
+				...basePlanningContext,
+				claimCount: allClaims.length
+			});
+			groupingPlan = await planIngestionStage('grouping', {
+				...basePlanningContext,
+				claimCount: allClaims.length
+			});
+			validationPlan = await planIngestionStage('validation', {
+				...basePlanningContext,
+				claimCount: allClaims.length
+			});
+			embeddingPlan = await planIngestionStage('embedding', {
+				...basePlanningContext,
+				claimCount: allClaims.length,
+				claimTextChars: allClaims.reduce((sum, claim) => sum + claim.text.length, 0)
+			});
 
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 2: RELATION EXTRACTION
@@ -2188,15 +2044,13 @@ async function main() {
 			const relUserMsg = RELATIONS_USER(claimsJson);
 			const relRawResponse = await callStageModel({
 				stage: 'relations',
-				profile: relationModelProfile,
+				plan: relationPlan,
 				budget: relationBudget,
 				tracker: relationsTracker,
-				client: claude,
-				vertex: vertexIngestClient,
 				systemPrompt: RELATIONS_SYSTEM,
 				userMessage: relUserMsg
 			});
-			logExtractionCost('Relations', relationModelProfile[0]?.provider ?? ingestProvider);
+			logStageCost('Relations', relationsTracker, relationPlan);
 
 				try {
 					const parsed = parseJsonResponse(relRawResponse);
@@ -2205,9 +2059,7 @@ async function main() {
 				} catch (parseError) {
 				console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
 				const fixedResponse = await fixJsonWithModel(
-					claude,
-					vertexIngestClient,
-					jsonRepairModelProfile,
+					jsonRepairPlan,
 					jsonRepairBudget,
 					repairTracker,
 					relRawResponse,
@@ -2247,6 +2099,16 @@ async function main() {
 				relations = partial.relations;
 			}
 			assertRelationIntegrity(relations, allClaims);
+			groupingPlan = await planIngestionStage('grouping', {
+				...basePlanningContext,
+				claimCount: allClaims.length,
+				relationCount: relations.length
+			});
+			validationPlan = await planIngestionStage('validation', {
+				...basePlanningContext,
+				claimCount: allClaims.length,
+				relationCount: relations.length
+			});
 
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 3: ARGUMENT GROUPING
@@ -2281,16 +2143,14 @@ async function main() {
 					const grpUserMsg = GROUPING_USER(claimsJson, relationsJson);
 					const grpRawResponse = await callStageModel({
 						stage: 'grouping',
-						profile: groupingModelProfile,
+						plan: groupingPlan,
 						budget: groupingBudget,
 						tracker: groupingTracker,
-						client: claude,
-						vertex: vertexIngestClient,
 						systemPrompt: GROUPING_SYSTEM,
 						userMessage: grpUserMsg
 					});
 					saveGroupingDebugRaw(slug, batchIndex, grpRawResponse);
-					logExtractionCost('Grouping', groupingModelProfile[0]?.provider ?? ingestProvider);
+					logStageCost('Grouping', groupingTracker, groupingPlan);
 
 					try {
 						const parsed = parseJsonResponse(grpRawResponse);
@@ -2304,9 +2164,7 @@ async function main() {
 							`  [WARN] JSON parse/validation failed for grouping batch ${batchIndex + 1}. Attempting fix...`
 						);
 						const fixedResponse = await fixJsonWithModel(
-							claude,
-							vertexIngestClient,
-							jsonRepairModelProfile,
+							jsonRepairPlan,
 							jsonRepairBudget,
 							repairTracker,
 							grpRawResponse,
@@ -2357,7 +2215,13 @@ async function main() {
 				throw new Error('Resume data missing arguments for skipped Stage 3; rerun from Stage 3');
 			}
 			arguments_ = partial.arguments;
-		}
+			}
+			validationPlan = await planIngestionStage('validation', {
+				...basePlanningContext,
+				claimCount: allClaims.length,
+				relationCount: relations.length,
+				argumentCount: arguments_.length
+			});
 
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 4: EMBEDDING
@@ -2373,20 +2237,21 @@ async function main() {
 			console.log('└──────────────────────────────────────────────────────────┘');
 
 			const claimTexts = allClaims.map((c) => c.text);
-			if (embeddingModelProfile.some((route) => route.provider !== 'vertex')) {
+			if (embeddingPlan.provider !== 'vertex') {
 				throw new Error('Embedding model profile currently supports only vertex provider');
 			}
-			console.log(`  Embedding ${claimTexts.length} claims via ${embeddingModelProfile[0]?.model || 'text-embedding-005'} (${EMBEDDING_DIMENSIONS}-dim)...`);
+			console.log(
+				`  Embedding ${claimTexts.length} claims via ${embeddingPlan.model} (${EMBEDDING_DIMENSIONS}-dim)...`
+			);
 
 			allEmbeddings = await withTimeout(
 				embedTexts(claimTexts),
 				embeddingBudget.timeoutMs,
-				`embedding ${embeddingModelProfile[0]?.model || 'text-embedding-005'}`
+				`embedding ${embeddingPlan.model}`
 			);
 
-			// Track cost: Vertex AI charges per character, not per token
 			const totalChars = claimTexts.reduce((sum, t) => sum + t.length, 0);
-			costs.vertexChars += totalChars;
+			trackEmbeddingCost(totalChars);
 			assertStageBudget(embeddingBudget, embeddingTracker);
 
 			console.log(`  [OK] Generated ${allEmbeddings.length} embeddings (${EMBEDDING_DIMENSIONS} dimensions)`);
@@ -2470,11 +2335,9 @@ async function main() {
 					try {
 						const responseText = await callStageModel({
 							stage: 'validation',
-							profile: validationModelProfile,
+							plan: validationPlan,
 							budget: validationBudget,
 							tracker: validationTracker,
-							client: claude,
-							vertex: vertexIngestClient,
 							systemPrompt: 'You are a strict validation assistant. Return JSON only.',
 							userMessage: validationPrompt
 						});
@@ -2490,9 +2353,7 @@ async function main() {
 								`  [WARN] JSON parse/validation failed for validation batch ${batchIndex + 1}. Attempting fix...`
 							);
 							const fixedResponse = await fixJsonWithModel(
-								claude,
-								vertexIngestClient,
-								jsonRepairModelProfile,
+								jsonRepairPlan,
 								jsonRepairBudget,
 								repairTracker,
 								responseText,
@@ -3083,13 +2944,10 @@ async function main() {
 		);
 		console.log('╠══════════════════════════════════════════════════════════════╣');
 		console.log(
-			`║  Claude tokens:    ${`${(costs.claudeInputTokens + costs.claudeOutputTokens).toLocaleString()} (in: ${costs.claudeInputTokens.toLocaleString()}, out: ${costs.claudeOutputTokens.toLocaleString()})`.padEnd(40)} ║`
+			`║  Reasoning tokens: ${`${costs.totalInputTokens.toLocaleString()} in / ${costs.totalOutputTokens.toLocaleString()} out`.padEnd(40)} ║`
 		);
 		console.log(
 			`║  Vertex chars:     ${costs.vertexChars.toLocaleString().padEnd(40)} ║`
-		);
-		console.log(
-			`║  Gemini tokens:    ${costs.geminiTokens.toLocaleString().padEnd(40)} ║`
 		);
 		console.log(
 			`║  Estimated cost:   £${estimateCost()} ($${estimateCostUsd()})${' '.repeat(Math.max(0, 37 - estimateCost().length - estimateCostUsd().length))} ║`

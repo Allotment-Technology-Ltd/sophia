@@ -8,8 +8,7 @@ const PAYLOAD_TEMPLATES: Record<string, string> = {
     {
       source_url: 'https://plato.stanford.edu/entries/ethics-deontological/',
       source_type: 'sep_entry',
-      validate: true,
-      ingest_provider: 'vertex'
+      validate: true
     },
     null,
     2

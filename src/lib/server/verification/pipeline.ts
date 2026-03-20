@@ -50,6 +50,12 @@ export interface VerificationPipelineResult {
   extracted_claims: VerificationResult['extracted_claims'];
   logical_relations: VerificationResult['logical_relations'];
   reasoning_quality: VerificationResult['reasoning_quality'];
+  reasoning_model?: {
+    provider: string;
+    modelId: string;
+    routeId: string | null;
+    reason: string | null;
+  };
   constitutional_check: VerificationResult['constitutional_check'];
   pass_outputs?: VerificationResult['pass_outputs'];
   retrieval?: VerificationResult['metadata']['retrieval'];
@@ -128,10 +134,10 @@ export async function runVerificationPipeline(
     metadata: extraction.metadata
   });
 
-  const reasoningQuality = await evaluateReasoning(extraction.claims, extraction.relations, request, {
+  const reasoning = await evaluateReasoning(extraction.claims, extraction.relations, request, {
     providerApiKeys: options.providerApiKeys
   });
-  callbacks?.onReasoningScores?.(reasoningQuality);
+  callbacks?.onReasoningScores?.(reasoning.evaluation);
 
   const constitutionStartedAt = Date.now();
   const constitutionResult = await evaluateConstitutionWithTelemetry(
@@ -149,7 +155,8 @@ export async function runVerificationPipeline(
     inputText,
     extracted_claims: extraction.claims,
     logical_relations: extraction.relations,
-    reasoning_quality: reasoningQuality,
+    reasoning_quality: reasoning.evaluation,
+    reasoning_model: reasoning.route,
     constitutional_check: constitutionResult.check,
     pass_outputs: includePassOutputs
       ? {

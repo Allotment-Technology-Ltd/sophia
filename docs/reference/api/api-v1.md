@@ -104,7 +104,7 @@ The following additive endpoints are planned as part of the BYOK rollout and are
 - `POST /api/byok/providers/:provider/validate`
 
 BYOK rollout is planned to preserve backward compatibility for the existing `/api/v1/verify` contract.
-When BYOK is active, `/api/models` is expected to become user-contextual, reflecting provider/model availability based on the caller's configured credentials.
+When BYOK is active, `/api/allowed-models` becomes user-contextual, reflecting provider/model availability based on the caller's configured credentials and Restormel policy evaluation.
 
 ### `GET /api/v1/keys`
 

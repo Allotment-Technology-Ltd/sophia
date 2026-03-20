@@ -53,23 +53,15 @@ describe('classifyResolveFailure', () => {
 });
 
 describe('resolveProviderDecision', () => {
-  const originalUseRestormelKeys = process.env.USE_RESTORMEL_KEYS;
-
   beforeEach(() => {
     vi.resetModules();
-    process.env.USE_RESTORMEL_KEYS = 'true';
   });
 
   afterEach(() => {
-    if (originalUseRestormelKeys === undefined) {
-      delete process.env.USE_RESTORMEL_KEYS;
-    } else {
-      process.env.USE_RESTORMEL_KEYS = originalUseRestormelKeys;
-    }
     vi.restoreAllMocks();
   });
 
-  it('logs policy-blocked resolves as warnings and preserves legacy fallback', async () => {
+  it('logs policy-blocked resolves as warnings and returns the degraded default', async () => {
     const restormel = await import('./restormel');
     const { resolveProviderDecision } = await import('./resolve-provider');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -87,25 +79,24 @@ describe('resolveProviderDecision', () => {
     });
     vi.spyOn(restormel, 'restormelResolve').mockRejectedValue(error);
 
-    const legacy = vi.fn(() => ({
-      provider: 'vertex' as const,
-      model: 'gemini-2.5-flash',
-      source: 'legacy' as const
-    }));
-
     const result = await resolveProviderDecision({
-      legacy,
-      routeId: 'interactive'
+      routeId: 'interactive',
+      safeDefault: {
+        provider: 'vertex',
+        model: 'gemini-2.5-flash'
+      }
     });
 
     expect(result).toEqual({
       provider: 'vertex',
       model: 'gemini-2.5-flash',
-      source: 'legacy'
+      source: 'degraded_default',
+      routeId: null,
+      explanation: 'No permitted AI model route is currently available. Using Sophia\'s degraded default route.',
+      failureKind: 'policy_blocked'
     });
-    expect(legacy).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      '[restormel] Policy blocked all Restormel route steps; using legacy fallback',
+      '[restormel] Policy blocked all Restormel route steps; evaluating degraded fallback',
       expect.objectContaining({
         code: 'policy_blocked',
         status: 403,
