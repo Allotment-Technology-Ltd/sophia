@@ -74,6 +74,9 @@ SOPHIA remains the concrete app that proves these ideas in product form. Use [..
 
 ### Design
 - [Restormel Platform: Design Backlog by Surface](05-design/21-design-backlog-by-surface.md)
+- [Restormel Design System - Component Inventory](05-design/COMPONENT-INVENTORY.md)
+- [Restormel Design System - Complete Specification](05-design/DESIGN-SPECIFICATION.md)
+- [Restormel Design System - Design Tokens](05-design/DESIGN-TOKENS.md)
 
 ### Marketplace
 - [Restormel Marketplace Strategy](06-marketplace/04-marketplace-strategy.md)
