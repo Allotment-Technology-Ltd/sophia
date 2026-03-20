@@ -94,39 +94,39 @@
   }> = [
     {
       id: 'prepare',
-      title: 'Prepare',
-      cue: 'Define the source and aim',
-      summary: 'Choose what to ingest and how much manual control you want.'
+      title: 'Configure source',
+      cue: 'Step 1',
+      summary: 'Choose the source, operation type, and basic execution settings.'
     },
     {
       id: 'preflight',
-      title: 'Preflight',
-      cue: 'Check before burn',
-      summary: 'Surface blockers, incomplete routing, and provider visibility before the run starts.'
+      title: 'Review checks',
+      cue: 'Step 2',
+      summary: 'See blockers, warnings, and anything that needs fixing before launch.'
     },
     {
       id: 'pipeline',
-      title: 'Pipeline',
-      cue: 'Inspect the chambers',
-      summary: 'See each ingestion stage, the route bound to it, and where the work will travel.'
+      title: 'Review pipeline',
+      cue: 'Step 3',
+      summary: 'Inspect each ingestion stage, its route, and its fallback steps.'
     },
     {
       id: 'simulate',
-      title: 'Simulate',
-      cue: 'Preview the route',
-      summary: 'Test the active route and inspect the likely primary and fallback steps.'
+      title: 'Preview route',
+      cue: 'Step 4',
+      summary: 'Run a route preview to confirm the likely active path and cost.'
     },
     {
       id: 'run',
-      title: 'Run',
-      cue: 'Launch the operation',
-      summary: 'Queue the job when the source, routing, and checks all read clearly.'
+      title: 'Launch run',
+      cue: 'Step 5',
+      summary: 'Queue the operation when the source, routing, and checks are ready.'
     },
     {
       id: 'review',
-      title: 'Review',
-      cue: 'Confirm what happened',
-      summary: 'Read the live status, review the log, and decide whether to continue or rectify.'
+      title: 'Review result',
+      cue: 'Step 6',
+      summary: 'Review the outcome, logs, and next action after the run finishes.'
     }
   ];
 
@@ -595,6 +595,96 @@
 
   const prepareReady = $derived(preflightBlockers().length === 0);
   const canLaunch = $derived(prepareReady && requestState !== 'submitting');
+  const preflightBlockerList = $derived.by(() => preflightBlockers());
+  const preflightWarningList = $derived.by(() => preflightWarnings());
+  const criticalSignals = $derived.by(() => {
+    const signals: Array<{ tone: 'attention' | 'ready' | 'passed'; label: string; value: string; detail: string }> = [];
+
+    if (preflightBlockerList.length > 0) {
+      signals.push({
+        tone: 'attention',
+        label: 'Blockers',
+        value: `${preflightBlockerList.length}`,
+        detail: 'Fix these before launch.'
+      });
+    } else {
+      signals.push({
+        tone: 'passed',
+        label: 'Blockers',
+        value: '0',
+        detail: 'No required fixes.'
+      });
+    }
+
+    if (providerHealthEntries.length === 0) {
+      signals.push({
+        tone: 'attention',
+        label: 'Provider health',
+        value: 'Unavailable',
+        detail: 'Reliability signal is weak.'
+      });
+    } else {
+      signals.push({
+        tone: 'passed',
+        label: 'Provider health',
+        value: `${providerHealthEntries.length}`,
+        detail: 'Configured providers visible.'
+      });
+    }
+
+    if (missingStageCount > 0) {
+      signals.push({
+        tone: 'attention',
+        label: 'Route coverage',
+        value: `${missingStageCount} missing`,
+        detail: 'Some stages still need routing.'
+      });
+    } else {
+      signals.push({
+        tone: 'passed',
+        label: 'Route coverage',
+        value: `${dedicatedRouteCount} staged`,
+        detail: 'Every stage has route coverage.'
+      });
+    }
+
+    signals.push({
+      tone: ingestProvider === 'auto' ? 'passed' : 'ready',
+      label: 'Routing mode',
+      value: ingestProvider === 'auto' ? 'Automatic' : 'Manual',
+      detail: ingestProvider === 'auto' ? 'Restormel chooses the path.' : 'A provider override is active.'
+    });
+
+    return signals;
+  });
+  const dominantSignal = $derived.by(() => {
+    if (preflightBlockerList.length > 0) {
+      return {
+        tone: 'attention' as PhaseSignal,
+        title: 'This run needs fixes before launch.',
+        detail: preflightBlockerList[0]
+      };
+    }
+    if (providerHealthEntries.length === 0) {
+      return {
+        tone: 'attention' as PhaseSignal,
+        title: 'Provider health is not visible for this project.',
+        detail: 'You can still configure the run, but reliability guidance is weaker than it should be.'
+      };
+    }
+    if (missingStageCount > 0) {
+      return {
+        tone: 'ready' as PhaseSignal,
+        title: 'The pipeline is usable, but stage routing is incomplete.',
+        detail: `${missingStageCount} stage${missingStageCount === 1 ? '' : 's'} still rely on shared or missing coverage.`
+      };
+    }
+    return {
+      tone: 'passed' as PhaseSignal,
+      title: 'The workbench is ready for a clean staged walkthrough.',
+      detail: 'Source setup, route coverage, and provider visibility are in a workable state.'
+    };
+  });
 
   function phaseSignal(id: WorkbenchPhaseId): PhaseSignal {
     const blockers = preflightBlockers();
@@ -929,38 +1019,37 @@
               Admin Ingestion Workbench
             </span>
             <span class="rounded-full border border-sophia-dark-border bg-sophia-dark-surface-raised/70 px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">
-              Surface clarity, subfloor detail
+              Guided operator flow
             </span>
           </div>
 
           <div>
             <h1 class="text-4xl font-serif leading-tight text-sophia-dark-text md:text-[3.35rem]">
-              Guide the ingestion, then inspect the route beneath it.
+              Configure, check, preview, run, and review from one clear flow.
             </h1>
             <p class="mt-3 max-w-3xl text-base leading-7 text-sophia-dark-muted md:text-lg">
-              This workbench turns the old raw console into a staged walkthrough. Choose the source, clear
-              the preflight, inspect the Restormel route plan, simulate the path, then queue the run when the
-              signal is clear.
+              This workbench leads the operator through the ingestion journey in six steps. Start with the source,
+              review checks, confirm the stage pipeline, preview the route, then launch only when the signal is clear.
             </p>
           </div>
 
           <div class="grid gap-3 md:grid-cols-3">
             <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-              <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Operator signal</div>
+              <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">What you do here</div>
               <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
-                Every phase tells you what happened, what still needs attention, and whether you can proceed.
+                Set up the source, inspect the routing plan, and decide when the run is safe to launch.
               </p>
             </div>
             <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-              <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Routing beneath the floor</div>
+              <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">What Sophia checks</div>
               <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
-                Restormel route steps, provider health, and simulation stay visible, but they no longer drown the workflow.
+                Route coverage, provider visibility, and simulation stay in view without taking over the page.
               </p>
             </div>
             <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-              <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Advanced control intact</div>
+              <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Advanced control</div>
               <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
-                Raw payload editing is still available whenever you need it, but it is no longer the opening move.
+                Raw payload editing and route policy detail remain available when you need expert-level control.
               </p>
             </div>
           </div>
@@ -971,7 +1060,7 @@
             <div>
               <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Phase signal</div>
               <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
-                The triangle is now the process gate. Analysis covers preparation, critique covers route inspection, synthesis confirms readiness to proceed.
+                The triangle marks where you are in the workflow: setup, route review, then launch and confirmation.
               </p>
             </div>
             <DialecticalTriangle
@@ -1028,6 +1117,43 @@
     {/if}
 
     {#if pageState === 'ready'}
+      <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5">
+        <div class="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+          <div class={`rounded border px-4 py-4 ${statusTone(dominantSignal.tone)}`}>
+            <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em]">Current signal</div>
+            <h2 class="mt-2 text-2xl font-serif text-sophia-dark-text">{dominantSignal.title}</h2>
+            <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{dominantSignal.detail}</p>
+            {#if dominantSignal.tone !== 'passed'}
+              <div class="mt-4 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onclick={() => (activePhase = 'preflight')}
+                  class="rounded border border-sophia-dark-copper/35 bg-sophia-dark-surface px-3 py-2 font-mono text-xs text-sophia-dark-text hover:bg-sophia-dark-surface-raised"
+                >
+                  Review checks
+                </button>
+                <a
+                  href="/admin/ingestion-routing"
+                  class="rounded border border-sophia-dark-border px-3 py-2 font-mono text-xs text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+                >
+                  Open routing studio
+                </a>
+              </div>
+            {/if}
+          </div>
+
+          <div class="grid gap-3 sm:grid-cols-2">
+            {#each criticalSignals as signal}
+              <div class={`rounded border px-4 py-4 ${statusTone(signal.tone)}`}>
+                <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em]">{signal.label}</div>
+                <div class="mt-2 font-mono text-xl text-sophia-dark-text">{signal.value}</div>
+                <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{signal.detail}</p>
+              </div>
+            {/each}
+          </div>
+        </div>
+      </section>
+
       <nav class="phase-rail rounded border border-sophia-dark-border bg-sophia-dark-surface px-4 py-4" aria-label="Ingestion walkthrough phases">
         <div class="grid gap-3 lg:grid-cols-6">
           {#each PHASES as phase}
@@ -1061,15 +1187,20 @@
             <div class="space-y-6">
               <div>
                 <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Phase 1</div>
-                <h2 class="mt-2 text-3xl font-serif text-sophia-dark-text">Define the operation clearly before you touch the machinery.</h2>
+                <h2 class="mt-2 text-3xl font-serif text-sophia-dark-text">Configure the source and confirm the basics.</h2>
                 <p class="mt-3 max-w-3xl text-base leading-7 text-sophia-dark-muted">
-                  Choose the operation, identify the source, and decide whether this run should validate immediately or remain dry.
+                  Start with the source, then choose the execution settings. The aim of this step is to make the run clear before you move on.
                 </p>
               </div>
 
-              <div class="grid gap-4 lg:grid-cols-2">
+              <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
                 <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Operation</div>
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Operation selection</div>
+                    <span class="rounded-full border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
+                      Required
+                    </span>
+                  </div>
                   <label class="mt-3 block space-y-2">
                     <span class="font-mono text-xs text-sophia-dark-muted">Kind</span>
                     <select
@@ -1091,19 +1222,27 @@
                 </div>
 
                 <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Source mode</div>
-                  <div class="mt-3 flex flex-wrap gap-2">
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Source selection</div>
+                    <span class="rounded-full border border-sophia-dark-border px-2 py-1 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
+                      Required
+                    </span>
+                  </div>
+                  <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">Choose one source mode, then complete the fields for that mode.</p>
+                  <div class="mt-4 inline-flex rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 p-1">
                     <button
                       type="button"
-                      class={`rounded border px-3 py-2 font-mono text-xs uppercase tracking-[0.12em] ${sourceMode === 'url' ? 'border-sophia-dark-blue/40 bg-sophia-dark-blue/10 text-sophia-dark-blue' : 'border-sophia-dark-border bg-sophia-dark-surface-raised/30 text-sophia-dark-muted'}`}
+                      class={`rounded px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] ${sourceMode === 'url' ? 'bg-sophia-dark-blue/15 text-sophia-dark-blue shadow-[inset_0_0_0_1px_rgba(122,167,190,0.35)]' : 'text-sophia-dark-muted'}`}
                       onclick={() => (sourceMode = 'url')}
+                      aria-pressed={sourceMode === 'url'}
                     >
                       URL source
                     </button>
                     <button
                       type="button"
-                      class={`rounded border px-3 py-2 font-mono text-xs uppercase tracking-[0.12em] ${sourceMode === 'file' ? 'border-sophia-dark-blue/40 bg-sophia-dark-blue/10 text-sophia-dark-blue' : 'border-sophia-dark-border bg-sophia-dark-surface-raised/30 text-sophia-dark-muted'}`}
+                      class={`rounded px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] ${sourceMode === 'file' ? 'bg-sophia-dark-blue/15 text-sophia-dark-blue shadow-[inset_0_0_0_1px_rgba(122,167,190,0.35)]' : 'text-sophia-dark-muted'}`}
                       onclick={() => (sourceMode = 'file')}
+                      aria-pressed={sourceMode === 'file'}
                     >
                       Local file
                     </button>
@@ -1111,16 +1250,17 @@
 
                   {#if sourceMode === 'url'}
                     <label class="mt-4 block space-y-2">
-                      <span class="font-mono text-xs text-sophia-dark-muted">Source URL</span>
+                      <span class="font-mono text-xs text-sophia-dark-muted">Source URL *</span>
                       <input
                         bind:value={sourceUrl}
                         type="url"
                         placeholder="https://plato.stanford.edu/entries/ethics-deontological/"
                         class="w-full rounded border border-sophia-dark-border bg-sophia-dark-surface px-3 py-2 text-sm text-sophia-dark-text"
                       />
+                      <span class="block text-xs leading-5 text-sophia-dark-dim">Paste the source you want Sophia to ingest.</span>
                     </label>
                     <label class="mt-4 block space-y-2">
-                      <span class="font-mono text-xs text-sophia-dark-muted">Source type</span>
+                      <span class="font-mono text-xs text-sophia-dark-muted">Source type *</span>
                       <div class="flex gap-2">
                         <select
                           bind:value={sourceType}
@@ -1141,88 +1281,101 @@
                           </button>
                         {/if}
                       </div>
+                      <span class="block text-xs leading-5 text-sophia-dark-dim">Choose the content shape so extraction starts with the right assumptions.</span>
                     </label>
                   {:else}
                     <label class="mt-4 block space-y-2">
-                      <span class="font-mono text-xs text-sophia-dark-muted">Source file</span>
+                      <span class="font-mono text-xs text-sophia-dark-muted">Source file *</span>
                       <input
                         bind:value={sourceFile}
                         type="text"
                         placeholder="data/sources/example.txt"
                         class="w-full rounded border border-sophia-dark-border bg-sophia-dark-surface px-3 py-2 text-sm text-sophia-dark-text"
                       />
+                      <span class="block text-xs leading-5 text-sophia-dark-dim">Use a repo-relative path that the ingestion worker can read.</span>
                     </label>
                   {/if}
                 </div>
               </div>
 
-              <div class="grid gap-4 lg:grid-cols-4">
-                <label class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-                  <span class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Validation</span>
-                  <div class="mt-3 flex items-center justify-between gap-3">
-                    <span class="text-sm leading-6 text-sophia-dark-muted">Run validation after import</span>
-                    <input bind:checked={validateRun} type="checkbox" class="h-4 w-4 accent-[var(--color-sage)]" />
-                  </div>
-                </label>
-                <label class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
-                  <span class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Dry run</span>
-                  <div class="mt-3 flex items-center justify-between gap-3">
-                    <span class="text-sm leading-6 text-sophia-dark-muted">Check the plan without committing downstream changes</span>
-                    <input bind:checked={dryRun} type="checkbox" class="h-4 w-4 accent-[var(--color-blue)]" />
-                  </div>
-                </label>
-                <label class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4 space-y-2">
-                  <span class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Manual provider</span>
-                  <select
-                    bind:value={ingestProvider}
-                    class="w-full rounded border border-sophia-dark-border bg-sophia-dark-surface px-3 py-2 font-mono text-sm text-sophia-dark-text"
-                  >
-                    <option value="auto">Automatic routing</option>
-                    <option value="vertex">Vertex only</option>
-                    <option value="anthropic">Anthropic only</option>
-                  </select>
-                </label>
-                <label class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4 space-y-2">
-                  <span class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Domain</span>
-                  <input
-                    bind:value={domain}
-                    type="text"
-                    placeholder="ethics"
-                    class="w-full rounded border border-sophia-dark-border bg-sophia-dark-surface px-3 py-2 text-sm text-sophia-dark-text"
-                  />
-                </label>
+              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Execution options</div>
+                <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">These settings control validation, dry runs, and any temporary routing overrides.</p>
+
+                <div class="mt-4 grid gap-4 lg:grid-cols-4">
+                  <label class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/20 p-4">
+                    <span class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Validation</span>
+                    <div class="mt-3 flex items-center justify-between gap-3">
+                      <span class="text-sm leading-6 text-sophia-dark-muted">Run validation after import</span>
+                      <input bind:checked={validateRun} type="checkbox" class="h-4 w-4 accent-[var(--color-sage)]" />
+                    </div>
+                  </label>
+                  <label class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/20 p-4">
+                    <span class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Dry run</span>
+                    <div class="mt-3 flex items-center justify-between gap-3">
+                      <span class="text-sm leading-6 text-sophia-dark-muted">Check the plan without committing downstream changes</span>
+                      <input bind:checked={dryRun} type="checkbox" class="h-4 w-4 accent-[var(--color-blue)]" />
+                    </div>
+                  </label>
+                  <label class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/20 p-4 space-y-2">
+                    <span class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Manual provider</span>
+                    <select
+                      bind:value={ingestProvider}
+                      class="w-full rounded border border-sophia-dark-border bg-sophia-dark-surface px-3 py-2 font-mono text-sm text-sophia-dark-text"
+                    >
+                      <option value="auto">Automatic routing</option>
+                      <option value="vertex">Vertex only</option>
+                      <option value="anthropic">Anthropic only</option>
+                    </select>
+                    <span class="block text-xs leading-5 text-sophia-dark-dim">Leave this on automatic unless you are testing one provider on purpose.</span>
+                  </label>
+                  <label class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/20 p-4 space-y-2">
+                    <span class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Domain</span>
+                    <input
+                      bind:value={domain}
+                      type="text"
+                      placeholder="ethics"
+                      class="w-full rounded border border-sophia-dark-border bg-sophia-dark-surface px-3 py-2 text-sm text-sophia-dark-text"
+                    />
+                    <span class="block text-xs leading-5 text-sophia-dark-dim">Optional domain hint for classification or routing context.</span>
+                  </label>
+                </div>
               </div>
 
-              <label class="block space-y-2">
-                <span class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Operator note</span>
-                <textarea
-                  bind:value={notes}
-                  rows="3"
-                  placeholder="Add rationale, caveats, or handover notes for this run."
-                  class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg/70 px-3 py-3 text-sm text-sophia-dark-text"
-                ></textarea>
-              </label>
+              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
+                <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Operator note</div>
+                <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">Leave a short note if someone else may inspect or continue this run later.</p>
+                <label class="mt-4 block space-y-2">
+                  <span class="font-mono text-xs text-sophia-dark-muted">Run note</span>
+                  <textarea
+                    bind:value={notes}
+                    rows="3"
+                    placeholder="e.g. urgent review before 10am"
+                    class="w-full rounded border border-sophia-dark-border bg-sophia-dark-surface px-3 py-3 text-sm text-sophia-dark-text"
+                  ></textarea>
+                </label>
+              </div>
 
               <div class="flex flex-wrap items-center justify-between gap-3 rounded border border-sophia-dark-border bg-sophia-dark-bg/70 px-4 py-3">
                 <div>
                   <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Next step</div>
-                  <p class="mt-1 text-sm text-sophia-dark-muted">Move into preflight once the source and payload are unambiguous.</p>
+                  <p class="mt-1 text-sm text-sophia-dark-muted">Move into review checks once the source and settings are clear.</p>
                 </div>
                 <div class="flex gap-3">
+                  <button
+                    type="button"
+                    onclick={advancePhase}
+                    disabled={!prepareReady}
+                    class="rounded border border-sophia-dark-blue/45 bg-sophia-dark-blue/12 px-5 py-2.5 font-mono text-sm text-sophia-dark-blue hover:bg-sophia-dark-blue/20 disabled:opacity-50"
+                  >
+                    Continue to review checks
+                  </button>
                   <button
                     type="button"
                     onclick={() => (advancedMode = !advancedMode)}
                     class="rounded border border-sophia-dark-border px-4 py-2 font-mono text-sm text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
                   >
-                    {advancedMode ? 'Hide raw payload' : 'Advanced payload'}
-                  </button>
-                  <button
-                    type="button"
-                    onclick={advancePhase}
-                    disabled={!prepareReady}
-                    class="rounded border border-sophia-dark-blue/40 px-4 py-2 font-mono text-sm text-sophia-dark-blue hover:bg-sophia-dark-blue/10 disabled:opacity-50"
-                  >
-                    Continue to preflight
+                    {advancedMode ? 'Hide raw payload' : 'Open raw payload'}
                   </button>
                 </div>
               </div>
@@ -1231,9 +1384,9 @@
             <div class="space-y-6">
               <div>
                 <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Phase 2</div>
-                <h2 class="mt-2 text-3xl font-serif text-sophia-dark-text">Read the warnings before you light the route.</h2>
+                <h2 class="mt-2 text-3xl font-serif text-sophia-dark-text">Review checks before you proceed.</h2>
                 <p class="mt-3 max-w-3xl text-base leading-7 text-sophia-dark-muted">
-                  This pass surfaces hard blockers, weak routing coverage, and empty provider health so the user knows what still needs attention.
+                  This step shows hard blockers, weaker signals, and route gaps so the operator knows exactly what still needs attention.
                 </p>
               </div>
 
@@ -1241,12 +1394,12 @@
                 <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
                   <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Blocking issues</div>
                   <div class="mt-4 space-y-3">
-                    {#if preflightBlockers().length === 0}
+                    {#if preflightBlockerList.length === 0}
                       <div class="rounded border border-sophia-dark-sage/35 bg-sophia-dark-sage/8 px-4 py-3 text-sm text-sophia-dark-sage">
                         No hard blockers. The source and payload are structurally ready.
                       </div>
                     {:else}
-                      {#each preflightBlockers() as blocker}
+                      {#each preflightBlockerList as blocker}
                         <div class="rounded border border-sophia-dark-copper/35 bg-sophia-dark-copper/8 px-4 py-3 text-sm text-sophia-dark-copper">
                           {blocker}
                         </div>
@@ -1258,12 +1411,12 @@
                 <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
                   <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Attention points</div>
                   <div class="mt-4 space-y-3">
-                    {#if preflightWarnings().length === 0}
+                    {#if preflightWarningList.length === 0}
                       <div class="rounded border border-sophia-dark-blue/35 bg-sophia-dark-blue/8 px-4 py-3 text-sm text-sophia-dark-blue">
-                        The route coverage and provider surface look ready for a clean walk through the pipeline.
+                        Route coverage and provider visibility look ready for a clean run.
                       </div>
                     {:else}
-                      {#each preflightWarnings() as warning}
+                      {#each preflightWarningList as warning}
                         <div class="rounded border border-sophia-dark-amber/35 bg-sophia-dark-amber/8 px-4 py-3 text-sm text-sophia-dark-amber">
                           {warning}
                         </div>
@@ -1335,9 +1488,9 @@
             <div class="space-y-6">
               <div>
                 <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Phase 3</div>
-                <h2 class="mt-2 text-3xl font-serif text-sophia-dark-text">Walk the chambers above the floor, inspect the route beneath it.</h2>
+                <h2 class="mt-2 text-3xl font-serif text-sophia-dark-text">Review the staged pipeline.</h2>
                 <p class="mt-3 max-w-3xl text-base leading-7 text-sophia-dark-muted">
-                  Each stage shows whether it has a dedicated route, is borrowing a shared route, or still needs explicit routing. Select a stage to inspect its active and fallback steps.
+                  Each stage shows whether it has a dedicated route, is borrowing a shared route, or still needs explicit routing. Select a stage to inspect the active and fallback steps.
                 </p>
               </div>
 
@@ -1470,9 +1623,9 @@
             <div class="space-y-6">
               <div>
                 <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Phase 4</div>
-                <h2 class="mt-2 text-3xl font-serif text-sophia-dark-text">Preview the route before the run crosses the threshold.</h2>
+                <h2 class="mt-2 text-3xl font-serif text-sophia-dark-text">Preview the route before launch.</h2>
                 <p class="mt-3 max-w-3xl text-base leading-7 text-sophia-dark-muted">
-                  Use the selected stage as a proxy for route readiness. When a stage has dedicated route metadata, the preview sends that context through Restormel. Otherwise it runs the route in shared mode.
+                  Use the selected stage as a proxy for readiness. When a stage has dedicated route metadata, the preview sends that context through Restormel. Otherwise it runs in shared mode.
                 </p>
               </div>
 
@@ -1751,6 +1904,21 @@
 
         <aside class="space-y-6">
           <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5">
+            <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Status dashboard</div>
+            <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+              {#each criticalSignals as signal}
+                <div class={`rounded border px-4 py-4 ${statusTone(signal.tone)}`}>
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em]">{signal.label}</div>
+                    <div class="font-mono text-sm text-sophia-dark-text">{signal.value}</div>
+                  </div>
+                  <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">{signal.detail}</p>
+                </div>
+              {/each}
+            </div>
+          </section>
+
+          <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5">
             <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Restormel advice</div>
             <div class="mt-4 rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-4">
               <div class={`inline-flex rounded-full border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.14em] ${statusTone(routingAdvisory.tone)}`}>
@@ -1823,7 +1991,7 @@
           </section>
 
           <section class="rounded border border-sophia-dark-border bg-sophia-dark-surface p-5">
-            <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Providers</div>
+            <div class="font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">Provider health</div>
             <div class="mt-4 space-y-3">
               {#if providerHealthEntries.length > 0}
                 {#each providerHealthEntries as provider}
@@ -1841,7 +2009,7 @@
                 {/each}
               {:else}
                 <div class="rounded border border-sophia-dark-amber/35 bg-sophia-dark-amber/8 px-4 py-3 text-sm leading-6 text-sophia-dark-amber">
-                  Provider health is not yet surfacing configured providers for this project. Routing can still exist, but the operator signal is weaker than it should be.
+                  Provider health is not surfacing configured providers for this project yet. Routing can still exist, but reliability guidance is weaker than it should be.
                 </div>
               {/if}
             </div>
@@ -1868,6 +2036,9 @@
                       {operation.status}
                     </span>
                   </div>
+                  <p class="mt-3 text-sm leading-6 text-sophia-dark-muted">
+                    {operation.result_summary ?? operation.last_error ?? 'Open this run to inspect status, logs, and next action.'}
+                  </p>
                   <div class="mt-3 flex items-center justify-between gap-3 font-mono text-xs text-sophia-dark-dim">
                     <span>{operation.requested_by_uid}</span>
                     <span>{formatDate(operation.created_at)}</span>
