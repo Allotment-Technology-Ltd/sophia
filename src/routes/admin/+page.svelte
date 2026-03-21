@@ -7,6 +7,7 @@
     adminIngestionHomeShouldRedirectToQuickStart,
     consumeAdminQuickStartParams
   } from '$lib/admin/quickStartGate';
+  import { resolveStageRoutes } from '$lib/utils/ingestionRouting';
 
   type PageState = 'loading' | 'ready' | 'forbidden';
   type RequestState = 'idle' | 'loading';
@@ -150,6 +151,7 @@
 
   let loadingContextState = $state<RequestState>('idle');
   let recommendingState = $state<RequestState>('idle');
+  let launchRunState = $state<RequestState>('idle');
 
   let sourceMode = $state<SourceMode>('url');
   let sourceUrl = $state('');
@@ -298,6 +300,20 @@
     () => (sourceMode === 'url' ? sourceUrl.trim().length > 0 : sourceFile !== null) && sourceType.length > 0
   );
 
+  const stageRouteCoverage = $derived.by(() =>
+    resolveStageRoutes(
+      routes,
+      INGESTION_STAGE_PREVIEW.map((stage) => stage.id),
+      selectedRouteId
+    )
+  );
+
+  const routedStageCount = $derived.by(
+    () => stageRouteCoverage.filter((entry) => entry.mode !== 'missing').length
+  );
+
+  const allStagesHaveRouting = $derived.by(() => routedStageCount === INGESTION_STAGE_PREVIEW.length);
+
   const duplicateModels = $derived.by(() => {
     const seen = new Set<string>();
     const duplicates = new Set<string>();
@@ -349,6 +365,10 @@
 
   const canStartPhaseOne = $derived.by(
     () => sourceReady && chainReady && duplicateModels.length === 0
+  );
+
+  const canStartIngestion = $derived.by(
+    () => canStartPhaseOne && allStagesHaveRouting && launchRunState === 'idle'
   );
 
   const setupSteps = $derived.by(() => [
@@ -726,10 +746,6 @@
       errorMessage = error instanceof Error ? error.message : 'Failed to load administrator context';
       pageState = 'ready';
     }
-  }
-
-  function startPipelineSetup(): void {
-    showPipelineLanding = false;
   }
 
   function setSourceType(value: (typeof SOURCE_TYPES)[number]['id']): void {
@@ -1216,27 +1232,41 @@
   }
 
   async function startPhaseOne(): Promise<void> {
-    if (!canStartPhaseOne) return;
-    if (browser) {
-      sessionStorage.setItem(
-        'sophia.admin.ingestion.current',
-        JSON.stringify({
-          sourceMode,
-          sourceUrl,
-          sourceFileName,
-          sourceType,
-          sourceTitle,
-          sourceAuthor,
-          sourcePublicationYear,
-          sourceContentType,
-          sourceContentBytes,
-          routeId: selectedRouteId,
-          modelChain,
-          failoverAction
-        })
-      );
+    if (!canStartIngestion) return;
+    if (sourceMode !== 'url' || !sourceUrl.trim()) {
+      errorMessage = 'A source URL is required before starting ingestion.';
+      return;
     }
-    await goto('/admin/operations');
+
+    launchRunState = 'loading';
+    errorMessage = '';
+    successMessage = '';
+    try {
+      const body = await authorizedJson('/api/admin/ingest/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_url: sourceUrl.trim(),
+          source_type: sourceType,
+          validate: true,
+          model_chain: {
+            extract: modelChain[0],
+            relate: modelChain[1] || modelChain[0],
+            group: modelChain[2] || modelChain[1] || modelChain[0],
+            validate: modelChain[0]
+          }
+        })
+      });
+      const runId = typeof body?.run_id === 'string' ? body.run_id : '';
+      if (!runId) {
+        throw new Error('Could not start ingestion run.');
+      }
+      await goto(`/admin/ingest?monitor=1&runId=${encodeURIComponent(runId)}`);
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'Failed to start ingestion run.';
+    } finally {
+      launchRunState = 'idle';
+    }
   }
 
   $effect(() => {
@@ -1293,10 +1323,6 @@
   onMount(() => {
     if (!browser) return;
     consumeAdminQuickStartParams();
-    const query = new URLSearchParams(window.location.search);
-    if (query.get('setup') === '1') {
-      showPipelineLanding = false;
-    }
     if (adminIngestionHomeShouldRedirectToQuickStart(window.location.search)) {
       void goto('/admin/quick-start', { replaceState: true });
       return;
@@ -1587,25 +1613,38 @@
             </p>
           </div>
           <div class="rounded-lg border border-sophia-dark-border bg-sophia-dark-bg/60 px-5 py-3.5 text-xs text-sophia-dark-muted">
-            Default route:
-            <span class="ml-1 font-mono text-sophia-dark-text">{(selectedRoute?.name ?? selectedRouteId) || 'Not yet loaded'}</span>
+            Routed stages:
+            <span class="ml-1 font-mono text-sophia-dark-text">{routedStageCount} / {INGESTION_STAGE_PREVIEW.length}</span>
           </div>
         </div>
 
         <div class="mt-7 grid gap-4 md:grid-cols-2">
           {#each INGESTION_STAGE_PREVIEW as stage}
+            {@const coverage = stageRouteCoverage.find((entry) => entry.stage === stage.id)}
             <article class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg/45 p-5">
               <div class="flex items-start justify-between gap-2">
                 <div>
                   <h3 class="font-serif text-xl text-sophia-dark-text">{stage.title}</h3>
                   <p class="mt-1 text-sm leading-6 text-sophia-dark-muted">{stage.description}</p>
                 </div>
-                <span class="rounded-full border border-sophia-dark-sage/35 bg-sophia-dark-sage/10 px-2.5 py-1.5 font-mono text-[0.64rem] uppercase tracking-[0.12em] text-sophia-dark-sage">
-                  Default
-                </span>
+                {#if coverage?.mode === 'missing'}
+                  <span class="rounded-full border border-sophia-dark-copper/35 bg-sophia-dark-copper/10 px-2.5 py-1.5 font-mono text-[0.64rem] uppercase tracking-[0.12em] text-sophia-dark-copper">
+                    Needs route
+                  </span>
+                {:else if coverage?.mode === 'dedicated'}
+                  <span class="rounded-full border border-sophia-dark-sage/35 bg-sophia-dark-sage/10 px-2.5 py-1.5 font-mono text-[0.64rem] uppercase tracking-[0.12em] text-sophia-dark-sage">
+                    Dedicated
+                  </span>
+                {:else}
+                  <span class="rounded-full border border-sophia-dark-blue/35 bg-sophia-dark-blue/10 px-2.5 py-1.5 font-mono text-[0.64rem] uppercase tracking-[0.12em] text-sophia-dark-blue">
+                    Shared
+                  </span>
+                {/if}
               </div>
               <div class="mt-4 flex items-center justify-between gap-3 border-t border-sophia-dark-border pt-4">
-                <div class="font-mono text-xs text-sophia-dark-dim">Route: {(selectedRoute?.name ?? selectedRouteId) || 'auto'}</div>
+                <div class="font-mono text-xs text-sophia-dark-dim">
+                  Route: {(coverage?.route?.name ?? coverage?.route?.id) || 'Not configured'}
+                </div>
                 <a
                   href={`/admin/ingestion-routing?mode=quick&stage=${stage.id}`}
                   class="rounded border border-sophia-dark-border px-4 py-2.5 font-mono text-[0.7rem] uppercase tracking-[0.12em] text-sophia-dark-text hover:bg-sophia-dark-surface-raised"
@@ -1618,75 +1657,25 @@
         </div>
 
         <div class="mt-7 rounded-xl border border-sophia-dark-border bg-sophia-dark-bg/60 p-5 md:p-6">
-          <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">
-            Reusable config
-          </div>
+          <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Launch</div>
           <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
-            Configs auto-save continuously. Reuse one at any time and rename it after creation.
+            Once all six stages are routed, press Start to launch ingestion and move to live monitor mode.
           </p>
-          <div class="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
-            <label class="space-y-2">
-              <span class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Saved configs</span>
-              <select
-                value={activeProfileId}
-                onchange={(event) => void switchActiveProfile((event.currentTarget as HTMLSelectElement).value)}
-                class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-sm text-sophia-dark-text"
-              >
-                {#if ingestionProfiles.length === 0}
-                  <option value="">No saved configs yet</option>
-                {:else}
-                  {#each ingestionProfiles as profile}
-                    <option value={profile.id}>
-                      {profile.name} · {new Date(profile.updatedAt).toLocaleDateString('en-GB')}
-                    </option>
-                  {/each}
-                {/if}
-              </select>
-            </label>
+          <div class="mt-4 flex flex-wrap items-center gap-3">
             <button
               type="button"
-              onclick={createNewProfileFromCurrent}
-              class="self-end rounded border border-sophia-dark-border px-4 py-3 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+              onclick={() => void startPhaseOne()}
+              class="rounded border border-sophia-dark-sage/45 bg-sophia-dark-sage/14 px-5 py-3 font-mono text-sm text-sophia-dark-sage hover:bg-sophia-dark-sage/20 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!canStartIngestion}
             >
-              Create copy
+              {launchRunState === 'loading' ? 'Starting…' : 'Start'}
             </button>
+            {#if !allStagesHaveRouting}
+              <p class="text-xs text-sophia-dark-copper">
+                Route each stage first. {INGESTION_STAGE_PREVIEW.length - routedStageCount} stage{INGESTION_STAGE_PREVIEW.length - routedStageCount === 1 ? '' : 's'} still need routing.
+              </p>
+            {/if}
           </div>
-
-          <div class="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
-            <label class="space-y-2">
-              <span class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Config name</span>
-              <input
-                type="text"
-                bind:value={activeProfileNameInput}
-                placeholder="Ingestion config"
-                class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-sm text-sophia-dark-text"
-              />
-            </label>
-            <button
-              type="button"
-              onclick={renameActiveProfile}
-              class="self-end rounded border border-sophia-dark-border px-4 py-3 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
-              disabled={!activeProfileId}
-            >
-              Rename
-            </button>
-          </div>
-        </div>
-
-        <div class="mt-6 flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onclick={startPipelineSetup}
-            class="rounded border border-sophia-dark-purple/45 bg-sophia-dark-purple/16 px-5 py-3 font-mono text-sm text-sophia-dark-text hover:bg-sophia-dark-purple/24"
-          >
-            Continue to source + model setup
-          </button>
-          <a
-            href="/admin/ingestion-routing"
-            class="rounded border border-sophia-dark-border px-5 py-3 font-mono text-sm text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
-          >
-            Open routing studio
-          </a>
         </div>
       </section>
       {:else}

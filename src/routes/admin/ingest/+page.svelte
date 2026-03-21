@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import {
     CHAT_MODELS_BY_PROVIDER,
     DEFAULT_WIZARD_EMBED_ID,
@@ -42,6 +42,7 @@
   // ─── State ────────────────────────────────────────────────────────────────
 
   let wizardStep  = $state<WizardStep>('source');
+  let monitorMode = $state(false);
 
   // Step 1
   let sourceUrl   = $state('');
@@ -253,7 +254,16 @@
     pollingInterval = setInterval(async () => {
       try {
         const res = await fetch(`/api/admin/ingest/run/${runId}/status`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (res.status === 404) {
+            runError = `Run ${runId} was not found.`;
+            if (pollingInterval) {
+              clearInterval(pollingInterval);
+              pollingInterval = null;
+            }
+          }
+          return;
+        }
         const data = await res.json();
 
         if (data.stages) {
@@ -294,6 +304,19 @@
   onDestroy(() => {
     if (pollingInterval) clearInterval(pollingInterval);
   });
+
+  onMount(() => {
+    const params = new URLSearchParams(window.location.search);
+    const monitor = params.get('monitor');
+    const providedRunId = params.get('runId');
+    if (monitor !== '1' || !providedRunId) return;
+
+    monitorMode = true;
+    runId = providedRunId;
+    wizardStep = 'running';
+    runLog = [`Monitoring run — ID: ${runId}`];
+    pollProgress();
+  });
 </script>
 
 <svelte:head>
@@ -303,6 +326,7 @@
 <div class="ingest-page">
 
   <!-- ── Progress breadcrumb ─────────────────────────────────────────── -->
+  {#if !monitorMode}
   <nav class="breadcrumb" aria-label="Ingestion steps">
     {#each WIZARD_STEPS as step, i}
       {@const active = wizardStep === step}
@@ -322,11 +346,12 @@
       {/if}
     {/each}
   </nav>
+  {/if}
 
   <!-- ══════════════════════════════════════════════════════════════════
        STEP 1 — Source
   ═══════════════════════════════════════════════════════════════════ -->
-  {#if wizardStep === 'source'}
+  {#if wizardStep === 'source' && !monitorMode}
   <section class="card" aria-labelledby="step-source-heading">
     <div class="card-header">
       <span class="step-badge">Step 1 of 3</span>
@@ -368,7 +393,7 @@
   <!-- ══════════════════════════════════════════════════════════════════
        STEP 2 — Models
   ═══════════════════════════════════════════════════════════════════ -->
-  {#if wizardStep === 'models'}
+  {#if wizardStep === 'models' && !monitorMode}
   <section class="card" aria-labelledby="step-models-heading">
     <div class="card-header">
       <span class="step-badge">Step 2 of 3</span>
@@ -551,7 +576,7 @@
   <!-- ══════════════════════════════════════════════════════════════════
        STEP 3 — Confirm
   ═══════════════════════════════════════════════════════════════════ -->
-  {#if wizardStep === 'confirm'}
+  {#if wizardStep === 'confirm' && !monitorMode}
   <section class="card" aria-labelledby="step-confirm-heading">
     <div class="card-header">
       <span class="step-badge">Step 3 of 3</span>
@@ -615,7 +640,7 @@
       <h1 id="step-running-heading">
         {wizardStep === 'done' ? 'Ingestion complete' : 'Ingesting…'}
       </h1>
-      {#if slugPreview}
+      {#if slugPreview && !monitorMode}
         <p class="subtitle">Source: <code>{slugPreview}</code></p>
       {/if}
     </div>
@@ -675,8 +700,12 @@
 
     {#if wizardStep === 'done'}
       <div class="card-actions">
-        <a class="btn-ghost" href="/admin/review">Review ingested claims →</a>
-        <button class="btn-primary" onclick={resetWizard}>Ingest another paper</button>
+        {#if monitorMode}
+          <a class="btn-primary" href="/admin">Back to admin</a>
+        {:else}
+          <a class="btn-ghost" href="/admin/review">Review ingested claims →</a>
+          <button class="btn-primary" onclick={resetWizard}>Ingest another paper</button>
+        {/if}
       </div>
     {/if}
   </section>
