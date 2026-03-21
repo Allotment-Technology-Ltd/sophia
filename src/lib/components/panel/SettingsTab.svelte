@@ -706,8 +706,8 @@
     {:else if byokProviders.length === 0}
       <div class="setting-row">
         <div class="setting-info">
-          <span class="setting-name">No BYOK providers enabled</span>
-          <span class="setting-desc">Set `BYOK_ENABLED_PROVIDERS` to enable provider rollout in this environment.</span>
+          <span class="setting-name">No BYOK providers returned</span>
+          <span class="setting-desc">Providers should be available by default. Retry status refresh and check server health if this persists.</span>
         </div>
       </div>
     {:else}

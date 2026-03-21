@@ -689,7 +689,7 @@
       const unavailableLabels = unavailableByokProvidersForQuickStage
         .map((provider) => PROVIDER_UI_META[provider].label)
         .join(', ');
-      pageError = `BYOK is not enabled for ${unavailableLabels} in this environment. Enable those providers (BYOK_ENABLED_PROVIDERS) or choose models from enabled providers.`;
+      pageError = `BYOK providers were not returned for ${unavailableLabels}. Refresh provider status and retry.`;
       return false;
     }
 
@@ -2556,9 +2556,9 @@
 
             {#if unavailableByokProvidersForQuickStage.length > 0}
               <div class="mt-3 rounded border border-sophia-dark-amber/35 bg-sophia-dark-amber/10 px-3 py-2 text-xs text-sophia-dark-amber">
-                BYOK not enabled for:
+                BYOK providers not currently returned for:
                 {unavailableByokProvidersForQuickStage.map((provider) => PROVIDER_UI_META[provider].label).join(', ')}.
-                Update <span class="font-mono">BYOK_ENABLED_PROVIDERS</span> and restart local dev, or select models from enabled providers.
+                Refresh key status and retry.
               </div>
             {/if}
 
