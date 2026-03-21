@@ -2803,6 +2803,21 @@
       </section>
       {/if}
 
+      <div class="mt-4 rounded-xl border border-sophia-dark-sage/35 bg-sophia-dark-sage/8 px-4 py-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <p class="text-sm text-sophia-dark-muted">
+            Routing ready? Move straight to ingestion run.
+          </p>
+          <button
+            type="button"
+            class="rounded border border-sophia-dark-sage/45 bg-sophia-dark-sage/14 px-4 py-2.5 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-sage hover:bg-sophia-dark-sage/22"
+            onclick={() => void goto('/admin/ingest')}
+          >
+            Start ingestion now
+          </button>
+        </div>
+      </div>
+
       <div class={`grid gap-6 ${journeyStep === 2 ? 'xl:grid-cols-[1.08fr,0.92fr]' : ''}`}>
         <section class="rounded-2xl border border-sophia-dark-border bg-sophia-dark-surface p-6 md:p-8">
           <div class="flex items-start justify-between gap-4">
