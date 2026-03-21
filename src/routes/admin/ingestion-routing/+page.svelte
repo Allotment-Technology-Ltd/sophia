@@ -3626,6 +3626,13 @@
         <div class="mt-6 flex flex-wrap items-center gap-3">
           <button
             type="button"
+            class="rounded border border-sophia-dark-sage/45 bg-sophia-dark-sage/14 px-4 py-2.5 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-sage hover:bg-sophia-dark-sage/22"
+            onclick={() => void goto('/admin/ingest')}
+          >
+            Start ingestion
+          </button>
+          <button
+            type="button"
             class="rounded border border-sophia-dark-purple/45 bg-sophia-dark-purple/16 px-4 py-2.5 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-text hover:bg-sophia-dark-purple/24"
             onclick={publishRoute}
             disabled={!selectedRouteId || busyAction !== ''}
@@ -3634,11 +3641,10 @@
           </button>
           <button
             type="button"
-            class="rounded border border-sophia-dark-border px-4 py-2.5 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised disabled:opacity-50"
-            onclick={() => void goto('/admin/operations')}
-            disabled={!selectedRouteId}
+            class="rounded border border-sophia-dark-border px-4 py-2.5 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+            onclick={() => void goto('/admin/ingest')}
           >
-            Open Operations Workbench
+            Open ingestion wizard
           </button>
           <button
             type="button"
