@@ -3,6 +3,7 @@
 	import { browser } from '$app/environment';
 	import { onMount } from 'svelte';
 	import { auth, getIdToken, onAuthChange } from '$lib/firebase';
+	import { consumeAdminQuickStartParams } from '$lib/admin/quickStartGate';
 	import type {
 		DuplicateClassification,
 		ReviewDashboardData
@@ -219,6 +220,7 @@
 
 	onMount(() => {
 		if (!browser) return;
+		consumeAdminQuickStartParams();
 
 		const sync = async () => {
 			if (!auth?.currentUser) {
@@ -250,8 +252,8 @@
 	});
 </script>
 
-<div class="min-h-screen bg-sophia-dark-bg text-sophia-dark-text">
-	<div class="mx-auto max-w-7xl px-6 py-8">
+<div class="admin-review min-h-screen bg-sophia-dark-bg text-sophia-dark-text">
+	<div class="admin-review-shell mx-auto w-full max-w-[76rem] px-6 py-8 sm:px-10 lg:px-14 xl:px-16">
 		<div class="mb-8 flex items-start justify-between gap-4">
 			<div>
 				<h1 class="mb-1 text-3xl font-serif text-sophia-dark-text">Review Queue</h1>

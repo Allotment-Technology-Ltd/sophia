@@ -26,4 +26,12 @@ describe('byok rollout config', () => {
     expect(isByokProviderEnabled('voyage')).toBe(false);
     expect(isReasoningProviderEnabled('perplexity')).toBe(false);
   });
+
+  it('treats cohere as a reasoning-capable BYOK provider when enabled', () => {
+    vi.stubEnv('BYOK_ENABLED_PROVIDERS', 'cohere,vertex');
+    expect(getEnabledByokProviders()).toEqual(['cohere', 'vertex']);
+    expect(getEnabledReasoningProviders()).toEqual(['vertex', 'cohere']);
+    expect(isReasoningProviderEnabled('cohere')).toBe(true);
+    expect(isByokProviderEnabled('cohere')).toBe(true);
+  });
 });

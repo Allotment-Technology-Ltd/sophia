@@ -53,3 +53,60 @@
     top: var(--space-2);
   }
 }
+
+@layer components {
+  :root {
+    --sophia-control-min-height: 2.625rem;
+    --sophia-control-px: 0.95rem;
+    --sophia-control-py: 0.58rem;
+    --sophia-control-tracking: 0.11em;
+    --sophia-pill-min-height: 1.72rem;
+    --sophia-pill-px: 0.74rem;
+    --sophia-pill-py: 0.34rem;
+  }
+
+  :where(button, a, input, select, textarea)[class*='border-sophia-dark-'][class*='font-mono'] {
+    line-height: 1.28;
+  }
+
+  :where(button, a)[class*='border-sophia-dark-'][class*='font-mono'] {
+    min-height: var(--sophia-control-min-height);
+    padding-inline: var(--sophia-control-px);
+    padding-block: var(--sophia-control-py);
+  }
+
+  :where(button, a)[class*='border-sophia-dark-'][class*='font-mono'][class*='uppercase'] {
+    letter-spacing: var(--sophia-control-tracking);
+  }
+
+  :where(input, select, textarea)[class*='border-sophia-dark-'][class*='font-mono'] {
+    min-height: var(--sophia-control-min-height);
+    padding-inline: var(--sophia-control-px);
+    padding-block: var(--sophia-control-py);
+  }
+
+  :where(span, div, a, button)[class*='rounded-full'][class*='border-sophia-dark-'][class*='font-mono'] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--sophia-pill-min-height);
+    padding-inline: var(--sophia-pill-px);
+    padding-block: var(--sophia-pill-py);
+    line-height: 1.18;
+  }
+
+  .admin-ingestion-shell,
+  .admin-routing-shell,
+  .admin-review-shell,
+  .admin-workbench > div {
+    padding-inline: clamp(1.25rem, 2.4vw, 2.25rem);
+  }
+
+  @media (max-width: 720px) {
+    :root {
+      --sophia-control-px: 0.9rem;
+      --sophia-control-py: 0.6rem;
+      --sophia-pill-px: 0.75rem;
+    }
+  }
+}

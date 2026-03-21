@@ -3,11 +3,16 @@
   import { browser } from '$app/environment';
   import { onMount } from 'svelte';
   import { auth, getIdToken, onAuthChange } from '$lib/firebase';
+  import {
+    adminIngestionHomeShouldRedirectToQuickStart,
+    consumeAdminQuickStartParams
+  } from '$lib/admin/quickStartGate';
 
   type PageState = 'loading' | 'ready' | 'forbidden';
   type RequestState = 'idle' | 'loading';
   type SourceMode = 'url' | 'file';
   type FailoverAction = 'switch_secondary' | 'switch_tertiary' | 'retry_primary_once' | 'pause_for_operator';
+  const ADMIN_CONTEXT_TIMEOUT_MS = 15000;
 
   interface RouteRecord {
     id: string;
@@ -64,6 +69,34 @@
     note: string;
   }
 
+  interface IngestionConfigPayload {
+    sourceMode: SourceMode;
+    sourceUrl: string;
+    sourceFileName: string;
+    sourceType: (typeof SOURCE_TYPES)[number]['id'];
+    sourceTitle: string;
+    sourceAuthor: string;
+    sourcePublicationYear: string;
+    sourceContentType: string;
+    sourceContentBytes: number | null;
+    sourceMetadataUrl: string;
+    sourceMetadataUpdatedAt: string;
+    selectedRouteId: string;
+    modelChain: string[];
+    failoverAction: FailoverAction;
+    validationRan: boolean;
+    validationSummary: string;
+    validationResults: ValidationRecommendation[];
+  }
+
+  interface IngestionProfile {
+    id: string;
+    name: string;
+    createdAt: string;
+    updatedAt: string;
+    payload: IngestionConfigPayload;
+  }
+
   const SOURCE_TYPES = [
     { id: 'sep_entry', label: 'Stanford Encyclopedia of Philosophy' },
     { id: 'gutenberg_text', label: 'Project Gutenberg' },
@@ -84,11 +117,30 @@
     'www.gutenberg.org': 'gutenberg_text'
   };
 
+  const INGESTION_STAGE_PREVIEW = [
+    { id: 'ingestion_extraction', title: 'Extraction', description: 'Pull claims and source passages.' },
+    { id: 'ingestion_relations', title: 'Relations', description: 'Connect support and dependency links.' },
+    { id: 'ingestion_grouping', title: 'Grouping', description: 'Cluster recurring positions.' },
+    { id: 'ingestion_validation', title: 'Validation', description: 'Check quality and confidence.' },
+    { id: 'ingestion_embedding', title: 'Embedding', description: 'Prepare retrieval vectors.' },
+    { id: 'ingestion_json_repair', title: 'JSON Repair', description: 'Clean malformed output before storage.' }
+  ] as const;
+
+  const INGESTION_PROFILES_STORAGE_KEY = 'sophia.admin.ingestion.profiles';
+  const INGESTION_ACTIVE_PROFILE_KEY = 'sophia.admin.ingestion.active_profile';
+
   /** When Restormel route steps omit model IDs, validation still returns ranked labels — keep selects in sync. */
   const FALLBACK_CHAIN_MODEL_LABELS = [
     'anthropic · claude-3-5-sonnet-20241022',
+    'anthropic · claude-sonnet-4-5-20250929',
     'openai · gpt-4o',
-    'google · gemini-2.5-pro'
+    'openai · gpt-4.1',
+    'google · gemini-2.5-pro',
+    'vertex · gemini-2.5-flash',
+    'deepseek · deepseek-chat',
+    'deepseek · deepseek-reasoner',
+    'voyage · voyage-4',
+    'voyage · voyage-3-lite'
   ] as const;
 
   let pageState = $state<PageState>('loading');
@@ -105,6 +157,19 @@
   let sourceFileName = $state('');
   let sourceType = $state<(typeof SOURCE_TYPES)[number]['id']>('sep_entry');
   let sourceTypeOverridden = $state(false);
+  let sourceTitle = $state('');
+  let sourceAuthor = $state('');
+  let sourcePublicationYear = $state('');
+  let sourceContentType = $state('');
+  let sourceContentBytes = $state<number | null>(null);
+  let sourceMetadataUrl = $state('');
+  let sourceMetadataUpdatedAt = $state('');
+  let sourceMetadataState = $state<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  let sourceMetadataError = $state('');
+  let sourceTitleTouched = $state(false);
+  let sourceAuthorTouched = $state(false);
+  let sourcePublicationYearTouched = $state(false);
+  let lastSourceMetadataUrl = $state('');
 
   let firstStage = $state('ingestion_extraction');
   let routes = $state<RouteRecord[]>([]);
@@ -127,9 +192,13 @@
   let modelCatalogEntries = $state<CatalogEntry[]>([]);
   let sourceHints = $state<Record<string, SourceHintRow>>({});
   let catalogSync = $state<CatalogSyncState | null>(null);
-
-  /** 1–4: which tab is visible (single-panel wizard) */
   let wizardStep = $state(1);
+  let showPipelineLanding = $state(true);
+  let ingestionProfiles = $state<IngestionProfile[]>([]);
+  let activeProfileId = $state('');
+  let activeProfileNameInput = $state('');
+  let profilesHydrated = $state(false);
+  let lastAutosavedSnapshot = $state('');
 
   const showCatalogSourceColumn = $derived.by(() =>
     modelCatalogEntries.some((r) => r.catalogSource)
@@ -147,6 +216,10 @@
 
   const selectedRoute = $derived.by(
     () => routes.find((route) => route.id === selectedRouteId) ?? null
+  );
+
+  const activeProfile = $derived.by(
+    () => ingestionProfiles.find((profile) => profile.id === activeProfileId) ?? null
   );
 
   const modelOptions = $derived.by(() => {
@@ -180,6 +253,27 @@
   const sourceTypeLabel = $derived.by(
     () => SOURCE_TYPES.find((t) => t.id === sourceType)?.label ?? sourceType
   );
+
+  const sourceKnownBytes = $derived.by(() => {
+    if (sourceMode === 'file') return sourceFile?.size ?? sourceContentBytes ?? null;
+    const currentUrl = sourceUrl.trim();
+    if (!currentUrl) return null;
+    if (sourceMetadataState !== 'ready') return null;
+    if (lastSourceMetadataUrl !== currentUrl) return null;
+    return sourceContentBytes;
+  });
+
+  const sourceEstimatedTokens = $derived.by(() => {
+    if (!sourceKnownBytes || sourceKnownBytes <= 0) return null;
+    return Math.max(1, Math.round(sourceKnownBytes / 4));
+  });
+
+  const sourceKnownContentType = $derived.by(() => {
+    if (sourceMode === 'file') return sourceFile?.type || sourceContentType || '';
+    const currentUrl = sourceUrl.trim();
+    if (!currentUrl || sourceMetadataState !== 'ready' || lastSourceMetadataUrl !== currentUrl) return '';
+    return sourceContentType;
+  });
 
   const hintForSource = $derived.by(() => sourceHints[sourceType] ?? null);
 
@@ -280,7 +374,6 @@
     }
   ]);
 
-  /** Next is blocked until prerequisites for the current step are met */
   const canGoNextFromCurrentStep = $derived.by(() => {
     if (wizardStep === 1) return sourceReady;
     if (wizardStep === 2) return chainReady && duplicateModels.length === 0;
@@ -298,6 +391,8 @@
     }
     return null;
   });
+
+  const remainingSteps = $derived.by(() => Math.max(0, 4 - wizardStep));
 
   function goWizardBack(): void {
     if (wizardStep <= 1) return;
@@ -372,6 +467,114 @@
       .replace(/[-_]/g, ' ')
       .replace(/\.[a-z0-9]+$/i, '')
       .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+
+  function formatBytes(bytes: number | null | undefined): string {
+    if (!bytes || bytes <= 0) return 'Unknown';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
+  function normalizePublicationYear(input: string | null | undefined): string {
+    const raw = (input ?? '').trim();
+    if (!raw) return '';
+    const match = raw.match(/\b(19|20)\d{2}\b/);
+    return match ? match[0] : '';
+  }
+
+  function extractYearFromUrl(url: string): string {
+    return normalizePublicationYear(url);
+  }
+
+  function titleFromFilename(fileName: string): string {
+    const stripped = fileName.replace(/\.[a-z0-9]+$/i, '').trim();
+    if (!stripped) return '';
+    return stripped
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+
+  function isInspectableHttpUrl(value: string): boolean {
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
+  function seedSourceMetadataFromUrl(value: string): void {
+    if (!isInspectableHttpUrl(value)) return;
+    try {
+      const parsed = new URL(value);
+      if (!sourceTitleTouched || !sourceTitle.trim()) {
+        sourceTitle = guessTitleFromUrl(parsed);
+      }
+      if (!sourcePublicationYearTouched || !sourcePublicationYear.trim()) {
+        const guessedYear = extractYearFromUrl(value);
+        if (guessedYear) sourcePublicationYear = guessedYear;
+      }
+    } catch {
+      // ignore parsing failures
+    }
+  }
+
+  async function inspectSourceMetadataFromUrl(force = false): Promise<void> {
+    const url = sourceUrl.trim();
+    if (!isInspectableHttpUrl(url)) return;
+    if (!force && sourceMetadataState === 'loading') return;
+    if (!force && url === sourceMetadataUrl && sourceMetadataUpdatedAt) return;
+    sourceMetadataState = 'loading';
+    sourceMetadataError = '';
+
+    try {
+      const body = await authorizedJson('/api/admin/ingestion-source/inspect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+      const metadata = (body?.metadata ?? {}) as {
+        title?: string;
+        author?: string;
+        publicationYear?: string;
+        contentType?: string;
+        contentLengthBytes?: number | null;
+        finalUrl?: string;
+        hostname?: string;
+      };
+
+      const nextTitle = typeof metadata.title === 'string' ? metadata.title.trim() : '';
+      const nextAuthor = typeof metadata.author === 'string' ? metadata.author.trim() : '';
+      const nextYear = normalizePublicationYear(metadata.publicationYear ?? '');
+
+      if (!sourceTitleTouched || !sourceTitle.trim()) {
+        sourceTitle = nextTitle || sourceTitle || '';
+      }
+      if (!sourceAuthorTouched || !sourceAuthor.trim()) {
+        sourceAuthor = nextAuthor || sourceAuthor || '';
+      }
+      if (!sourcePublicationYearTouched || !sourcePublicationYear.trim()) {
+        sourcePublicationYear = nextYear || sourcePublicationYear || '';
+      }
+
+      sourceContentType = typeof metadata.contentType === 'string' ? metadata.contentType : sourceContentType;
+      sourceContentBytes =
+        typeof metadata.contentLengthBytes === 'number' && Number.isFinite(metadata.contentLengthBytes)
+          ? metadata.contentLengthBytes
+          : sourceContentBytes;
+      sourceMetadataUrl = typeof metadata.finalUrl === 'string' ? metadata.finalUrl : url;
+      sourceMetadataUpdatedAt = new Date().toISOString();
+      lastSourceMetadataUrl = url;
+      sourceMetadataState = 'ready';
+    } catch (error) {
+      sourceMetadataState = 'error';
+      sourceMetadataError =
+        error instanceof Error
+          ? error.message
+          : 'Could not inspect source metadata from URL.';
+    }
   }
 
   function detectSourceType(url: string): (typeof SOURCE_TYPES)[number]['id'] | null {
@@ -501,6 +704,34 @@
     }
   }
 
+  function loadAdminContextWithTimeout(timeoutMs = ADMIN_CONTEXT_TIMEOUT_MS): Promise<void> {
+    return Promise.race([
+      loadAdminContext(),
+      new Promise<void>((_, reject) => {
+        const timeoutId = window.setTimeout(() => {
+          clearTimeout(timeoutId);
+          reject(new Error('Admin context request timed out. Check auth/session and API connectivity, then retry.'));
+        }, timeoutMs);
+      })
+    ]);
+  }
+
+  async function retryLoadAdminContext(): Promise<void> {
+    errorMessage = '';
+    successMessage = '';
+    pageState = 'loading';
+    try {
+      await loadAdminContextWithTimeout();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'Failed to load administrator context';
+      pageState = 'ready';
+    }
+  }
+
+  function startPipelineSetup(): void {
+    showPipelineLanding = false;
+  }
+
   function setSourceType(value: (typeof SOURCE_TYPES)[number]['id']): void {
     sourceType = value;
     sourceTypeOverridden = true;
@@ -510,15 +741,34 @@
     const file = fileList?.[0] ?? null;
     sourceFile = file;
     sourceFileName = file?.name ?? '';
+    sourceMetadataError = '';
+    sourceMetadataState = file ? 'ready' : 'idle';
+    if (file) {
+      sourceContentType = file.type || 'application/octet-stream';
+      sourceContentBytes = file.size;
+      sourceMetadataUrl = '';
+      sourceMetadataUpdatedAt = new Date().toISOString();
+      if (!sourceTitleTouched || !sourceTitle.trim()) {
+        sourceTitle = titleFromFilename(file.name);
+      }
+      if (!sourcePublicationYearTouched || !sourcePublicationYear.trim()) {
+        const fileYear = new Date(file.lastModified).getFullYear();
+        sourcePublicationYear = fileYear >= 1900 ? String(fileYear) : sourcePublicationYear;
+      }
+    } else {
+      sourceContentType = '';
+      sourceContentBytes = null;
+      sourceMetadataUpdatedAt = '';
+    }
   }
 
   function applySuggestedChainFromHints(): void {
     const h = hintForSource;
     if (!h) return;
     modelChain = [h.budget, h.balanced, h.quality];
+    wizardStep = 2;
     successMessage = 'Filled Model 1–3 with suggested picks (lowest cost → balanced → quality-first).';
     errorMessage = '';
-    wizardStep = 2;
   }
 
   function moveModel(index: number, direction: -1 | 1): void {
@@ -699,20 +949,206 @@
     }
   }
 
-  function saveDraft(): void {
-    if (!browser) return;
-    const payload = {
+  function createConfigPayload(): IngestionConfigPayload {
+    return {
       sourceMode,
       sourceUrl,
       sourceFileName,
       sourceType,
+      sourceTitle,
+      sourceAuthor,
+      sourcePublicationYear,
+      sourceContentType,
+      sourceContentBytes,
+      sourceMetadataUrl,
+      sourceMetadataUpdatedAt,
       selectedRouteId,
-      modelChain,
+      modelChain: [...modelChain],
       failoverAction,
       validationRan,
       validationSummary,
-      validationResults
+      validationResults: [...validationResults]
     };
+  }
+
+  function applyConfigPayload(payload: IngestionConfigPayload): void {
+    sourceMode = payload.sourceMode === 'file' ? 'file' : 'url';
+    sourceUrl = payload.sourceUrl ?? '';
+    sourceFileName = payload.sourceFileName ?? '';
+    if (SOURCE_TYPES.some((type) => type.id === payload.sourceType)) {
+      sourceType = payload.sourceType;
+    }
+    sourceTitle = typeof payload.sourceTitle === 'string' ? payload.sourceTitle : '';
+    sourceAuthor = typeof payload.sourceAuthor === 'string' ? payload.sourceAuthor : '';
+    sourcePublicationYear = normalizePublicationYear(payload.sourcePublicationYear ?? '');
+    sourceContentType = typeof payload.sourceContentType === 'string' ? payload.sourceContentType : '';
+    sourceContentBytes =
+      typeof payload.sourceContentBytes === 'number' && Number.isFinite(payload.sourceContentBytes)
+        ? payload.sourceContentBytes
+        : null;
+    sourceMetadataUrl = typeof payload.sourceMetadataUrl === 'string' ? payload.sourceMetadataUrl : '';
+    sourceMetadataUpdatedAt = typeof payload.sourceMetadataUpdatedAt === 'string' ? payload.sourceMetadataUpdatedAt : '';
+    sourceTitleTouched = false;
+    sourceAuthorTouched = false;
+    sourcePublicationYearTouched = false;
+    lastSourceMetadataUrl = sourceUrl.trim();
+    selectedRouteId = payload.selectedRouteId ?? '';
+    modelChain = [
+      String(payload.modelChain?.[0] ?? ''),
+      String(payload.modelChain?.[1] ?? ''),
+      String(payload.modelChain?.[2] ?? '')
+    ];
+    if (FAILOVER_OPTIONS.some((option) => option.id === payload.failoverAction)) {
+      failoverAction = payload.failoverAction;
+    }
+    validationRan = payload.validationRan === true;
+    validationSummary =
+      typeof payload.validationSummary === 'string'
+        ? payload.validationSummary
+        : 'Run validation to generate ranked model advice for this source.';
+    validationResults = Array.isArray(payload.validationResults)
+      ? payload.validationResults.map((row, idx) => ({
+          rank: typeof row.rank === 'number' ? row.rank : idx + 1,
+          model: String(row.model ?? ''),
+          confidence: typeof row.confidence === 'number' ? row.confidence : 0.75,
+          reason: typeof row.reason === 'string' ? row.reason : '',
+          costTier:
+            row.costTier === 'low' || row.costTier === 'medium' || row.costTier === 'high'
+              ? row.costTier
+              : 'medium',
+          speed:
+            row.speed === 'fast' || row.speed === 'balanced' || row.speed === 'thorough'
+              ? row.speed
+              : 'balanced',
+          contextWindow: typeof row.contextWindow === 'string' ? row.contextWindow : '128k'
+        }))
+      : [];
+  }
+
+  function profilePlaceholderName(): string {
+    return `Ingestion config ${new Date().toLocaleDateString('en-GB')}`;
+  }
+
+  function loadProfilesFromStorage(): void {
+    if (!browser) return;
+    try {
+      const raw = localStorage.getItem(INGESTION_PROFILES_STORAGE_KEY);
+      const parsed = raw ? (JSON.parse(raw) as IngestionProfile[]) : [];
+      ingestionProfiles = Array.isArray(parsed) ? parsed : [];
+      const savedActive = localStorage.getItem(INGESTION_ACTIVE_PROFILE_KEY) ?? '';
+      activeProfileId =
+        (savedActive && ingestionProfiles.some((profile) => profile.id === savedActive) ? savedActive : '') ||
+        ingestionProfiles[0]?.id ||
+        '';
+      activeProfileNameInput =
+        ingestionProfiles.find((profile) => profile.id === activeProfileId)?.name ?? '';
+      const active = ingestionProfiles.find((profile) => profile.id === activeProfileId);
+      if (active) {
+        applyConfigPayload(active.payload);
+        lastAutosavedSnapshot = JSON.stringify(active.payload);
+      }
+    } catch {
+      ingestionProfiles = [];
+      activeProfileId = '';
+      activeProfileNameInput = '';
+    } finally {
+      profilesHydrated = true;
+    }
+  }
+
+  function persistProfiles(): void {
+    if (!browser) return;
+    localStorage.setItem(INGESTION_PROFILES_STORAGE_KEY, JSON.stringify(ingestionProfiles));
+    if (activeProfileId) {
+      localStorage.setItem(INGESTION_ACTIVE_PROFILE_KEY, activeProfileId);
+    }
+  }
+
+  function ensureActiveProfile(): void {
+    if (activeProfileId && ingestionProfiles.some((profile) => profile.id === activeProfileId)) return;
+    const now = new Date().toISOString();
+    const created: IngestionProfile = {
+      id: crypto.randomUUID(),
+      name: profilePlaceholderName(),
+      createdAt: now,
+      updatedAt: now,
+      payload: createConfigPayload()
+    };
+    ingestionProfiles = [created, ...ingestionProfiles];
+    activeProfileId = created.id;
+    activeProfileNameInput = created.name;
+    persistProfiles();
+  }
+
+  function autosaveActiveProfile(): void {
+    if (!browser || !profilesHydrated || pageState !== 'ready') return;
+    ensureActiveProfile();
+    if (!activeProfileId) return;
+
+    const payload = createConfigPayload();
+    const snapshot = JSON.stringify(payload);
+    if (snapshot === lastAutosavedSnapshot) return;
+    lastAutosavedSnapshot = snapshot;
+
+    ingestionProfiles = ingestionProfiles.map((profile) =>
+      profile.id === activeProfileId
+        ? {
+            ...profile,
+            updatedAt: new Date().toISOString(),
+            payload
+          }
+        : profile
+    );
+    persistProfiles();
+  }
+
+  function renameActiveProfile(): void {
+    if (!activeProfileId) return;
+    const nextName = activeProfileNameInput.trim();
+    if (!nextName) return;
+    ingestionProfiles = ingestionProfiles.map((profile) =>
+      profile.id === activeProfileId
+        ? { ...profile, name: nextName, updatedAt: new Date().toISOString() }
+        : profile
+    );
+    persistProfiles();
+    successMessage = 'Config name updated.';
+  }
+
+  function createNewProfileFromCurrent(): void {
+    const now = new Date().toISOString();
+    const created: IngestionProfile = {
+      id: crypto.randomUUID(),
+      name: `${profilePlaceholderName()} (copy)`,
+      createdAt: now,
+      updatedAt: now,
+      payload: createConfigPayload()
+    };
+    ingestionProfiles = [created, ...ingestionProfiles];
+    activeProfileId = created.id;
+    activeProfileNameInput = created.name;
+    lastAutosavedSnapshot = JSON.stringify(created.payload);
+    persistProfiles();
+    successMessage = 'Created a reusable config copy.';
+  }
+
+  async function switchActiveProfile(profileId: string): Promise<void> {
+    const profile = ingestionProfiles.find((entry) => entry.id === profileId);
+    if (!profile) return;
+    activeProfileId = profile.id;
+    activeProfileNameInput = profile.name;
+    applyConfigPayload(profile.payload);
+    persistProfiles();
+    showPipelineLanding = false;
+    if (profile.payload.selectedRouteId) {
+      await handleRouteChange(profile.payload.selectedRouteId);
+    }
+    successMessage = `Loaded config: ${profile.name}.`;
+  }
+
+  function saveDraft(): void {
+    if (!browser) return;
+    const payload = createConfigPayload();
     localStorage.setItem('sophia.admin.ingestion.draft', JSON.stringify(payload));
     lastDraftSavedAt = new Date().toLocaleString('en-GB', {
       hour: '2-digit',
@@ -729,44 +1165,46 @@
     if (!raw) return;
     try {
       const draft = JSON.parse(raw) as Record<string, unknown>;
-      sourceMode = draft.sourceMode === 'file' ? 'file' : 'url';
-      sourceUrl = typeof draft.sourceUrl === 'string' ? draft.sourceUrl : '';
-      sourceFileName = typeof draft.sourceFileName === 'string' ? draft.sourceFileName : '';
-      if (
-        typeof draft.sourceType === 'string' &&
-        SOURCE_TYPES.some((type) => type.id === draft.sourceType)
-      ) {
-        sourceType = draft.sourceType as (typeof SOURCE_TYPES)[number]['id'];
-      }
-      selectedRouteId = typeof draft.selectedRouteId === 'string' ? draft.selectedRouteId : selectedRouteId;
-      modelChain = Array.isArray(draft.modelChain)
-        ? [String(draft.modelChain[0] ?? ''), String(draft.modelChain[1] ?? ''), String(draft.modelChain[2] ?? '')]
-        : modelChain;
-      if (typeof draft.failoverAction === 'string' && FAILOVER_OPTIONS.some((option) => option.id === draft.failoverAction)) {
-        failoverAction = draft.failoverAction as FailoverAction;
-      }
-      validationRan = draft.validationRan === true;
-      validationSummary = typeof draft.validationSummary === 'string' ? draft.validationSummary : validationSummary;
-      if (Array.isArray(draft.validationResults)) {
-        const parsed = draft.validationResults.filter(
-          (row): row is Record<string, unknown> =>
-            typeof row === 'object' && row !== null && typeof (row as { model?: unknown }).model === 'string'
-        );
-        validationResults = parsed.map((row, idx) => ({
-          rank: typeof row.rank === 'number' ? row.rank : idx + 1,
-          model: String(row.model),
-          confidence: typeof row.confidence === 'number' ? row.confidence : 0.75,
-          reason: typeof row.reason === 'string' ? row.reason : '',
-          costTier:
-            row.costTier === 'low' || row.costTier === 'medium' || row.costTier === 'high'
-              ? row.costTier
-              : 'medium',
-          speed:
-            row.speed === 'fast' || row.speed === 'balanced' || row.speed === 'thorough'
-              ? row.speed
-              : 'balanced',
-          contextWindow: typeof row.contextWindow === 'string' ? row.contextWindow : '128k'
-        }));
+      if (typeof draft === 'object' && draft !== null) {
+        applyConfigPayload({
+          sourceMode: draft.sourceMode === 'file' ? 'file' : 'url',
+          sourceUrl: typeof draft.sourceUrl === 'string' ? draft.sourceUrl : '',
+          sourceFileName: typeof draft.sourceFileName === 'string' ? draft.sourceFileName : '',
+          sourceType:
+            typeof draft.sourceType === 'string' &&
+            SOURCE_TYPES.some((type) => type.id === draft.sourceType)
+              ? (draft.sourceType as (typeof SOURCE_TYPES)[number]['id'])
+              : sourceType,
+          sourceTitle: typeof draft.sourceTitle === 'string' ? draft.sourceTitle : '',
+          sourceAuthor: typeof draft.sourceAuthor === 'string' ? draft.sourceAuthor : '',
+          sourcePublicationYear:
+            typeof draft.sourcePublicationYear === 'string' ? draft.sourcePublicationYear : '',
+          sourceContentType: typeof draft.sourceContentType === 'string' ? draft.sourceContentType : '',
+          sourceContentBytes:
+            typeof draft.sourceContentBytes === 'number' && Number.isFinite(draft.sourceContentBytes)
+              ? draft.sourceContentBytes
+              : null,
+          sourceMetadataUrl: typeof draft.sourceMetadataUrl === 'string' ? draft.sourceMetadataUrl : '',
+          sourceMetadataUpdatedAt:
+            typeof draft.sourceMetadataUpdatedAt === 'string' ? draft.sourceMetadataUpdatedAt : '',
+          selectedRouteId: typeof draft.selectedRouteId === 'string' ? draft.selectedRouteId : selectedRouteId,
+          modelChain: Array.isArray(draft.modelChain)
+            ? [String(draft.modelChain[0] ?? ''), String(draft.modelChain[1] ?? ''), String(draft.modelChain[2] ?? '')]
+            : modelChain,
+          failoverAction:
+            typeof draft.failoverAction === 'string' &&
+            FAILOVER_OPTIONS.some((option) => option.id === draft.failoverAction)
+              ? (draft.failoverAction as FailoverAction)
+              : failoverAction,
+          validationRan: draft.validationRan === true,
+          validationSummary:
+            typeof draft.validationSummary === 'string'
+              ? draft.validationSummary
+              : 'Run validation to generate ranked model advice for this source.',
+          validationResults: Array.isArray(draft.validationResults)
+            ? (draft.validationResults as ValidationRecommendation[])
+            : []
+        });
       }
       if (validationRan && validationResults.length === 0) {
         validationRan = false;
@@ -787,6 +1225,11 @@
           sourceUrl,
           sourceFileName,
           sourceType,
+          sourceTitle,
+          sourceAuthor,
+          sourcePublicationYear,
+          sourceContentType,
+          sourceContentBytes,
           routeId: selectedRouteId,
           modelChain,
           failoverAction
@@ -798,13 +1241,67 @@
 
   $effect(() => {
     if (sourceMode !== 'url') return;
+    seedSourceMetadataFromUrl(sourceUrl);
     if (sourceTypeOverridden) return;
     const detected = detectSourceType(sourceUrl);
     if (detected) sourceType = detected;
   });
 
+  $effect(() => {
+    if (!browser) return;
+    if (sourceMode !== 'url') return;
+    const nextUrl = sourceUrl.trim();
+    if (!isInspectableHttpUrl(nextUrl)) return;
+
+    if (nextUrl !== lastSourceMetadataUrl) {
+      sourceTitleTouched = false;
+      sourceAuthorTouched = false;
+      sourcePublicationYearTouched = false;
+      lastSourceMetadataUrl = nextUrl;
+    }
+
+    const timer = window.setTimeout(() => {
+      void inspectSourceMetadataFromUrl(false);
+    }, 700);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  });
+
+  $effect(() => {
+    sourceMode;
+    sourceUrl;
+    sourceFileName;
+    sourceType;
+    sourceTitle;
+    sourceAuthor;
+    sourcePublicationYear;
+    sourceContentType;
+    sourceContentBytes;
+    sourceMetadataUrl;
+    sourceMetadataUpdatedAt;
+    selectedRouteId;
+    modelChain;
+    failoverAction;
+    validationRan;
+    validationSummary;
+    validationResults;
+    autosaveActiveProfile();
+  });
+
   onMount(() => {
     if (!browser) return;
+    consumeAdminQuickStartParams();
+    const query = new URLSearchParams(window.location.search);
+    if (query.get('setup') === '1') {
+      showPipelineLanding = false;
+    }
+    if (adminIngestionHomeShouldRedirectToQuickStart(window.location.search)) {
+      void goto('/admin/quick-start', { replaceState: true });
+      return;
+    }
+    loadProfilesFromStorage();
 
     const sync = async () => {
       if (!auth?.currentUser) {
@@ -813,9 +1310,10 @@
         return;
       }
       try {
-        await loadAdminContext();
+        await loadAdminContextWithTimeout();
       } catch (error) {
         errorMessage = error instanceof Error ? error.message : 'Failed to load administrator context';
+        pageState = 'ready';
       }
     };
 
@@ -836,21 +1334,22 @@
 </script>
 
 <div class="admin-ingestion min-h-screen text-sophia-dark-text">
-  <div class="admin-ingestion-shell mx-auto w-full max-w-[min(100%,88rem)] px-4 py-8 sm:px-8 sm:py-10 lg:px-12">
-    <header class="rounded-2xl border border-sophia-dark-border/80 bg-sophia-dark-surface/95 p-8 md:p-10">
+  <div class="admin-ingestion-shell mx-auto w-full max-w-[76rem] px-6 py-8 sm:px-10 sm:py-10 lg:px-14 xl:px-16">
+    <header class="rounded-2xl border border-sophia-dark-border/80 bg-sophia-dark-surface/95 p-8 md:p-11">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex flex-wrap items-center gap-2">
-          <span class="rounded-full border border-sophia-dark-purple/40 bg-sophia-dark-purple/10 px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-purple">
-            Admin Ingestion
+          <span class="rounded-full border border-sophia-dark-purple/40 bg-sophia-dark-purple/10 px-4 py-2.5 font-mono text-[0.75rem] font-medium uppercase tracking-[0.08em] leading-none text-sophia-dark-purple">
+            Ingestion
           </span>
           <span
-            class="rounded-full border border-sophia-dark-border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-muted"
+            class="rounded-full border border-sophia-dark-border px-4 py-2 font-mono text-[0.72rem] uppercase tracking-[0.1em] leading-none text-sophia-dark-muted"
             title="Phase 1 prepares extraction. Phase 2 and 3 continue in Operations."
           >
             Phase 1 of 3: Extraction & Ingestion
           </span>
         </div>
         <nav class="flex flex-wrap items-center gap-6">
+          <a href="/admin/quick-start" class="rounded border border-sophia-dark-sage/45 bg-sophia-dark-sage/12 px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-text hover:bg-sophia-dark-sage/20">Quick start</a>
           <a href="/admin/operations" class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-text hover:bg-sophia-dark-surface">Operations Workbench</a>
           <a href="/admin/ingestion-routing" class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-text hover:bg-sophia-dark-surface">Ingestion Routing</a>
           <a href="/admin/review" class="rounded border border-sophia-dark-border bg-sophia-dark-surface-raised px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-text hover:bg-sophia-dark-surface">Review Queue</a>
@@ -858,10 +1357,10 @@
       </div>
 
       <h1 class="mt-4 text-[2.1rem] font-serif leading-[1.15] text-sophia-dark-text md:text-[2.45rem]">
-        Configure ingestion with a guided setup flow
+        Configure ingestion and launch quickly
       </h1>
       <p class="mt-3 max-w-3xl text-base leading-7 text-sophia-dark-muted">
-        One step at a time: use the tabs to switch between stages. <span class="text-sophia-dark-text">Start Phase 1</span> only appears on tab 4 after your chain is valid.
+        Four clear steps: source, model chain, optional recommendation, then final review. You can move between tabs and always see what remains.
       </p>
     </header>
 
@@ -878,8 +1377,15 @@
       </div>
     {:else}
       {#if errorMessage}
-        <div class="mt-6 rounded-xl border border-sophia-dark-copper/40 bg-sophia-dark-copper/10 px-4 py-3 font-mono text-sm text-sophia-dark-copper">
-          {errorMessage}
+        <div class="mt-6 rounded-xl border border-sophia-dark-copper/40 bg-sophia-dark-copper/10 px-5 py-4 font-mono text-sm text-sophia-dark-copper">
+          <div>{errorMessage}</div>
+          <button
+            type="button"
+            class="mt-3 rounded border border-sophia-dark-copper/40 bg-sophia-dark-bg/60 px-4 py-2.5 font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-copper hover:bg-sophia-dark-copper/10"
+            onclick={() => void retryLoadAdminContext()}
+          >
+            Retry loading admin context
+          </button>
         </div>
       {/if}
       {#if successMessage}
@@ -888,31 +1394,340 @@
         </div>
       {/if}
 
-      <div class="mt-10 flex w-full flex-col gap-8 lg:flex-row lg:items-start lg:gap-10">
-        <nav
-          class="flex w-full flex-col gap-1 sm:max-w-xl lg:max-w-[15rem] lg:shrink-0"
-          aria-label="Setup steps"
-        >
-          {#each setupSteps as step, idx}
-            <button
-              type="button"
-              onclick={() => (wizardStep = idx + 1)}
-              class={`flex w-full flex-col items-start rounded-lg border px-4 py-3 text-left transition-colors ${wizardStep === idx + 1 ? 'border-sophia-dark-purple/50 bg-sophia-dark-purple/12' : 'border-sophia-dark-border bg-sophia-dark-bg/50 hover:border-sophia-dark-border'}`}
-            >
-              <div class="flex w-full items-center justify-between gap-2">
-                <span class="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Step {idx + 1}</span>
-                <span
-                  class={`rounded-full border px-2 py-0.5 font-mono text-[0.58rem] uppercase tracking-[0.12em] ${step.complete ? 'border-sophia-dark-sage/40 bg-sophia-dark-sage/10 text-sophia-dark-sage' : 'border-sophia-dark-border bg-sophia-dark-surface-raised text-sophia-dark-muted'}`}
+      {#if showPipelineLanding}
+      <section class="landing-panel mt-10 rounded-2xl border border-sophia-dark-border bg-sophia-dark-surface/90 p-7 md:p-10">
+        <div class="flex flex-wrap items-start justify-between gap-6">
+          <div>
+            <div class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">Ingestion source</div>
+            <h2 class="mt-2 font-serif text-3xl text-sophia-dark-text">Set your source before routing setup</h2>
+            <p class="mt-3 max-w-3xl text-sm leading-6 text-sophia-dark-muted">
+              Provide a URL or upload a file, then confirm core metadata (title, author, year). Sophia can pull what it can automatically so you know scope and expected ingestion load before configuring the 6 stages.
+            </p>
+          </div>
+          <div class="rounded-lg border border-sophia-dark-border bg-sophia-dark-bg/60 px-5 py-3.5 text-xs text-sophia-dark-muted">
+            Source mode:
+            <span class="ml-1 font-mono text-sophia-dark-text">{sourceMode === 'url' ? 'URL' : 'File upload'}</span>
+          </div>
+        </div>
+
+        <div class="mt-7 grid gap-5 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)]">
+          <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg/55 p-5">
+            <div class="inline-flex items-center gap-1 rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 p-1">
+              <button
+                type="button"
+                class={`rounded border px-4 py-2 font-mono text-xs uppercase tracking-[0.08em] ${sourceMode === 'url' ? 'border-sophia-dark-purple/45 bg-sophia-dark-purple/18 text-sophia-dark-text' : 'border-transparent text-sophia-dark-muted hover:border-sophia-dark-border'}`}
+                onclick={() => (sourceMode = 'url')}
+                aria-pressed={sourceMode === 'url'}
+              >
+                Paste URL
+              </button>
+              <span class="h-5 w-px bg-sophia-dark-border" aria-hidden="true"></span>
+              <button
+                type="button"
+                class={`rounded border px-4 py-2 font-mono text-xs uppercase tracking-[0.08em] ${sourceMode === 'file' ? 'border-sophia-dark-purple/45 bg-sophia-dark-purple/18 text-sophia-dark-text' : 'border-transparent text-sophia-dark-muted hover:border-sophia-dark-border'}`}
+                onclick={() => (sourceMode = 'file')}
+                aria-pressed={sourceMode === 'file'}
+              >
+                Browse file
+              </button>
+            </div>
+
+            {#if sourceMode === 'url'}
+              <div class="mt-5 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                <label class="space-y-2">
+                  <span class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Source URL</span>
+                  <input
+                    bind:value={sourceUrl}
+                    type="url"
+                    placeholder="https://plato.stanford.edu/entries/ethics-deontology/"
+                    class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-sm text-sophia-dark-text"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onclick={() => void inspectSourceMetadataFromUrl(true)}
+                  disabled={!isInspectableHttpUrl(sourceUrl.trim()) || sourceMetadataState === 'loading'}
+                  class="rounded border border-sophia-dark-border px-4 py-3 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised disabled:opacity-40"
                 >
-                  {step.complete ? '✓' : '•'}
+                  {sourceMetadataState === 'loading' ? 'Pulling…' : 'Pull metadata'}
+                </button>
+              </div>
+
+              {#if urlPreview}
+                <div class="mt-4 rounded border border-sophia-dark-border bg-sophia-dark-bg/70 px-4 py-3">
+                  <div class="font-mono text-[0.66rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Detected source</div>
+                  <div class="mt-2 flex items-center gap-3">
+                    <img src={urlPreview.favicon} alt="" class="h-5 w-5 rounded-sm" />
+                    <div>
+                      <div class="text-sm text-sophia-dark-text">{urlPreview.title}</div>
+                      <div class="font-mono text-xs text-sophia-dark-muted">{urlPreview.domain}</div>
+                    </div>
+                  </div>
+                </div>
+              {/if}
+            {:else}
+              <div class="mt-5">
+                <label class="block rounded border border-dashed border-sophia-dark-border bg-sophia-dark-bg/70 p-8 text-center">
+                  <input
+                    type="file"
+                    class="hidden"
+                    onchange={(event) => onFileSelected((event.currentTarget as HTMLInputElement).files)}
+                  />
+                  <span class="font-mono text-sm text-sophia-dark-text">Drop a file here or click to choose</span>
+                  <p class="mt-2 text-xs text-sophia-dark-muted">Supports text, markdown, or document files used for ingestion setup.</p>
+                </label>
+                {#if sourceFileName}
+                  <p class="mt-3 font-mono text-xs text-sophia-dark-muted">Selected: {sourceFileName}</p>
+                {/if}
+              </div>
+            {/if}
+
+            <label class="mt-5 block space-y-2">
+              <span class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Source type</span>
+              <select
+                value={sourceType}
+                onchange={(event) => setSourceType((event.currentTarget as HTMLSelectElement).value as (typeof SOURCE_TYPES)[number]['id'])}
+                class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-sm text-sophia-dark-text"
+              >
+                {#each SOURCE_TYPES as option}
+                  <option value={option.id}>{option.label}</option>
+                {/each}
+              </select>
+              <span class="text-xs text-sophia-dark-muted">Auto-detected from URL when possible. You can override manually.</span>
+            </label>
+          </div>
+
+          <div class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg/55 p-5">
+            <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Source metadata</div>
+            <p class="mt-2 text-xs leading-5 text-sophia-dark-muted">
+              You can edit all fields. Auto-fill updates only values you have not manually changed.
+            </p>
+
+            <div class="mt-4 space-y-3">
+              <label class="block space-y-2">
+                <span class="font-mono text-[0.62rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Article title</span>
+                <input
+                  bind:value={sourceTitle}
+                  type="text"
+                  placeholder="Title"
+                  class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 text-sm text-sophia-dark-text"
+                  oninput={() => (sourceTitleTouched = true)}
+                />
+              </label>
+              <label class="block space-y-2">
+                <span class="font-mono text-[0.62rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Author</span>
+                <input
+                  bind:value={sourceAuthor}
+                  type="text"
+                  placeholder="Author"
+                  class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 text-sm text-sophia-dark-text"
+                  oninput={() => (sourceAuthorTouched = true)}
+                />
+              </label>
+              <label class="block space-y-2">
+                <span class="font-mono text-[0.62rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Publication year</span>
+                <input
+                  bind:value={sourcePublicationYear}
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="YYYY"
+                  class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-sm text-sophia-dark-text"
+                  oninput={() => {
+                    sourcePublicationYearTouched = true;
+                    sourcePublicationYear = normalizePublicationYear(sourcePublicationYear) || sourcePublicationYear.slice(0, 4);
+                  }}
+                />
+              </label>
+            </div>
+
+            <div class="mt-5 rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/25 px-4 py-4">
+              <div class="font-mono text-[0.62rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Ingestion profile</div>
+              <dl class="mt-3 grid grid-cols-1 gap-2 text-sm">
+                <div class="flex items-center justify-between gap-3">
+                  <dt class="font-mono text-[0.62rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Type</dt>
+                  <dd class="text-sophia-dark-text">{sourceTypeLabel}</dd>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <dt class="font-mono text-[0.62rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Size</dt>
+                  <dd class="font-mono text-sophia-dark-text">{formatBytes(sourceKnownBytes)}</dd>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <dt class="font-mono text-[0.62rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Estimated tokens</dt>
+                  <dd class="font-mono text-sophia-dark-text">{sourceEstimatedTokens ? `~${sourceEstimatedTokens.toLocaleString('en-GB')}` : 'Unknown'}</dd>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <dt class="font-mono text-[0.62rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Content type</dt>
+                  <dd class="font-mono text-sophia-dark-text">{sourceKnownContentType || 'Unknown'}</dd>
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <dt class="font-mono text-[0.62rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Metadata refreshed</dt>
+                  <dd class="font-mono text-sophia-dark-text">
+                    {sourceMetadataUpdatedAt ? new Date(sourceMetadataUpdatedAt).toLocaleString('en-GB') : 'Not yet'}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+        </div>
+
+        {#if sourceMetadataError}
+          <div class="mt-4 rounded border border-sophia-dark-copper/35 bg-sophia-dark-copper/10 px-4 py-3 font-mono text-xs text-sophia-dark-copper">
+            Metadata pull failed: {sourceMetadataError}
+          </div>
+        {/if}
+      </section>
+
+      <section class="landing-panel mt-10 rounded-2xl border border-sophia-dark-border bg-sophia-dark-surface/90 p-7 md:p-10">
+        <div class="flex flex-wrap items-start justify-between gap-6">
+          <div>
+            <div class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">Preconfigured pipeline</div>
+            <h2 class="mt-2 font-serif text-3xl text-sophia-dark-text">6-stage ingestion pipeline is ready</h2>
+            <p class="mt-3 max-w-3xl text-sm leading-6 text-sophia-dark-muted">
+              Default settings are applied across all phases. Start quickly, then edit routing and model behavior per stage only where needed.
+            </p>
+          </div>
+          <div class="rounded-lg border border-sophia-dark-border bg-sophia-dark-bg/60 px-5 py-3.5 text-xs text-sophia-dark-muted">
+            Default route:
+            <span class="ml-1 font-mono text-sophia-dark-text">{(selectedRoute?.name ?? selectedRouteId) || 'Not yet loaded'}</span>
+          </div>
+        </div>
+
+        <div class="mt-7 grid gap-4 md:grid-cols-2">
+          {#each INGESTION_STAGE_PREVIEW as stage}
+            <article class="rounded-xl border border-sophia-dark-border bg-sophia-dark-bg/45 p-5">
+              <div class="flex items-start justify-between gap-2">
+                <div>
+                  <h3 class="font-serif text-xl text-sophia-dark-text">{stage.title}</h3>
+                  <p class="mt-1 text-sm leading-6 text-sophia-dark-muted">{stage.description}</p>
+                </div>
+                <span class="rounded-full border border-sophia-dark-sage/35 bg-sophia-dark-sage/10 px-2.5 py-1.5 font-mono text-[0.64rem] uppercase tracking-[0.12em] text-sophia-dark-sage">
+                  Default
                 </span>
               </div>
-              <span class="mt-1 font-serif text-base text-sophia-dark-text">{step.title}</span>
-              <span class="mt-0.5 text-xs leading-snug text-sophia-dark-muted">{step.subtitle}</span>
-            </button>
+              <div class="mt-4 flex items-center justify-between gap-3 border-t border-sophia-dark-border pt-4">
+                <div class="font-mono text-xs text-sophia-dark-dim">Route: {(selectedRoute?.name ?? selectedRouteId) || 'auto'}</div>
+                <a
+                  href={`/admin/ingestion-routing?mode=quick&stage=${stage.id}`}
+                  class="rounded border border-sophia-dark-border px-4 py-2.5 font-mono text-[0.7rem] uppercase tracking-[0.12em] text-sophia-dark-text hover:bg-sophia-dark-surface-raised"
+                >
+                  Edit stage
+                </a>
+              </div>
+            </article>
           {/each}
-        </nav>
+        </div>
 
+        <div class="mt-7 rounded-xl border border-sophia-dark-border bg-sophia-dark-bg/60 p-5 md:p-6">
+          <div class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">
+            Reusable config
+          </div>
+          <p class="mt-2 text-sm leading-6 text-sophia-dark-muted">
+            Configs auto-save continuously. Reuse one at any time and rename it after creation.
+          </p>
+          <div class="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+            <label class="space-y-2">
+              <span class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Saved configs</span>
+              <select
+                value={activeProfileId}
+                onchange={(event) => void switchActiveProfile((event.currentTarget as HTMLSelectElement).value)}
+                class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-sm text-sophia-dark-text"
+              >
+                {#if ingestionProfiles.length === 0}
+                  <option value="">No saved configs yet</option>
+                {:else}
+                  {#each ingestionProfiles as profile}
+                    <option value={profile.id}>
+                      {profile.name} · {new Date(profile.updatedAt).toLocaleDateString('en-GB')}
+                    </option>
+                  {/each}
+                {/if}
+              </select>
+            </label>
+            <button
+              type="button"
+              onclick={createNewProfileFromCurrent}
+              class="self-end rounded border border-sophia-dark-border px-4 py-3 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+            >
+              Create copy
+            </button>
+          </div>
+
+          <div class="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+            <label class="space-y-2">
+              <span class="font-mono text-[0.66rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Config name</span>
+              <input
+                type="text"
+                bind:value={activeProfileNameInput}
+                placeholder="Ingestion config"
+                class="w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-3 font-mono text-sm text-sophia-dark-text"
+              />
+            </label>
+            <button
+              type="button"
+              onclick={renameActiveProfile}
+              class="self-end rounded border border-sophia-dark-border px-4 py-3 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+              disabled={!activeProfileId}
+            >
+              Rename
+            </button>
+          </div>
+        </div>
+
+        <div class="mt-6 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onclick={startPipelineSetup}
+            class="rounded border border-sophia-dark-purple/45 bg-sophia-dark-purple/16 px-5 py-3 font-mono text-sm text-sophia-dark-text hover:bg-sophia-dark-purple/24"
+          >
+            Continue to source + model setup
+          </button>
+          <a
+            href="/admin/ingestion-routing"
+            class="rounded border border-sophia-dark-border px-5 py-3 font-mono text-sm text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+          >
+            Open routing studio
+          </a>
+        </div>
+      </section>
+      {:else}
+      <div class="mt-10 rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/80 p-4">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <div class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">
+            Step {wizardStep} of 4
+          </div>
+          <div class="text-xs text-sophia-dark-dim">
+            {remainingSteps === 0 ? 'Final review ready' : `${remainingSteps} step${remainingSteps === 1 ? '' : 's'} remaining`}
+          </div>
+        </div>
+        <div class="h-1.5 w-full rounded-full bg-sophia-dark-bg/60">
+          <div
+            class="h-1.5 rounded-full bg-sophia-dark-purple transition-all"
+            style={`width: ${(wizardStep / 4) * 100}%`}
+          ></div>
+        </div>
+        <div class="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {#each setupSteps as step, idx}
+          <button
+            type="button"
+            onclick={() => (wizardStep = idx + 1)}
+            class={`rounded-lg border px-4 py-3 text-left ${wizardStep === idx + 1 ? 'border-sophia-dark-purple/50 bg-sophia-dark-purple/12' : 'border-sophia-dark-border bg-sophia-dark-bg/40 hover:border-sophia-dark-border'}`}
+          >
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-mono text-[0.65rem] uppercase tracking-[0.12em] text-sophia-dark-muted">Step {idx + 1}</span>
+              <span
+                class={`rounded-full border px-2 py-0.5 font-mono text-[0.58rem] uppercase tracking-[0.12em] ${step.complete ? 'border-sophia-dark-sage/40 bg-sophia-dark-sage/10 text-sophia-dark-sage' : 'border-sophia-dark-border bg-sophia-dark-surface-raised text-sophia-dark-muted'}`}
+              >
+                {step.complete ? '✓' : '•'}
+              </span>
+            </div>
+            <div class="mt-1 font-serif text-base text-sophia-dark-text">{step.title}</div>
+            <div class="mt-0.5 text-xs leading-snug text-sophia-dark-muted">{step.subtitle}</div>
+          </button>
+        {/each}
+        </div>
+      </div>
+
+      <div class="mt-6 flex w-full flex-col gap-6">
         <div class="min-w-0 flex-1 space-y-6">
           {#if wizardStep === 1}
           <section class="setup-card rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/95 p-6 md:p-8">
@@ -921,22 +1736,23 @@
               <span class="help-tip" title="Pick exactly one source mode. URL mode fetches from a link. File mode uses a local upload for this run setup.">ⓘ</span>
             </div>
 
-            <div class="inline-flex rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 p-1">
+            <div class="inline-flex items-center gap-1 rounded border border-sophia-dark-border bg-sophia-dark-surface-raised/30 p-1">
               <button
                 type="button"
-                class={`rounded px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] ${sourceMode === 'url' ? 'bg-sophia-dark-purple/18 text-sophia-dark-text' : 'text-sophia-dark-muted'}`}
+                class={`rounded border px-4 py-2 font-mono text-xs uppercase tracking-[0.08em] ${sourceMode === 'url' ? 'border-sophia-dark-purple/45 bg-sophia-dark-purple/18 text-sophia-dark-text' : 'border-transparent text-sophia-dark-muted hover:border-sophia-dark-border'}`}
                 onclick={() => (sourceMode = 'url')}
                 aria-pressed={sourceMode === 'url'}
               >
                 Paste URL
               </button>
+              <span class="h-5 w-px bg-sophia-dark-border" aria-hidden="true"></span>
               <button
                 type="button"
-                class={`rounded px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] ${sourceMode === 'file' ? 'bg-sophia-dark-purple/18 text-sophia-dark-text' : 'text-sophia-dark-muted'}`}
+                class={`rounded border px-4 py-2 font-mono text-xs uppercase tracking-[0.08em] ${sourceMode === 'file' ? 'border-sophia-dark-purple/45 bg-sophia-dark-purple/18 text-sophia-dark-text' : 'border-transparent text-sophia-dark-muted hover:border-sophia-dark-border'}`}
                 onclick={() => (sourceMode = 'file')}
                 aria-pressed={sourceMode === 'file'}
               >
-                Browse file
+                Browse File
               </button>
             </div>
 
@@ -996,7 +1812,7 @@
               <span class="text-xs text-sophia-dark-muted">Auto-detected from URL when possible. You can override manually.</span>
             </label>
           </section>
-          {:else if wizardStep === 2}
+        {:else if wizardStep === 2}
           <section class="setup-card rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/95 p-6 md:p-8">
             <div class="mb-5 flex items-center justify-between gap-3">
               <h2 class="text-2xl font-serif text-sophia-dark-text">2. Model chain & failover</h2>
@@ -1110,7 +1926,7 @@
               </div>
             {/if}
           </section>
-          {:else if wizardStep === 3}
+        {:else if wizardStep === 3}
           <section class="setup-card rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/95 p-6 md:p-8">
             <div class="mb-5 flex items-center justify-between gap-3">
               <h2 class="text-2xl font-serif text-sophia-dark-text">3. Optional: Restormel recommendation</h2>
@@ -1331,7 +2147,7 @@
               </div>
             {/if}
           </section>
-          {:else if wizardStep === 4}
+        {:else}
           <section class="setup-card rounded-xl border border-sophia-dark-border bg-sophia-dark-surface/95 p-6 md:p-8">
             <div class="mb-5 flex items-center justify-between gap-3">
               <h2 class="text-2xl font-serif text-sophia-dark-text">4. Review & proceed</h2>
@@ -1340,34 +2156,63 @@
 
             <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/70 p-5">
               <div class="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Configuration summary</div>
-              <div class="summary-list mt-4 divide-y divide-sophia-dark-border">
-                <div class="summary-row py-3">
-                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Source</div>
-                  <div class="mt-1 text-sm text-sophia-dark-text break-all">
-                    {sourceMode === 'url' ? sourceUrl || 'Not set' : sourceFileName || 'No file selected'}
-                  </div>
+              <dl class="gov-summary-list mt-4">
+                <div class="gov-summary-list__row">
+                  <dt class="gov-summary-list__key">Config profile</dt>
+                  <dd class="gov-summary-list__value">{activeProfile?.name ?? 'Auto-saved config'}</dd>
+                  <dd class="gov-summary-list__actions">
+                    <button type="button" class="summary-action" onclick={() => (showPipelineLanding = true)}>Manage</button>
+                  </dd>
                 </div>
-                <div class="summary-row py-3">
-                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Route</div>
-                  <div class="mt-1 text-sm text-sophia-dark-text">{(selectedRoute?.name ?? selectedRouteId) || 'Not selected'}</div>
+                <div class="gov-summary-list__row">
+                  <dt class="gov-summary-list__key">Source</dt>
+                  <dd class="gov-summary-list__value break-all">{sourceMode === 'url' ? sourceUrl || 'Not set' : sourceFileName || 'No file selected'}</dd>
+                  <dd class="gov-summary-list__actions">
+                    <button type="button" class="summary-action" onclick={() => (wizardStep = 1)}>Change</button>
+                  </dd>
                 </div>
-                <div class="summary-row py-3">
-                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Model chain</div>
-                  <div class="mt-1 text-sm text-sophia-dark-text">
-                    {modelChain[0] || '—'} → {modelChain[1] || '—'} → {modelChain[2] || '—'}
-                  </div>
+                <div class="gov-summary-list__row">
+                  <dt class="gov-summary-list__key">Source metadata</dt>
+                  <dd class="gov-summary-list__value">
+                    {sourceTitle || 'Untitled source'}
+                    {#if sourceAuthor}
+                      · {sourceAuthor}
+                    {/if}
+                    {#if sourcePublicationYear}
+                      · {sourcePublicationYear}
+                    {/if}
+                  </dd>
+                  <dd class="gov-summary-list__actions">
+                    <button type="button" class="summary-action" onclick={() => (showPipelineLanding = true)}>Edit</button>
+                  </dd>
                 </div>
-                <div class="summary-row py-3">
-                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Failover</div>
-                  <div class="mt-1 text-sm text-sophia-dark-text">
-                    {FAILOVER_OPTIONS.find((option) => option.id === failoverAction)?.label}
-                  </div>
+                <div class="gov-summary-list__row">
+                  <dt class="gov-summary-list__key">Route</dt>
+                  <dd class="gov-summary-list__value">{(selectedRoute?.name ?? selectedRouteId) || 'Not selected'}</dd>
+                  <dd class="gov-summary-list__actions">
+                    <button type="button" class="summary-action" onclick={() => (wizardStep = 3)}>Change</button>
+                  </dd>
                 </div>
-                <div class="summary-row py-3">
-                  <div class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Estimated envelope</div>
-                  <div class="mt-1 text-sm text-sophia-dark-text">~${estimatedCostUsd.toFixed(2)} · ~{estimatedDurationMinutes} min</div>
+                <div class="gov-summary-list__row">
+                  <dt class="gov-summary-list__key">Model chain</dt>
+                  <dd class="gov-summary-list__value">{modelChain[0] || '—'} → {modelChain[1] || '—'} → {modelChain[2] || '—'}</dd>
+                  <dd class="gov-summary-list__actions">
+                    <button type="button" class="summary-action" onclick={() => (wizardStep = 2)}>Change</button>
+                  </dd>
                 </div>
-              </div>
+                <div class="gov-summary-list__row">
+                  <dt class="gov-summary-list__key">Failover</dt>
+                  <dd class="gov-summary-list__value">{FAILOVER_OPTIONS.find((option) => option.id === failoverAction)?.label}</dd>
+                  <dd class="gov-summary-list__actions">
+                    <button type="button" class="summary-action" onclick={() => (wizardStep = 2)}>Change</button>
+                  </dd>
+                </div>
+                <div class="gov-summary-list__row">
+                  <dt class="gov-summary-list__key">Estimated envelope</dt>
+                  <dd class="gov-summary-list__value">~${estimatedCostUsd.toFixed(2)} · ~{estimatedDurationMinutes} min</dd>
+                  <dd class="gov-summary-list__actions"></dd>
+                </div>
+              </dl>
             </div>
 
             <div class="mt-5 flex flex-wrap items-center gap-3">
@@ -1399,35 +2244,34 @@
           </section>
           {/if}
 
-          {#if wizardStep < 4}
-            <div
-              class="flex flex-col gap-4 border-t border-sophia-dark-border/50 pt-6 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between"
+          <div class="flex flex-col gap-4 border-t border-sophia-dark-border/50 pt-6 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+            <button
+              type="button"
+              onclick={goWizardBack}
+              disabled={wizardStep === 1}
+              class="rounded border border-sophia-dark-border px-4 py-3 font-mono text-sm text-sophia-dark-muted hover:bg-sophia-dark-surface-raised disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <button
-                type="button"
-                onclick={goWizardBack}
-                disabled={wizardStep === 1}
-                class="rounded border border-sophia-dark-border px-4 py-3 font-mono text-sm text-sophia-dark-muted hover:bg-sophia-dark-surface-raised disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                ← Back
-              </button>
-              <div class="flex min-w-0 flex-1 flex-col items-stretch gap-2 sm:max-w-md sm:flex-row sm:items-center sm:justify-end">
-                {#if nextButtonHint}
-                  <p class="text-xs leading-5 text-sophia-dark-dim sm:mr-2 sm:text-right">{nextButtonHint}</p>
-                {/if}
+              ← Back
+            </button>
+            <div class="flex min-w-0 flex-1 flex-col items-stretch gap-2 sm:max-w-md sm:flex-row sm:items-center sm:justify-end">
+              {#if nextButtonHint && wizardStep < 4}
+                <p class="text-xs leading-5 text-sophia-dark-dim sm:mr-2 sm:text-right">{nextButtonHint}</p>
+              {/if}
+              {#if wizardStep < 4}
                 <button
                   type="button"
                   onclick={goWizardNext}
                   disabled={!canGoNextFromCurrentStep}
                   class="rounded border border-sophia-dark-purple/45 bg-sophia-dark-purple/16 px-5 py-3 font-mono text-sm text-sophia-dark-text hover:bg-sophia-dark-purple/24 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Next →
+                  Continue →
                 </button>
-              </div>
+              {/if}
             </div>
-          {/if}
+          </div>
         </div>
       </div>
+      {/if}
     {/if}
   </div>
 </div>
@@ -1444,6 +2288,15 @@
     min-height: 2.75rem;
   }
 
+  .admin-ingestion-shell {
+    padding-bottom: 3rem;
+  }
+
+  .landing-panel {
+    max-width: 76rem;
+    margin-inline: auto;
+  }
+
   .help-tip {
     display: inline-flex;
     align-items: center;
@@ -1456,5 +2309,74 @@
     font-size: 0.66rem;
     color: var(--color-dim);
     cursor: help;
+  }
+
+  .gov-summary-list {
+    margin: 0;
+    border-top: 1px solid rgba(140, 146, 168, 0.28);
+  }
+
+  .gov-summary-list__row {
+    display: grid;
+    grid-template-columns: minmax(8rem, 12rem) minmax(0, 1fr) auto;
+    gap: 0.75rem;
+    align-items: start;
+    padding: 0.85rem 0;
+    border-bottom: 1px solid rgba(140, 146, 168, 0.28);
+  }
+
+  .gov-summary-list__key {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-dim);
+  }
+
+  .gov-summary-list__value {
+    font-size: 0.95rem;
+    color: var(--color-text);
+  }
+
+  .gov-summary-list__actions {
+    text-align: right;
+  }
+
+  .summary-action {
+    min-height: auto;
+    border: 1px solid rgba(140, 146, 168, 0.45);
+    border-radius: 0.35rem;
+    padding: 0.2rem 0.55rem;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--color-text);
+    background: rgba(20, 20, 20, 0.7);
+  }
+
+  .summary-action:hover {
+    background: rgba(33, 33, 33, 0.9);
+  }
+
+  @media (max-width: 720px) {
+    .admin-ingestion-shell {
+      padding-inline: 1.25rem;
+    }
+
+    .admin-ingestion header {
+      padding: 1.25rem;
+    }
+
+    .landing-panel {
+      padding: 1.25rem;
+    }
+
+    .gov-summary-list__row {
+      grid-template-columns: 1fr;
+      gap: 0.45rem;
+    }
+
+    .gov-summary-list__actions {
+      text-align: left;
+    }
   }
 </style>

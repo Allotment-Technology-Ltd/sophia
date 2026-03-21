@@ -531,6 +531,7 @@ export async function runDialecticalEngine(
     deepseek: { analysis: 140_000, critique: 165_000, synthesis: 185_000 },
     together: { analysis: 140_000, critique: 165_000, synthesis: 185_000 },
     openrouter: { analysis: 150_000, critique: 180_000, synthesis: 200_000 },
+    cohere: { analysis: 130_000, critique: 160_000, synthesis: 180_000 },
     perplexity: { analysis: 120_000, critique: 150_000, synthesis: 170_000 }
   };
 

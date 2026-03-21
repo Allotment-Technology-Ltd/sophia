@@ -2,6 +2,10 @@
 
 Date: 2026-03-20
 
+## Ten-minute first-run track (narrow scope)
+
+Product direction: **default experience = few questions, few options**, advanced tools available but not in the critical path. See **[dashboard-ten-minute-experience.md](./dashboard-ten-minute-experience.md)** and in-app **`/admin/quick-start`**.
+
 ## Goal
 
 Make Sophia's administration experience feel like a best-in-class operator cockpit rather than a set of disconnected utility pages.

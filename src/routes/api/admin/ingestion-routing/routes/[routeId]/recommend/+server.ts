@@ -11,9 +11,14 @@ import { parseJsonBody } from '$lib/server/restormelAdmin';
 import {
   RESTORMEL_ENVIRONMENT_ID,
   restormelListRouteSteps,
+  restormelListProjectModels,
   restormelSimulateRoute,
   type RestormelStepRecord
 } from '$lib/server/restormel';
+import {
+  mergeCatalogWithRestormelModels,
+  type IngestionModelCatalogEntryMerged
+} from '$lib/ingestionModelCatalogMerge';
 
 function modelMetadata(modelLabel: string): {
   contextWindow: string;
@@ -34,6 +39,57 @@ function costFromTokens(tokens: number, rank: number): number {
   const base = Math.max(tokens, 12000) / 1000;
   const multiplier = rank === 0 ? 0.012 : rank === 1 ? 0.009 : 0.007;
   return Number((base * multiplier).toFixed(2));
+}
+
+type RecommendationObjective = 'lowest_cost' | 'balanced' | 'highest_quality';
+
+function parseRecommendationObjective(value: unknown): RecommendationObjective {
+  if (value === 'lowest_cost' || value === 'highest_quality' || value === 'balanced') {
+    return value;
+  }
+  return 'balanced';
+}
+
+function scoreCatalogEntryForStage(
+  entry: IngestionModelCatalogEntryMerged,
+  stage: string | undefined,
+  objective: RecommendationObjective,
+  slot: number
+): number {
+  let score = 0;
+  const bestFor = entry.bestFor.toLowerCase();
+
+  if (objective === 'lowest_cost') {
+    score += entry.costTier === 'low' ? 7 : entry.costTier === 'medium' ? 3 : 0;
+    score += entry.speed === 'fast' ? 4 : entry.speed === 'balanced' ? 2 : 0;
+  } else if (objective === 'highest_quality') {
+    score += entry.qualityTier === 'frontier' ? 8 : entry.qualityTier === 'strong' ? 4 : 1;
+    score += entry.speed === 'thorough' ? 3 : entry.speed === 'balanced' ? 2 : 0;
+  } else {
+    score += entry.qualityTier === 'frontier' ? 5 : entry.qualityTier === 'strong' ? 4 : 2;
+    score += entry.speed === 'balanced' ? 3 : entry.speed === 'fast' ? 2 : 1;
+    score += entry.costTier === 'low' ? 3 : entry.costTier === 'medium' ? 2 : 0;
+  }
+
+  if (stage === 'ingestion_embedding') {
+    score += entry.costTier === 'low' ? 4 : entry.costTier === 'medium' ? 2 : 0;
+    score += bestFor.includes('embedding') || bestFor.includes('long') ? 3 : 0;
+  } else if (stage === 'ingestion_json_repair') {
+    score += entry.speed === 'fast' ? 4 : entry.speed === 'balanced' ? 2 : 0;
+    score += bestFor.includes('structured') || bestFor.includes('repair') ? 3 : 0;
+  } else {
+    score += entry.qualityTier === 'frontier' ? 3 : entry.qualityTier === 'strong' ? 2 : 0;
+    score += bestFor.includes('extraction') || bestFor.includes('reasoning') || bestFor.includes('quality') ? 2 : 0;
+  }
+
+  if (slot === 1) {
+    score += entry.costTier === 'low' ? 3 : entry.costTier === 'medium' ? 1 : 0;
+  }
+  if (slot === 2) {
+    score += entry.qualityTier === 'frontier' ? 3 : entry.qualityTier === 'strong' ? 2 : 0;
+  }
+
+  return score;
 }
 
 function buildRecommendedAction(
@@ -62,8 +118,12 @@ async function buildFallbackRecommendation(
 ) {
   const stepsResponse = await restormelListRouteSteps(routeId);
   const steps = (stepsResponse.data ?? []) as RestormelStepRecord[];
+  const stage = typeof payload.stage === 'string' ? payload.stage : undefined;
+  const objective = parseRecommendationObjective(payload.preferredObjective);
+  const estimatedInputTokens =
+    typeof payload.estimatedInputTokens === 'number' ? payload.estimatedInputTokens : 14000;
 
-  const rankings = steps
+  const rankingsFromSteps = steps
     .filter((step) => step.enabled !== false && step.modelId)
     .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0))
     .map((step, index) => {
@@ -71,8 +131,6 @@ async function buildFallbackRecommendation(
       const provider = step.providerPreference?.trim() ?? 'auto';
       const display = `${provider} · ${model}`;
       const meta = modelMetadata(display);
-      const estimatedInputTokens =
-        typeof payload.estimatedInputTokens === 'number' ? payload.estimatedInputTokens : 14000;
       return {
         rank: index + 1,
         providerType: provider,
@@ -92,6 +150,58 @@ async function buildFallbackRecommendation(
       };
     });
 
+  const seen = new Set(
+    rankingsFromSteps.map((item) => `${item.providerType.toLowerCase()}::${item.modelId.toLowerCase()}`)
+  );
+  const rankings = [...rankingsFromSteps];
+
+  let modelIndexSyncNote = 'Restormel project model index unavailable.';
+  try {
+    const projectModels = await restormelListProjectModels();
+    const { entries, sync } = mergeCatalogWithRestormelModels(projectModels, null);
+    modelIndexSyncNote =
+      sync.status === 'restormel'
+        ? 'Rankings searched against live Restormel project models.'
+        : sync.status === 'merged'
+          ? 'Rankings searched against live Restormel project models with Sophia supplements.'
+          : 'Rankings searched against Sophia catalog fallback because live model index was unavailable.';
+
+    for (let slot = rankings.length; slot < 3; slot += 1) {
+      const picked = [...entries]
+        .sort((a, b) => {
+          const scoreDiff = scoreCatalogEntryForStage(b, stage, objective, slot) - scoreCatalogEntryForStage(a, stage, objective, slot);
+          if (scoreDiff !== 0) return scoreDiff;
+          return a.label.localeCompare(b.label);
+        })
+        .find((entry) => {
+          const key = `${entry.provider.toLowerCase()}::${entry.modelId.toLowerCase()}`;
+          return !seen.has(key);
+        });
+      if (!picked) continue;
+      const key = `${picked.provider.toLowerCase()}::${picked.modelId.toLowerCase()}`;
+      seen.add(key);
+      rankings.push({
+        rank: rankings.length + 1,
+        providerType: picked.provider,
+        modelId: picked.modelId,
+        display: `${picked.provider} · ${picked.modelId}`,
+        confidence: Number(Math.max(0.52, 0.88 - rankings.length * 0.09).toFixed(2)),
+        rationale:
+          rankings.length === 0
+            ? 'Primary recommendation selected from stage requirements, objective, and live Restormel model availability.'
+            : rankings.length === 1
+              ? 'Fallback 1 selected from live model index for resilience and cost control.'
+              : 'Fallback 2 selected from live model index for edge-case resilience.',
+        contextWindow: picked.contextWindow,
+        costTier: picked.costTier,
+        speed: picked.speed,
+        estimatedCostUsd: costFromTokens(estimatedInputTokens, rankings.length)
+      });
+    }
+  } catch {
+    // Preserve rankings from route steps only if model index lookup fails.
+  }
+
   let simulation: Record<string, unknown> | null = null;
   try {
     simulation = (
@@ -100,11 +210,10 @@ async function buildFallbackRecommendation(
           typeof payload.environmentId === 'string' ? payload.environmentId : RESTORMEL_ENVIRONMENT_ID,
         routeId,
         workload: typeof payload.workload === 'string' ? payload.workload : 'ingestion',
-        stage: typeof payload.stage === 'string' ? payload.stage : undefined,
+        stage,
         task: typeof payload.task === 'string' ? payload.task : 'completion',
         attempt: typeof payload.attempt === 'number' ? payload.attempt : 1,
-        estimatedInputTokens:
-          typeof payload.estimatedInputTokens === 'number' ? payload.estimatedInputTokens : 14000,
+        estimatedInputTokens,
         estimatedInputChars:
           typeof payload.estimatedInputChars === 'number' ? payload.estimatedInputChars : 56000,
         complexity: typeof payload.complexity === 'string' ? payload.complexity : 'medium'
@@ -123,7 +232,8 @@ async function buildFallbackRecommendation(
   return {
     support: {
       available: false,
-      reason: 'Restormel recommendation API is unavailable in this environment. Sophia generated a fallback recommendation from route steps and simulation data.',
+      reason:
+        `Restormel recommendation API is unavailable in this environment. Sophia generated a fallback recommendation by searching route steps, stage requirements, and the Restormel project model index. ${modelIndexSyncNote}`,
       actionTypes: getRestormelRecommendationSupport().actionTypes
     },
     recommendation: {

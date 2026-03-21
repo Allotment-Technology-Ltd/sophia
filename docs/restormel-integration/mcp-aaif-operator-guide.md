@@ -8,6 +8,10 @@
 - The official Restormel MCP runtime is installed in this repo as `@restormel/mcp`.
 - The full admin ingestion-routing mixer is not shipped. Public Dashboard APIs are still too narrow for a true Restormel-owned stage editor.
 
+## Sophia admin: Auto configure with MCP
+
+On **`/admin/ingestion-routing`**, the header includes **Auto configure with MCP**. It opens a panel that (1) applies recommended ingestion routes across all stages inside Sophia (same automation as the former “Invoke Restormel MCP” control) and (2) provides a **copy-ready MCP client JSON** with `RESTORMEL_EVALUATE_URL` taken from the deployment environment and a placeholder for the gateway key.
+
 ## Running the official MCP server
 
 Use the published runtime directly:

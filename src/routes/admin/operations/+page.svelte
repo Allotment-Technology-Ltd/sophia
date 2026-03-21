@@ -3,6 +3,7 @@
   import { browser } from '$app/environment';
   import { onMount } from 'svelte';
   import { auth, getIdToken, onAuthChange } from '$lib/firebase';
+  import { consumeAdminQuickStartParams } from '$lib/admin/quickStartGate';
   import type { PageData } from './$types';
   import type { AdminOperationRecord } from '$lib/server/adminOperations';
   import { listEnabledSharedRoutes, resolveStageRoutes } from '$lib/utils/ingestionRouting';
@@ -858,6 +859,66 @@
       payload.ingest_provider === 'vertex' || payload.ingest_provider === 'anthropic'
         ? payload.ingest_provider
         : 'auto';
+  }
+
+  type WizardHandoffPayload = {
+    sourceMode?: unknown;
+    sourceUrl?: unknown;
+    sourceFileName?: unknown;
+    sourceType?: unknown;
+    routeId?: unknown;
+    modelChain?: unknown;
+  };
+
+  /** Admin `/admin` ingestion wizard → operations workbench field types. */
+  const WIZARD_TO_OPS_SOURCE_TYPE: Record<string, (typeof SOURCE_TYPES)[number]> = {
+    sep_entry: 'sep_entry',
+    gutenberg_text: 'book',
+    journal_article: 'paper',
+    web_article: 'institutional'
+  };
+
+  function applyIngestionWizardHandoff(raw: unknown): void {
+    if (!raw || typeof raw !== 'object') return;
+    const w = raw as WizardHandoffPayload;
+    let applied = false;
+
+    if (w.sourceMode === 'file' || w.sourceMode === 'url') {
+      sourceMode = w.sourceMode;
+      applied = true;
+    }
+    if (typeof w.sourceUrl === 'string' && w.sourceUrl.trim()) {
+      sourceUrl = w.sourceUrl.trim();
+      applied = true;
+    }
+    if (typeof w.sourceFileName === 'string' && w.sourceFileName.trim()) {
+      sourceFile = w.sourceFileName.trim();
+      applied = true;
+    }
+    if (typeof w.sourceType === 'string') {
+      const mapped = WIZARD_TO_OPS_SOURCE_TYPE[w.sourceType];
+      if (mapped) {
+        sourceType = mapped;
+        applied = true;
+      } else if (SOURCE_TYPES.includes(w.sourceType as (typeof SOURCE_TYPES)[number])) {
+        sourceType = w.sourceType as (typeof SOURCE_TYPES)[number];
+        applied = true;
+      }
+    }
+    if (typeof w.routeId === 'string' && w.routeId.trim()) {
+      preferredSharedRouteId = w.routeId.trim();
+      applied = true;
+    }
+
+    if (!applied) return;
+
+    const modelHint =
+      Array.isArray(w.modelChain) && w.modelChain.length > 0
+        ? w.modelChain.map((m) => String(m).trim()).filter(Boolean).join(' → ')
+        : '';
+    successMessage = modelHint
+      ? `Loaded from ingestion wizard. Tier chain: ${modelHint}.`
+      : 'Loaded source configuration from the ingestion wizard.';
   }
 
   function routeOptionLabel(route: AdminRouteRecord): string {
@@ -1724,17 +1785,16 @@
 
   onMount(() => {
     if (!browser) return;
+    consumeAdminQuickStartParams();
     try {
       hydrateIngestFormFromPayload(JSON.parse(templateFor('ingest_import')));
     } catch {
       // keep defaults
     }
     try {
-      const currentRun = JSON.parse(
-        sessionStorage.getItem('sophia.admin.ingestion.current') ?? 'null'
-      ) as { routeId?: unknown } | null;
-      if (typeof currentRun?.routeId === 'string' && currentRun.routeId.trim()) {
-        preferredSharedRouteId = currentRun.routeId;
+      const handoffRaw = sessionStorage.getItem('sophia.admin.ingestion.current');
+      if (handoffRaw) {
+        applyIngestionWizardHandoff(JSON.parse(handoffRaw) as unknown);
       }
     } catch {
       // ignore malformed stored state
@@ -1791,15 +1851,15 @@
 </script>
 
 <div class="admin-workbench min-h-screen bg-sophia-dark-bg text-sophia-dark-text">
-  <div class="mx-auto max-w-[75rem] px-8 py-8 space-y-8">
+  <div class="mx-auto w-full max-w-[76rem] px-6 py-8 sm:px-10 lg:px-14 xl:px-16 space-y-8">
     <section class="workbench-hero rounded-2xl border border-sophia-dark-border bg-sophia-dark-surface p-8 md:p-10">
       <div class="hero-grid grid gap-8 xl:grid-cols-[minmax(0,1fr),19rem]">
         <div class="space-y-4">
           <div class="flex flex-wrap items-center gap-3">
-            <span class="rounded-full border border-sophia-dark-purple/35 bg-sophia-dark-purple/10 px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-purple">
+            <span class="rounded-full border border-sophia-dark-purple/35 bg-sophia-dark-purple/10 px-4 py-2.5 font-mono text-[0.75rem] font-medium uppercase tracking-[0.08em] leading-none text-sophia-dark-purple">
               Admin Ingestion Workbench
             </span>
-            <span class="rounded-full border border-sophia-dark-border px-3 py-1 font-mono text-[0.68rem] uppercase tracking-[0.16em] text-sophia-dark-muted">
+            <span class="rounded-full border border-sophia-dark-border px-3.5 py-2 font-mono text-[0.72rem] uppercase tracking-[0.1em] leading-none text-sophia-dark-muted">
               6-step operator flow
             </span>
           </div>
@@ -1814,6 +1874,9 @@
           </div>
 
           <nav class="flex flex-wrap items-center gap-6">
+            <a href="/admin/quick-start" class="px-0 py-1 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-sage hover:text-sophia-dark-text">
+              Quick start
+            </a>
             <a href="/admin" class="px-0 py-1 font-mono text-xs uppercase tracking-[0.14em] text-sophia-dark-muted hover:text-sophia-dark-text">
               Setup
             </a>

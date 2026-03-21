@@ -193,6 +193,7 @@
       deepseek: 'Quick (~15-25s)',
       together: 'Quick (~15-25s)',
       openrouter: 'Quick (~20-35s)',
+      cohere: 'Quick (~15-28s)',
       perplexity: 'Quick (~15-30s)'
     },
     standard: {
@@ -206,6 +207,7 @@
       deepseek: 'Standard (~35-65s)',
       together: 'Standard (~35-60s)',
       openrouter: 'Standard (~45-75s)',
+      cohere: 'Standard (~35-58s)',
       perplexity: 'Standard (~35-60s)'
     },
     deep: {
@@ -219,6 +221,7 @@
       deepseek: 'Deep (~70-130s)',
       together: 'Deep (~65-120s)',
       openrouter: 'Deep (~80-150s)',
+      cohere: 'Deep (~65-115s)',
       perplexity: 'Deep (~65-120s)'
     }
   };

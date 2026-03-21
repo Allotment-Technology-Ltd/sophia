@@ -76,5 +76,8 @@ jobs:
       - name: Type check
         run: pnpm check
 
+      - name: Minimal TS project (ingest CLI)
+        run: pnpm exec tsc -p tsconfig.json --noEmit
+
       - name: Build
         run: pnpm build

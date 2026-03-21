@@ -238,7 +238,8 @@ function defaultRestormelTool(kind: AdminOperationKind): string | null {
   }
 }
 
-function buildEnvFileArgs(): string[] {
+/** Shared with `ingestRuns` for `npx tsx` invocations. */
+export function buildEnvFileArgs(): string[] {
   const args: string[] = [];
   if (fs.existsSync(path.resolve(process.cwd(), '.env'))) args.push('--env-file=.env');
   if (fs.existsSync(path.resolve(process.cwd(), '.env.local'))) args.push('--env-file=.env.local');
@@ -249,7 +250,7 @@ function normalizeTextFilePath(sourceFile: string): string {
   return path.isAbsolute(sourceFile) ? sourceFile : path.resolve(process.cwd(), sourceFile);
 }
 
-function findFetchedSourceFile(sourceUrl: string): string | null {
+export function findFetchedSourceFile(sourceUrl: string): string | null {
   const targetIdentity = canonicalizeAndHashSourceUrl(sourceUrl);
   if (!targetIdentity) return null;
   const sourcesDir = path.resolve(process.cwd(), 'data/sources');

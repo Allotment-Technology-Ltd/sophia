@@ -10,6 +10,7 @@ describe('BYOK provider registry', () => {
     expect(BYOK_PROVIDERS).toContain('together');
     expect(BYOK_PROVIDERS).toContain('openrouter');
     expect(BYOK_PROVIDERS).toContain('perplexity');
+    expect(BYOK_PROVIDERS).toContain('cohere');
     expect(BYOK_PROVIDERS).toContain('voyage');
   });
 

@@ -21,6 +21,10 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     );
     return json({ simulation: response.data });
   } catch (error) {
+    console.warn('[restormel] route simulate failed', {
+      routeId: params.routeId,
+      projectId: process.env.RESTORMEL_PROJECT_ID?.trim() || null
+    }, error);
     return restormelJsonError(error);
   }
 };

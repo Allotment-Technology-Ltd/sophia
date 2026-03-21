@@ -1,19 +1,19 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import {
+    CHAT_MODELS_BY_PROVIDER,
+    DEFAULT_WIZARD_EMBED_ID,
+    DEFAULT_WIZARD_EXTRACT_ID,
+    DEFAULT_WIZARD_GROUP_ID,
+    DEFAULT_WIZARD_VALIDATE_ID,
+    EMBEDDING_MODELS_BY_PROVIDER,
+    getWizardModelById,
+    type AdminIngestWizardModelOption
+  } from '$lib/adminIngestWizardModels';
 
   // ─── Types ────────────────────────────────────────────────────────────────
 
-  type ModelOption = {
-    id: string;
-    label: string;
-    provider: 'anthropic' | 'vertex';
-    tier: 'fast' | 'balanced' | 'powerful';
-    costPer1k: number;
-    quality: number;
-    speed: number;
-    bestFor: string;
-    badge?: string;
-  };
+  type ModelOption = AdminIngestWizardModelOption;
 
   type StageStatus = 'idle' | 'running' | 'done' | 'error' | 'skipped';
 
@@ -23,74 +23,13 @@
     label: string;
     description: string;
     usesModel: boolean;
-    provider?: 'anthropic' | 'vertex' | 'fixed';
+    provider?: string;
     fixedProviderNote?: string;
     status: StageStatus;
     result?: string;
   };
 
   type WizardStep = 'source' | 'models' | 'confirm' | 'running' | 'done';
-
-  // ─── Model catalogue ──────────────────────────────────────────────────────
-
-  const MODEL_CATALOGUE: ModelOption[] = [
-    {
-      id: 'claude-haiku-3-5',
-      label: 'Claude Haiku 3.5',
-      provider: 'anthropic',
-      tier: 'fast',
-      costPer1k: 0.001,
-      quality: 3,
-      speed: 5,
-      bestFor: 'High-volume extraction, budget runs',
-      badge: 'Cheapest'
-    },
-    {
-      id: 'claude-sonnet-4-5',
-      label: 'Claude Sonnet 4.5',
-      provider: 'anthropic',
-      tier: 'balanced',
-      costPer1k: 0.003,
-      quality: 4,
-      speed: 4,
-      bestFor: 'Balanced extraction & relation mapping',
-      badge: 'Recommended'
-    },
-    {
-      id: 'claude-opus-4',
-      label: 'Claude Opus 4',
-      provider: 'anthropic',
-      tier: 'powerful',
-      costPer1k: 0.015,
-      quality: 5,
-      speed: 2,
-      bestFor: 'Dense philosophical text, complex arguments'
-    },
-    {
-      id: 'gemini-2-0-flash',
-      label: 'Gemini 2.0 Flash',
-      provider: 'vertex',
-      tier: 'fast',
-      costPer1k: 0.0005,
-      quality: 3,
-      speed: 5,
-      bestFor: 'Fast secondary extraction pass',
-      badge: 'Lowest cost'
-    },
-    {
-      id: 'gemini-2-5-pro',
-      label: 'Gemini 2.5 Pro',
-      provider: 'vertex',
-      tier: 'powerful',
-      costPer1k: 0.007,
-      quality: 5,
-      speed: 3,
-      bestFor: 'Nuanced argument grouping, validation'
-    }
-  ];
-
-  const ANTHROPIC_MODELS = MODEL_CATALOGUE.filter(m => m.provider === 'anthropic');
-  const VERTEX_MODELS    = MODEL_CATALOGUE.filter(m => m.provider === 'vertex');
 
   const SOURCE_TYPES = [
     { value: 'sep_entry',       label: 'Stanford Encyclopedia of Philosophy' },
@@ -109,11 +48,12 @@
   let sourceType  = $state('sep_entry');
   let urlError    = $state('');
 
-  // Step 2
-  let extractModel  = $state('claude-sonnet-4-5');
-  let relateModel   = $state('claude-sonnet-4-5');
-  let groupModel    = $state('claude-haiku-3-5');
-  let validateModel = $state('gemini-2-5-pro');
+  // Step 2 — ids from shared catalog (`provider__modelId`)
+  let extractModel  = $state(DEFAULT_WIZARD_EXTRACT_ID);
+  let relateModel   = $state(DEFAULT_WIZARD_EXTRACT_ID);
+  let groupModel    = $state(DEFAULT_WIZARD_GROUP_ID);
+  let validateModel = $state(DEFAULT_WIZARD_VALIDATE_ID);
+  let embedModel    = $state(DEFAULT_WIZARD_EMBED_ID);
   let runValidation = $state(false);
 
   // Steps 4–5: pipeline
@@ -134,7 +74,7 @@
       label: 'Segment & Extract Claims',
       description: 'Split into ~900-token passages, extract structured claims with type, domain, thinker, era, and confidence.',
       usesModel: true,
-      provider: 'anthropic',
+      provider: 'routed',
       status: 'idle'
     },
     {
@@ -143,7 +83,7 @@
       label: 'Extract Relations',
       description: 'Map supports / contradicts / depends_on / responds_to / defines / qualifies edges between claims.',
       usesModel: true,
-      provider: 'anthropic',
+      provider: 'routed',
       status: 'idle'
     },
     {
@@ -152,26 +92,25 @@
       label: 'Group into Arguments',
       description: 'Cluster claims into named philosophical arguments; assign roles (conclusion, premise, objection, response).',
       usesModel: true,
-      provider: 'anthropic',
+      provider: 'routed',
       status: 'idle'
     },
     {
       key: 'embed',
       step: 4,
       label: 'Embed Claims',
-      description: 'Generate 768-dim Vertex AI embeddings for every claim — enables semantic similarity search.',
-      usesModel: false,
-      provider: 'vertex',
-      fixedProviderNote: 'Vertex AI text-embedding-005 — always Vertex, no substitute',
+      description: 'Vector embeddings for semantic search — pick Vertex, Google, or Voyage ids to align with Restormel / BYOK.',
+      usesModel: true,
+      provider: 'embedding',
       status: 'idle'
     },
     {
       key: 'validate',
       step: 5,
       label: 'Validate (optional)',
-      description: 'Gemini cross-checks faithfulness, coherence, and role clarity. Items below threshold get needs_review.',
+      description: 'Cross-check faithfulness, coherence, and role clarity. Items below threshold get needs_review.',
       usesModel: true,
-      provider: 'vertex',
+      provider: 'routed',
       status: 'idle'
     },
     {
@@ -205,30 +144,33 @@
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
   function getModel(id: string): ModelOption | undefined {
-    return MODEL_CATALOGUE.find(m => m.id === id);
+    return getWizardModelById(id);
   }
 
   function estimateCost(): string {
-    const e = getModel(extractModel)!;
-    const r = getModel(relateModel)!;
-    const g = getModel(groupModel)!;
+    const e = getModel(extractModel);
+    const r = getModel(relateModel);
+    const g = getModel(groupModel);
     const v = runValidation ? getModel(validateModel) : null;
+    const emb = getModel(embedModel);
+    if (!e || !r || !g) return '—';
     const total =
       50 * e.costPer1k +
       20 * r.costPer1k +
       10 * g.costPer1k +
       (v ? 15 * v.costPer1k : 0) +
+      (emb ? 8 * emb.costPer1k : 0) +
       0.02;
     return `~$${total.toFixed(3)}`;
   }
 
   function estimateTime(): string {
-    const speeds = [
-      getModel(extractModel)!.speed,
-      getModel(relateModel)!.speed,
-      getModel(groupModel)!.speed,
-      runValidation ? getModel(validateModel)!.speed : 5
-    ];
+    const e = getModel(extractModel);
+    const r = getModel(relateModel);
+    const g = getModel(groupModel);
+    const v = runValidation ? getModel(validateModel) : null;
+    if (!e || !r || !g) return '—';
+    const speeds = [e.speed, r.speed, g.speed, runValidation ? (v?.speed ?? 4) : 5];
     const avg = speeds.reduce((a, b) => a + b, 0) / speeds.length;
     return `~${Math.round(12 - (avg - 1) * 1.8)} min`;
   }
@@ -269,10 +211,12 @@
     runError   = '';
     stages     = stages.map(s => ({ ...s, status: 'idle' as StageStatus, result: undefined }));
 
+    const emb = getModel(embedModel);
     const payload = {
       source_url:  sourceUrl,
       source_type: sourceType,
       validate:    runValidation,
+      embedding_model: emb?.label ?? embedModel,
       model_chain: {
         extract:  extractModel,
         relate:   relateModel,
@@ -441,27 +385,35 @@
           <p>Core work — reading passages, identifying claims, and drawing graph edges (supports / contradicts / depends_on etc.). Quality here matters most.</p>
         </div>
       </div>
-      <div class="model-grid">
-        {#each ANTHROPIC_MODELS as m}
-          <button
-            class="model-card"
-            class:selected={extractModel === m.id}
-            onclick={() => { extractModel = m.id; relateModel = m.id; }}
-            type="button"
-          >
-            {#if m.badge}
-              <span class="model-badge" style="background: {tierToken(m.tier)}">{m.badge}</span>
-            {/if}
-            <div class="model-name">{m.label}</div>
-            <div class="model-cost">${(m.costPer1k * 1000).toFixed(2)} / M tokens</div>
-            <div class="model-stars">
-              <span title="Quality">🧠 {stars(m.quality)}</span>
-              <span title="Speed">⚡ {stars(m.speed)}</span>
-            </div>
-            <div class="model-bestfor">{m.bestFor}</div>
-          </button>
-        {/each}
-      </div>
+      <p class="field-hint" style="margin: 0 0 var(--space-3)">
+        Extract and relate share one pick here (including <strong>DeepSeek</strong>, OpenAI, Gemini, Groq, OpenRouter, etc.).
+      </p>
+      {#each CHAT_MODELS_BY_PROVIDER as group}
+        <div class="model-provider-block">
+          <h3 class="model-provider-title">{group.provider}</h3>
+          <div class="model-grid">
+            {#each group.models as m}
+              <button
+                class="model-card"
+                class:selected={extractModel === m.id}
+                onclick={() => { extractModel = m.id; relateModel = m.id; }}
+                type="button"
+              >
+                {#if m.badge}
+                  <span class="model-badge" style="background: {tierToken(m.tier)}">{m.badge}</span>
+                {/if}
+                <div class="model-name">{m.label}</div>
+                <div class="model-cost">${(m.costPer1k * 1000).toFixed(2)} / M tokens</div>
+                <div class="model-stars">
+                  <span title="Quality">🧠 {stars(m.quality)}</span>
+                  <span title="Speed">⚡ {stars(m.speed)}</span>
+                </div>
+                <div class="model-bestfor">{m.bestFor}</div>
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/each}
     </div>
 
     <!-- Group -->
@@ -473,41 +425,69 @@
           <p>Clusters claims into named arguments and assigns roles. Lighter work — a fast model is usually fine.</p>
         </div>
       </div>
-      <div class="model-grid">
-        {#each ANTHROPIC_MODELS as m}
-          <button
-            class="model-card"
-            class:selected={groupModel === m.id}
-            onclick={() => groupModel = m.id}
-            type="button"
-          >
-            {#if m.badge}
-              <span class="model-badge" style="background: {tierToken(m.tier)}">{m.badge}</span>
-            {/if}
-            <div class="model-name">{m.label}</div>
-            <div class="model-cost">${(m.costPer1k * 1000).toFixed(2)} / M tokens</div>
-            <div class="model-stars">
-              <span>🧠 {stars(m.quality)}</span>
-              <span>⚡ {stars(m.speed)}</span>
-            </div>
-            <div class="model-bestfor">{m.bestFor}</div>
-          </button>
-        {/each}
-      </div>
+      {#each CHAT_MODELS_BY_PROVIDER as group}
+        <div class="model-provider-block">
+          <h3 class="model-provider-title">{group.provider}</h3>
+          <div class="model-grid">
+            {#each group.models as m}
+              <button
+                class="model-card"
+                class:selected={groupModel === m.id}
+                onclick={() => groupModel = m.id}
+                type="button"
+              >
+                {#if m.badge}
+                  <span class="model-badge" style="background: {tierToken(m.tier)}">{m.badge}</span>
+                {/if}
+                <div class="model-name">{m.label}</div>
+                <div class="model-cost">${(m.costPer1k * 1000).toFixed(2)} / M tokens</div>
+                <div class="model-stars">
+                  <span>🧠 {stars(m.quality)}</span>
+                  <span>⚡ {stars(m.speed)}</span>
+                </div>
+                <div class="model-bestfor">{m.bestFor}</div>
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/each}
     </div>
 
-    <!-- Embed (fixed) -->
-    <div class="model-stage fixed-stage">
+    <!-- Embed — Vertex / Google / Voyage -->
+    <div class="model-stage">
       <div class="model-stage-header">
         <span class="stage-icon">🔢</span>
         <div>
           <h2>Stage 4 · Embed claims</h2>
-          <p>768-dim vector embeddings for semantic search. Always uses <strong>Vertex AI text-embedding-005</strong> — no model choice here.</p>
+          <p>
+            Choose an embedding model id for routing / BYOK (e.g. <strong>Voyage 4</strong> or <strong>Vertex text-embedding-005</strong>).
+            The live pipeline still follows your server Restormel / env defaults unless wired to this selection.
+          </p>
         </div>
       </div>
-      <div class="fixed-note">
-        <span class="lock-icon" aria-hidden="true">🔒</span> Fixed: Vertex AI text-embedding-005
-      </div>
+      {#each EMBEDDING_MODELS_BY_PROVIDER as group}
+        <div class="model-provider-block">
+          <h3 class="model-provider-title">{group.provider}</h3>
+          <div class="model-grid">
+            {#each group.models as m}
+              <button
+                class="model-card"
+                class:selected={embedModel === m.id}
+                onclick={() => embedModel = m.id}
+                type="button"
+              >
+                <div class="model-name">{m.label}</div>
+                <div class="model-cost">${(m.costPer1k * 1000).toFixed(2)} / M tokens</div>
+                <div class="model-stars">
+                  <span>🧠 {stars(m.quality)}</span>
+                  <span>⚡ {stars(m.speed)}</span>
+                </div>
+                <div class="model-bestfor">{m.bestFor}</div>
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/each}
     </div>
 
     <!-- Validate (optional) -->
@@ -524,27 +504,35 @@
         <span>Run validation after ingestion</span>
       </label>
       {#if runValidation}
-        <div class="model-grid" style="margin-top: var(--space-3)">
-          {#each VERTEX_MODELS as m}
-            <button
-              class="model-card"
-              class:selected={validateModel === m.id}
-              onclick={() => validateModel = m.id}
-              type="button"
-            >
-              {#if m.badge}
-                <span class="model-badge" style="background: {tierToken(m.tier)}">{m.badge}</span>
-              {/if}
-              <div class="model-name">{m.label}</div>
-              <div class="model-cost">${(m.costPer1k * 1000).toFixed(2)} / M tokens</div>
-              <div class="model-stars">
-                <span>🧠 {stars(m.quality)}</span>
-                <span>⚡ {stars(m.speed)}</span>
-              </div>
-              <div class="model-bestfor">{m.bestFor}</div>
-            </button>
-          {/each}
-        </div>
+        <p class="field-hint" style="margin: var(--space-2) 0 var(--space-3)">
+          Any chat-capable model from the catalog — not limited to Gemini.
+        </p>
+        {#each CHAT_MODELS_BY_PROVIDER as group}
+          <div class="model-provider-block">
+            <h3 class="model-provider-title">{group.provider}</h3>
+            <div class="model-grid" style="margin-top: var(--space-2)">
+              {#each group.models as m}
+                <button
+                  class="model-card"
+                  class:selected={validateModel === m.id}
+                  onclick={() => validateModel = m.id}
+                  type="button"
+                >
+                  {#if m.badge}
+                    <span class="model-badge" style="background: {tierToken(m.tier)}">{m.badge}</span>
+                  {/if}
+                  <div class="model-name">{m.label}</div>
+                  <div class="model-cost">${(m.costPer1k * 1000).toFixed(2)} / M tokens</div>
+                  <div class="model-stars">
+                    <span>🧠 {stars(m.quality)}</span>
+                    <span>⚡ {stars(m.speed)}</span>
+                  </div>
+                  <div class="model-bestfor">{m.bestFor}</div>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/each}
       {/if}
     </div>
 
@@ -590,7 +578,7 @@
       </div>
       <div class="summary-row">
         <dt>Embeddings</dt>
-        <dd>Vertex AI text-embedding-005 (fixed)</dd>
+        <dd>{getModel(embedModel)?.label ?? embedModel}</dd>
       </div>
       <div class="summary-row">
         <dt>Validation</dt>
@@ -871,7 +859,6 @@
     padding: var(--space-3);
     margin-bottom: var(--space-3);
   }
-  .fixed-stage { opacity: 0.7; }
   .model-stage-header {
     display: flex;
     gap: var(--space-2);
@@ -897,13 +884,6 @@
     color: var(--color-dim);
     font-size: 0.75rem;
   }
-  .fixed-note {
-    font-size: var(--text-meta);
-    color: var(--color-dim);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
   .toggle-row {
     display: flex;
     align-items: center;
@@ -915,6 +895,20 @@
   .toggle-row input[type="checkbox"] { accent-color: var(--color-sage); cursor: pointer; }
 
   /* ── Model cards grid ────────────────────────────────────────────── */
+  .model-provider-block {
+    margin-bottom: var(--space-4);
+  }
+  .model-provider-block:last-child {
+    margin-bottom: 0;
+  }
+  .model-provider-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-dim);
+    margin: 0 0 var(--space-2);
+  }
   .model-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));

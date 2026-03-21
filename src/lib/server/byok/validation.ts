@@ -73,6 +73,10 @@ async function validateVoyage(apiKey: string): Promise<ValidationResult> {
   return validateBearerModelsEndpoint('voyage', apiKey, 'https://api.voyageai.com/v1/models');
 }
 
+async function validateCohere(apiKey: string): Promise<ValidationResult> {
+  return validateBearerModelsEndpoint('cohere', apiKey, 'https://api.cohere.com/v1/models');
+}
+
 export async function validateProviderApiKey(provider: ByokProvider, apiKey: string): Promise<ValidationResult> {
   const normalized = apiKey.trim();
   if (!normalized) {
@@ -87,6 +91,9 @@ export async function validateProviderApiKey(provider: ByokProvider, apiKey: str
   }
   if (provider === 'voyage') {
     return validateVoyage(normalized);
+  }
+  if (provider === 'cohere') {
+    return validateCohere(normalized);
   }
   return validateOpenAICompatible(provider, normalized);
 }

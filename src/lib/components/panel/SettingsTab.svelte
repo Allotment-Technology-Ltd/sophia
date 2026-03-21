@@ -696,6 +696,13 @@
           <span class="setting-name">Loading provider status...</span>
         </div>
       </div>
+    {:else if byokError && byokProviders.length === 0}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Unable to load BYOK provider status</span>
+          <span class="setting-desc">Retry below. If this persists locally, verify auth/session and backend connectivity.</span>
+        </div>
+      </div>
     {:else if byokProviders.length === 0}
       <div class="setting-row">
         <div class="setting-info">

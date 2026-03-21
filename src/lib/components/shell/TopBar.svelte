@@ -135,7 +135,7 @@
       <a href="/learn" class="mode-link" aria-current={$page.url.pathname.startsWith('/learn') ? 'page' : undefined}>Learn</a>
     {/if}
     {#if administrator}
-      <a href="/admin" class="mode-link" aria-current={$page.url.pathname.startsWith('/admin') ? 'page' : undefined}>Admin</a>
+      <a href="/admin" class="mode-link" aria-current={$page.url.pathname.startsWith('/admin') ? 'page' : undefined}>Expand</a>
     {/if}
   </div>
 

@@ -71,15 +71,26 @@ function inferEntry(providerRaw: string, modelIdRaw: string): IngestionModelCata
 	let speed: IngestionModelCatalogEntry['speed'] = 'balanced';
 	let contextWindow = '128k';
 
-	if (low.includes('flash') || low.includes('mini') || low.includes('haiku')) {
+	if (low.includes('flash') || low.includes('mini') || low.includes('haiku') || low.includes('lite')) {
 		costTier = 'low';
 		qualityTier = 'capable';
 		speed = 'fast';
 	}
-	if (low.includes('opus') || low.includes('gpt-5') || low.includes('sonnet-4')) {
+	if (low.includes('opus') || low.includes('gpt-5') || low.includes('sonnet-4') || low.includes('reasoner')) {
 		costTier = 'high';
 		qualityTier = 'frontier';
 		speed = 'thorough';
+	}
+	if (provider.toLowerCase() === 'deepseek' && low.includes('chat')) {
+		costTier = 'low';
+		qualityTier = 'strong';
+		speed = 'balanced';
+	}
+	if (provider.toLowerCase() === 'voyage' || low.includes('voyage-') || low.includes('embedding')) {
+		costTier = 'low';
+		qualityTier = 'capable';
+		speed = 'fast';
+		contextWindow = low.includes('voyage-2') ? '4k' : '32k';
 	}
 	if (low.includes('gemini') && (low.includes('1m') || low.includes('pro') || low.includes('2.5'))) {
 		contextWindow = '1M';
