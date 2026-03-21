@@ -44,4 +44,40 @@ describe('validateProviderApiKey', () => {
     expect(result).toEqual({ ok: false, error: 'empty_api_key' });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('validates Voyage keys via embeddings probe endpoint', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await validateProviderApiKey('voyage', 'pa-valid-voyage-key');
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.voyageai.com/v1/embeddings',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer pa-valid-voyage-key',
+          'Content-Type': 'application/json'
+        })
+      })
+    );
+    const init = (fetchMock as any).mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init).toBeDefined();
+    expect(JSON.parse(String(init?.body ?? '{}'))).toEqual({
+      input: 'BYOK validation probe',
+      model: 'voyage-3.5',
+      input_type: 'document'
+    });
+  });
+
+  it('returns voyage-specific validation errors', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"detail":"Not Found"}', { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await validateProviderApiKey('voyage', 'pa-invalid');
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('voyage_validation_failed_404:{"detail":"Not Found"}');
+  });
 });

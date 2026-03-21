@@ -43,7 +43,7 @@ export const POST: RequestHandler = async ({ locals, request, params }) => {
     });
   }
 
-  const apiKey = await getByokProviderApiKey(uid, provider, { allowPending: true });
+  const apiKey = await getByokProviderApiKey(uid, provider, { allowPending: true, allowInvalid: true });
   if (!apiKey) {
     return problemJson({
       status: 404,

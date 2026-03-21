@@ -144,14 +144,17 @@ export async function revokeByokProviderCredential(uid: string, provider: ByokPr
 export async function getByokProviderApiKey(
   uid: string,
   provider: ByokProvider,
-  options?: { allowPending?: boolean }
+  options?: { allowPending?: boolean; allowInvalid?: boolean }
 ): Promise<string | null> {
   const doc = await providerRef(uid, provider).get();
   if (!doc.exists) return null;
 
   const record = doc.data() as ByokProviderRecord;
   const status = record.status;
-  const allowed = status === 'active' || (options?.allowPending && status === 'pending_validation');
+  const allowed =
+    status === 'active' ||
+    (options?.allowPending && status === 'pending_validation') ||
+    (options?.allowInvalid && status === 'invalid');
   if (!allowed) return null;
 
   if (!record.ciphertext_b64) return null;
