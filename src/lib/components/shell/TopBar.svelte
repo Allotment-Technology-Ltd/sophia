@@ -191,7 +191,7 @@
             </div>
             {#if administrator}
               <a class="dropdown-item" href="/admin" role="menuitem">
-                Admin Hub
+                Ingestion
               </a>
             {/if}
             <button class="dropdown-item" onclick={handleSignOut} role="menuitem">
