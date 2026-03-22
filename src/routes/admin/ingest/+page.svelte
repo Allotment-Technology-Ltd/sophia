@@ -1,16 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { getIdToken } from '$lib/firebase';
-  import {
-    ADMIN_INGEST_WIZARD_CHAT_MODELS,
-    ADMIN_INGEST_WIZARD_EMBEDDING_MODELS,
-    DEFAULT_WIZARD_EMBED_ID,
-    DEFAULT_WIZARD_EXTRACT_ID,
-    DEFAULT_WIZARD_GROUP_ID,
-    DEFAULT_WIZARD_VALIDATE_ID,
-    getWizardModelById,
-    type AdminIngestWizardModelOption
-  } from '$lib/adminIngestWizardModels';
+  import { isEmbeddingModelEntry } from '$lib/ingestionModelCatalogMerge';
   import { resolveRouteForStage } from '$lib/utils/ingestionRouting';
 
   type StageStatus = 'idle' | 'running' | 'done' | 'error' | 'skipped';
@@ -29,6 +20,12 @@
     stage?: string | null;
     enabled?: boolean | null;
     [key: string]: unknown;
+  }
+
+  interface CatalogEntry {
+    label: string;
+    provider: string;
+    modelId: string;
   }
 
   const SOURCE_TYPES = [
@@ -115,20 +112,61 @@
   let routingMessage = $state('');
   let routingError = $state('');
   let routes = $state<AdminRouteRecord[]>([]);
+  let catalogEntries = $state<CatalogEntry[]>([]);
+  let catalogError = $state('');
+  let catalogNotice = $state('');
   let stageModelIds = $state<Record<string, string>>({
-    ingestion_extraction: DEFAULT_WIZARD_EXTRACT_ID,
-    ingestion_relations: DEFAULT_WIZARD_EXTRACT_ID,
-    ingestion_grouping: DEFAULT_WIZARD_GROUP_ID,
-    ingestion_validation: DEFAULT_WIZARD_VALIDATE_ID,
-    ingestion_embedding: DEFAULT_WIZARD_EMBED_ID,
-    ingestion_json_repair: DEFAULT_WIZARD_GROUP_ID
+    ingestion_extraction: '',
+    ingestion_relations: '',
+    ingestion_grouping: '',
+    ingestion_validation: '',
+    ingestion_embedding: '',
+    ingestion_json_repair: ''
   });
+
+  let chatModels = $derived(catalogEntries.filter((e) => !isEmbeddingModelEntry(e)));
+  let embeddingModels = $derived(catalogEntries.filter((e) => isEmbeddingModelEntry(e)));
 
   let syncDurationLabel = $state('');
   let completionMessage = $state('');
 
-  function modelsForStage(row: (typeof RESTORMEL_STAGES)[number]): AdminIngestWizardModelOption[] {
-    return row.embed ? ADMIN_INGEST_WIZARD_EMBEDDING_MODELS : ADMIN_INGEST_WIZARD_CHAT_MODELS;
+  function stableModelId(e: Pick<CatalogEntry, 'provider' | 'modelId'>): string {
+    return `${e.provider}__${e.modelId}`.replace(/\//g, '-');
+  }
+
+  function getCatalogEntryByStableId(id: string): CatalogEntry | undefined {
+    if (!id.trim()) return undefined;
+    return catalogEntries.find((e) => stableModelId(e) === id);
+  }
+
+  function modelsForStage(row: (typeof RESTORMEL_STAGES)[number]): CatalogEntry[] {
+    return row.embed ? embeddingModels : chatModels;
+  }
+
+  function applyDefaultStageSelections(): void {
+    if (catalogEntries.length === 0) {
+      stageModelIds = Object.fromEntries(RESTORMEL_STAGES.map((r) => [r.key, ''])) as Record<string, string>;
+      return;
+    }
+    const next: Record<string, string> = {};
+    for (const row of RESTORMEL_STAGES) {
+      const list = catalogEntries.filter((e) =>
+        row.embed ? isEmbeddingModelEntry(e) : !isEmbeddingModelEntry(e)
+      );
+      next[row.key] = list[0] ? stableModelId(list[0]) : '';
+    }
+    stageModelIds = next;
+  }
+
+  function ingestionModelsReady(): boolean {
+    if (catalogEntries.length === 0) return false;
+    for (const row of RESTORMEL_STAGES) {
+      const id = stageModelIds[row.key]?.trim() ?? '';
+      if (!id) return false;
+      if (!getCatalogEntryByStableId(id)) return false;
+      if (modelsForStage(row).length === 0) return false;
+    }
+    return true;
   }
 
   function cloneStages(): Stage[] {
@@ -165,6 +203,62 @@
     }
   }
 
+  async function loadModelCatalog(): Promise<void> {
+    catalogError = '';
+    catalogNotice = '';
+    try {
+      const body = await authorizedJson('/api/admin/ingestion-routing/model-catalog');
+      catalogEntries = Array.isArray(body.entries) ? (body.entries as CatalogEntry[]) : [];
+      const sync = body.catalogSync as { status?: string; reason?: string } | undefined;
+      if (sync?.status === 'unavailable') {
+        catalogError = sync.reason ?? 'Restormel model list is not available.';
+      } else if (catalogEntries.length > 0) {
+        catalogNotice = `${catalogEntries.length} models from Restormel Keys.`;
+      }
+      applyDefaultStageSelections();
+    } catch (e) {
+      catalogEntries = [];
+      catalogError = e instanceof Error ? e.message : 'Failed to load models from Restormel.';
+      applyDefaultStageSelections();
+    }
+  }
+
+  async function hydrateSelectionsFromRoutes(): Promise<void> {
+    if (catalogEntries.length === 0) return;
+    const next = { ...stageModelIds };
+    for (const row of RESTORMEL_STAGES) {
+      const route = resolveRouteForStage(routes, row.key);
+      if (!route?.id) continue;
+      try {
+        const body = await authorizedJson(`/api/admin/ingestion-routing/routes/${route.id}/steps`);
+        const steps = Array.isArray(body.steps) ? body.steps : [];
+        const ordered = [...steps].sort(
+          (a, b) => (Number((a as { orderIndex?: number }).orderIndex) || 0) - (Number((b as { orderIndex?: number }).orderIndex) || 0)
+        );
+        const first = ordered[0] as { providerPreference?: string | null; modelId?: string | null } | undefined;
+        const pid = first?.providerPreference?.trim() ?? '';
+        const mid = first?.modelId?.trim() ?? '';
+        if (!pid || !mid) continue;
+        const entry = catalogEntries.find((e) => e.provider === pid && e.modelId === mid);
+        if (!entry) continue;
+        const sid = stableModelId(entry);
+        const list = modelsForStage(row);
+        if (list.some((e) => stableModelId(e) === sid)) {
+          next[row.key] = sid;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    stageModelIds = next;
+  }
+
+  async function refreshModelsAndRoutes(): Promise<void> {
+    await loadModelCatalog();
+    await loadRoutingContext();
+    await hydrateSelectionsFromRoutes();
+  }
+
   async function applyStageRouting(): Promise<void> {
     routingBusy = true;
     routingError = '';
@@ -177,10 +271,10 @@
           routingError = `No Restormel route is available for “${row.label}”. Configure routes in Restormel Keys, then refresh.`;
           return;
         }
-        const wizardId = stageModelIds[row.key];
-        const opt = getWizardModelById(wizardId);
+        const sid = stageModelIds[row.key];
+        const opt = getCatalogEntryByStableId(sid);
         if (!opt) {
-          routingError = `Unknown model selection for ${row.label}.`;
+          routingError = `Choose a Restormel model for “${row.label}”.`;
           return;
         }
         await authorizedJson(`/api/admin/ingestion-routing/routes/${route.id}/steps`, {
@@ -238,6 +332,11 @@
 
   async function startIngestion(): Promise<void> {
     if (starting || !validateSource()) return;
+    if (!ingestionModelsReady()) {
+      runError =
+        'Select a Restormel model for every stage (and ensure your project lists both chat and embedding models where required).';
+      return;
+    }
     starting = true;
     runError = '';
     runLog = [];
@@ -408,7 +507,12 @@
   }
 
   onMount(() => {
-    void loadRoutingContext();
+    void (async () => {
+      await loadModelCatalog();
+      await loadRoutingContext();
+      await hydrateSelectionsFromRoutes();
+    })();
+
     const params = new URLSearchParams(window.location.search);
     const monitor = params.get('monitor');
     const existingRunId = params.get('runId');
@@ -433,7 +537,7 @@
       <p class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-dim">Expand</p>
       <h1 class="mt-2 font-serif text-3xl text-sophia-dark-text">Ingestion</h1>
       <p class="mt-2 max-w-2xl text-sm leading-6 text-sophia-dark-muted">
-        Set the source URL, align all six Restormel ingestion stages to the models you want, run the pipeline,
+        Set the source URL, choose models for each ingestion stage from your Restormel Keys project list, run the pipeline,
         then sync results to SurrealDB in one step when prepare is complete.
       </p>
     </header>
@@ -479,18 +583,34 @@
           <h2 class="font-mono text-[0.7rem] uppercase tracking-[0.14em] text-sophia-dark-dim">
             2. Model routing (six stages)
           </h2>
-          <button
-            type="button"
-            disabled={routingBusy || flowState !== 'setup'}
-            onclick={() => void applyStageRouting()}
-            class="rounded border border-sophia-dark-border px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised disabled:opacity-50"
-          >
-            {routingBusy ? 'Saving…' : 'Apply routing'}
-          </button>
+          <div class="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={flowState !== 'setup'}
+              onclick={() => void refreshModelsAndRoutes()}
+              class="rounded border border-sophia-dark-border px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised disabled:opacity-50"
+            >
+              Refresh models
+            </button>
+            <button
+              type="button"
+              disabled={routingBusy || flowState !== 'setup' || catalogEntries.length === 0}
+              onclick={() => void applyStageRouting()}
+              class="rounded border border-sophia-dark-border px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised disabled:opacity-50"
+            >
+              {routingBusy ? 'Saving…' : 'Apply routing'}
+            </button>
+          </div>
         </div>
         <p class="text-sm text-sophia-dark-muted">
-          Primary model per stage is written to Restormel as step 0. Re-apply after changing any selection.
+          Choices are loaded from Restormel Keys (project model index). Primary model per stage is written to Restormel as step 0.
         </p>
+        {#if catalogNotice}
+          <p class="font-mono text-xs text-sophia-dark-sage">{catalogNotice}</p>
+        {/if}
+        {#if catalogError}
+          <p class="font-mono text-xs text-sophia-dark-copper" role="alert">{catalogError}</p>
+        {/if}
         {#if routingMessage}
           <p class="font-mono text-xs text-sophia-dark-sage">{routingMessage}</p>
         {/if}
@@ -507,12 +627,16 @@
                 </div>
                 <select
                   bind:value={stageModelIds[row.key]}
-                  disabled={flowState !== 'setup'}
+                  disabled={flowState !== 'setup' || modelsForStage(row).length === 0}
                   class="min-w-[14rem] rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
                 >
-                  {#each modelsForStage(row) as m}
-                    <option value={m.id}>{m.label}</option>
-                  {/each}
+                  {#if modelsForStage(row).length === 0}
+                    <option value="">No models in Restormel for this slot</option>
+                  {:else}
+                    {#each modelsForStage(row) as m}
+                      <option value={stableModelId(m)}>{m.label}</option>
+                    {/each}
+                  {/if}
                 </select>
               </div>
             </div>
@@ -528,7 +652,7 @@
             type="button"
             onclick={() => void startIngestion()}
             class="rounded border border-sophia-dark-sage/45 bg-sophia-dark-sage/14 px-5 py-3 font-mono text-sm uppercase tracking-[0.12em] text-sophia-dark-sage hover:bg-sophia-dark-sage/20 disabled:opacity-50"
-            disabled={starting}
+            disabled={starting || !ingestionModelsReady()}
           >
             {starting ? 'Starting…' : 'Run ingestion'}
           </button>
