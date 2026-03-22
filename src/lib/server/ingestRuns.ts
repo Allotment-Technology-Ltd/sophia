@@ -12,6 +12,8 @@ export interface IngestRunPayload {
   source_url: string;
   source_type: string;
   validate: boolean;
+  /** When true (default), ingest stops after Stage 5 until the operator runs SurrealDB sync. */
+  stop_before_store?: boolean;
   /** Preferred embedding profile (wizard / Restormel); pipeline may still use server defaults. */
   embedding_model?: string;
   model_chain: {
@@ -29,13 +31,21 @@ export interface StageStatus {
 
 export interface IngestRunState {
   id: string;
-  status: 'running' | 'done' | 'error';
+  status: 'running' | 'awaiting_sync' | 'done' | 'error';
   stages: Record<string, StageStatus>;
   logLines: string[];
   error?: string;
   process?: ChildProcess;
   createdAt: number;
   completedAt?: number;
+  /** Snapshot for resume / sync */
+  payload: IngestRunPayload;
+  sourceFilePath?: string;
+  fetchRetryAttempts: number;
+  ingestRetryAttempts: number;
+  syncRetryAttempts: number;
+  syncStartedAt?: number;
+  syncCompletedAt?: number;
 }
 
 /** Admin wizard / ingest UI types → `scripts/fetch-source.ts` types. */
@@ -61,15 +71,18 @@ function appendProcessOutput(runId: string, chunk: Buffer, manager: IngestRunMan
   }
 }
 
+const PIPELINE_STAGES = ['extract', 'relate', 'group', 'embed'] as const;
+
 class IngestRunManager extends EventEmitter {
   private runs: Map<string, IngestRunState> = new Map();
   private maxLogLines = 500;
 
-  /**
-   * Create and spawn a new ingestion run
-   */
   createRun(payload: IngestRunPayload, actorEmail: string): string {
     const runId = randomBytes(8).toString('hex');
+    const snapshot: IngestRunPayload = {
+      ...payload,
+      stop_before_store: payload.stop_before_store !== false
+    };
 
     const state: IngestRunState = {
       id: runId,
@@ -84,24 +97,59 @@ class IngestRunManager extends EventEmitter {
         store: { status: 'idle' }
       },
       logLines: [],
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      payload: snapshot,
+      fetchRetryAttempts: 0,
+      ingestRetryAttempts: 0,
+      syncRetryAttempts: 0
     };
 
     this.runs.set(runId, state);
-    this.spawnIngestionProcess(runId, payload, actorEmail);
+    this.spawnIngestionProcess(runId, snapshot, actorEmail);
     return runId;
   }
 
-  /**
-   * Get the current state of a run
-   */
   getState(runId: string): IngestRunState | undefined {
     return this.runs.get(runId);
   }
 
   /**
-   * Add a log line to the run (called by process handlers)
+   * Run Stage 6 after a successful prepare phase (--stop-before-store).
    */
+  startSyncToSurreal(runId: string): { ok: true } | { ok: false; error: string } {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return { ok: false, error: 'Run not found.' };
+    }
+    if (state.status !== 'awaiting_sync') {
+      return { ok: false, error: 'Run is not waiting for SurrealDB sync.' };
+    }
+    if (ingestRunUsesRealChildProcess()) {
+      if (!state.sourceFilePath) {
+        return { ok: false, error: 'Source file path missing; cannot sync.' };
+      }
+      state.status = 'running';
+      state.syncStartedAt = Date.now();
+      state.syncCompletedAt = undefined;
+      this.addLog(runId, 'Starting SurrealDB sync (Stage 6)…');
+      this.startIngestChild(runId, state.payload, state.sourceFilePath, { forSyncOnly: true });
+    } else {
+      state.status = 'running';
+      state.syncStartedAt = Date.now();
+      this.addLog(runId, 'Simulating SurrealDB sync (Stage 6)…');
+      this.updateStageStatus(runId, 'store', 'running');
+      setTimeout(() => {
+        const s = this.runs.get(runId);
+        if (!s) return;
+        this.updateStageStatus(runId, 'store', 'done');
+        this.addLog(runId, 'SurrealDB sync completed successfully.');
+        s.syncCompletedAt = Date.now();
+        this.completeRun(runId);
+      }, 2200);
+    }
+    return { ok: true };
+  }
+
   addLog(runId: string, line: string): void {
     const state = this.runs.get(runId);
     if (state) {
@@ -112,9 +160,6 @@ class IngestRunManager extends EventEmitter {
     }
   }
 
-  /**
-   * Update stage status (called by process handlers)
-   */
   updateStageStatus(
     runId: string,
     stage: string,
@@ -127,9 +172,6 @@ class IngestRunManager extends EventEmitter {
     }
   }
 
-  /**
-   * Mark run as complete
-   */
   completeRun(runId: string): void {
     const state = this.runs.get(runId);
     if (state) {
@@ -138,9 +180,6 @@ class IngestRunManager extends EventEmitter {
     }
   }
 
-  /**
-   * Mark run as failed
-   */
   failRun(runId: string, error: string): void {
     const state = this.runs.get(runId);
     if (state) {
@@ -150,9 +189,6 @@ class IngestRunManager extends EventEmitter {
     }
   }
 
-  /**
-   * Spawn the background ingestion process
-   */
   private spawnIngestionProcess(runId: string, payload: IngestRunPayload, actorEmail: string): void {
     this.addLog(runId, `Ingestion started by ${actorEmail}`);
     this.addLog(runId, `Source: ${payload.source_url}`);
@@ -167,13 +203,16 @@ class IngestRunManager extends EventEmitter {
     if (payload.embedding_model?.trim()) {
       this.addLog(runId, `Embedding preference: ${payload.embedding_model.trim()}`);
     }
+    if (payload.stop_before_store !== false) {
+      this.addLog(runId, 'SurrealDB store is deferred until you press Sync.');
+    }
 
     if (ingestRunUsesRealChildProcess()) {
       this.addLog(
         runId,
         `Running fetch-source + ingest via npx tsx (fetch type: ${normalizeSourceTypeForFetch(payload.source_type)}).`
       );
-      this.runRealIngestionPipeline(runId, payload);
+      this.spawnFetchChild(runId, payload);
     } else {
       this.addLog(
         runId,
@@ -183,7 +222,7 @@ class IngestRunManager extends EventEmitter {
     }
   }
 
-  private runRealIngestionPipeline(runId: string, payload: IngestRunPayload): void {
+  private spawnFetchChild(runId: string, payload: IngestRunPayload): void {
     const fetchType = normalizeSourceTypeForFetch(payload.source_type);
     const fetchArgs = [
       'tsx',
@@ -217,6 +256,13 @@ class IngestRunManager extends EventEmitter {
       const s = this.runs.get(runId);
       if (s) s.process = undefined;
       if (code !== 0) {
+        if (s && s.fetchRetryAttempts < 1) {
+          s.fetchRetryAttempts++;
+          this.addLog(runId, 'Fetch failed; retrying once automatically…');
+          this.updateStageStatus(runId, 'fetch', 'idle');
+          this.spawnFetchChild(runId, payload);
+          return;
+        }
         this.updateStageStatus(runId, 'fetch', 'error');
         this.failRun(runId, `fetch-source exited with code ${code ?? 1}`);
         return;
@@ -230,22 +276,39 @@ class IngestRunManager extends EventEmitter {
         );
         return;
       }
-      this.startIngestChild(runId, payload, sourceFile);
+      if (s) s.sourceFilePath = sourceFile;
+      this.startIngestChild(runId, payload, sourceFile, { forSyncOnly: false });
     });
   }
 
-  private startIngestChild(runId: string, payload: IngestRunPayload, sourceFile: string): void {
-    const pipelineStages = ['extract', 'relate', 'group', 'embed'] as const;
-    for (const stage of pipelineStages) {
-      this.updateStageStatus(runId, stage, 'running');
+  private startIngestChild(
+    runId: string,
+    payload: IngestRunPayload,
+    sourceFile: string,
+    options: { forSyncOnly: boolean }
+  ): void {
+    const forSync = options.forSyncOnly;
+    const stopBeforeStore = forSync ? false : payload.stop_before_store !== false;
+
+    if (!forSync) {
+      for (const stage of PIPELINE_STAGES) {
+        this.updateStageStatus(runId, stage, 'running');
+      }
+      if (payload.validate) {
+        this.updateStageStatus(runId, 'validate', 'running');
+      }
+      if (stopBeforeStore) {
+        this.updateStageStatus(runId, 'store', 'idle');
+      } else {
+        this.updateStageStatus(runId, 'store', 'running');
+      }
+    } else {
+      this.updateStageStatus(runId, 'store', 'running');
     }
-    if (payload.validate) {
-      this.updateStageStatus(runId, 'validate', 'running');
-    }
-    this.updateStageStatus(runId, 'store', 'running');
 
     const ingestArgs = ['tsx', ...buildEnvFileArgs(), 'scripts/ingest.ts', sourceFile];
     if (payload.validate) ingestArgs.push('--validate');
+    if (stopBeforeStore) ingestArgs.push('--stop-before-store');
 
     const ingestChild = spawn('npx', ingestArgs, {
       cwd: process.cwd(),
@@ -262,25 +325,78 @@ class IngestRunManager extends EventEmitter {
     ingestChild.on('error', (err: Error) => {
       const s = this.runs.get(runId);
       if (s) s.process = undefined;
-      this.markPipelineStagesError(runId, payload);
+      if (forSync) {
+        this.updateStageStatus(runId, 'store', 'error');
+      } else {
+        this.markPipelineStagesError(runId, payload);
+      }
       this.failRun(runId, `ingest.ts failed to start: ${err.message}`);
     });
 
     ingestChild.on('close', (code: number | null) => {
       const s = this.runs.get(runId);
       if (s) s.process = undefined;
-      const terminalStages = [
-        ...pipelineStages,
-        ...(payload.validate ? (['validate'] as const) : []),
-        'store'
-      ] as const;
+
       if (code === 0) {
-        for (const stage of terminalStages) {
-          this.updateStageStatus(runId, stage, 'done');
+        if (stopBeforeStore) {
+          for (const stage of PIPELINE_STAGES) {
+            this.updateStageStatus(runId, stage, 'done');
+          }
+          if (payload.validate) {
+            this.updateStageStatus(runId, 'validate', 'done');
+          }
+          this.updateStageStatus(runId, 'store', 'idle');
+          if (s) s.status = 'awaiting_sync';
+          this.addLog(runId, 'Run phases complete. Press “Sync to SurrealDB” to finish.');
+          return;
         }
-        this.addLog(runId, 'Ingestion pipeline finished successfully.');
-        this.completeRun(runId);
+        if (forSync) {
+          this.updateStageStatus(runId, 'store', 'done');
+          this.addLog(runId, 'SurrealDB sync completed successfully.');
+          if (s) s.syncCompletedAt = Date.now();
+          this.completeRun(runId);
+        } else {
+          const terminalStages = [
+            ...PIPELINE_STAGES,
+            ...(payload.validate ? (['validate'] as const) : []),
+            'store'
+          ] as const;
+          for (const stage of terminalStages) {
+            this.updateStageStatus(runId, stage, 'done');
+          }
+          if (!payload.validate) {
+            this.updateStageStatus(runId, 'validate', 'skipped');
+          }
+          this.addLog(runId, 'Ingestion pipeline finished successfully.');
+          this.completeRun(runId);
+        }
+        return;
+      }
+
+      if (forSync && s && s.syncRetryAttempts < 1) {
+        s.syncRetryAttempts++;
+        this.addLog(runId, 'SurrealDB sync failed; retrying once automatically…');
+        this.updateStageStatus(runId, 'store', 'running');
+        this.startIngestChild(runId, payload, sourceFile, { forSyncOnly: true });
+        return;
+      }
+
+      if (!forSync && s && s.ingestRetryAttempts < 1) {
+        s.ingestRetryAttempts++;
+        this.addLog(runId, 'Ingest failed; retrying once automatically…');
+        this.startIngestChild(runId, payload, sourceFile, { forSyncOnly: false });
+        return;
+      }
+
+      if (forSync) {
+        this.updateStageStatus(runId, 'store', 'error');
+        this.failRun(runId, `SurrealDB sync (ingest.ts) exited with code ${code ?? 1}`);
       } else {
+        const terminalStages = [
+          ...PIPELINE_STAGES,
+          ...(payload.validate ? (['validate'] as const) : []),
+          'store'
+        ] as const;
         for (const stage of terminalStages) {
           this.updateStageStatus(runId, stage, 'error');
         }
@@ -290,7 +406,7 @@ class IngestRunManager extends EventEmitter {
   }
 
   private markPipelineStagesError(runId: string, payload: IngestRunPayload): void {
-    for (const stage of ['extract', 'relate', 'group', 'embed'] as const) {
+    for (const stage of PIPELINE_STAGES) {
       this.updateStageStatus(runId, stage, 'error');
     }
     if (payload.validate) {
@@ -299,18 +415,13 @@ class IngestRunManager extends EventEmitter {
     this.updateStageStatus(runId, 'store', 'error');
   }
 
-  /**
-   * Simulate ingestion progress (default when ADMIN_INGEST_RUN_REAL is unset)
-   */
   private simulateIngestionProgress(runId: string, payload: IngestRunPayload): void {
+    const stopBeforeStore = payload.stop_before_store !== false;
     const stages = [
       'fetch',
-      'extract',
-      'relate',
-      'group',
-      'embed',
+      ...PIPELINE_STAGES,
       payload.validate ? 'validate' : null,
-      'store'
+      ...(stopBeforeStore ? [] : ['store'])
     ].filter(Boolean) as string[];
     let stageIndex = 0;
 
@@ -338,17 +449,25 @@ class IngestRunManager extends EventEmitter {
         }, duration);
       } else {
         for (const stage of stages) {
-          if (state.stages[stage].status === 'running') {
+          if (state.stages[stage]?.status === 'running') {
             this.updateStageStatus(runId, stage, 'done');
           }
         }
-        this.addLog(runId, 'All stages complete!');
-        this.completeRun(runId);
+        if (stopBeforeStore) {
+          this.updateStageStatus(runId, 'store', 'idle');
+          if (!payload.validate) {
+            this.updateStageStatus(runId, 'validate', 'skipped');
+          }
+          state.status = 'awaiting_sync';
+          this.addLog(runId, 'Run phases complete. Press “Sync to SurrealDB” to finish.');
+        } else {
+          this.addLog(runId, 'All stages complete!');
+          this.completeRun(runId);
+        }
         clearInterval(progressInterval);
       }
     }, 1000);
   }
 }
 
-// Export singleton
 export const ingestRunManager = new IngestRunManager();

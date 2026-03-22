@@ -1633,6 +1633,8 @@ async function main() {
 	// Pipeline mode: exit after stages 1-4 so the batch can start the next source's
 	// Claude extraction while Gemini validation runs for this source in a separate process.
 	const stopAfterEmbedding = args.includes('--stop-after-embedding');
+	// Admin UI: exit after Stage 5 so the operator explicitly resumes for Stage 6 (SurrealDB store).
+	const stopBeforeStore = args.includes('--stop-before-store');
 	// Domain override: when set, all claims from this source are tagged with this domain,
 	// overriding whatever domain Claude assigns during extraction.
 	const domainOverrideIdx = args.findIndex((a) => a === '--domain');
@@ -1657,6 +1659,7 @@ async function main() {
 		console.error('  --ingest-provider <p>   Provider hint: auto | vertex | anthropic (default: auto)');
 		console.error('  --force-stage <stage>   Re-run from this stage onwards, ignoring saved progress');
 		console.error(`                          Valid stages: ${STAGES_ORDER.join(', ')}`);
+		console.error('  --stop-before-store     Exit after validation; re-run the same source to execute Stage 6 (store)');
 		console.error('\nRestormel route env vars (optional):');
 		console.error('  RESTORMEL_INGEST_ROUTE_ID, RESTORMEL_INGEST_VALIDATION_ROUTE_ID');
 		console.error('  RESTORMEL_INGEST_EXTRACTION_ROUTE_ID, RESTORMEL_INGEST_RELATIONS_ROUTE_ID, RESTORMEL_INGEST_GROUPING_ROUTE_ID, RESTORMEL_INGEST_JSON_REPAIR_ROUTE_ID');
@@ -2419,6 +2422,20 @@ async function main() {
 		} else {
 			console.log('  [SKIP] Stage 5: Validation (already completed)\n');
 			validationResult = partial.validation ?? null;
+		}
+
+		if (stopBeforeStore) {
+			console.log(
+				'\n  [PHASE] Stages 1–5 complete. Resume this source without --stop-before-store (or use admin Sync) to run Stage 6 (SurrealDB).'
+			);
+			savePartialResults(slug, partial);
+			await updateIngestionLog(db, sourceMeta.url, {
+				status: 'validating',
+				stage_completed: 'validating',
+				cost_usd: parseFloat(estimateCostUsd())
+			});
+			await db.close();
+			process.exit(0);
 		}
 
 		// ═══════════════════════════════════════════════════════════════

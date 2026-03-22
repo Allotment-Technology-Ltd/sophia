@@ -15,9 +15,17 @@ export type IngestionModelCatalogEntryMerged = IngestionModelCatalogEntry & {
 	catalogSource?: CatalogEntrySource;
 };
 
+/** True when a catalog row should use embedding-style pickers (Restormel project models). */
+export function isEmbeddingModelEntry(e: Pick<IngestionModelCatalogEntry, 'provider' | 'modelId'>): boolean {
+	const p = e.provider.toLowerCase();
+	if (p === 'voyage') return true;
+	if (/embedding|embed/i.test(e.modelId)) return true;
+	return false;
+}
+
 export interface CatalogSyncMeta {
 	/** How entries were assembled */
-	status: 'restormel' | 'static' | 'merged';
+	status: 'restormel' | 'static' | 'merged' | 'unavailable';
 	/** Human-readable when Restormel fetch failed or returned nothing usable */
 	reason?: string;
 	remoteRowCount: number;
@@ -107,7 +115,7 @@ function inferEntry(providerRaw: string, modelIdRaw: string): IngestionModelCata
 		qualityTier,
 		speed,
 		contextWindow,
-		bestFor: 'Listed in your Restormel project model index; tiers are heuristic until annotated in the static catalog.'
+		bestFor: 'Model from your Restormel project index; tiers are heuristic estimates only.'
 	};
 }
 
@@ -206,6 +214,85 @@ export function mergeCatalogWithRestormelModels(
 			annotatedCount,
 			inferredRemoteCount,
 			staticSupplementCount
+		}
+	};
+}
+
+/**
+ * Models available for operator pickers: **only** rows returned by Restormel project models.
+ * No static catalog supplement or fallback list.
+ */
+export function buildRestormelProjectModelEntriesOnly(
+	remoteResponse: unknown | null,
+	fetchError?: string | null
+): { entries: IngestionModelCatalogEntryMerged[]; sync: CatalogSyncMeta } {
+	if (fetchError) {
+		return {
+			entries: [],
+			sync: {
+				status: 'unavailable',
+				reason: fetchError,
+				remoteRowCount: 0,
+				annotatedCount: 0,
+				inferredRemoteCount: 0,
+				staticSupplementCount: 0
+			}
+		};
+	}
+
+	const rows = extractModelRowsFromRestormelPayload(remoteResponse);
+	if (rows.length === 0) {
+		const hadPayload = remoteResponse !== null && remoteResponse !== undefined;
+		return {
+			entries: [],
+			sync: {
+				status: 'unavailable',
+				reason: hadPayload
+					? 'Restormel returned no usable models (empty or unrecognized response shape).'
+					: 'Restormel models response was empty.',
+				remoteRowCount: 0,
+				annotatedCount: 0,
+				inferredRemoteCount: 0,
+				staticSupplementCount: 0
+			}
+		};
+	}
+
+	const seen = new Set<string>();
+	const entries: IngestionModelCatalogEntryMerged[] = [];
+
+	for (const row of rows) {
+		const ids = rowToProviderModel(row);
+		if (!ids) continue;
+		const key = `${ids.provider} · ${ids.modelId}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		entries.push({ ...inferEntry(ids.provider, ids.modelId), catalogSource: 'remote' });
+	}
+
+	if (entries.length === 0) {
+		return {
+			entries: [],
+			sync: {
+				status: 'unavailable',
+				reason:
+					'Restormel returned rows but none could be parsed (each row needs a provider and model id).',
+				remoteRowCount: rows.length,
+				annotatedCount: 0,
+				inferredRemoteCount: 0,
+				staticSupplementCount: 0
+			}
+		};
+	}
+
+	return {
+		entries,
+		sync: {
+			status: 'restormel',
+			remoteRowCount: rows.length,
+			annotatedCount: 0,
+			inferredRemoteCount: entries.length,
+			staticSupplementCount: 0
 		}
 	};
 }

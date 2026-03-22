@@ -16,7 +16,7 @@ import {
   type RestormelStepRecord
 } from '$lib/server/restormel';
 import {
-  mergeCatalogWithRestormelModels,
+  buildRestormelProjectModelEntriesOnly,
   type IngestionModelCatalogEntryMerged
 } from '$lib/ingestionModelCatalogMerge';
 
@@ -157,14 +157,20 @@ async function buildFallbackRecommendation(
 
   let modelIndexSyncNote = 'Restormel project model index unavailable.';
   try {
-    const projectModels = await restormelListProjectModels();
-    const { entries, sync } = mergeCatalogWithRestormelModels(projectModels, null);
+    let remote: unknown | null = null;
+    let fetchError: string | null = null;
+    try {
+      remote = await restormelListProjectModels();
+    } catch (e) {
+      fetchError = e instanceof Error ? e.message : String(e);
+    }
+    const { entries, sync } = buildRestormelProjectModelEntriesOnly(remote, fetchError);
     modelIndexSyncNote =
       sync.status === 'restormel'
-        ? 'Rankings searched against live Restormel project models.'
-        : sync.status === 'merged'
-          ? 'Rankings searched against live Restormel project models with Sophia supplements.'
-          : 'Rankings searched against Sophia catalog fallback because live model index was unavailable.';
+        ? 'Rankings searched against live Restormel project models only.'
+        : sync.reason
+          ? `Project models unavailable: ${sync.reason}`
+          : 'Rankings use route steps only; Restormel project model list was empty or unavailable.';
 
     for (let slot = rankings.length; slot < 3; slot += 1) {
       const picked = [...entries]

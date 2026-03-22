@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	buildRestormelProjectModelEntriesOnly,
 	extractModelRowsFromRestormelPayload,
 	mergeCatalogWithRestormelModels
 } from './ingestionModelCatalogMerge';
@@ -50,5 +51,34 @@ describe('mergeCatalogWithRestormelModels', () => {
 		expect(sonnet?.catalogSource).toBe('annotated');
 		const custom = entries.find((e) => e.modelId === 'other-model');
 		expect(custom?.catalogSource).toBe('remote');
+	});
+});
+
+describe('buildRestormelProjectModelEntriesOnly', () => {
+	it('returns empty entries on fetch error', () => {
+		const { entries, sync } = buildRestormelProjectModelEntriesOnly(null, 'unauthorized');
+		expect(entries).toHaveLength(0);
+		expect(sync.status).toBe('unavailable');
+		expect(sync.reason).toBe('unauthorized');
+	});
+
+	it('returns only Restormel rows with no static supplement', () => {
+		const remote = {
+			data: [
+				{ providerType: 'anthropic', modelId: 'claude-3-5-sonnet-20241022' },
+				{ providerType: 'vertex', modelId: 'text-embedding-005' }
+			]
+		};
+		const { entries, sync } = buildRestormelProjectModelEntriesOnly(remote, null);
+		expect(entries).toHaveLength(2);
+		expect(sync.status).toBe('restormel');
+		expect(sync.staticSupplementCount).toBe(0);
+		expect(entries.every((e) => e.catalogSource === 'remote')).toBe(true);
+	});
+
+	it('returns unavailable when payload parses to zero usable models', () => {
+		const { entries, sync } = buildRestormelProjectModelEntriesOnly({ data: [{ foo: 1 }] }, null);
+		expect(entries).toHaveLength(0);
+		expect(sync.status).toBe('unavailable');
 	});
 });
