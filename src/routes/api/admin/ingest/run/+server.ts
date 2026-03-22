@@ -25,8 +25,13 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     return json({ error: 'Missing model_chain' }, { status: 400 });
   }
 
+  const normalized: IngestRunPayload = {
+    ...(payload as IngestRunPayload),
+    stop_before_store: (payload as Partial<IngestRunPayload>).stop_before_store !== false
+  };
+
   try {
-    const runId = ingestRunManager.createRun(payload as IngestRunPayload, actor.email || 'unknown');
+    const runId = ingestRunManager.createRun(normalized, actor.email || 'unknown');
     return json(
       { run_id: runId, status: 'running' },
       { status: 201 }

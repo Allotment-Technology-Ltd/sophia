@@ -19,10 +19,13 @@ export const GET: RequestHandler = async ({ locals, params }) => {
   return json({
     id: state.id,
     status: state.status,
+    awaitingSync: state.status === 'awaiting_sync',
     stages: state.stages,
     logLines: state.logLines,
     error: state.error,
     createdAt: state.createdAt,
-    completedAt: state.completedAt
+    completedAt: state.completedAt,
+    syncStartedAt: state.syncStartedAt,
+    syncCompletedAt: state.syncCompletedAt
   });
 };

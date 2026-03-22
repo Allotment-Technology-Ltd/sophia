@@ -13,6 +13,8 @@ export type AdminIngestWizardTier = 'fast' | 'balanced' | 'powerful';
 export interface AdminIngestWizardModelOption {
 	/** Stable id for form state / API payload fragments */
 	id: string;
+	/** Raw catalog model id (for Restormel step payloads) */
+	modelId: string;
 	/** Same as Restormel-style `provider · modelId` */
 	label: string;
 	provider: string;
@@ -57,6 +59,7 @@ export function catalogEntryToWizardOption(e: IngestionModelCatalogEntry): Admin
 	const speed = e.speed === 'fast' ? 5 : e.speed === 'balanced' ? 4 : 2;
 	return {
 		id,
+		modelId: e.modelId,
 		label: e.label,
 		provider: e.provider,
 		tier,
