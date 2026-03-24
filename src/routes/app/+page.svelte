@@ -170,12 +170,21 @@
   const ROTATE_INTERVAL_MS = 8000;
   let suggestionTick = $state(0);
   let baseExamplePool = $state<string[]>([]);
+  let loadingTick = $state(0);
+  let passPhaseStartedAt = $state<Record<string, number>>({});
+  let lastTrackedPass = $state<string | null>(null);
 
   const LOADING_STATUS: Record<string, string> = {
     analysis: 'The first pass for your question is being assembled - this may take a moment…',
     critique: 'Testing the first position for hidden tensions…',
     synthesis: 'Weaving a balanced resolution from both sides…',
     verification: 'Reviewing sources and scholarly grounding…',
+  };
+  const PASS_COUNTDOWN_ESTIMATE_MS: Record<'analysis' | 'critique' | 'synthesis' | 'verification', number> = {
+    analysis: 55_000,
+    critique: 70_000,
+    synthesis: 85_000,
+    verification: 60_000
   };
 
   const PASS_LABELS: Record<string, string> = {
@@ -641,8 +650,8 @@
   });
   let simpleSynthesisReady = $derived.by(() => {
     if (selectedDepth === 'quick') return Boolean(displayedPasses.analysis);
-    if (displayedPasses.synthesis) return true;
-    return !conversation.isLoading && Boolean(simplePrimaryContent);
+    // In longer modes, show the earliest completed pass while later passes keep streaming.
+    return Boolean(simplePrimaryContent);
   });
   let hasDisplayedCorePass = $derived.by(() =>
     Boolean(displayedPasses.analysis || displayedPasses.critique || displayedPasses.synthesis)
@@ -695,6 +704,38 @@
     return available.length > 0 ? available : ['analysis'];
   });
 
+  function phaseEstimateMs(
+    pass: 'analysis' | 'critique' | 'synthesis' | 'verification',
+    provider: ModelProvider | undefined
+  ): number {
+    const base = PASS_COUNTDOWN_ESTIMATE_MS[pass];
+    if (!provider || provider === 'auto' || provider === 'vertex') return base;
+    if (pass === 'critique' || pass === 'synthesis') return Math.round(base * 1.25);
+    return Math.round(base * 1.15);
+  }
+
+  function formatCountdown(ms: number): string {
+    const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  let loadingCountdownText = $derived.by(() => {
+    loadingTick;
+    const pass = conversation.currentPass;
+    if (!pass) return '';
+    const provider = conversation.passModels[pass]?.provider ?? conversation.loadingModelProvider;
+    const estimateMs = phaseEstimateMs(pass, provider);
+    const startedAt = passPhaseStartedAt[pass] ?? Date.now();
+    const elapsedMs = Math.max(0, Date.now() - startedAt);
+    const remainingMs = estimateMs - elapsedMs;
+    if (remainingMs >= 0) {
+      return `~${formatCountdown(remainingMs)} remaining in ${PASS_LABELS[pass] ?? pass}`;
+    }
+    return `${PASS_LABELS[pass] ?? pass} is running longer than expected`;
+  });
+
   let loadingStatusText = $derived.by(() => {
     if (!conversation.currentPass) {
       return hasStreamingCorePass
@@ -703,10 +744,12 @@
     }
     const base = LOADING_STATUS[conversation.currentPass] ?? 'Thinking…';
     const provider = conversation.passModels[conversation.currentPass]?.provider ?? conversation.loadingModelProvider;
-    if (provider && provider !== 'vertex' && provider !== 'auto' && (conversation.currentPass === 'critique' || conversation.currentPass === 'synthesis')) {
-      return `${base} ${safeModelProviderLabel(provider)} deep reasoning can take longer.`;
-    }
-    return base;
+    const providerHint =
+      provider && provider !== 'vertex' && provider !== 'auto' && (conversation.currentPass === 'critique' || conversation.currentPass === 'synthesis')
+        ? ` ${safeModelProviderLabel(provider)} deep reasoning can take longer.`
+        : '';
+    const countdown = loadingCountdownText ? ` ${loadingCountdownText}.` : '';
+    return `${base}${providerHint}${countdown}`;
   });
 
   let loadingPassLabel = $derived(
@@ -879,6 +922,10 @@
   function stripSophiaMeta(text: string): string {
     return text
       .replace(/```sophia-meta[\s\S]*?```/g, '')
+      // If streaming fails mid-block, remove any unterminated sophia-meta fence tail.
+      .replace(/```sophia-meta[\s\S]*$/g, '')
+      // Guard against bare marker tokens leaking into rendered markdown.
+      .replace(/\bsophia-meta\b/gi, '')
       .replace(/\n?\{\s*"sections"\s*:\s*\[[\s\S]*$/m, '')
       .trim();
   }
@@ -1687,6 +1734,29 @@
     }, ROTATE_INTERVAL_MS);
     return () => window.clearInterval(timer);
   });
+
+  $effect(() => {
+    const pass = conversation.currentPass;
+    if (!pass) {
+      lastTrackedPass = null;
+      return;
+    }
+    if (lastTrackedPass === pass) return;
+    passPhaseStartedAt = {
+      ...passPhaseStartedAt,
+      [pass]: Date.now()
+    };
+    lastTrackedPass = pass;
+  });
+
+  $effect(() => {
+    if (typeof window === 'undefined') return;
+    if (!conversation.isLoading || !conversation.currentPass) return;
+    const timer = window.setInterval(() => {
+      loadingTick += 1;
+    }, 1000);
+    return () => window.clearInterval(timer);
+  });
 </script>
 
 <svelte:head>
@@ -2051,6 +2121,30 @@
             />
           {:else}
             <section class="simple-results" data-testid="simple-results">
+              {#if showLiveProgressHero}
+                <div class="live-progress-hero" aria-live="polite">
+                  <div class="live-progress-stage" aria-hidden="true">
+                    <DialecticalTriangle
+                      mode="loading"
+                      currentPass={conversation.currentPass}
+                      {startedPasses}
+                      {completedPasses}
+                      depthMode={selectedDepth}
+                      size={200}
+                    />
+                  </div>
+                  <div class="live-progress-copy">
+                    <p class="live-progress-title">Live generation in progress</p>
+                    <p class="live-progress-status">{loadingStatusText}</p>
+                    <p class="live-progress-hint">{liveProgressHint}</p>
+                    <PassTracker
+                      currentPass={conversation.currentPass}
+                      {completedPasses}
+                    />
+                  </div>
+                </div>
+              {/if}
+
               {#if simpleLayer === 'synthesis'}
                 <article class="simple-card" data-testid="simple-synthesis-card" in:fade={{ duration: 220 }}>
                   <h2>Your Question</h2>

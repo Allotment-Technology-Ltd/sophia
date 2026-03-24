@@ -170,7 +170,15 @@ interface EngineOptions {
   providerApiKeys?: ProviderApiKeys;
 }
 
+const PASS_HARD_TIMEOUT_ENABLED =
+  (process.env.ENABLE_PASS_HARD_TIMEOUTS ?? '').trim().toLowerCase() === 'true';
+
 function withPassTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  // Default behavior: do not hard-timeout long-running passes.
+  // Enable explicit hard cutoffs only when ENABLE_PASS_HARD_TIMEOUTS=true.
+  if (!PASS_HARD_TIMEOUT_ENABLED || timeoutMs <= 0) {
+    return promise;
+  }
   let timer: ReturnType<typeof setTimeout> | null = null;
   return new Promise<T>((resolve, reject) => {
     timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
@@ -522,7 +530,8 @@ export async function runDialecticalEngine(
   const reusedCritique = options?.reuse?.critique?.trim();
   const reusedSynthesis = options?.reuse?.synthesis?.trim();
   const PASS_TIMEOUT_MS: Record<ReasoningProvider, Record<'analysis' | 'critique' | 'synthesis', number>> = {
-    vertex: { analysis: 95_000, critique: 95_000, synthesis: 105_000 },
+    // Vertex can exceed 95s on critique for long contexts; give it more headroom.
+    vertex: { analysis: 95_000, critique: 130_000, synthesis: 105_000 },
     anthropic: { analysis: 150_000, critique: 180_000, synthesis: 200_000 },
     openai: { analysis: 140_000, critique: 165_000, synthesis: 185_000 },
     xai: { analysis: 140_000, critique: 165_000, synthesis: 185_000 },
