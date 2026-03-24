@@ -244,8 +244,13 @@ function buildOpenAICompatibleRoute(
   modelId: string,
   apiKey?: string
 ): ReasoningModelRoute {
+  const client = getOpenAICompatibleForProvider(provider, apiKey);
+  const model =
+    provider === 'openai'
+      ? client(modelId)
+      : client.chat(modelId as any);
   return {
-    model: getOpenAICompatibleForProvider(provider, apiKey)(modelId),
+    model,
     provider,
     modelId,
     supportsGrounding: false,

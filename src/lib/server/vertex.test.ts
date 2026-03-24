@@ -11,7 +11,11 @@ const {
   mockCreateVertex: vi.fn(() => vi.fn((modelId: string) => `vertex:${modelId}`)),
   mockCreateAnthropic: vi.fn(() => vi.fn((modelId: string) => `anthropic:${modelId}`)),
   mockCreateGoogleGenerativeAI: vi.fn(() => vi.fn((modelId: string) => `google:${modelId}`)),
-  mockCreateOpenAI: vi.fn(() => vi.fn((modelId: string) => `openai:${modelId}`)),
+  mockCreateOpenAI: vi.fn(() => {
+    const provider = ((modelId: string) => `openai-responses:${modelId}`) as any;
+    provider.chat = vi.fn((modelId: string) => `openai-chat:${modelId}`);
+    return provider;
+  }),
   mockLoadServerEnv: vi.fn(),
   mockResolveProviderDecision: vi.fn()
 }));
@@ -92,5 +96,23 @@ describe('resolveReasoningModelRoute', () => {
         failureMode: 'error'
       })
     ).rejects.toThrow('anthropic provider requested but no BYOK key or platform API key is configured');
+  });
+
+  it('uses chat-completions path for non-openai compatible providers', async () => {
+    process.env.OPENROUTER_API_KEY = 'sk-or-test';
+    process.env.OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+    mockResolveProviderDecision.mockResolvedValue({
+      provider: 'openrouter',
+      model: 'openrouter/auto',
+      source: 'restormel',
+      routeId: 'interactive',
+      explanation: 'route=interactive step=0 provider=openrouter model=openrouter/auto'
+    });
+
+    const { resolveReasoningModelRoute } = await import('./vertex');
+    const route = await resolveReasoningModelRoute({ routeId: 'interactive' });
+
+    expect(route.provider).toBe('openrouter');
+    expect(route.model).toBe('openai-chat:openrouter/auto');
   });
 });
