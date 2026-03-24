@@ -1,13 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const {
-  mockLoadByokProviderApiKeys,
-  mockGetAvailableReasoningModels,
-  mockRestormelEvaluatePolicies
-} = vi.hoisted(() => ({
+const { mockLoadByokProviderApiKeys, mockGetAvailableReasoningModels } = vi.hoisted(() => ({
   mockLoadByokProviderApiKeys: vi.fn(),
-  mockGetAvailableReasoningModels: vi.fn(),
-  mockRestormelEvaluatePolicies: vi.fn()
+  mockGetAvailableReasoningModels: vi.fn()
 }));
 
 vi.mock('$lib/server/byok/store', () => ({
@@ -17,14 +12,6 @@ vi.mock('$lib/server/byok/store', () => ({
 vi.mock('$lib/server/vertex', () => ({
   getAvailableReasoningModels: mockGetAvailableReasoningModels
 }));
-
-vi.mock('$lib/server/restormel', async () => {
-  const actual = await vi.importActual<typeof import('$lib/server/restormel')>('$lib/server/restormel');
-  return {
-    ...actual,
-    restormelEvaluatePolicies: mockRestormelEvaluatePolicies
-  };
-});
 
 describe('/api/allowed-models', () => {
   beforeEach(() => {
@@ -36,34 +23,35 @@ describe('/api/allowed-models', () => {
       anthropic: 'sk-ant-test',
       openai: 'sk-proj-openai'
     });
-    mockGetAvailableReasoningModels.mockReturnValue([
+    const mockCatalog = [
       {
         id: 'claude-3-5-sonnet',
-        provider: 'anthropic',
+        provider: 'anthropic' as const,
         label: 'Anthropic · claude-3-5-sonnet',
         description: 'User BYOK Anthropic model'
       },
       {
         id: 'gpt-4o',
-        provider: 'openai',
+        provider: 'openai' as const,
         label: 'OpenAI · gpt-4o',
         description: 'User BYOK OpenAI model'
       }
-    ]);
+    ];
+    mockGetAvailableReasoningModels.mockImplementation((opts) => {
+      const ap = opts?.allowedProviders;
+      if (ap?.length) {
+        const allow = new Set(ap);
+        return mockCatalog.filter((m) => allow.has(m.provider));
+      }
+      return mockCatalog;
+    });
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it('filters available models through Restormel policy evaluation', async () => {
-    mockRestormelEvaluatePolicies.mockImplementation(async ({ modelId, providerType }) => ({
-      data: {
-        allowed: modelId === 'claude-3-5-sonnet' && providerType === 'anthropic',
-        violations: []
-      }
-    }));
-
+  it('returns catalog candidates for BYOK provider without policy evaluation', async () => {
     const { GET } = await import('./+server');
     const response = await GET({
       locals: { user: { uid: 'user:byok' } },
@@ -73,70 +61,10 @@ describe('/api/allowed-models', () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.filtering).toEqual({
-      active: true,
-      degraded: false,
-      routeId: 'interactive'
-    });
-    expect(body.models).toEqual([
-      {
-        id: 'claude-3-5-sonnet',
-        provider: 'anthropic',
-        label: 'Anthropic · claude-3-5-sonnet',
-        description: 'User BYOK Anthropic model'
-      }
-    ]);
-    expect(body.allowed_by_provider.anthropic).toContain('claude-3-5-sonnet');
-    expect(body.allowed_by_provider.openai).not.toContain('gpt-4o');
-  });
-
-  it('returns a degraded empty explicit-model set when policy evaluation fails', async () => {
-    mockRestormelEvaluatePolicies.mockRejectedValue(new Error('gateway unavailable'));
-
-    const { GET } = await import('./+server');
-    const response = await GET({
-      locals: { user: { uid: 'user:platform' } },
-      url: new URL('http://localhost/api/allowed-models?credential_mode=platform')
-    } as any);
-
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body.filtering).toEqual({
       active: false,
-      degraded: true,
-      routeId: 'interactive'
-    });
-    expect(body.error).toContain('Policy-filtered models are temporarily unavailable');
-    expect(body.models).toEqual([]);
-  });
-
-  it('keeps partial policy-filtered results when only some model evaluations fail', async () => {
-    mockRestormelEvaluatePolicies.mockImplementation(async ({ modelId }) => {
-      if (modelId === 'gpt-4o') {
-        throw new Error('unknown model in Restormel catalog');
-      }
-
-      return {
-        data: {
-          allowed: modelId === 'claude-3-5-sonnet',
-          violations: []
-        }
-      };
-    });
-
-    const { GET } = await import('./+server');
-    const response = await GET({
-      locals: { user: { uid: 'user:partial' } },
-      url: new URL('http://localhost/api/allowed-models?credential_mode=auto')
-    } as any);
-
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body.filtering).toEqual({
-      active: true,
       degraded: false,
       routeId: 'interactive'
     });
-    expect(body.error).toBeUndefined();
     expect(body.models).toEqual([
       {
         id: 'claude-3-5-sonnet',
@@ -147,5 +75,38 @@ describe('/api/allowed-models', () => {
     ]);
     expect(body.allowed_by_provider.anthropic).toContain('claude-3-5-sonnet');
     expect(body.allowed_by_provider.openai).toEqual([]);
+  });
+
+  it('returns catalog candidates for platform mode', async () => {
+    const { GET } = await import('./+server');
+    const response = await GET({
+      locals: { user: { uid: 'user:platform' } },
+      url: new URL('http://localhost/api/allowed-models?credential_mode=platform')
+    } as any);
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.filtering).toEqual({
+      active: false,
+      degraded: false,
+      routeId: 'interactive'
+    });
+    expect(body.models).toHaveLength(2);
+    expect(body.error).toBeUndefined();
+  });
+
+  it('returns all catalog candidates for auto credential mode', async () => {
+    const { GET } = await import('./+server');
+    const response = await GET({
+      locals: { user: { uid: 'user:auto' } },
+      url: new URL('http://localhost/api/allowed-models?credential_mode=auto')
+    } as any);
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.filtering.degraded).toBe(false);
+    expect(body.filtering.active).toBe(false);
+    expect(body.models).toHaveLength(2);
+    expect(body.error).toBeUndefined();
   });
 });
