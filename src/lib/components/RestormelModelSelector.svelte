@@ -1,6 +1,9 @@
 <script lang="ts">
-  import { ModelSelector as RestormelModelSelector } from '@restormel/keys-svelte';
-  import '@restormel/keys-svelte/theme.css';
+  /**
+   * We do not import `@restormel/keys-svelte` ModelSelector here: that package ships a prebundled
+   * Svelte runtime in `dist/index.js`, which mounts components outside the app effect tree and
+   * throws `effect_orphan` in production. The headless `keys` instance stays on the public API.
+   */
   import { resolveProviderId, type KeysInstance, type ProviderDefinition } from '@restormel/keys';
 
   interface Props {
@@ -92,7 +95,26 @@
 
   <div class="restormel-theme-shell" class:is-disabled={disabled}>
     {#if canRenderSelector}
-      <RestormelModelSelector {keys} {providers} onSelect={handleSelect} />
+      <div class="restormel-native-picker" role="listbox" aria-label="Explicit models">
+        {#each providers as provider (provider.id)}
+          <div class="restormel-provider-block" role="group" aria-label={provider.name}>
+            <span class="restormel-provider-title">{provider.name}</span>
+            <div class="restormel-model-pills">
+              {#each provider.models as modelId (modelId)}
+                <button
+                  type="button"
+                  class="restormel-model-pill"
+                  class:active={value === `${provider.id}::${modelId}`}
+                  disabled={disabled}
+                  onclick={() => handleSelect(modelId, provider.id)}
+                >
+                  {modelId}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/each}
+      </div>
     {:else}
       <div class="restormel-placeholder" role="status" aria-live="polite">
         <div class="restormel-placeholder-chip"></div>
@@ -100,7 +122,7 @@
         <div class="restormel-placeholder-line"></div>
         <div class="restormel-model-state">
           {#if loading}
-            Loading policy-filtered models…
+            Loading models…
           {:else}
             {emptyMessage || 'No explicit models are currently available for this key source.'}
           {/if}
@@ -236,6 +258,64 @@
 
   .restormel-placeholder-line.wide {
     width: 88%;
+  }
+
+  .restormel-native-picker {
+    display: grid;
+    gap: 0.65rem;
+    align-content: start;
+  }
+
+  .restormel-provider-block {
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .restormel-provider-title {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+  }
+
+  .restormel-model-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .restormel-model-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.35rem 0.55rem;
+    border: 1px solid color-mix(in oklab, var(--rk-border) 90%, transparent);
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--rk-bg) 70%, transparent);
+    color: var(--rk-text);
+    font: inherit;
+    font-size: 0.72rem;
+    cursor: pointer;
+  }
+
+  .restormel-model-pill:hover:not(:disabled) {
+    border-color: color-mix(in oklab, var(--rk-accent) 45%, var(--rk-border));
+    background: color-mix(in oklab, var(--rk-accent) 12%, var(--rk-bg));
+  }
+
+  .restormel-model-pill:focus-visible {
+    outline: 2px solid color-mix(in oklab, var(--rk-accent) 65%, transparent);
+    outline-offset: 2px;
+  }
+
+  .restormel-model-pill.active {
+    border-color: color-mix(in oklab, var(--rk-accent) 55%, var(--rk-border));
+    background: color-mix(in oklab, var(--rk-accent) 20%, transparent);
+  }
+
+  .restormel-model-pill:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
 
   @media (max-width: 720px) {
