@@ -2,7 +2,26 @@ import { adminDb } from './firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 
 export const DAILY_QUERY_LIMIT = 20;
-export const PLATFORM_STANDARD_SEARCH_LIMIT = 3;
+export type PlatformBudgetPlan = 'free' | 'founder' | 'pro' | 'premium';
+
+export const PLATFORM_STANDARD_SEARCH_LIMITS: Record<PlatformBudgetPlan, number> = {
+  free: 5,
+  founder: 10,
+  pro: 10,
+  premium: 20
+};
+export const PLATFORM_DEEP_SEARCH_LIMITS: Record<PlatformBudgetPlan, number> = {
+  free: 0,
+  founder: 3,
+  pro: 3,
+  premium: 3
+};
+export const PLATFORM_PREMIUM_SEARCH_LIMITS: Record<PlatformBudgetPlan, number> = {
+  free: 0,
+  founder: 1,
+  pro: 1,
+  premium: 1
+};
 export const PLATFORM_DAILY_BUDGET_CREDITS = 12; // 12 half-units = 6 standard-equivalent queries
 export const PLATFORM_QUICK_QUERY_CREDITS = 1; // 0.5 standard
 export const PLATFORM_STANDARD_QUERY_CREDITS = 2; // 1.0 standard
@@ -10,6 +29,8 @@ export const PLATFORM_STANDARD_QUERY_CREDITS = 2; // 1.0 standard
 export type QueryKind = 'new' | 'follow_up' | 'rerun';
 export type PlatformBudgetDenyReason =
   | 'deep_requires_byok'
+  | 'deep_limit_reached'
+  | 'premium_limit_reached'
   | 'standard_limit_reached'
   | 'follow_up_limit_reached'
   | 'budget_exhausted';
@@ -19,6 +40,8 @@ interface PlatformBudgetRecord {
   budget_credits_used?: number;
   standard_queries?: number;
   follow_up_queries?: number;
+  deep_queries?: number;
+  premium_queries?: number;
 }
 
 export interface PlatformBudgetResult {
@@ -26,7 +49,22 @@ export interface PlatformBudgetResult {
   remainingCredits: number;
   standardQueries: number;
   followUpQueries: number;
+  deepQueries: number;
+  premiumQueries: number;
+  standardLimit: number;
+  deepLimit: number;
+  premiumLimit: number;
   reason?: PlatformBudgetDenyReason;
+}
+
+export function resolvePlatformStandardSearchLimit(plan: PlatformBudgetPlan = 'free'): number {
+  return PLATFORM_STANDARD_SEARCH_LIMITS[plan] ?? PLATFORM_STANDARD_SEARCH_LIMITS.free;
+}
+export function resolvePlatformDeepSearchLimit(plan: PlatformBudgetPlan = 'free'): number {
+  return PLATFORM_DEEP_SEARCH_LIMITS[plan] ?? PLATFORM_DEEP_SEARCH_LIMITS.free;
+}
+export function resolvePlatformPremiumSearchLimit(plan: PlatformBudgetPlan = 'free'): number {
+  return PLATFORM_PREMIUM_SEARCH_LIMITS[plan] ?? PLATFORM_PREMIUM_SEARCH_LIMITS.free;
 }
 
 /** Returns today's date as YYYY-MM-DD in UTC. */
@@ -80,16 +118,27 @@ export async function consumePlatformBudget(
   uid: string,
   options: {
     depthMode: 'quick' | 'standard' | 'deep';
+    resourceMode?: 'standard' | 'expanded';
     queryKind?: QueryKind;
+    plan?: PlatformBudgetPlan;
   }
 ): Promise<PlatformBudgetResult> {
-  if (options.depthMode === 'deep') {
+  const standardLimit = resolvePlatformStandardSearchLimit(options.plan ?? 'free');
+  const deepLimit = resolvePlatformDeepSearchLimit(options.plan ?? 'free');
+  const premiumLimit = resolvePlatformPremiumSearchLimit(options.plan ?? 'free');
+
+  if (options.depthMode === 'deep' && deepLimit <= 0) {
     return {
       allowed: false,
       reason: 'deep_requires_byok',
       remainingCredits: 0,
       standardQueries: 0,
-      followUpQueries: 0
+      followUpQueries: 0,
+      deepQueries: 0,
+      premiumQueries: 0,
+      standardLimit,
+      deepLimit,
+      premiumLimit
     };
   }
 
@@ -97,6 +146,8 @@ export async function consumePlatformBudget(
   const today = todayUtc();
   const isFollowUp = options.queryKind === 'follow_up';
   const isStandardNewQuery = !isFollowUp && options.depthMode === 'standard';
+  const isDeepQuery = options.depthMode === 'deep';
+  const isPremiumQuery = options.resourceMode === 'expanded';
   const creditsToConsume = queryCredits(options.depthMode);
 
   return adminDb.runTransaction(async (tx) => {
@@ -106,14 +157,51 @@ export async function consumePlatformBudget(
     const budgetCreditsUsed = data.date === today ? (data.budget_credits_used ?? 0) : 0;
     const standardQueries = data.date === today ? (data.standard_queries ?? 0) : 0;
     const followUpQueries = data.date === today ? (data.follow_up_queries ?? 0) : 0;
+    const deepQueries = data.date === today ? (data.deep_queries ?? 0) : 0;
+    const premiumQueries = data.date === today ? (data.premium_queries ?? 0) : 0;
 
-    if (isStandardNewQuery && standardQueries >= PLATFORM_STANDARD_SEARCH_LIMIT) {
+    if (isDeepQuery && deepQueries >= deepLimit) {
+      return {
+        allowed: false,
+        reason: 'deep_limit_reached' as const,
+        remainingCredits: toRemainingCredits(budgetCreditsUsed),
+        standardQueries,
+        followUpQueries,
+        deepQueries,
+        premiumQueries,
+        standardLimit,
+        deepLimit,
+        premiumLimit
+      };
+    }
+
+    if (isPremiumQuery && premiumQueries >= premiumLimit) {
+      return {
+        allowed: false,
+        reason: 'premium_limit_reached' as const,
+        remainingCredits: toRemainingCredits(budgetCreditsUsed),
+        standardQueries,
+        followUpQueries,
+        deepQueries,
+        premiumQueries,
+        standardLimit,
+        deepLimit,
+        premiumLimit
+      };
+    }
+
+    if (isStandardNewQuery && standardQueries >= standardLimit) {
       return {
         allowed: false,
         reason: 'standard_limit_reached' as const,
         remainingCredits: toRemainingCredits(budgetCreditsUsed),
         standardQueries,
-        followUpQueries
+        followUpQueries,
+        deepQueries,
+        premiumQueries,
+        standardLimit,
+        deepLimit,
+        premiumLimit
       };
     }
 
@@ -123,7 +211,12 @@ export async function consumePlatformBudget(
         reason: 'follow_up_limit_reached' as const,
         remainingCredits: toRemainingCredits(budgetCreditsUsed),
         standardQueries,
-        followUpQueries
+        followUpQueries,
+        deepQueries,
+        premiumQueries,
+        standardLimit,
+        deepLimit,
+        premiumLimit
       };
     }
 
@@ -133,13 +226,20 @@ export async function consumePlatformBudget(
         reason: 'budget_exhausted' as const,
         remainingCredits: toRemainingCredits(budgetCreditsUsed),
         standardQueries,
-        followUpQueries
+        followUpQueries,
+        deepQueries,
+        premiumQueries,
+        standardLimit,
+        deepLimit,
+        premiumLimit
       };
     }
 
     const nextBudgetCreditsUsed = budgetCreditsUsed + creditsToConsume;
     const nextStandardQueries = standardQueries + (isStandardNewQuery ? 1 : 0);
     const nextFollowUpQueries = followUpQueries + (isFollowUp ? 1 : 0);
+    const nextDeepQueries = deepQueries + (isDeepQuery ? 1 : 0);
+    const nextPremiumQueries = premiumQueries + (isPremiumQuery ? 1 : 0);
 
     tx.set(
       ref,
@@ -148,6 +248,8 @@ export async function consumePlatformBudget(
         budget_credits_used: nextBudgetCreditsUsed,
         standard_queries: nextStandardQueries,
         follow_up_queries: nextFollowUpQueries,
+        deep_queries: nextDeepQueries,
+        premium_queries: nextPremiumQueries,
         updated_at: FieldValue.serverTimestamp()
       },
       { merge: true }
@@ -157,7 +259,12 @@ export async function consumePlatformBudget(
       allowed: true,
       remainingCredits: toRemainingCredits(nextBudgetCreditsUsed),
       standardQueries: nextStandardQueries,
-      followUpQueries: nextFollowUpQueries
+      followUpQueries: nextFollowUpQueries,
+      deepQueries: nextDeepQueries,
+      premiumQueries: nextPremiumQueries,
+      standardLimit,
+      deepLimit,
+      premiumLimit
     };
   });
 }

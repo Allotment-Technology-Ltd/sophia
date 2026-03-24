@@ -151,17 +151,17 @@
       <article class="price-card">
         <h3>Curious Thinker</h3>
         <p class="tier">Free</p>
-        <p>Sample lessons + 2 inquiries/month</p>
+        <p>5 daily standard inquiries on platform capacity (BYOK optional)</p>
       </article>
       <article class="price-card featured">
         <h3>Dedicated Inquirer</h3>
         <p class="tier">Pro</p>
-        <p>Full curriculum + essay feedback</p>
+        <p>10 standard + 3 deep + 1 premium inquiry daily without BYOK</p>
       </article>
       <article class="price-card">
         <h3>Philosopher's Desk</h3>
         <p class="tier">Premium</p>
-        <p>Unlimited learning, deeper analysis, citation integration</p>
+        <p>20 standard + 3 deep + 1 premium inquiry daily without BYOK</p>
       </article>
     </div>
     <a class="btn secondary" href="/pricing">See Plans</a>

@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { DAILY_QUERY_LIMIT, todayUtc } from './rateLimit';
+import {
+  DAILY_QUERY_LIMIT,
+  resolvePlatformDeepSearchLimit,
+  resolvePlatformPremiumSearchLimit,
+  resolvePlatformStandardSearchLimit,
+  todayUtc
+} from './rateLimit';
 
 // ─── todayUtc ──────────────────────────────────────────────────────────────
 
@@ -20,6 +26,48 @@ describe('todayUtc', () => {
 describe('DAILY_QUERY_LIMIT', () => {
   it('is set to 20', () => {
     expect(DAILY_QUERY_LIMIT).toBe(20);
+  });
+});
+
+describe('resolvePlatformStandardSearchLimit', () => {
+  it('returns 5 for free users', () => {
+    expect(resolvePlatformStandardSearchLimit('free')).toBe(5);
+  });
+
+  it('returns 10 for founder users', () => {
+    expect(resolvePlatformStandardSearchLimit('founder')).toBe(10);
+  });
+
+  it('returns 10 for pro users', () => {
+    expect(resolvePlatformStandardSearchLimit('pro')).toBe(10);
+  });
+
+  it('returns 20 for premium users', () => {
+    expect(resolvePlatformStandardSearchLimit('premium')).toBe(20);
+  });
+});
+
+describe('resolvePlatformDeepSearchLimit', () => {
+  it('returns 0 for free users', () => {
+    expect(resolvePlatformDeepSearchLimit('free')).toBe(0);
+  });
+
+  it('returns 3 for founder/pro/premium users', () => {
+    expect(resolvePlatformDeepSearchLimit('founder')).toBe(3);
+    expect(resolvePlatformDeepSearchLimit('pro')).toBe(3);
+    expect(resolvePlatformDeepSearchLimit('premium')).toBe(3);
+  });
+});
+
+describe('resolvePlatformPremiumSearchLimit', () => {
+  it('returns 0 for free users', () => {
+    expect(resolvePlatformPremiumSearchLimit('free')).toBe(0);
+  });
+
+  it('returns 1 for founder/pro/premium users', () => {
+    expect(resolvePlatformPremiumSearchLimit('founder')).toBe(1);
+    expect(resolvePlatformPremiumSearchLimit('pro')).toBe(1);
+    expect(resolvePlatformPremiumSearchLimit('premium')).toBe(1);
   });
 });
 

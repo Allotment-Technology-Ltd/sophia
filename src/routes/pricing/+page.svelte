@@ -409,6 +409,10 @@
         Start free, then upgrade to run more inquiries each month.
         Payments and taxes are managed securely through Paddle.
       </p>
+      <p class="resource-note">
+        Platform-funded daily inquiry allowances (without BYOK): Free 5 standard; Founder/Pro 10
+        standard + 3 deep + 1 premium; Premium 20 standard + 3 deep + 1 premium.
+      </p>
       {#if founderOffer?.active}
         <p class="founder-callout">
           Founder access active: Premium included until {founderExpiryLabel} with
@@ -427,6 +431,7 @@
       <p class="price">£0</p>
       <ul>
         <li>Core SOPHIA query experience</li>
+        <li>Daily platform inquiries: 5 standard runs (quick/standard)</li>
         <li>Monthly source additions: 2 shared references</li>
         <li>Learn quota: 2 micro-lessons + 1 short-answer review / month</li>
         <li>Bring your own API key (BYOK) available with wallet limits</li>
@@ -451,7 +456,7 @@
           <p class="founder-tag">Included with Founder access</p>
         {/if}
         <ul>
-          <li>Higher usage limits</li>
+          <li>Daily platform inquiries: 10 standard + 3 deep + 1 premium (no BYOK required)</li>
           <li>Monthly source additions: 3 shared, or 1 private + 2 shared</li>
           <li>Learn quota: 50 micro-lessons + 3 essay reviews / month</li>
           <li>API wallet with transparent 10% handling fee</li>
@@ -477,7 +482,7 @@
           <p class="founder-tag">Included with Founder access</p>
         {/if}
         <ul>
-          <li>Highest consumer plan allowances</li>
+          <li>Daily platform inquiries: 20 standard + 3 deep + 1 premium (no BYOK required)</li>
           <li>Monthly source additions: 5 shared, or 1 private + 3 shared</li>
           <li>Learn quota: unlimited lessons + 10 essay reviews / month</li>
           <li>Priority access to premium capabilities</li>

@@ -29,22 +29,23 @@ import {
   parseReasoningProvider,
   type ModelProvider
 } from '@restormel/contracts/providers';
-import { consumePlatformBudget, type QueryKind } from '$lib/server/rateLimit';
+import { consumePlatformBudget, type PlatformBudgetPlan, type QueryKind } from '$lib/server/rateLimit';
 import {
-  consumeIngestionEntitlements,
-  getEntitlementSummary
+  consumeIngestionEntitlements
 } from '$lib/server/billing/entitlements';
 import {
   assertByokWalletBalance,
-  ensureWallet,
   computeByokFeeCents,
   debitByokHandlingFee
 } from '$lib/server/billing/wallet';
 import {
+  isFounderOfferActive,
+  summarizeEntitlements,
   TIER_INGESTION_RULES,
   type EntitlementSummary,
   type IngestVisibilityScope
 } from '$lib/server/billing/types';
+import { ensureBillingState } from '$lib/server/billing/store';
 import {
   BILLING_FEATURE_ENABLED,
   BYOK_WALLET_CHARGING_ENABLED,
@@ -958,7 +959,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (credentialMode === 'byok' && !usingByok) {
     return json({ error: 'BYOK credential mode selected, but no active BYOK key is configured for the selected provider.' }, { status: 400 });
   }
-  if (depthMode === 'deep' && !usingByok) {
+  if (depthMode === 'deep' && !usingByok && !uid) {
     return json({ error: 'Deep searches require an active BYOK key. Select your key from Settings and run again.' }, { status: 403 });
   }
   if (credentialMode === 'platform' && modelProvider !== 'auto' && modelProvider !== 'vertex') {
@@ -1092,14 +1093,25 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   let entitlementSummarySnapshot: EntitlementSummary | null = null;
-  let walletSnapshot: Awaited<ReturnType<typeof ensureWallet>> | null = null;
+  let walletSnapshot: { availableCents: number; currency: 'GBP' | 'USD' } | null = null;
+  let platformBudgetPlan: PlatformBudgetPlan = 'free';
 
   if (uid && billingEnabled) {
     try {
-      [entitlementSummarySnapshot, walletSnapshot] = await Promise.all([
-        getEntitlementSummary(uid),
-        ensureWallet(uid)
-      ]);
+      const billingState = await ensureBillingState(uid);
+      entitlementSummarySnapshot = summarizeEntitlements(
+        billingState.effectiveTier,
+        billingState.profile.status,
+        billingState.profile.currency,
+        billingState.entitlements
+      );
+      walletSnapshot = {
+        availableCents: billingState.wallet.available_cents,
+        currency: billingState.wallet.currency
+      };
+      platformBudgetPlan = isFounderOfferActive(billingState.profile.founder_offer)
+        ? 'founder'
+        : billingState.effectiveTier;
     } catch (err) {
       console.warn(
         '[BILLING] Failed to load billing snapshots for analyse:',
@@ -1205,16 +1217,34 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (process.env.NODE_ENV !== 'test' && !cachedEvents && uid && !usingByok) {
     const budget = await consumePlatformBudget(uid, {
       depthMode,
-      queryKind
+      resourceMode,
+      queryKind,
+      plan: platformBudgetPlan
     });
     if (!budget.allowed) {
       if (budget.reason === 'deep_requires_byok') {
         return json({ error: 'Deep searches require an active BYOK key.' }, { status: 403 });
       }
+      if (budget.reason === 'deep_limit_reached') {
+        return json(
+          {
+            error: `Daily deep-search limit reached (${budget.deepLimit}). Add BYOK for additional deep runs.`
+          },
+          { status: 429 }
+        );
+      }
+      if (budget.reason === 'premium_limit_reached') {
+        return json(
+          {
+            error: `Daily premium-search limit reached (${budget.premiumLimit}). Add BYOK for additional premium runs.`
+          },
+          { status: 429 }
+        );
+      }
       if (budget.reason === 'standard_limit_reached') {
         return json(
           {
-            error: 'Daily standard-search limit reached (3). Add BYOK for additional standard/deep runs.'
+            error: `Daily standard-search limit reached (${budget.standardLimit}). Add BYOK for additional standard/deep runs.`
           },
           { status: 429 }
         );
