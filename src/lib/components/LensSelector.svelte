@@ -49,26 +49,23 @@
   const availableOptions = $derived(
     options.filter((option) => allowedByDomain[domain].includes(option.value))
   );
-  const activeOption = $derived(availableOptions.find((option) => option.value === value) ?? availableOptions[0]);
-  const domainHint = $derived(
-    isDomainAuto
-      ? 'Perspective is disabled while reasoning focus is Auto.'
-      : activeOption.description
-  );
+
+  const AUTO_FOCUS_LENS_HINT =
+    'With Auto focus, the topic is inferred from your question; perspective still shapes tone and structure.';
 </script>
 
 <div class="selector-row" aria-label="Reasoning lens selector">
   <label for="lens-select">Perspective (optional)</label>
-  <select id="lens-select" bind:value disabled={disabled || isDomainAuto}>
+  <select id="lens-select" bind:value {disabled}>
     {#each availableOptions as option}
       <option value={option.value}>{option.label}</option>
     {/each}
   </select>
   <span class="hint">
-    {#if !isDomainAuto}
-      Each lens changes SOPHIA output style - not the underlying reasoning quality.
+    {#if isDomainAuto}
+      {AUTO_FOCUS_LENS_HINT}
     {:else}
-      {domainHint}
+      Each lens changes SOPHIA output style — not the underlying reasoning quality.
     {/if}
   </span>
 </div>

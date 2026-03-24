@@ -68,7 +68,7 @@
   .title {
     font-family: var(--font-display);
     font-size: var(--text-d3);
-    font-weight: 300;
+    font-weight: 400;
     color: var(--color-text);
     margin: 0;
   }

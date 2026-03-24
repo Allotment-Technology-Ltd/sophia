@@ -60,7 +60,7 @@
     font-family: var(--font-display);
     font-size: 0.9rem;
     font-style: italic;
-    font-weight: 300;
+    font-weight: 400;
     color: var(--color-muted);
     transition: border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
     animation: hintFadeIn 300ms ease both;

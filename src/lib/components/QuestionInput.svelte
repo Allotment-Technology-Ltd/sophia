@@ -51,7 +51,7 @@
     padding: 16px 20px;
     font-family: var(--font-display);
     font-size: 1rem;
-    font-weight: 300;
+    font-weight: 400;
     color: var(--color-text);
     min-height: 120px;
     resize: vertical;
@@ -60,7 +60,7 @@
   }
 
   .textarea::placeholder {
-    color: var(--color-muted);
+    color: color-mix(in srgb, var(--color-muted) 72%, var(--color-text) 28%);
     font-style: italic;
   }
 
@@ -79,8 +79,8 @@
     bottom: 10px;
     right: 14px;
     font-family: var(--font-ui);
-    font-size: 0.6rem;
-    color: var(--color-dim);
+    font-size: var(--text-label);
+    color: var(--color-muted);
     pointer-events: none;
     user-select: none;
   }

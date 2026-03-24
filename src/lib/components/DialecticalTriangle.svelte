@@ -21,10 +21,10 @@
     onReveal,
   }: Props = $props();
 
-  // SVG coordinate space: viewBox="-60 -70 120 130"
-  // A = (0, -45)   top,          sage    (Analysis)
-  // C = (39, 22)   bottom-right, copper  (Critique)
-  // S = (-39, 22)  bottom-left,  blue    (Synthesis)
+  // SVG coordinate space: viewBox="-68 -76 136 140" (extra padding for vertex labels)
+  // Analysis vertex  = (0, -45)   top,          sage
+  // Critique vertex  = (39, 22)   bottom-right, copper
+  // Synthesis vertex = (-39, 22)  bottom-left,  blue
   // O = (0, 0)     centre,       amber
 
   // Edge lengths in SVG units
@@ -136,7 +136,7 @@
     tabindex={mode === 'complete' ? 0 : undefined}
     width={size}
     height={size}
-    viewBox="-60 -70 120 130"
+    viewBox="-68 -76 136 140"
     fill="none"
     class="tri-svg"
     class:is-complete={mode === 'complete'}
@@ -332,14 +332,14 @@
       filter={isSynthesisActive || isSynthesisDone || (mode === 'complete' && !isQuickDepth) ? 'url(#glow-blue-dt)' : undefined}
     />
 
-    <!-- Labels: single-letter in loading/complete, hidden in logo -->
+    <!-- Vertex labels: loading/complete only; hidden in logo -->
     {#if mode !== 'logo'}
-      <text class="lbl" x="0" y="-52" text-anchor="middle"
-        fill="var(--color-sage)" opacity={opacityA}>A</text>
-      <text class="lbl" x="46" y="27" text-anchor="start"
-        fill="var(--color-copper)" opacity={opacityC}>C</text>
-      <text class="lbl" x="-46" y="27" text-anchor="end"
-        fill="var(--color-blue)" opacity={opacityS}>S</text>
+      <text class="lbl" x="0" y="-56" text-anchor="middle"
+        fill="var(--color-sage)" opacity={opacityA}>Analysis</text>
+      <text class="lbl" x="50" y="30" text-anchor="start"
+        fill="var(--color-copper)" opacity={opacityC}>Critique</text>
+      <text class="lbl" x="-50" y="30" text-anchor="end"
+        fill="var(--color-blue)" opacity={opacityS}>Synthesis</text>
     {/if}
 
     <!-- Centre dot skeleton always visible -->
@@ -423,8 +423,9 @@
 
   .lbl {
     font-family: var(--font-ui);
-    font-size: 5px;
-    letter-spacing: 0.12em;
+    font-size: 4.25px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
     transition: opacity 0.4s ease;
   }
 

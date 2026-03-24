@@ -28,8 +28,43 @@ function buildFingerprintLast8(apiKey: string): string {
   return normalized.slice(-8);
 }
 
-function toIso(value: Timestamp | null | undefined): string | null {
-  return value?.toDate?.()?.toISOString() ?? null;
+function toIso(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+  if (value instanceof Timestamp) {
+    const d = value.toDate();
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  if (typeof (value as Timestamp).toDate === 'function') {
+    const d = (value as Timestamp).toDate();
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  const sec =
+    typeof (value as { seconds?: unknown }).seconds === 'number'
+      ? (value as { seconds: number }).seconds
+      : typeof (value as { _seconds?: unknown })._seconds === 'number'
+        ? (value as { _seconds: number })._seconds
+        : null;
+  if (sec != null) {
+    return new Date(sec * 1000).toISOString();
+  }
+  return null;
+}
+
+/** Every enabled BYOK slot as not configured — used when Firestore cannot be reached (e.g. local dev without ADC). */
+export function emptyNotConfiguredByokStatuses(): ByokProviderStatus[] {
+  return getEnabledByokProviders().map((provider) => ({
+    provider,
+    configured: false,
+    status: 'not_configured' as const,
+    fingerprint_last8: null,
+    validated_at: null,
+    updated_at: null,
+    last_error: null
+  }));
 }
 
 export async function listByokProviderStatuses(uid: string): Promise<ByokProviderStatus[]> {

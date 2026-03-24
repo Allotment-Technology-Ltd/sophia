@@ -203,6 +203,13 @@
     return body;
   }
 
+  function mergeByokProviderFromResponse(provider: ByokProvider, patch: unknown): void {
+    if (!patch || typeof patch !== 'object') return;
+    const row = patch as Partial<ByokProviderStatus>;
+    if (row.provider !== provider) return;
+    byokProviders = byokProviders.map((s) => (s.provider === provider ? { ...s, ...row } : s));
+  }
+
   async function refreshByokProviders(): Promise<void> {
     if (!currentUser) {
       byokProviders = [];
@@ -263,6 +270,7 @@
         [provider]: ''
       };
       await refreshByokProviders();
+      mergeByokProviderFromResponse(provider, body?.provider);
       const ok = body?.validation?.ok === true;
       byokMessage = ok
         ? `${BYOK_PROVIDER_LABELS[provider]} key saved and validated.`
@@ -284,6 +292,7 @@
       });
       const body = await parseResponseOrThrow(response);
       await refreshByokProviders();
+      mergeByokProviderFromResponse(provider, body?.provider);
       const ok = body?.validation?.ok === true;
       byokMessage = ok
         ? `${BYOK_PROVIDER_LABELS[provider]} credential is valid.`
@@ -754,6 +763,7 @@
                   class="byok-input"
                   type="password"
                   placeholder={BYOK_PROVIDER_PLACEHOLDERS[provider]}
+                  autocomplete="off"
                   value={byokInputs[provider]}
                   oninput={(event) => {
                     byokInputs = {
@@ -763,30 +773,32 @@
                   }}
                   disabled={byokSaving[provider]}
                 />
-                <button
-                  class="byok-btn"
-                  type="button"
-                  onclick={() => saveByokKey(provider)}
-                  disabled={byokSaving[provider]}
-                >
-                  {byokSaving[provider] ? 'Saving...' : 'Save key'}
-                </button>
-                <button
-                  class="byok-btn secondary"
-                  type="button"
-                  onclick={() => validateByokKey(provider)}
-                  disabled={byokSaving[provider] || !status.configured}
-                >
-                  Validate
-                </button>
-                <button
-                  class="byok-btn danger"
-                  type="button"
-                  onclick={() => revokeByokKey(provider)}
-                  disabled={byokSaving[provider] || !status.configured}
-                >
-                  Revoke
-                </button>
+                <div class="byok-provider-action-buttons">
+                  <button
+                    class="byok-btn"
+                    type="button"
+                    onclick={() => saveByokKey(provider)}
+                    disabled={byokSaving[provider]}
+                  >
+                    {byokSaving[provider] ? 'Saving...' : 'Save key'}
+                  </button>
+                  <button
+                    class="byok-btn secondary"
+                    type="button"
+                    onclick={() => validateByokKey(provider)}
+                    disabled={byokSaving[provider] || !status.configured}
+                  >
+                    Validate
+                  </button>
+                  <button
+                    class="byok-btn danger"
+                    type="button"
+                    onclick={() => revokeByokKey(provider)}
+                    disabled={byokSaving[provider] || !status.configured}
+                  >
+                    Revoke
+                  </button>
+                </div>
               </div>
             </div>
           {/each}
@@ -1195,7 +1207,13 @@
 
   .byok-provider-actions {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    gap: 10px;
+    align-items: stretch;
+  }
+
+  .byok-provider-action-buttons {
+    display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     align-items: center;
   }
@@ -1203,6 +1221,7 @@
   .byok-input {
     min-width: 0;
     width: 100%;
+    box-sizing: border-box;
     border: 1px solid var(--color-border);
     border-radius: 4px;
     background: var(--color-surface);
@@ -1315,8 +1334,14 @@
       flex-direction: column;
       align-items: stretch;
     }
-    .byok-provider-actions {
-      grid-template-columns: 1fr;
+    .byok-provider-action-buttons {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .byok-provider-action-buttons .byok-btn {
+      width: 100%;
+      text-align: center;
     }
     .sources-head {
       flex-direction: column;

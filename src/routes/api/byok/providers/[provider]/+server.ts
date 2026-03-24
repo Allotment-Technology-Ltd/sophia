@@ -55,14 +55,56 @@ export const PUT: RequestHandler = async ({ locals, request, params }) => {
     });
   }
 
-  await upsertByokProviderCredential(uid, provider, apiKey);
-  const validation = await validateProviderApiKey(provider, apiKey);
-  await setByokProviderValidationStatus(uid, provider, {
-    success: validation.ok,
-    errorMessage: validation.error ?? null
-  });
+  try {
+    await upsertByokProviderCredential(uid, provider, apiKey);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error('[BYOK PUT] upsert failed:', detail);
+    return problemJson({
+      status: 503,
+      title: 'Unable to save BYOK credential',
+      detail: `${detail} — Check Firestore access (GOOGLE_APPLICATION_CREDENTIALS / secrets/*.json via pnpm dev) and that rules allow writes to users/{uid}/byokProviders.`,
+      requestId
+    });
+  }
 
-  const providers = await listByokProviderStatuses(uid);
+  let validation: { ok: boolean; error?: string };
+  try {
+    validation = await validateProviderApiKey(provider, apiKey);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error('[BYOK PUT] validate failed:', detail);
+    validation = { ok: false, error: detail };
+  }
+
+  try {
+    await setByokProviderValidationStatus(uid, provider, {
+      success: validation.ok,
+      errorMessage: validation.error ?? null
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error('[BYOK PUT] set validation status failed:', detail);
+    return problemJson({
+      status: 503,
+      title: 'Credential saved but status update failed',
+      detail,
+      requestId
+    });
+  }
+
+  let providers: Awaited<ReturnType<typeof listByokProviderStatuses>>;
+  try {
+    providers = await listByokProviderStatuses(uid);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return problemJson({
+      status: 503,
+      title: 'Unable to list BYOK providers after save',
+      detail,
+      requestId
+    });
+  }
   const current = providers.find((item) => item.provider === provider);
 
   return json(

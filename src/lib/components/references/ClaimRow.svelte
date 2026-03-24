@@ -40,7 +40,7 @@
 
   .claim-text {
     font-family: var(--font-display);
-    font-weight: 300;
+    font-weight: 400;
     font-size: var(--text-body);
     line-height: var(--leading-body);
     color: var(--color-text);

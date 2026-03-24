@@ -67,7 +67,7 @@
     padding: 12px 16px;
     font-family: var(--font-display);
     font-size: 1rem;
-    font-weight: 300;
+    font-weight: 400;
     color: var(--color-text);
     min-height: 64px;
     resize: vertical;

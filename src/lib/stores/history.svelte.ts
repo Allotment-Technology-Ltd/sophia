@@ -178,7 +178,10 @@ function buildCacheKey(query: string, options?: CacheLookupOptions): string {
   if (!options) return normalizeQuery(query);
   const depth = options.depthMode ?? 'standard';
   const modelProvider = options.modelProvider ?? 'auto';
-  const modelId = options.modelId?.trim().toLowerCase() ?? 'auto';
+  const modelId =
+    String(options.modelId ?? '')
+      .trim()
+      .toLowerCase() || 'auto';
   const domainMode = options.domainMode ?? 'auto';
   const domain = normalizeDomain(domainMode, options.domain);
   const resourceMode = options.resourceMode ?? 'standard';
@@ -287,8 +290,10 @@ function createHistoryStore() {
         if (byProvider.length > 0) narrowed = byProvider;
       }
 
-      if (options?.modelId?.trim()) {
-        const expectedModelId = options.modelId.trim().toLowerCase();
+      if (String(options?.modelId ?? '').trim()) {
+        const expectedModelId = String(options?.modelId ?? '')
+          .trim()
+          .toLowerCase();
         const byModel = narrowed.filter(
           (entry) => (entry.metadata.selected_model_id ?? '').trim().toLowerCase() === expectedModelId
         );

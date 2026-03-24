@@ -9,7 +9,8 @@
     "infra"
   ],
   "scripts": {
-    "dev": "vite dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:vite": "vite dev",
     "dev:prod-db": "bash scripts/dev-prod-db.sh",
     "build": "vite build",
     "preview": "vite preview",
@@ -28,6 +29,7 @@
     "ingest:nightly": "tsx --env-file=.env scripts/ingest-nightly-links.ts",
     "health": "curl -s --max-time 30 https://usesophia.app/api/health | jq .",
     "restormel:route-steps": "tsx --env-file=.env scripts/restormel/route-steps.ts",
+    "restormel:keys-catalog-diff": "tsx scripts/restormel/keys-catalog-diff.ts",
     "infra:preview": "cd infra && pulumi preview --stack production",
     "infra:up": "cd infra && pulumi up --stack production",
     "infra:refresh": "cd infra && pulumi refresh --stack production",

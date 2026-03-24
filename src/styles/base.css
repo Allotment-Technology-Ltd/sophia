@@ -14,7 +14,7 @@ html {
   color: var(--color-text);
   font-family: var(--font-display);
   font-size: 16px;
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.85;
   -webkit-font-smoothing: antialiased;
 }

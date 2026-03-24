@@ -121,8 +121,35 @@ function decryptLocal(secret: EncryptedSecret): string {
   return plaintext.toString('utf8');
 }
 
+let loggedDevLocalEncryptHint = false;
+
+function shouldUseKmsForEncrypt(): string | undefined {
+  const keyName = process.env.BYOK_KMS_KEY_NAME?.trim();
+  if (!keyName) return undefined;
+
+  const forceLocal =
+    process.env.BYOK_FORCE_LOCAL_ENCRYPTION === '1' ||
+    process.env.BYOK_FORCE_LOCAL_ENCRYPTION === 'true';
+  if (forceLocal) return undefined;
+
+  const isNonProd = process.env.NODE_ENV !== 'production';
+  const useKmsInDev =
+    process.env.BYOK_USE_KMS_IN_DEV === '1' || process.env.BYOK_USE_KMS_IN_DEV === 'true';
+  if (isNonProd && !useKmsInDev) {
+    if (!loggedDevLocalEncryptHint) {
+      loggedDevLocalEncryptHint = true;
+      console.info(
+        '[BYOK] Using local AES for new credentials (Cloud KMS disabled in non-production). Set BYOK_USE_KMS_IN_DEV=true to encrypt via KMS locally, or BYOK_FORCE_LOCAL_ENCRYPTION=true for preview builds.'
+      );
+    }
+    return undefined;
+  }
+
+  return keyName;
+}
+
 export async function encryptByokSecret(plaintext: string): Promise<EncryptedSecret> {
-  const kmsKeyName = process.env.BYOK_KMS_KEY_NAME?.trim();
+  const kmsKeyName = shouldUseKmsForEncrypt();
   if (kmsKeyName) {
     const ciphertext = await callKmsEncrypt(kmsKeyName, Buffer.from(plaintext, 'utf8'));
     return {

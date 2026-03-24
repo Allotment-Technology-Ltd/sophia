@@ -3,8 +3,9 @@ import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { loadServerEnv } from './env';
 
-// On Cloud Run, Application Default Credentials work automatically
-// Otherwise, set GOOGLE_APPLICATION_CREDENTIALS env var pointing to service account JSON
+// On Cloud Run, Application Default Credentials work automatically.
+// Local: `pnpm dev` runs scripts/dev.mjs, which resolves GOOGLE_APPLICATION_CREDENTIALS from .env
+// or conventional paths under secrets/ — see .env.example.
 loadServerEnv();
 
 function resolveFirebaseProjectId(): string | undefined {

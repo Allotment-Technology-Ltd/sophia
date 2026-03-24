@@ -73,7 +73,7 @@
     padding: 12px 16px;
     font-family: var(--font-display);
     font-size: 0.9rem;
-    font-weight: 300;
+    font-weight: 400;
     color: var(--color-muted);
     background: none;
     border: none;

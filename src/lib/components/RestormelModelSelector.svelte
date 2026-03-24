@@ -58,17 +58,19 @@
 
 <div class="restormel-model-shell" class:stacked={layout === 'stacked'} aria-label="Model selector">
   <div class="restormel-model-header">
-    <span class="restormel-model-label">Choose your model</span>
-    <button
-      type="button"
-      class="restormel-auto-btn"
-      class:active={value === 'auto'}
-      onclick={handleAutoSelect}
-      disabled={disabled}
-      aria-pressed={value === 'auto'}
-    >
-      Use automatic routing
-    </button>
+    <div class="restormel-model-header-main">
+      <span class="restormel-model-label">Choose your model</span>
+      <button
+        type="button"
+        class="restormel-auto-btn"
+        class:active={value === 'auto'}
+        onclick={handleAutoSelect}
+        disabled={disabled}
+        aria-pressed={value === 'auto'}
+      >
+        Use automatic routing
+      </button>
+    </div>
   </div>
 
   <div class="restormel-model-summary" role="status" aria-live="polite">
@@ -126,9 +128,15 @@
 
   .restormel-model-header {
     display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+  }
+
+  .restormel-model-header-main {
+    display: flex;
     flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
     gap: 8px 12px;
   }
 
@@ -141,6 +149,9 @@
 
   .restormel-auto-btn,
   .restormel-retry-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border: 1px solid var(--color-border);
     background: transparent;
     color: var(--color-text);
@@ -228,11 +239,6 @@
   }
 
   @media (max-width: 720px) {
-    .restormel-model-header {
-      align-items: flex-start;
-      flex-direction: column;
-    }
-
     .restormel-auto-btn {
       width: 100%;
       justify-content: center;

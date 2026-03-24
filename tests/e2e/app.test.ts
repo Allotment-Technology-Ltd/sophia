@@ -53,16 +53,13 @@ test.describe('Authenticated onboarding flow', () => {
     await expect(page.getByText('Reasoning Focus')).toBeVisible();
   });
 
-  test('simple flow reveals synthesis then overview then scholar view', async ({ page }) => {
+  test('simple flow reveals synthesis then scholar view', async ({ page }) => {
     const input = page.getByPlaceholder(/ask a question/i).first();
     await expect(input).toBeVisible({ timeout: 10_000 });
     await input.fill('Is suffering necessary for meaning?');
 
     await page.getByRole('button', { name: /begin inquiry/i }).click();
     await expect(page.getByTestId('simple-synthesis-card')).toBeVisible({ timeout: 120_000 });
-
-    await page.getByTestId('see-reasoning-btn').click();
-    await expect(page.getByTestId('simple-overview-card')).toBeVisible({ timeout: 10_000 });
 
     await page.getByTestId('open-scholar-btn').click();
     await expect(page.getByRole('navigation', { name: 'Pass navigation' })).toBeVisible({ timeout: 10_000 });

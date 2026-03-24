@@ -43,7 +43,20 @@ export const POST: RequestHandler = async ({ locals, request, params }) => {
     });
   }
 
-  const apiKey = await getByokProviderApiKey(uid, provider, { allowPending: true, allowInvalid: true });
+  let apiKey: string | null;
+  try {
+    apiKey = await getByokProviderApiKey(uid, provider, { allowPending: true, allowInvalid: true });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error('[BYOK validate] decrypt/load failed:', detail);
+    return problemJson({
+      status: 503,
+      title: 'Unable to read stored BYOK credential',
+      detail: `${detail} — If this key was encrypted with Cloud KMS, set BYOK_USE_KMS_IN_DEV=true or decrypt in an environment with KMS access.`,
+      requestId
+    });
+  }
+
   if (!apiKey) {
     return problemJson({
       status: 404,
@@ -53,13 +66,41 @@ export const POST: RequestHandler = async ({ locals, request, params }) => {
     });
   }
 
-  const validation = await validateProviderApiKey(provider, apiKey);
-  await setByokProviderValidationStatus(uid, provider, {
-    success: validation.ok,
-    errorMessage: validation.error ?? null
-  });
+  let validation: { ok: boolean; error?: string };
+  try {
+    validation = await validateProviderApiKey(provider, apiKey);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    validation = { ok: false, error: detail };
+  }
 
-  const providers = await listByokProviderStatuses(uid);
+  try {
+    await setByokProviderValidationStatus(uid, provider, {
+      success: validation.ok,
+      errorMessage: validation.error ?? null
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return problemJson({
+      status: 503,
+      title: 'Unable to update validation status',
+      detail,
+      requestId
+    });
+  }
+
+  let providers: Awaited<ReturnType<typeof listByokProviderStatuses>>;
+  try {
+    providers = await listByokProviderStatuses(uid);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return problemJson({
+      status: 503,
+      title: 'Unable to list BYOK providers',
+      detail,
+      requestId
+    });
+  }
   const current = providers.find((item) => item.provider === provider);
 
   return json(

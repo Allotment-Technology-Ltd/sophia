@@ -53,7 +53,7 @@
 
   .brand-name {
     font-family: var(--font-display);
-    font-weight: 300;
+    font-weight: 500;
     font-size: 1.1rem;
     letter-spacing: 0.08em;
     color: var(--color-text);
@@ -67,7 +67,7 @@
 
   .btn-ghost {
     font-family: var(--font-ui);
-    font-size: 0.69rem;
+    font-size: var(--text-ui);
     letter-spacing: 0.10em;
     text-transform: uppercase;
     color: var(--color-muted);
@@ -86,7 +86,7 @@
 
   .nav-link {
     font-family: var(--font-ui);
-    font-size: 0.69rem;
+    font-size: var(--text-ui);
     letter-spacing: 0.05em;
     color: var(--color-muted);
     background: none;

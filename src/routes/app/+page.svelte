@@ -52,6 +52,7 @@
   } from '$lib/restormel/model-selector';
   import {
     PROVIDER_UI_META,
+    REASONING_PROVIDER_ORDER,
     getModelProviderLabel,
     isReasoningProvider,
     parseReasoningProvider,
@@ -127,10 +128,15 @@
   let byokProviders = $state<ByokProviderStatus[]>([]);
   let keySource = $state<QueryKeySource>('platform');
   let byokStatusError = $state('');
+  let byokStatusWarning = $state('');
   let modelOptionsLoading = $state(false);
   let modelOptionsError = $state('');
   let modelPolicyFilteringActive = $state(false);
   let modelOptionsDegraded = $state(false);
+  /** Bumps on each refresh so stale async work does not clobber state or leave loading stuck. */
+  let modelOptionsRefreshGen = 0;
+  /** Invalidates in-flight model-list fetches when the effect re-runs or cleans up (avoids perpetual loading). */
+  let modelOptionsRefreshTicket = 0;
   let selectedModelValue = $state<string>('auto');
   let customModelId = $state('');
   let previousKeySource: QueryKeySource = 'platform';
@@ -148,13 +154,11 @@
   let ingestionBillingLoading = $state(false);
   let ingestionBillingError = $state('');
   let selectedDomain = $state<'auto' | 'ethics' | 'philosophy_of_mind'>('auto');
-  const domainSelectorEnabled =
-    (import.meta.env.PUBLIC_ENABLE_DOMAIN_OVERRIDE_UI ?? 'true').toLowerCase() === 'true';
   let activeTab = $state<TabId>('references');
   let settingsSubTab = $state<SettingsSubTab>('general');
   let activeResultPass = $state<'analysis' | 'critique' | 'synthesis' | 'verification'>('analysis');
   let autoFocusFirstPass = $state(true);
-  type SimpleLayer = 'input' | 'synthesis' | 'overview' | 'scholar';
+  type SimpleLayer = 'input' | 'synthesis' | 'scholar';
   let simpleLayer = $state<SimpleLayer>('input');
   let advancedOptionsOpen = $state(false);
   let trackedSimpleLayer = '';
@@ -225,6 +229,11 @@
       perplexity: 'Deep (~65-120s)'
     }
   };
+
+  function safeModelProviderLabel(provider: string | undefined | null): string {
+    if (!provider || provider === 'auto') return 'Auto';
+    return isReasoningProvider(provider) ? getModelProviderLabel(provider) : provider;
+  }
 
   const DOMAIN_ALLOWED_LENSES: Record<'auto' | 'ethics' | 'philosophy_of_mind', string[]> = {
     auto: ['', 'balanced_dialogue', 'socratic', 'realist_pragmatist', 'continental'],
@@ -329,20 +338,6 @@
     return selectedLens || undefined;
   }
 
-  function summarizePassContent(text: string, maxChars = 260): string {
-    const normalized = text
-      .replace(/```[\s\S]*?```/g, ' ')
-      .replace(/#{1,6}\s+/g, '')
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-      .replace(/[*_`>\-]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (!normalized) return 'Summary unavailable while this pass is still forming.';
-    const sentence = normalized.match(/[^.!?]+[.!?]?/)?.[0]?.trim() ?? normalized;
-    if (sentence.length <= maxChars) return sentence;
-    return `${sentence.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
-  }
-
   async function loadByokProviders(token: string): Promise<void> {
     try {
       const response = await fetch('/api/byok/providers', {
@@ -353,8 +348,13 @@
       const incoming = Array.isArray(payload.providers) ? payload.providers as ByokProviderStatus[] : [];
       byokProviders = incoming;
       byokStatusError = '';
+      byokStatusWarning =
+        payload.degraded === true && typeof payload.detail === 'string' && payload.detail.trim()
+          ? payload.detail.trim()
+          : '';
     } catch (err) {
       byokProviders = [];
+      byokStatusWarning = '';
       byokStatusError = err instanceof Error ? err.message : 'Unable to load BYOK providers';
     }
   }
@@ -390,21 +390,43 @@
     }
   }
 
+  const ALLOWED_MODELS_FETCH_TIMEOUT_MS = 25_000;
+  /** Clears stuck loading if the model-refresh effect abort/restart races or fetch hangs past all timeouts. */
+  const MODEL_OPTIONS_REFRESH_SAFETY_MS = 45_000;
+
   async function loadModelOptions(
     token: string | null,
-    source: QueryKeySource
-  ): Promise<AllowedModelsResponse> {
+    source: QueryKeySource,
+    signal: AbortSignal | undefined,
+    gen: number
+  ): Promise<void> {
     const params = new URLSearchParams();
     params.set('credential_mode', source === 'platform' ? 'platform' : 'byok');
     if (source !== 'platform') {
       params.set('byok_provider', source);
     }
     const url = `/api/allowed-models?${params.toString()}`;
-    const response = await fetch(url, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined
-    });
+
+    const fetchController = new AbortController();
+    const timeoutId = window.setTimeout(() => fetchController.abort(), ALLOWED_MODELS_FETCH_TIMEOUT_MS);
+    const onExternalAbort = () => fetchController.abort();
+    signal?.addEventListener('abort', onExternalAbort);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        signal: fetchController.signal
+      });
+    } finally {
+      window.clearTimeout(timeoutId);
+      signal?.removeEventListener('abort', onExternalAbort);
+    }
+
+    if (modelOptionsRefreshGen !== gen) return;
     if (!response.ok) throw new Error(`status ${response.status}`);
-    const payload = await response.json() as AllowedModelsResponse;
+    const payload = (await response.json()) as AllowedModelsResponse;
+    if (modelOptionsRefreshGen !== gen) return;
     const fetched = Array.isArray(payload.models) ? payload.models : [];
     modelOptions = fetched
       .filter((item) => item?.id && isReasoningProvider(item?.provider))
@@ -421,23 +443,42 @@
     modelPolicyFilteringActive = payload.filtering?.active === true;
     modelOptionsDegraded = payload.filtering?.degraded === true;
     modelOptionsError = payload.error ?? '';
-    return payload;
   }
 
   async function refreshModelOptions(
     token: string | null,
-    source: QueryKeySource
+    source: QueryKeySource,
+    signal?: AbortSignal
   ): Promise<void> {
+    const gen = ++modelOptionsRefreshGen;
     modelOptionsLoading = true;
+    const safetyId = window.setTimeout(() => {
+      if (modelOptionsRefreshGen !== gen) return;
+      if (!modelOptionsLoading) return;
+      modelOptionsLoading = false;
+      modelOptionsDegraded = true;
+      if (!modelOptionsError) {
+        modelOptionsError =
+          'Model list is taking too long. Automatic routing still works — try Retry or check Restormel/network configuration.';
+      }
+    }, MODEL_OPTIONS_REFRESH_SAFETY_MS);
     try {
-      await loadModelOptions(token, source);
-    } catch {
+      await loadModelOptions(token, source, signal, gen);
+    } catch (e) {
+      if (modelOptionsRefreshGen !== gen) return;
+      const aborted =
+        (e instanceof DOMException && e.name === 'AbortError') ||
+        (e instanceof Error && e.name === 'AbortError');
+      if (aborted) return;
       modelOptions = [];
       modelPolicyFilteringActive = false;
       modelOptionsDegraded = true;
       modelOptionsError = 'Policy-filtered models are temporarily unavailable. Automatic routing still works.';
     } finally {
-      modelOptionsLoading = false;
+      window.clearTimeout(safetyId);
+      if (modelOptionsRefreshGen === gen) {
+        modelOptionsLoading = false;
+      }
     }
   }
 
@@ -449,7 +490,6 @@
           await loadByokProviders(token);
           await refreshIngestionBilling(token);
         }
-        await refreshModelOptions(token, keySource);
       } catch {
         modelOptions = [];
         modelPolicyFilteringActive = false;
@@ -465,12 +505,6 @@
       .map((provider) => provider.provider)
       .filter((provider): provider is ReasoningProvider => isReasoningProvider(provider))
   );
-  const queryKeyProviderOrder = $derived.by(() =>
-    byokProviders
-      .map((provider) => provider.provider)
-      .filter((provider): provider is ReasoningProvider => isReasoningProvider(provider))
-  );
-
   const hasAnyActiveByok = $derived(activeByokProviders.length > 0);
 
   const canRunDeepWithCurrentKey = $derived.by(() => {
@@ -495,7 +529,7 @@
 
   $effect(() => {
     if (keySource === 'platform') return;
-    if (!queryKeyProviderOrder.includes(keySource)) {
+    if (!REASONING_PROVIDER_ORDER.includes(keySource)) {
       keySource = 'platform';
       return;
     }
@@ -541,17 +575,24 @@
 
   $effect(() => {
     if (typeof window === 'undefined') return;
-    let cancelled = false;
-    (async () => {
-      const token = await getIdToken();
-      try {
-        if (!cancelled) {
-          await refreshModelOptions(token, keySource);
+    const source = keySource;
+    const ticket = ++modelOptionsRefreshTicket;
+    const ac = new AbortController();
+    queueMicrotask(() => {
+      void (async () => {
+        try {
+          if (ticket !== modelOptionsRefreshTicket || ac.signal.aborted) return;
+          const token = await getIdToken();
+          if (ticket !== modelOptionsRefreshTicket || ac.signal.aborted) return;
+          await refreshModelOptions(token, source, ac.signal);
+        } catch {
+          /* refreshModelOptions sets degraded state; swallow unexpected throws */
         }
-      } catch {}
-    })();
+      })();
+    });
     return () => {
-      cancelled = true;
+      ac.abort();
+      modelOptionsRefreshTicket += 1;
     };
   });
 
@@ -587,20 +628,6 @@
       verification: lastAssistantMsg?.passes?.verification ?? ''
     };
   });
-  let displayedStructuredPasses = $derived.by(() => {
-    if (conversation.isLoading) {
-      return {
-        analysis: conversation.currentStructuredPasses.analysis,
-        critique: conversation.currentStructuredPasses.critique,
-        synthesis: conversation.currentStructuredPasses.synthesis
-      };
-    }
-    return {
-      analysis: lastAssistantMsg?.structuredPasses?.analysis,
-      critique: lastAssistantMsg?.structuredPasses?.critique,
-      synthesis: lastAssistantMsg?.structuredPasses?.synthesis
-    };
-  });
   let simplePrimaryPass = $derived.by(() => {
     if (displayedPasses.synthesis) return 'synthesis' as const;
     if (displayedPasses.critique) return 'critique' as const;
@@ -616,22 +643,6 @@
     if (selectedDepth === 'quick') return Boolean(displayedPasses.analysis);
     if (displayedPasses.synthesis) return true;
     return !conversation.isLoading && Boolean(simplePrimaryContent);
-  });
-  let simpleOverviewSummaries = $derived.by(() => {
-    const analysisSummary =
-      displayedStructuredPasses.analysis?.sections?.[0]?.content ??
-      summarizePassContent(displayedPasses.analysis);
-    const critiqueSummary =
-      displayedStructuredPasses.critique?.sections?.[0]?.content ??
-      summarizePassContent(displayedPasses.critique);
-    const synthesisSummary =
-      displayedStructuredPasses.synthesis?.sections?.[0]?.content ??
-      summarizePassContent(displayedPasses.synthesis);
-    return {
-      analysis: summarizePassContent(analysisSummary),
-      critique: summarizePassContent(critiqueSummary),
-      synthesis: summarizePassContent(synthesisSummary)
-    };
   });
   let hasDisplayedCorePass = $derived.by(() =>
     Boolean(displayedPasses.analysis || displayedPasses.critique || displayedPasses.synthesis)
@@ -693,7 +704,7 @@
     const base = LOADING_STATUS[conversation.currentPass] ?? 'Thinking…';
     const provider = conversation.passModels[conversation.currentPass]?.provider ?? conversation.loadingModelProvider;
     if (provider && provider !== 'vertex' && provider !== 'auto' && (conversation.currentPass === 'critique' || conversation.currentPass === 'synthesis')) {
-      return `${base} ${getModelProviderLabel(provider)} deep reasoning can take longer.`;
+      return `${base} ${safeModelProviderLabel(provider)} deep reasoning can take longer.`;
     }
     return base;
   });
@@ -705,20 +716,26 @@
   let loadingModelLabel = $derived.by(() => {
     const passModel = conversation.currentPass ? conversation.passModels[conversation.currentPass] : undefined;
     if (passModel) {
-      return `${getModelProviderLabel(passModel.provider)} · ${passModel.modelId}`;
+      const mid = passModel.modelId ? ` · ${passModel.modelId}` : '';
+      return `${safeModelProviderLabel(passModel.provider)}${mid}`;
     }
     if (conversation.loadingModelProvider && conversation.loadingModelProvider !== 'auto') {
-      return `${getModelProviderLabel(conversation.loadingModelProvider)}${conversation.loadingModelId ? ` · ${conversation.loadingModelId}` : ''}`;
+      return `${safeModelProviderLabel(conversation.loadingModelProvider)}${conversation.loadingModelId ? ` · ${conversation.loadingModelId}` : ''}`;
     }
     return 'Auto';
   });
 
   let loadingDepthLabel = $derived.by(() => {
     const passModel = conversation.currentPass ? conversation.passModels[conversation.currentPass] : undefined;
-    const provider =
+    const raw =
       passModel?.provider ??
-      (conversation.loadingModelProvider === 'auto' ? 'auto' : conversation.loadingModelProvider);
-    return DEPTH_LABELS[selectedDepth][provider];
+      (conversation.loadingModelProvider === 'auto' || !conversation.loadingModelProvider
+        ? 'auto'
+        : conversation.loadingModelProvider);
+    const row = DEPTH_LABELS[selectedDepth];
+    const key: 'auto' | ReasoningProvider =
+      raw === 'auto' || isReasoningProvider(raw) ? raw : 'auto';
+    return row[key] ?? row.auto;
   });
 
   let loadingWorkingLines = $derived.by(() => {
@@ -1198,10 +1215,6 @@
     resetQuoteCardState();
   }
 
-  function openSimpleOverview(): void {
-    simpleLayer = 'overview';
-  }
-
   function openScholarView(): void {
     simpleLayer = 'scholar';
   }
@@ -1397,12 +1410,8 @@
 
   // ── Effects ───────────────────────────────────────────────────────────────
   $effect(() => {
-    if (selectedDomain === 'auto' && selectedLens !== '') {
-      selectedLens = '';
-      return;
-    }
     const allowed = DOMAIN_ALLOWED_LENSES[selectedDomain];
-    if (allowed && !allowed.includes(selectedLens)) {
+    if (allowed && selectedLens !== '' && !allowed.includes(selectedLens)) {
       selectedLens = '';
     }
   });
@@ -1413,11 +1422,15 @@
     trackedSimpleLayer = simpleLayer;
   });
 
+  let wasQueryScreen = $state(false);
   $effect(() => {
-    if (!isQueryState) return;
-    simpleLayer = 'input';
-    advancedOptionsOpen = false;
-    resetQuoteCardState();
+    const onQuery = isQueryState;
+    if (onQuery && !wasQueryScreen) {
+      simpleLayer = 'input';
+      advancedOptionsOpen = false;
+      resetQuoteCardState();
+    }
+    wasQueryScreen = onQuery;
   });
 
   $effect(() => {
@@ -1757,9 +1770,9 @@
                       <label for="key-source-select">Choose your key</label>
                       <select id="key-source-select" bind:value={keySource}>
                         <option value="platform">Platform key (limited)</option>
-                        {#each queryKeyProviderOrder as provider}
+                        {#each REASONING_PROVIDER_ORDER as provider (provider)}
                           <option value={provider} disabled={!activeByokProviders.includes(provider)}>
-                            My {PROVIDER_UI_META[provider].label} key {!activeByokProviders.includes(provider) ? '(not active)' : ''}
+                            My {PROVIDER_UI_META[provider]?.label ?? provider} key {!activeByokProviders.includes(provider) ? '(not active)' : ''}
                           </option>
                         {/each}
                       </select>
@@ -1822,6 +1835,9 @@
                       </button>
                     </div>
                   </div>
+                  {#if byokStatusWarning}
+                    <p class="key-source-warning">{byokStatusWarning}</p>
+                  {/if}
                   {#if byokStatusError}
                     <p class="key-source-error">Unable to refresh BYOK status: {byokStatusError}</p>
                   {/if}
@@ -1832,16 +1848,14 @@
                   <p class="frame-copy">
                     Adjust reasoning depth, domain focus, style lens, or data sources.
                   </p>
-                  {#if domainSelectorEnabled}
-                    <div class="domain-row">
-                      <label for="domain-select">Reasoning Focus</label>
-                      <select id="domain-select" bind:value={selectedDomain}>
-                        <option value="auto">Auto</option>
-                        <option value="ethics">Ethics</option>
-                        <option value="philosophy_of_mind">Philosophy of Mind</option>
-                      </select>
-                    </div>
-                  {/if}
+                  <div class="domain-row">
+                    <label for="domain-select">Reasoning Focus</label>
+                    <select id="domain-select" bind:value={selectedDomain}>
+                      <option value="auto">Auto</option>
+                      <option value="ethics">Ethics</option>
+                      <option value="philosophy_of_mind">Philosophy of Mind</option>
+                    </select>
+                  </div>
                   <LensSelector bind:value={selectedLens} domain={selectedDomain} disabled={conversation.isLoading} />
                 </div>
 
@@ -2045,11 +2059,6 @@
                   <div class="simple-prose">
                     {@html renderPass(simplePrimaryContent)}
                   </div>
-                  <div class="simple-actions">
-                    <button type="button" class="simple-link-btn" data-testid="see-reasoning-btn" onclick={openSimpleOverview}>
-                      See reasoning breakdown →
-                    </button>
-                  </div>
                   <div class="simple-actions secondary">
                     <button type="button" class="simple-outline-btn" data-testid="quote-card-generate" onclick={generateQuoteCard}>
                       Save as quote card
@@ -2076,28 +2085,6 @@
                   {#if quoteCardError}
                     <p class="simple-note error">{quoteCardError}</p>
                   {/if}
-                </article>
-              {:else if simpleLayer === 'overview'}
-                <article class="simple-card" data-testid="simple-overview-card" in:fade={{ duration: 220 }}>
-                  <h2>Reasoning Overview</h2>
-                  <p class="simple-caption">A three-layer dialectic.</p>
-                  <div class="simple-summary-block">
-                    <h3>Analysis (summary)</h3>
-                    <p>{simpleOverviewSummaries.analysis}</p>
-                  </div>
-                  <div class="simple-summary-block">
-                    <h3>Critique (summary)</h3>
-                    <p>{simpleOverviewSummaries.critique}</p>
-                  </div>
-                  <div class="simple-summary-block">
-                    <h3>Synthesis (summary)</h3>
-                    <p>{simpleOverviewSummaries.synthesis}</p>
-                  </div>
-                  <div class="simple-actions">
-                    <button type="button" class="simple-link-btn" data-testid="open-scholar-btn" onclick={openScholarView}>
-                      Open full scholar view →
-                    </button>
-                  </div>
                 </article>
               {/if}
             </section>
@@ -2270,9 +2257,9 @@
                   <label for="rerun-key-source">Key source</label>
                   <select id="rerun-key-source" bind:value={keySource} disabled={conversation.isLoading}>
                     <option value="platform">Platform key (limited)</option>
-                    {#each queryKeyProviderOrder as provider}
+                    {#each REASONING_PROVIDER_ORDER as provider (provider)}
                       <option value={provider} disabled={!activeByokProviders.includes(provider)}>
-                        My {PROVIDER_UI_META[provider].label} key {!activeByokProviders.includes(provider) ? '(not active)' : ''}
+                        My {PROVIDER_UI_META[provider]?.label ?? provider} key {!activeByokProviders.includes(provider) ? '(not active)' : ''}
                       </option>
                     {/each}
                   </select>
@@ -2668,7 +2655,7 @@
   .query-heading {
     font-family: var(--font-display);
     font-size: var(--text-d2);
-    font-weight: 300;
+    font-weight: 500;
     color: var(--color-text);
     text-align: center;
     margin-bottom: var(--space-2);
@@ -2677,9 +2664,9 @@
 
   .query-sub {
     font-family: var(--font-ui);
-    font-size: 0.69rem;
+    font-size: var(--text-ui);
     letter-spacing: 0.08em;
-    color: var(--color-dim);
+    color: var(--color-muted);
     margin-bottom: var(--space-2);
     text-align: center;
   }
@@ -2687,9 +2674,9 @@
   .query-persona {
     margin: 0 0 var(--space-5);
     font-family: var(--font-display);
-    font-size: 0.95rem;
+    font-size: 1.0625rem;
     font-style: italic;
-    color: var(--color-muted);
+    color: color-mix(in srgb, var(--color-muted) 88%, var(--color-text) 12%);
     text-align: center;
   }
 
@@ -2718,7 +2705,7 @@
     border-radius: 999px;
     padding: 8px 14px;
     font-family: var(--font-ui);
-    font-size: 0.68rem;
+    font-size: var(--text-ui);
     letter-spacing: 0.08em;
     text-transform: uppercase;
     cursor: pointer;
@@ -2861,6 +2848,17 @@
     border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
     border-radius: 4px;
     background: color-mix(in srgb, var(--color-surface-raised) 62%, transparent);
+  }
+
+  .key-source-warning {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: 0.7rem;
+    color: var(--color-dim);
+    text-align: left;
+    text-transform: none;
+    letter-spacing: 0;
+    line-height: 1.35;
   }
 
   .key-source-error {
@@ -3180,17 +3178,17 @@
   .suggested-header h3 {
     margin: 0;
     font-family: var(--font-ui);
-    font-size: 0.78rem;
+    font-size: var(--text-ui);
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: var(--color-muted);
+    color: color-mix(in srgb, var(--color-text) 55%, var(--color-muted) 45%);
   }
 
   .suggested-header p {
     margin: 0;
     font-family: var(--font-ui);
-    font-size: 0.72rem;
-    color: var(--color-dim);
+    font-size: var(--text-meta);
+    color: var(--color-muted);
   }
 
   .pass-feedback-row {
@@ -3209,9 +3207,9 @@
 
   .pill {
     font-family: var(--font-display);
-    font-size: 0.8rem;
-    font-weight: 300;
-    color: var(--color-muted);
+    font-size: 0.9375rem;
+    font-weight: 400;
+    color: color-mix(in srgb, var(--color-muted) 65%, var(--color-text) 35%);
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: 2px;
@@ -3264,13 +3262,6 @@
     font-style: italic;
   }
 
-  .simple-caption {
-    margin: 0;
-    color: var(--color-dim);
-    font-family: var(--font-ui);
-    font-size: 0.74rem;
-  }
-
   .simple-prose {
     color: var(--color-muted);
     line-height: 1.75;
@@ -3278,19 +3269,6 @@
 
   .simple-prose :global(p) {
     margin: 0 0 0.75rem;
-  }
-
-  .simple-summary-block {
-    border-top: 1px solid var(--color-border);
-    padding-top: var(--space-2);
-    display: grid;
-    gap: 6px;
-  }
-
-  .simple-summary-block p {
-    margin: 0;
-    color: var(--color-muted);
-    line-height: 1.65;
   }
 
   .simple-actions {
@@ -3302,18 +3280,6 @@
 
   .simple-actions.secondary {
     margin-top: -4px;
-  }
-
-  .simple-link-btn {
-    border: none;
-    background: transparent;
-    color: var(--color-blue);
-    padding: 0;
-    cursor: pointer;
-    font-family: var(--font-display);
-    font-size: 1rem;
-    text-decoration: underline;
-    text-underline-offset: 3px;
   }
 
   .simple-outline-btn {
@@ -3997,7 +3963,7 @@
     }
 
     .pill {
-      font-size: 0.75rem;
+      font-size: 0.875rem;
     }
 
     .query-heading {

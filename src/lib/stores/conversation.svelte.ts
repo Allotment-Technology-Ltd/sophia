@@ -439,7 +439,9 @@ function createConversationStore() {
       const domainMode = options?.domainMode ?? 'auto';
       const domain = options?.domain;
       const modelProvider = options?.modelProvider ?? 'auto';
-      const modelId = options?.modelId?.trim() || undefined;
+      const modelId = String(options?.modelId ?? '')
+        .trim()
+        .replace(/\0/g, '') || undefined;
       const resourceMode = options?.resourceMode ?? 'standard';
       const normalizedUserLinks = (options?.userLinks ?? [])
         .map((link) => link.trim())
@@ -458,32 +460,43 @@ function createConversationStore() {
       const queueForNightlyIngest = normalizedUserLinks.length > 0 || options?.queueForNightlyIngest === true;
       loadingModelProvider = modelProvider;
       loadingModelId = modelId ?? null;
-      trackEvent('query_submitted', {
-        query_length: query.length,
-        has_lens: !!lens,
-        lens: lens || undefined,
-        depth_mode: depthMode,
-        query_kind: queryKind,
-        credential_mode: credentialMode,
-        byok_provider: byokProvider,
-        model_provider: modelProvider,
-        model_id: modelId,
-        domain_mode: domainMode,
-        domain: domain ?? 'auto'
-      });
+      try {
+        trackEvent('query_submitted', {
+          query_length: query.length,
+          has_lens: !!lens,
+          lens: lens || undefined,
+          depth_mode: depthMode,
+          query_kind: queryKind,
+          credential_mode: credentialMode,
+          byok_provider: byokProvider,
+          model_provider: modelProvider,
+          model_id: modelId,
+          domain_mode: domainMode,
+          domain: domain ?? 'auto'
+        });
+      } catch {
+        /* analytics must never block inquiries */
+      }
 
-      const cached = historyStore.getCachedResult(query, {
-        lens,
-        depthMode,
-        modelProvider,
-        modelId,
-        domainMode,
-        domain,
-        resourceMode,
-        userLinks: normalizedUserLinks,
-        linkPreferences: normalizedLinkPreferences,
-        queueForNightlyIngest
-      });
+      let cached: CachedQueryResult | null = null;
+      try {
+        cached = historyStore.getCachedResult(query, {
+          lens,
+          depthMode,
+          modelProvider,
+          modelId,
+          domainMode,
+          domain,
+          resourceMode,
+          userLinks: normalizedUserLinks,
+          linkPreferences: normalizedLinkPreferences,
+          queueForNightlyIngest
+        });
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+        isLoading = false;
+        return;
+      }
       if (cached) {
         trackEvent('cache_hit');
         applyCachedResult(query, cached, { appendUserMessage: !options?.silentCacheLoad });

@@ -30,6 +30,10 @@ memory/
 docs/design/MASTER-IMPLEMENTATION-GUIDE.md
 
 # Environment & secrets — never commit real keys
+# Local service account JSON (pnpm dev → scripts/dev.mjs discovers secrets/*.json)
+secrets/*
+!secrets/.gitkeep
+
 .env
 .env.local
 .env*.local

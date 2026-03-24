@@ -277,10 +277,10 @@
 
   .mode-link {
     font-family: var(--font-ui);
-    font-size: 0.68rem;
+    font-size: var(--text-ui);
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-decoration: none;
     padding: 4px 6px;
     border-radius: 6px;
@@ -296,7 +296,7 @@
 
   .wordmark-text {
     font-family: var(--font-display);
-    font-weight: 300;
+    font-weight: 500;
     font-size: 1.1rem;
     letter-spacing: 0.08em;
     color: var(--color-text);
@@ -358,7 +358,7 @@
   /* + New Inquiry ghost button */
   .nav-btn-ghost {
     font-family: var(--font-ui);
-    font-size: 0.69rem;
+    font-size: var(--text-ui);
     letter-spacing: 0.10em;
     text-transform: uppercase;
     color: var(--color-muted);
@@ -377,7 +377,7 @@
 
   .plan-badge {
     font-family: var(--font-ui);
-    font-size: 0.69rem;
+    font-size: var(--text-ui);
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--color-sage);
@@ -400,7 +400,7 @@
     cursor: pointer;
     padding: 0;
     flex-shrink: 0;
-    color: var(--color-dim);
+    color: var(--color-muted);
     transition: color var(--transition-fast);
   }
 
