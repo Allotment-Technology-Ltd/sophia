@@ -115,4 +115,22 @@ describe('resolveReasoningModelRoute', () => {
     expect(route.provider).toBe('openrouter');
     expect(route.model).toBe('openai-chat:openrouter/auto');
   });
+
+  it('falls back to anthropic default when Restormel returns an unknown anthropic model id', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+    mockResolveProviderDecision.mockResolvedValue({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-5-20250914',
+      source: 'restormel',
+      routeId: 'interactive',
+      explanation: 'route=interactive step=0 provider=anthropic model=claude-sonnet-4-5-20250914'
+    });
+
+    const { resolveReasoningModelRoute } = await import('./vertex');
+    const route = await resolveReasoningModelRoute({ routeId: 'interactive' });
+
+    expect(route.provider).toBe('anthropic');
+    expect(route.model).not.toBe('anthropic:claude-sonnet-4-5-20250914');
+    expect(route.model).toContain('anthropic:');
+  });
 });

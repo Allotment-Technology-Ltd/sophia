@@ -14,7 +14,10 @@ import {
 } from '@restormel/contracts/providers';
 import { loadServerEnv } from './env';
 import type { ProviderApiKeys } from './byok/types';
-import type { RestormelFallbackCandidate } from './restormel';
+import {
+  restormelPostCatalogObservation,
+  type RestormelFallbackCandidate
+} from './restormel';
 import { resolveProviderDecision, type ResolveFailureKind } from './resolve-provider';
 
 // Lazy initialization - create vertex client only when first called
@@ -376,11 +379,52 @@ async function resolveRoute(options: {
     throw new Error(missingProviderMessage);
   }
 
-  const modelId =
+  let modelId =
     decision.model?.trim() ||
     (options.type === 'extraction'
       ? getDefaultExtractionModelId(decision.provider)
       : getDefaultReasoningModelId(decision.provider, depthMode, pass));
+
+  const providerCatalog = uniqueModelIds(DEFAULT_MODEL_CATALOG[decision.provider] ?? []);
+  const hasExplicitModelSelection = Boolean(options.requestedModelId?.trim());
+  const modelInCatalog = providerCatalog.includes(modelId);
+  if (
+    options.type === 'reasoning' &&
+    decision.provider === 'anthropic' &&
+    decision.source === 'restormel' &&
+    !hasExplicitModelSelection &&
+    providerCatalog.length > 0 &&
+    !modelInCatalog
+  ) {
+    const fallbackModel = getDefaultReasoningModelId(decision.provider, depthMode, pass);
+    console.warn(
+      '[restormel] Selected model is not in Sophia catalog; using provider default',
+      {
+        routeId: decision.routeId,
+        provider: decision.provider,
+        selectedModel: modelId,
+        fallbackModel
+      }
+    );
+    if (decision.routeId) {
+      void restormelPostCatalogObservation({
+        providerType: decision.provider,
+        modelId,
+        observationType: 'retirement',
+        reason: 'restormel_resolve_selected_model_missing_from_sophia_catalog',
+        source: 'sophia-routing',
+        routeId: decision.routeId
+      }).catch((error) => {
+        if (process.env.NODE_ENV !== 'test') {
+          console.warn(
+            '[restormel] Failed posting catalog observation:',
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+      });
+    }
+    modelId = fallbackModel;
+  }
 
   return {
     ...buildRouteForProvider(decision.provider, modelId, options.providerApiKeys),

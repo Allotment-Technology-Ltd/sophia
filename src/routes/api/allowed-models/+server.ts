@@ -10,6 +10,10 @@ import { getEnabledReasoningProviders, isByokProviderEnabled } from '$lib/server
 import { loadByokProviderApiKeys } from '$lib/server/byok/store';
 import type { ByokProvider, ProviderApiKeys } from '$lib/server/byok/types';
 import { getAvailableReasoningModels } from '$lib/server/vertex';
+import {
+  RESTORMEL_CATALOG_V5_CONTRACT_VERSION,
+  restormelGetLiveReasoningAllowlist
+} from '$lib/server/restormel';
 
 /**
  * Allowed-models lists candidates from the contracts catalog + BYOK/platform rules.
@@ -90,13 +94,53 @@ export const GET: RequestHandler = async ({ locals, url }) => {
     allowedProviders
   });
 
+  let liveAllowlist: Partial<Record<ReasoningProvider, Set<string>>> | null = null;
+  try {
+    const catalog = await restormelGetLiveReasoningAllowlist();
+    if (catalog.contractVersion !== RESTORMEL_CATALOG_V5_CONTRACT_VERSION) {
+      throw new Error(
+        `catalog_contract_mismatch:${catalog.contractVersion} expected=${RESTORMEL_CATALOG_V5_CONTRACT_VERSION}`
+      );
+    }
+    if (!catalog.allFresh) {
+      return json({
+        defaults: { mode: 'auto' },
+        models: [],
+        allowed_by_provider: {},
+        filtering: { active: false, degraded: true, routeId: getRouteId(url) ?? null },
+        error:
+          'Model catalog freshness signals are stale. Automatic routing remains available while external health recovers.'
+      });
+    }
+    liveAllowlist = catalog.allowlist;
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn(
+        '[restormel] Failed loading live catalog v5 for allowed-models:',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+    return json({
+      defaults: { mode: 'auto' },
+      models: [],
+      allowed_by_provider: {},
+      filtering: { active: false, degraded: true, routeId: getRouteId(url) ?? null },
+      error:
+        'Live model catalog is temporarily unavailable. Automatic routing remains available.'
+    });
+  }
+
+  const filteredModels = candidateModels.filter((model) =>
+    liveAllowlist?.[model.provider]?.has(model.id) === true
+  );
+
   const routeId = getRouteId(url);
   const allowedByProvider: Partial<Record<ReasoningProvider, string[]>> = {};
   for (const provider of REASONING_PROVIDER_ORDER) {
     allowedByProvider[provider] = [];
   }
 
-  for (const model of candidateModels) {
+  for (const model of filteredModels) {
     const bucket = allowedByProvider[model.provider];
     if (bucket && !bucket.includes(model.id)) {
       bucket.push(model.id);
@@ -105,7 +149,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 
   return json({
     defaults: { mode: 'auto' },
-    models: candidateModels,
+    models: filteredModels,
     allowed_by_provider: allowedByProvider,
     filtering: { active: false, degraded: false, routeId: routeId ?? null }
   });

@@ -135,6 +135,10 @@ export interface RestormelSwitchCriteriaEnumsResponse {
     [key: string]: unknown;
   };
 }
+import {
+  isReasoningProvider,
+  type ReasoningProvider
+} from '@restormel/contracts/providers';
 
 export class RestormelDashboardError extends Error {
   readonly status: number;
@@ -550,4 +554,146 @@ export async function restormelGetSwitchCriteriaEnums(): Promise<RestormelSwitch
  */
 export async function restormelListProjectModels(): Promise<unknown> {
   return requestRestormel<unknown>(`${projectPath()}/models`);
+}
+
+export const RESTORMEL_CATALOG_V5_CONTRACT_VERSION = '2026-03-25.catalog.v5';
+const LIVE_ALLOWLIST_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const LIVE_ALLOWLIST_REFRESH_MIN_INTERVAL_MS = 60 * 1000;
+
+type LiveAllowlistSnapshot = {
+  contractVersion: string;
+  fetchedAt: number;
+  allFresh: boolean;
+  allowlist: Partial<Record<ReasoningProvider, Set<string>>>;
+};
+
+let lastLiveAllowlistAttemptAt = 0;
+let liveAllowlistSnapshot: LiveAllowlistSnapshot | null = null;
+
+function providerFromCatalog(raw: unknown): ReasoningProvider | null {
+  if (typeof raw !== 'string') return null;
+  const normalized = raw.trim().toLowerCase();
+  const mapped = normalized === 'google' ? 'vertex' : normalized;
+  return isReasoningProvider(mapped) ? mapped : null;
+}
+
+function readModelRows(payload: unknown): Array<Record<string, unknown>> {
+  const obj = isRecord(payload) ? payload : null;
+  const data = isRecord(obj?.data) ? obj.data : null;
+  const rows = data?.models ?? obj?.models;
+  if (!Array.isArray(rows)) return [];
+  return rows.filter(isRecord);
+}
+
+function isDefaultAllowlisted(row: Record<string, unknown>): boolean {
+  if (typeof row.defaultAllowlisted === 'boolean') return row.defaultAllowlisted;
+  if (typeof row.defaultAllowlistAligned === 'boolean') return row.defaultAllowlistAligned;
+  if (isRecord(row.allowlist) && typeof row.allowlist.default === 'boolean') {
+    return row.allowlist.default;
+  }
+  if (isRecord(row.defaultAllowlist) && typeof row.defaultAllowlist.aligned === 'boolean') {
+    return row.defaultAllowlist.aligned;
+  }
+  return true;
+}
+
+function parseCatalogAllowlist(payload: unknown): Partial<Record<ReasoningProvider, Set<string>>> {
+  const allowlist: Partial<Record<ReasoningProvider, Set<string>>> = {};
+  const rows = readModelRows(payload);
+  for (const row of rows) {
+    if (!isDefaultAllowlisted(row)) continue;
+    const provider = providerFromCatalog(row.providerType ?? row.provider ?? row.providerId);
+    if (!provider) continue;
+    const modelIdRaw = row.modelId ?? row.model ?? row.modelVariant ?? row.variant ?? row.id;
+    const modelId = typeof modelIdRaw === 'string' ? modelIdRaw.trim() : '';
+    if (!modelId) continue;
+    const set = allowlist[provider] ?? new Set<string>();
+    set.add(modelId);
+    allowlist[provider] = set;
+  }
+  return allowlist;
+}
+
+function parseCatalogFreshness(payload: unknown): { allFresh: boolean } {
+  const obj = isRecord(payload) ? payload : null;
+  const data = isRecord(obj?.data) ? obj.data : null;
+  const externalSignals = isRecord(data?.externalSignals) ? data.externalSignals : null;
+  const freshness = isRecord(externalSignals?.freshness) ? externalSignals.freshness : null;
+  return {
+    allFresh: freshness?.allFresh === true
+  };
+}
+
+function parseCatalogContractVersion(payload: unknown): string {
+  const obj = isRecord(payload) ? payload : null;
+  const data = isRecord(obj?.data) ? obj.data : null;
+  const fromData = typeof data?.contractVersion === 'string' ? data.contractVersion.trim() : '';
+  if (fromData) return fromData;
+  const fromTop = typeof obj?.contractVersion === 'string' ? obj.contractVersion.trim() : '';
+  return fromTop;
+}
+
+export async function restormelGetLiveReasoningAllowlist(): Promise<{
+  allowlist: Partial<Record<ReasoningProvider, Set<string>>>;
+  contractVersion: string;
+  allFresh: boolean;
+  source: 'live' | 'cached';
+}> {
+  const now = Date.now();
+  const canRefresh = now - lastLiveAllowlistAttemptAt >= LIVE_ALLOWLIST_REFRESH_MIN_INTERVAL_MS;
+
+  if (!canRefresh && liveAllowlistSnapshot) {
+    return {
+      allowlist: liveAllowlistSnapshot.allowlist,
+      contractVersion: liveAllowlistSnapshot.contractVersion,
+      allFresh: liveAllowlistSnapshot.allFresh,
+      source: 'cached'
+    };
+  }
+
+  lastLiveAllowlistAttemptAt = now;
+
+  try {
+    const payload = await requestRestormel<unknown>('/catalog', { requireProjectId: false });
+    const contractVersion = parseCatalogContractVersion(payload);
+    if (contractVersion !== RESTORMEL_CATALOG_V5_CONTRACT_VERSION) {
+      throw new Error(
+        `catalog_contract_mismatch:${contractVersion || 'missing'} expected=${RESTORMEL_CATALOG_V5_CONTRACT_VERSION}`
+      );
+    }
+    const allowlist = parseCatalogAllowlist(payload);
+    const { allFresh } = parseCatalogFreshness(payload);
+    liveAllowlistSnapshot = {
+      contractVersion,
+      fetchedAt: now,
+      allFresh,
+      allowlist
+    };
+    return { allowlist, contractVersion, allFresh, source: 'live' };
+  } catch (error) {
+    if (liveAllowlistSnapshot && now - liveAllowlistSnapshot.fetchedAt <= LIVE_ALLOWLIST_CACHE_MAX_AGE_MS) {
+      return {
+        allowlist: liveAllowlistSnapshot.allowlist,
+        contractVersion: liveAllowlistSnapshot.contractVersion,
+        allFresh: liveAllowlistSnapshot.allFresh,
+        source: 'cached'
+      };
+    }
+    throw error;
+  }
+}
+
+export async function restormelPostCatalogObservation(payload: {
+  providerType: string;
+  modelId: string;
+  observationType: 'deprecation' | 'retirement';
+  reason?: string;
+  source?: string;
+  routeId?: string | null;
+}): Promise<void> {
+  await requestRestormel<unknown>('/catalog/observations', {
+    method: 'POST',
+    body: payload,
+    requireProjectId: false
+  });
 }

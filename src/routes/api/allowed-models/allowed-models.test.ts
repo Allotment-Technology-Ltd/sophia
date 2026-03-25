@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockLoadByokProviderApiKeys, mockGetAvailableReasoningModels } = vi.hoisted(() => ({
+const {
+  mockLoadByokProviderApiKeys,
+  mockGetAvailableReasoningModels,
+  mockRestormelGetLiveReasoningAllowlist
+} = vi.hoisted(() => ({
   mockLoadByokProviderApiKeys: vi.fn(),
-  mockGetAvailableReasoningModels: vi.fn()
+  mockGetAvailableReasoningModels: vi.fn(),
+  mockRestormelGetLiveReasoningAllowlist: vi.fn()
 }));
 
 vi.mock('$lib/server/byok/store', () => ({
@@ -11,6 +16,11 @@ vi.mock('$lib/server/byok/store', () => ({
 
 vi.mock('$lib/server/vertex', () => ({
   getAvailableReasoningModels: mockGetAvailableReasoningModels
+}));
+
+vi.mock('$lib/server/restormel', () => ({
+  RESTORMEL_CATALOG_V5_CONTRACT_VERSION: '2026-03-25.catalog.v5',
+  restormelGetLiveReasoningAllowlist: mockRestormelGetLiveReasoningAllowlist
 }));
 
 describe('/api/allowed-models', () => {
@@ -44,6 +54,15 @@ describe('/api/allowed-models', () => {
         return mockCatalog.filter((m) => allow.has(m.provider));
       }
       return mockCatalog;
+    });
+    mockRestormelGetLiveReasoningAllowlist.mockResolvedValue({
+      allowlist: {
+        anthropic: new Set(['claude-3-5-sonnet']),
+        openai: new Set(['gpt-4o'])
+      },
+      contractVersion: '2026-03-25.catalog.v5',
+      allFresh: true,
+      source: 'live'
     });
   });
 
@@ -108,5 +127,29 @@ describe('/api/allowed-models', () => {
     expect(body.filtering.active).toBe(false);
     expect(body.models).toHaveLength(2);
     expect(body.error).toBeUndefined();
+  });
+
+  it('returns degraded response when external freshness is stale', async () => {
+    mockRestormelGetLiveReasoningAllowlist.mockResolvedValueOnce({
+      allowlist: {
+        anthropic: new Set(['claude-3-5-sonnet']),
+        openai: new Set(['gpt-4o'])
+      },
+      contractVersion: '2026-03-25.catalog.v5',
+      allFresh: false,
+      source: 'live'
+    });
+
+    const { GET } = await import('./+server');
+    const response = await GET({
+      locals: { user: { uid: 'user:stale' } },
+      url: new URL('http://localhost/api/allowed-models?credential_mode=auto')
+    } as any);
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.filtering.degraded).toBe(true);
+    expect(body.models).toEqual([]);
+    expect(body.error).toContain('freshness');
   });
 });
