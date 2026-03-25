@@ -120,10 +120,39 @@ function inferEntry(providerRaw: string, modelIdRaw: string): IngestionModelCata
 }
 
 function rowToProviderModel(row: Record<string, unknown>): { provider: string; modelId: string } | null {
-	const provider = String(
-		row.providerType ?? row.provider ?? row.providerId ?? row.vendor ?? ''
-	).trim();
-	const modelId = String(row.modelId ?? row.id ?? row.name ?? row.slug ?? '').trim();
+	const providerNested =
+		isRecord(row.provider) ? (row.provider as Record<string, unknown>) : null;
+	const modelNested =
+		isRecord(row.model) ? (row.model as Record<string, unknown>) : null;
+
+	const providerRaw =
+		row.providerType ??
+		(row as { provider_type?: unknown }).provider_type ??
+		row.providerId ??
+		(row as { provider_id?: unknown }).provider_id ??
+		row.vendor ??
+		providerNested?.type ??
+		providerNested?.id ??
+		providerNested?.providerType ??
+		providerNested?.provider_type ??
+		row.provider ??
+		'';
+
+	const modelRaw =
+		row.modelId ??
+		(row as { model_id?: unknown }).model_id ??
+		modelNested?.id ??
+		modelNested?.modelId ??
+		modelNested?.model_id ??
+		row.model ??
+		row.variant ??
+		row.slug ??
+		row.name ??
+		row.id ??
+		'';
+
+	const provider = String(providerRaw ?? '').trim();
+	const modelId = String(modelRaw ?? '').trim();
 	if (!provider || !modelId) return null;
 	return { provider, modelId };
 }
