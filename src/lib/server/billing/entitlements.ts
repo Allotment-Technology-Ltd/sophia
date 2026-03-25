@@ -62,8 +62,16 @@ export async function getEntitlementSummary(uid: string): Promise<EntitlementSum
 
 export async function consumeIngestionEntitlement(
   uid: string,
-  visibility: IngestVisibilityScope
+  visibility: IngestVisibilityScope,
+  options?: { bypassQuota?: boolean }
 ): Promise<IngestionConsumeResult> {
+  if (options?.bypassQuota) {
+    return {
+      allowed: true,
+      summary: await getEntitlementSummary(uid)
+    };
+  }
+
   const profileRef = billingProfileRef(uid);
   const entitlementsRef = billingEntitlementsRef(uid);
 
@@ -180,8 +188,16 @@ export async function consumeIngestionEntitlement(
 
 export async function consumeIngestionEntitlements(
   uid: string,
-  visibilities: IngestVisibilityScope[]
+  visibilities: IngestVisibilityScope[],
+  options?: { bypassQuota?: boolean }
 ): Promise<IngestionConsumeResult> {
+  if (options?.bypassQuota) {
+    return {
+      allowed: true,
+      summary: await getEntitlementSummary(uid)
+    };
+  }
+
   if (visibilities.length === 0) {
     return {
       allowed: true,

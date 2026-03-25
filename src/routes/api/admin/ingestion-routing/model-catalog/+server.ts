@@ -73,6 +73,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 			label: entry.label,
 			provider: entry.provider,
 			modelId: entry.modelId,
+			contextWindow: entry.contextWindow,
 			pricing: {
 				inputPerMillion: estimate?.inputPerMillion ?? fallback.inputPerMillion,
 				outputPerMillion: estimate?.outputPerMillion ?? fallback.outputPerMillion

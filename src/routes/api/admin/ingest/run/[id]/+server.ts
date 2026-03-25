@@ -21,6 +21,8 @@ export const GET: RequestHandler = async ({ locals, params }) => {
     status: state.status,
     stages: state.stages,
     logLines: state.logLines,
+    issues: state.issues,
+    issueCount: state.issues.length,
     error: state.error,
     createdAt: state.createdAt,
     completedAt: state.completedAt

@@ -6,7 +6,7 @@
   import { resolveRouteForStage } from '$lib/utils/ingestionRouting';
 
   type StageStatus = 'idle' | 'running' | 'done' | 'error' | 'skipped';
-  type FlowState = 'setup' | 'running' | 'awaiting_sync' | 'done';
+  type FlowState = 'setup' | 'running' | 'awaiting_sync' | 'done' | 'error';
   type PipelinePreset = 'budget' | 'balanced' | 'complexity';
 
   type Stage = {
@@ -28,6 +28,8 @@
     label: string;
     provider: string;
     modelId: string;
+    /** e.g. 128k, 200k, 1M — from catalog / merge */
+    contextWindow?: string;
     pricing?: {
       inputPerMillion?: number | null;
       outputPerMillion?: number | null;
@@ -47,6 +49,35 @@
     inputTokens: number;
     outputTokens: number;
     totalTokens: number;
+  }
+
+  type IngestionAdvisorMode = 'off' | 'shadow' | 'auto';
+
+  interface AdvisorApiEnvelope {
+    mode: IngestionAdvisorMode;
+    enabled: boolean;
+    heuristicBaseline: {
+      recommendedPreset: PipelinePreset;
+      suggestCrossModelValidation: boolean;
+      basis: string;
+    };
+    suggestion: {
+      recommendedPreset: PipelinePreset;
+      confidence: number;
+      rationale: string;
+      suggestCrossModelValidation: boolean;
+      efficiencyNotes?: string;
+      riskSignals?: string[];
+    } | null;
+    applied: { preset: PipelinePreset; runValidate: boolean };
+    autoApplied: { preset: boolean; validation: boolean };
+    shadowDiff: {
+      presetChangedVsHeuristic: boolean;
+      presetChangedVsAdvisor: boolean;
+      validationChangedVsHeuristic: boolean;
+    };
+    model?: { provider: string; modelId: string };
+    error?: string;
   }
 
   interface SourcePreScanResult {
@@ -74,6 +105,7 @@
       previewTokens: number;
       phaseEstimates: SourcePreScanPhaseEstimate[];
     };
+    advisor?: AdvisorApiEnvelope;
   }
 
   const SOURCE_TYPES = [
@@ -253,6 +285,8 @@
   }
 
   let flowState = $state<FlowState>('setup');
+  /** Last `status` from a successful `/status` poll; used to tell live failure vs reopening an already-failed run. */
+  let lastAppliedRunStatus = $state<string | null>(null);
   let sourceUrl = $state('');
   let sourceType = $state<(typeof SOURCE_TYPES)[number]['value']>('sep_entry');
   let runValidate = $state(true);
@@ -278,6 +312,17 @@
   let runProcessStartedAt = $state<number | null>(null);
   let runProcessExitedAt = $state<number | null>(null);
   let showRawLog = $state(false);
+  /** Structured issues parsed from worker logs (also persisted to Firestore when the run ends or pauses for sync). */
+  type RunCapturedIssue = {
+    seq: number;
+    ts: number;
+    kind: string;
+    severity: string;
+    stageHint: string | null;
+    message: string;
+    rawLine: string;
+  };
+  let runCapturedIssues = $state<RunCapturedIssue[]>([]);
   let stages = $state<Stage[]>(cloneStages());
   let pollingInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -322,6 +367,16 @@
   let sourcePreScanError = $state('');
   let sourcePreScanResult = $state<SourcePreScanResult | null>(null);
   let sourcePreScanFingerprint = $state('');
+  /** When server auto-applies preset, models must be loaded before `applyPipelinePreset` runs. */
+  let advisorAutoApplyPreset = $state<PipelinePreset | null>(null);
+  let coachBusy = $state(false);
+  let coachError = $state('');
+  let coachResult = $state<{
+    executiveSummary: string;
+    recommendations: string[];
+    priority: string;
+    suggestedNextExperiments?: string[];
+  } | null>(null);
   let activeStep = $state<'source' | 'pipeline' | 'cost' | 'review'>('source');
   let activePipelineStageKey = $state('ingestion_extraction');
   const activePipelineStage = $derived(
@@ -1044,6 +1099,15 @@
     return null;
   }
 
+  /** JSON repair calls only log `[ROUTE] json_repair: … cost~$x` (see scripts/ingest.ts callStageModel); they never emit `[COST] … stage=$`. */
+  function parseJsonRepairRouteCostUsd(line: string): number | null {
+    if (!/\[ROUTE\]\s+json_repair\s*:/i.test(line)) return null;
+    const m = line.match(/cost~\$([0-9]+(?:\.[0-9]+)?)/i);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+
   let runCostLedger = $derived.by(() => {
     const rows: RunCostLedgerRow[] = phaseCostRows().map((row) => ({
       key: row.key,
@@ -1064,6 +1128,11 @@
         if (Number.isFinite(delta) && delta >= 0) {
           runningByKey[stageKey] = (runningByKey[stageKey] ?? 0) + delta;
         }
+      }
+      const repairRouteUsd = parseJsonRepairRouteCostUsd(line);
+      if (repairRouteUsd !== null) {
+        const k = 'ingestion_json_repair';
+        runningByKey[k] = (runningByKey[k] ?? 0) + repairRouteUsd;
       }
       if (totalMatch) {
         const total = Number(totalMatch[1]);
@@ -1094,6 +1163,47 @@
   function formatInt(value: number | null | undefined): string {
     if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
     return Math.round(value).toLocaleString();
+  }
+
+  /** Parse catalog strings like 128k, 32k, 1M into token counts. */
+  function parseContextWindowTokens(raw: string | undefined | null): number | null {
+    if (!raw || typeof raw !== 'string') return null;
+    const s = raw.trim().toLowerCase().replace(/\s/g, '');
+    const m = s.match(/^(\d+(?:\.\d+)?)(k|m)?$/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    if (!Number.isFinite(n) || n < 0) return null;
+    const suf = m[2];
+    if (suf === 'k') return Math.round(n * 1000);
+    if (suf === 'm') return Math.round(n * 1_000_000);
+    return Math.round(n);
+  }
+
+  /** Fixed ladder so raw counts are interpretable without a model selected (not API limits). */
+  const TOKEN_REFERENCE_MARKERS: { label: string; tokens: number }[] = [
+    { label: '10k', tokens: 10_000 },
+    { label: '60k', tokens: 60_000 },
+    { label: '200k', tokens: 200_000 }
+  ];
+
+  function formatPercentOfReferenceTokens(tokens: number): string {
+    return TOKEN_REFERENCE_MARKERS.map(({ label, tokens: cap }) => {
+      const pct = Math.round((tokens / cap) * 1000) / 10;
+      return `${pct}% of ${label}`;
+    }).join(' · ');
+  }
+
+  function formatTokensVsReferenceLadder(tokens: number): string {
+    return `${formatInt(tokens)} (${formatPercentOfReferenceTokens(tokens)})`;
+  }
+
+  /** Compare an estimate to the selected stage model’s advertised context window. */
+  function formatTokensVsSelectedModelWindow(tokens: number, entry: CatalogEntry | null): string {
+    if (!entry?.contextWindow) return '';
+    const cap = parseContextWindowTokens(entry.contextWindow);
+    if (cap === null || cap <= 0) return '';
+    const pct = Math.min(999, Math.round((tokens / cap) * 1000) / 10);
+    return `${formatInt(tokens)} / ${formatInt(cap)} (${pct}% of ${entry.contextWindow} context)`;
   }
 
   function formatUsd(value: number | null | undefined): string {
@@ -1283,6 +1393,7 @@
     sourcePreScanResult = null;
     sourcePreScanError = '';
     sourcePreScanFingerprint = '';
+    advisorAutoApplyPreset = null;
     costEstimateAcknowledged = false;
     sourceRunEndedDetail = null;
   }
@@ -1311,12 +1422,18 @@
       costEstimateAcknowledged ||
       flowState === 'running' ||
       flowState === 'awaiting_sync' ||
-      flowState === 'done'
+      flowState === 'done' ||
+      flowState === 'error'
     );
   }
 
   function reviewTabComplete(): boolean {
-    return flowState === 'running' || flowState === 'awaiting_sync' || flowState === 'done';
+    return (
+      flowState === 'running' ||
+      flowState === 'awaiting_sync' ||
+      flowState === 'done' ||
+      flowState === 'error'
+    );
   }
 
   function stepComplexity(row: (typeof RESTORMEL_STAGES)[number]): 'low' | 'medium' | 'high' {
@@ -1355,11 +1472,62 @@
         })
       });
       sourcePreScanResult = body as unknown as SourcePreScanResult;
+      const adv = sourcePreScanResult.advisor;
+      if (adv?.mode === 'auto') {
+        runValidate = adv.applied.runValidate;
+        if (adv.autoApplied.preset) {
+          advisorAutoApplyPreset = adv.applied.preset;
+        }
+      }
       sourcePreScanFingerprint = sourceFingerprint();
     } catch (e) {
       sourcePreScanError = e instanceof Error ? e.message : 'Unable to pre-scan this source.';
     } finally {
       sourcePreScanBusy = false;
+    }
+  }
+
+  $effect(() => {
+    if (advisorAutoApplyPreset === null) return;
+    if (catalogEntries.length === 0) return;
+    if (runInProgress()) return;
+    const preset = advisorAutoApplyPreset;
+    advisorAutoApplyPreset = null;
+    applyPipelinePreset(preset);
+  });
+
+  async function runOfflineCoach(): Promise<void> {
+    if (coachBusy) return;
+    coachBusy = true;
+    coachError = '';
+    try {
+      const body = await authorizedJson('/api/admin/ingest/coach', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit: 30 })
+      });
+      const output = body.output as
+        | {
+            executiveSummary?: string;
+            recommendations?: string[];
+            priority?: string;
+            suggestedNextExperiments?: string[];
+          }
+        | undefined;
+      if (output && typeof output.executiveSummary === 'string' && Array.isArray(output.recommendations)) {
+        coachResult = {
+          executiveSummary: output.executiveSummary,
+          recommendations: output.recommendations,
+          priority: typeof output.priority === 'string' ? output.priority : 'medium',
+          suggestedNextExperiments: output.suggestedNextExperiments
+        };
+      } else {
+        coachError = 'Unexpected coach response.';
+      }
+    } catch (e) {
+      coachError = e instanceof Error ? e.message : 'Coach request failed.';
+    } finally {
+      coachBusy = false;
     }
   }
 
@@ -1429,7 +1597,9 @@
       }
 
       runId = id;
+      lastAppliedRunStatus = null;
       flowState = 'running';
+      runCapturedIssues = [];
       runLog = [`Run started: ${runId}`];
       const params = new URLSearchParams(window.location.search);
       params.set('monitor', '1');
@@ -1559,7 +1729,18 @@
     stages = cloneStages();
     flowState = 'setup';
     activeStep = 'source';
+    lastAppliedRunStatus = null;
     stripMonitorParamsFromUrl();
+  }
+
+  /** Failed run viewed from history (or first poll already terminal): keep logs/run id, stay on Review. */
+  function applyTerminalErrorView(errorMessage: string): void {
+    clearPolling();
+    monitorRunNotice = '';
+    runError = errorMessage;
+    sourceRunEndedDetail = errorMessage;
+    flowState = 'error';
+    activeStep = 'review';
   }
 
   function applyStatusBody(body: Record<string, unknown>): void {
@@ -1587,6 +1768,10 @@
     runProcessStartedAt = typeof body?.processStartedAt === 'number' ? body.processStartedAt : null;
     runProcessExitedAt = typeof body?.processExitedAt === 'number' ? body.processExitedAt : null;
 
+    if (Array.isArray(body?.issues)) {
+      runCapturedIssues = body.issues as RunCapturedIssue[];
+    }
+
     const awaitingSync = body?.awaitingSync === true || body?.status === 'awaiting_sync';
     const syncStart = typeof body?.syncStartedAt === 'number' ? body.syncStartedAt : undefined;
     const syncEnd = typeof body?.syncCompletedAt === 'number' ? body.syncCompletedAt : undefined;
@@ -1596,16 +1781,28 @@
 
     if (body?.status === 'done') {
       flowState = 'done';
+      lastAppliedRunStatus = 'done';
       completionMessage =
         syncEnd != null
-          ? `Job completed. SurrealDB sync finished in ${syncDurationLabel || formatDuration((syncEnd ?? 0) - (syncStart ?? 0))}.`
-          : 'Job completed. Ingestion finished successfully.';
+          ? `Job completed. SurrealDB sync finished in ${syncDurationLabel || formatDuration((syncEnd ?? 0) - (syncStart ?? 0))}. A structured issue report was saved to Firestore (ingestion_run_reports) for review.`
+          : 'Job completed. Ingestion finished successfully. A structured issue report was saved to Firestore (ingestion_run_reports) for review.';
       clearPolling();
     } else if (awaitingSync) {
       flowState = 'awaiting_sync';
+      lastAppliedRunStatus = 'awaiting_sync';
     } else if (body?.status === 'error') {
       const err = typeof body?.error === 'string' ? body.error : 'Ingestion failed.';
-      unlockSourceAfterFailedRun(err);
+      const wasActive =
+        lastAppliedRunStatus === 'running' || lastAppliedRunStatus === 'awaiting_sync';
+      if (wasActive) {
+        lastAppliedRunStatus = null;
+        unlockSourceAfterFailedRun(err);
+      } else {
+        applyTerminalErrorView(err);
+        lastAppliedRunStatus = 'error';
+      }
+    } else if (typeof body?.status === 'string') {
+      lastAppliedRunStatus = body.status;
     }
   }
 
@@ -1628,6 +1825,7 @@
     runIdleForMs = null;
     runProcessStartedAt = null;
     runProcessExitedAt = null;
+    runCapturedIssues = [];
     completionMessage = '';
     syncDurationLabel = '';
     executionNotice = '';
@@ -1635,6 +1833,7 @@
     stages = cloneStages();
     flowState = 'setup';
     activeStep = 'review';
+    lastAppliedRunStatus = null;
     stripMonitorParamsFromUrl();
     sourceRunEndedDetail = null;
     monitorRunNotice =
@@ -1702,6 +1901,7 @@
     completionMessage = '';
     syncDurationLabel = '';
     stages = cloneStages();
+    lastAppliedRunStatus = null;
     stripMonitorParamsFromUrl();
   }
 
@@ -1789,6 +1989,13 @@
                   <div class="min-w-0 space-y-3">
                     <p class="font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-dim">Run ended</p>
                     <p class="font-mono text-sm text-sophia-dark-copper">{sourceRunEndedDetail}</p>
+                    {#if runCapturedIssues.length > 0}
+                      <p class="font-mono text-xs text-sophia-dark-muted">
+                        Structured issues captured: <span class="text-sophia-dark-text">{runCapturedIssues.length}</span>
+                        — open <strong class="text-sophia-dark-text">Review &amp; run</strong> to inspect, or query Firestore
+                        <code class="text-sophia-dark-text">ingestion_run_reports</code> for the saved report.
+                      </p>
+                    {/if}
                     <p class="max-w-2xl text-sm leading-relaxed text-sophia-dark-muted">
                       You can enter a new URL and source type, then run pre-scan to start a completely new ingestion. Cost review will ask for acknowledgement again after pre-scan.
                     </p>
@@ -1803,7 +2010,10 @@
                   <button
                     type="button"
                     class="shrink-0 rounded border border-sophia-dark-border/80 bg-sophia-dark-bg px-4 py-2.5 font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-muted hover:border-sophia-dark-border hover:bg-sophia-dark-surface-raised hover:text-sophia-dark-text"
-                    onclick={() => (sourceRunEndedDetail = null)}
+                    onclick={() => {
+                      sourceRunEndedDetail = null;
+                      runCapturedIssues = [];
+                    }}
                   >
                     Dismiss
                   </button>
@@ -1859,7 +2069,13 @@
                     <p><span class="text-sophia-dark-dim">Author:</span> {sourcePreScanResult.metadata.author || 'Unknown'}</p>
                     <p><span class="text-sophia-dark-dim">Year:</span> {sourcePreScanResult.metadata.publicationYear || 'Unknown'}</p>
                     <p><span class="text-sophia-dark-dim">Approx chars:</span> {formatInt(sourcePreScanResult.preScan.approxContentChars)}</p>
-                    <p><span class="text-sophia-dark-dim">Approx tokens:</span> {formatInt(sourcePreScanResult.preScan.approxContentTokens)}</p>
+                    <p>
+                      <span class="text-sophia-dark-dim">Approx tokens:</span>
+                      {formatTokensVsReferenceLadder(sourcePreScanResult.preScan.approxContentTokens)}
+                    </p>
+                    <p class="text-xs text-sophia-dark-muted">
+                      Reference sizes (10k / 60k / 200k) are common context benchmarks; your pipeline batches and models determine real limits.
+                    </p>
                   </div>
                 </div>
               {/if}
@@ -1924,6 +2140,99 @@
                 </p>
                 {#if presetMessage}
                   <p class="mt-2 font-mono text-xs text-sophia-dark-sage">{presetMessage}</p>
+                {/if}
+              </div>
+
+              {#if sourcePreScanResult?.advisor}
+                {@const adv = sourcePreScanResult.advisor}
+                <div class="rounded border border-sophia-dark-border/80 bg-sophia-dark-bg/35 p-4" role="region" aria-label="Ingestion advisor">
+                  <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Ingestion advisor</p>
+                  <p class="mt-2 text-xs text-sophia-dark-muted">
+                    <span class="font-mono text-sophia-dark-text">{adv.mode}</span>
+                    {#if adv.enabled}
+                      · active
+                    {:else if adv.mode === 'off'}
+                      · disabled via <span class="font-mono">INGESTION_ADVISOR_MODE</span>
+                    {/if}
+                    {#if adv.model}
+                      · {adv.model.provider}/{adv.model.modelId}
+                    {/if}
+                  </p>
+                  {#if adv.error}
+                    <p class="mt-2 font-mono text-xs text-sophia-dark-copper">{adv.error}</p>
+                  {/if}
+                  <dl class="mt-3 grid gap-2 font-mono text-xs text-sophia-dark-muted sm:grid-cols-2">
+                    <div>
+                      <dt class="text-sophia-dark-dim">Heuristic baseline</dt>
+                      <dd class="mt-0.5 text-sophia-dark-text">
+                        Preset {adv.heuristicBaseline.recommendedPreset}; validation {adv.heuristicBaseline.suggestCrossModelValidation ? 'on' : 'off'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt class="text-sophia-dark-dim">Applied (UI / run)</dt>
+                      <dd class="mt-0.5 text-sophia-dark-text">
+                        Preset {adv.applied.preset}; validation {adv.applied.runValidate ? 'on' : 'off'}
+                        {#if adv.mode === 'auto'}
+                          <span class="text-sophia-dark-dim">
+                            (auto: preset {adv.autoApplied.preset ? 'yes' : 'no'}, validation {adv.autoApplied.validation ? 'yes' : 'no'})
+                          </span>
+                        {/if}
+                      </dd>
+                    </div>
+                  </dl>
+                  {#if adv.suggestion}
+                    <div class="mt-3 rounded border border-sophia-dark-border/60 bg-sophia-dark-bg/40 p-3">
+                      <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Model suggestion</p>
+                      <p class="mt-2 text-xs leading-relaxed text-sophia-dark-muted">{adv.suggestion.rationale}</p>
+                      {#if adv.suggestion.riskSignals?.length}
+                        <p class="mt-2 font-mono text-[0.65rem] text-sophia-dark-amber">Risks: {adv.suggestion.riskSignals.join('; ')}</p>
+                      {/if}
+                    </div>
+                  {/if}
+                  {#if adv.mode === 'shadow' && adv.suggestion}
+                    <p class="mt-3 font-mono text-xs text-sophia-dark-dim">
+                      Shadow diff — preset vs heuristic: {adv.shadowDiff.presetChangedVsHeuristic ? 'yes' : 'no'}; validation vs heuristic: {adv.shadowDiff.validationChangedVsHeuristic ? 'yes' : 'no'}
+                    </p>
+                  {/if}
+                </div>
+              {/if}
+
+              <div class="rounded border border-sophia-dark-border/80 bg-sophia-dark-bg/30 p-4">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Offline coach</p>
+                    <p class="mt-1 text-xs text-sophia-dark-muted">
+                      Summarizes recent <span class="font-mono">ingestion_run_reports</span> and suggests pipeline improvements.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={runInProgress() || coachBusy}
+                    onclick={() => void runOfflineCoach()}
+                    class="shrink-0 rounded border border-sophia-dark-blue/45 bg-sophia-dark-blue/14 px-5 py-2.5 font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-blue hover:bg-sophia-dark-blue/20 disabled:opacity-50"
+                  >
+                    {coachBusy ? 'Running…' : 'Run coach'}
+                  </button>
+                </div>
+                {#if coachError}<p class="mt-2 font-mono text-xs text-sophia-dark-copper">{coachError}</p>{/if}
+                {#if coachResult}
+                  <div class="mt-4 space-y-3 border-t border-sophia-dark-border/50 pt-4">
+                    <p class="text-xs leading-relaxed text-sophia-dark-muted">{coachResult.executiveSummary}</p>
+                    <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Priority: {coachResult.priority}</p>
+                    <ul class="list-disc space-y-2 pl-5 text-xs text-sophia-dark-muted">
+                      {#each coachResult.recommendations as line}
+                        <li>{line}</li>
+                      {/each}
+                    </ul>
+                    {#if coachResult.suggestedNextExperiments?.length}
+                      <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Next experiments</p>
+                      <ul class="list-disc space-y-1 pl-5 text-xs text-sophia-dark-muted">
+                        {#each coachResult.suggestedNextExperiments as ex}
+                          <li>{ex}</li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </div>
                 {/if}
               </div>
 
@@ -2037,24 +2346,59 @@
                       {/if}
 
                     {#if sourcePreScanResult && preScanEstimateForRow(row.key)}
+                      {@const stageEntry = selectedCatalogEntryForRow(row.key)}
+                      {@const est = preScanEstimateForRow(row.key)}
                       <div class="mt-3 space-y-2">
                         <details class="rounded border border-sophia-dark-border bg-sophia-dark-bg/25 p-3">
                           <summary class="cursor-pointer font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">Input tokens</summary>
                           <p class="mt-2 text-xs text-sophia-dark-muted">
-                            <span class="text-sophia-dark-text">{formatInt(preScanEstimateForRow(row.key)?.inputTokens)}</span>
+                            <span class="text-sophia-dark-text">{formatInt(est?.inputTokens)}</span>
+                            {#if est?.inputTokens != null}
+                              <span class="text-sophia-dark-dim"> ({formatPercentOfReferenceTokens(est.inputTokens)})</span>
+                            {/if}
                           </p>
+                          {#if stageEntry && est?.inputTokens != null}
+                            <p class="mt-1 font-mono text-[0.65rem] text-sophia-dark-sage">
+                              {formatTokensVsSelectedModelWindow(est.inputTokens, stageEntry)}
+                            </p>
+                          {:else if est?.inputTokens != null}
+                            <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">Select a model above to compare input size to its context window.</p>
+                          {/if}
                         </details>
                         <details class="rounded border border-sophia-dark-border bg-sophia-dark-bg/25 p-3">
                           <summary class="cursor-pointer font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">Output tokens</summary>
                           <p class="mt-2 text-xs text-sophia-dark-muted">
-                            <span class="text-sophia-dark-text">{formatInt(preScanEstimateForRow(row.key)?.outputTokens)}</span>
+                            <span class="text-sophia-dark-text">{formatInt(est?.outputTokens)}</span>
+                            {#if est?.outputTokens != null}
+                              <span class="text-sophia-dark-dim"> ({formatPercentOfReferenceTokens(est.outputTokens)})</span>
+                            {/if}
                           </p>
+                          {#if stageEntry && est?.outputTokens != null}
+                            <p class="mt-1 font-mono text-[0.65rem] text-sophia-dark-sage">
+                              {formatTokensVsSelectedModelWindow(est.outputTokens, stageEntry)}
+                            </p>
+                          {:else if est?.outputTokens != null}
+                            <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">Select a model above to compare output estimate to its context window.</p>
+                          {/if}
                         </details>
                         <details class="rounded border border-sophia-dark-border bg-sophia-dark-bg/25 p-3">
                           <summary class="cursor-pointer font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">Total tokens</summary>
                           <p class="mt-2 text-xs text-sophia-dark-muted">
-                            <span class="text-sophia-dark-text">{formatInt(preScanEstimateForRow(row.key)?.totalTokens)}</span>
+                            <span class="text-sophia-dark-text">{formatInt(est?.totalTokens)}</span>
+                            {#if est?.totalTokens != null}
+                              <span class="text-sophia-dark-dim"> ({formatPercentOfReferenceTokens(est.totalTokens)})</span>
+                            {/if}
                           </p>
+                          {#if stageEntry && est?.totalTokens != null}
+                            <p class="mt-1 font-mono text-[0.65rem] text-sophia-dark-sage">
+                              {formatTokensVsSelectedModelWindow(est.totalTokens, stageEntry)}
+                            </p>
+                            <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                              Input + output for one stage call vs the model’s total context (providers may reserve part of the window for tools or cap output separately).
+                            </p>
+                          {:else if est?.totalTokens != null}
+                            <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">Select a model above to compare total request size to its context window.</p>
+                          {/if}
                         </details>
                         <details class="rounded border border-sophia-dark-border bg-sophia-dark-bg/25 p-3">
                           <summary class="cursor-pointer font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">Latency profile</summary>
@@ -2118,7 +2462,7 @@
               <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/30 p-4">
                 <div class="flex items-end justify-between gap-4">
                   <h3 class="font-mono text-[0.7rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Run ingestion</h3>
-                  <span class="font-mono text-xs text-sophia-dark-muted">{flowState === 'setup' ? 'Ready' : flowState === 'done' ? 'Complete' : 'Monitoring'}</span>
+                  <span class="font-mono text-xs text-sophia-dark-muted">{flowState === 'setup' ? 'Ready' : flowState === 'done' ? 'Complete' : flowState === 'error' ? 'Failed' : 'Monitoring'}</span>
                 </div>
                 {#if flowState === 'setup'}
                   <button type="button" onclick={() => void startIngestion()} class="mt-4 w-full rounded border border-sophia-dark-sage/45 bg-sophia-dark-sage/14 px-5 py-3 font-mono text-sm uppercase tracking-[0.12em] text-sophia-dark-sage hover:bg-sophia-dark-sage/20 disabled:opacity-50" disabled={starting || !ingestionModelsReady() || !costEstimateAcknowledged}>
@@ -2159,6 +2503,24 @@
                   {/if}
                   {#if runError}<p class="mt-3 font-mono text-xs text-sophia-dark-copper">{runError}</p>{/if}
                   {#if flowState === 'done' && completionMessage}<p class="mt-3 font-mono text-sm text-sophia-dark-text">{completionMessage}</p>{/if}
+                {/if}
+                {#if runCapturedIssues.length > 0}
+                  <div class="mt-4 rounded border border-sophia-dark-border bg-sophia-dark-bg/35 p-3">
+                    <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Captured issues</p>
+                    <p class="mt-1 text-xs text-sophia-dark-muted">
+                      Parsed from worker output in real time. The same report is merged into Firestore (<code class="text-sophia-dark-text">ingestion_run_reports</code>) when the run pauses for sync, finishes, fails, or is cancelled — use it for tuning prompts, routing, and budgets.
+                    </p>
+                    <ul class="mt-3 max-h-56 list-none space-y-2 overflow-y-auto p-0">
+                      {#each runCapturedIssues as iss}
+                        <li class="rounded border border-sophia-dark-border/60 bg-sophia-dark-bg/40 px-3 py-2 font-mono text-[0.65rem] leading-snug">
+                          <span class="text-sophia-dark-text">{iss.kind.replace(/_/g, ' ')}</span>
+                          <span class="text-sophia-dark-dim"> · {iss.severity}</span>
+                          {#if iss.stageHint}<span class="text-sophia-dark-dim"> · {iss.stageHint}</span>{/if}
+                          <span class="mt-0.5 block text-sophia-dark-muted">{iss.message}</span>
+                        </li>
+                      {/each}
+                    </ul>
+                  </div>
                 {/if}
                 {#if executionNotice}
                   <p class="mt-3 rounded border border-sophia-dark-amber/40 bg-sophia-dark-amber/10 p-2 font-mono text-xs text-sophia-dark-muted">{executionNotice}</p>
@@ -2226,13 +2588,26 @@
                 <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/30 p-4">
                   <h3 class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Pipeline progress</h3>
                   <p class="mt-2 text-xs text-sophia-dark-muted">
-                    Visual run path with current stage focus and completion state.
+                    One active stage at a time: completed (✓), running (●), not started (○), skipped (—), failed (!).
                   </p>
                   <ol class="run-stage-path mt-8" aria-label="Run stage progression">
                     {#each stages as stage}
-                      <li class="run-stage-node run-stage-node--{stage.status}">
+                      <li
+                        class="run-stage-node run-stage-node--{stage.status}"
+                        title="{stage.status === 'done'
+                          ? 'Completed'
+                          : stage.status === 'running'
+                            ? 'Running now'
+                            : stage.status === 'error'
+                              ? 'Failed'
+                              : stage.status === 'skipped'
+                                ? 'Skipped'
+                                : 'Not started yet'}"
+                      >
                         <span class="run-stage-label">{stage.label}</span>
-                        <span class="run-stage-glyph">{stage.status === 'done' ? '✓' : stage.status === 'running' ? '●' : stage.status === 'error' ? '!' : '○'}</span>
+                        <span class="run-stage-glyph" aria-hidden="true">
+                          {#if stage.status === 'done'}✓{:else if stage.status === 'running'}●{:else if stage.status === 'error'}!{:else if stage.status === 'skipped'}—{:else}○{/if}
+                        </span>
                       </li>
                     {/each}
                   </ol>

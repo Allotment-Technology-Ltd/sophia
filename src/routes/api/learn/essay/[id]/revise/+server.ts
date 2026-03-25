@@ -19,12 +19,14 @@ import {
   updateEssaySubmission
 } from '$lib/server/learn/store';
 import { loadByokProviderApiKeys } from '$lib/server/byok/store';
+import { hasOwnerRole } from '$lib/server/authRoles';
 import { consumeLearnEntitlement } from '$lib/server/learn/entitlements';
 
 export const POST: RequestHandler = async ({ request, params, locals }) => {
   if (!isLearnModuleEnabled()) return learnModuleDisabledResponse();
   const uid = requireUid(locals);
   if (!uid) return unauthorizedResponse();
+  const learnQuotaBypass = hasOwnerRole(locals.user);
 
   let body: unknown;
   try {
@@ -48,7 +50,9 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
     return json({ error: 'revised_text must be between 100 and 2000 words' }, { status: 400 });
   }
 
-  const essayQuota = await consumeLearnEntitlement(uid, 'essay_review');
+  const essayQuota = await consumeLearnEntitlement(uid, 'essay_review', {
+    bypassQuota: learnQuotaBypass
+  });
   if (!essayQuota.allowed) {
     return json(
       {

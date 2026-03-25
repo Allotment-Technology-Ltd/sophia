@@ -1,7 +1,7 @@
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from '$lib/server/firebase-admin';
 
-export const APP_USER_ROLE_VALUES = ['user', 'administrator'] as const;
+export const APP_USER_ROLE_VALUES = ['user', 'administrator', 'owner'] as const;
 export type AppUserRole = typeof APP_USER_ROLE_VALUES[number];
 
 export interface AuthenticatedUserProfile {
@@ -31,21 +31,42 @@ function getSeedAdministratorEmails(): Set<string> {
 
 const SEEDED_ADMINISTRATOR_EMAILS = getSeedAdministratorEmails();
 
+function getSeedOwnerEmails(): Set<string> {
+  const configured = process.env.OWNER_EMAILS?.trim();
+  const emails = configured
+    ? configured.split(',').map((value) => value.trim().toLowerCase()).filter(Boolean)
+    : [];
+  return new Set(emails);
+}
+
+const SEEDED_OWNER_EMAILS = getSeedOwnerEmails();
+
 export function isSeedAdministratorEmail(email: string | null | undefined): boolean {
   const normalized = normalizeEmail(email);
   if (!normalized) return false;
   return SEEDED_ADMINISTRATOR_EMAILS.has(normalized);
 }
 
+export function isSeedOwnerEmail(email: string | null | undefined): boolean {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return false;
+  return SEEDED_OWNER_EMAILS.has(normalized);
+}
+
 function normalizeRoles(input: unknown, fallback: AppUserRole): AppUserRole[] {
   if (!Array.isArray(input)) return [fallback];
-  const roles = input.filter((value): value is AppUserRole => value === 'user' || value === 'administrator');
+  const roles = input.filter(
+    (value): value is AppUserRole => value === 'user' || value === 'administrator' || value === 'owner'
+  );
   return roles.length > 0 ? roles : [fallback];
 }
 
 function resolvePrimaryRole(data: Record<string, unknown> | undefined, email: string | null): AppUserRole {
+  if (email && SEEDED_OWNER_EMAILS.has(email)) {
+    return 'owner';
+  }
   const storedRole = data?.role;
-  if (storedRole === 'administrator' || storedRole === 'user') {
+  if (storedRole === 'owner' || storedRole === 'administrator' || storedRole === 'user') {
     return storedRole;
   }
   if (email && SEEDED_ADMINISTRATOR_EMAILS.has(email)) {
@@ -54,10 +75,19 @@ function resolvePrimaryRole(data: Record<string, unknown> | undefined, email: st
   return 'user';
 }
 
+export function hasOwnerRole(user: { role?: string | null; roles?: string[] | null } | null | undefined): boolean {
+  if (!user) return false;
+  if (user.role === 'owner') return true;
+  return Array.isArray(user.roles) && user.roles.includes('owner');
+}
+
 export function hasAdministratorRole(user: { role?: string | null; roles?: string[] | null } | null | undefined): boolean {
   if (!user) return false;
-  if (user.role === 'administrator') return true;
-  return Array.isArray(user.roles) && user.roles.includes('administrator');
+  if (user.role === 'administrator' || user.role === 'owner') return true;
+  return (
+    Array.isArray(user.roles) &&
+    (user.roles.includes('administrator') || user.roles.includes('owner'))
+  );
 }
 
 export async function syncAuthenticatedUserRole(
@@ -70,12 +100,19 @@ export async function syncAuthenticatedUserRole(
 
   const primaryRole = resolvePrimaryRole(existing, email);
   const existingRoles = normalizeRoles(existing?.roles, primaryRole);
-  const roles = Array.from(new Set<AppUserRole>([
-    ...existingRoles,
-    primaryRole,
-    ...(email && SEEDED_ADMINISTRATOR_EMAILS.has(email) ? (['administrator'] as AppUserRole[]) : [])
-  ]));
-  const role: AppUserRole = roles.includes('administrator') ? 'administrator' : primaryRole;
+  const roles = Array.from(
+    new Set<AppUserRole>([
+      ...existingRoles,
+      primaryRole,
+      ...(email && SEEDED_OWNER_EMAILS.has(email) ? (['owner'] as AppUserRole[]) : []),
+      ...(email && SEEDED_ADMINISTRATOR_EMAILS.has(email) ? (['administrator'] as AppUserRole[]) : [])
+    ])
+  );
+  const role: AppUserRole = roles.includes('owner')
+    ? 'owner'
+    : roles.includes('administrator')
+      ? 'administrator'
+      : primaryRole;
 
   await ref.set(
     {

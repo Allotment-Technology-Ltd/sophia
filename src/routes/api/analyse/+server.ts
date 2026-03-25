@@ -29,6 +29,7 @@ import {
   parseReasoningProvider,
   type ModelProvider
 } from '@restormel/contracts/providers';
+import { hasOwnerRole } from '$lib/server/authRoles';
 import { consumePlatformBudget, type PlatformBudgetPlan, type QueryKind } from '$lib/server/rateLimit';
 import {
   consumeIngestionEntitlements
@@ -835,6 +836,7 @@ function selectEffectiveProviderApiKeys(
 export const POST: RequestHandler = async ({ request, locals }) => {
   // A2/A3: uid is guaranteed non-null here — hooks.server.ts already verified the Bearer token
   const uid = locals.user?.uid ?? null;
+  const isOwner = hasOwnerRole(locals.user);
   let providerApiKeys: ProviderApiKeys = {};
   if (uid) {
     try {
@@ -1120,7 +1122,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     }
   }
 
-  if (uid && selectedIngestionLinks.length > 0 && entitlementSummarySnapshot) {
+  if (uid && selectedIngestionLinks.length > 0 && entitlementSummarySnapshot && !isOwner) {
     const preview = evaluateIngestionSelection(
       entitlementSummarySnapshot,
       selectedIngestionLinks.map((link) => link.visibilityScope)
@@ -1195,7 +1197,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
   } // end if (!cachedEvents)
 
-  if (!cachedEvents && uid && byokChargingEnabled && !byokShadowMode) {
+  if (!cachedEvents && uid && byokChargingEnabled && !byokShadowMode && !isOwner) {
     const walletCheck = await assertByokWalletBalance(uid);
     if (!walletCheck.ok) {
       return json(
@@ -1219,7 +1221,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       depthMode,
       resourceMode,
       queryKind,
-      plan: platformBudgetPlan
+      plan: platformBudgetPlan,
+      bypassQuota: isOwner
     });
     if (!budget.allowed) {
       if (budget.reason === 'deep_requires_byok') {
@@ -1679,7 +1682,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           if (queueForNightlyIngest && nightlyIngestionEnabled && uid && selectedIngestionLinks.length > 0) {
             const entitlementConsume = await consumeIngestionEntitlements(
               uid,
-              selectedIngestionLinks.map((link) => link.visibilityScope)
+              selectedIngestionLinks.map((link) => link.visibilityScope),
+              { bypassQuota: isOwner }
             );
             if (entitlementConsume.allowed) {
               entitlementSummarySnapshot = entitlementConsume.summary;
@@ -1727,7 +1731,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           const estimatedRunCostUsd = latestModelCostBreakdown?.total_estimated_cost_usd ?? 0;
           byokEstimatedFeeCents = computeByokFeeCents(estimatedRunCostUsd);
 
-          if (uid && byokChargingEnabled) {
+          if (uid && byokChargingEnabled && !isOwner) {
             if (byokEstimatedFeeCents <= 0) {
               byokFeeChargeStatus = 'skipped';
               byokChargedFeeCents = 0;
@@ -1753,7 +1757,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
               };
             }
           } else if (usingByok) {
-            byokFeeChargeStatus = byokChargingEnabled ? 'pending' : 'skipped';
+            byokFeeChargeStatus =
+              isOwner ? 'skipped' : byokChargingEnabled ? 'pending' : 'skipped';
           } else {
             byokFeeChargeStatus = 'not_applicable';
           }

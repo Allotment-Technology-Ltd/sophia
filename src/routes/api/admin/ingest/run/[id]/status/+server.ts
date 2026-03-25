@@ -35,6 +35,8 @@ export const GET: RequestHandler = async ({ locals, params }) => {
     awaitingSync: state.status === 'awaiting_sync',
     stages: state.stages,
     logLines: state.logLines,
+    issues: state.issues,
+    issueCount: state.issues.length,
     error: state.error,
     currentStageKey: state.currentStageKey ?? null,
     currentAction: state.currentAction ?? null,
