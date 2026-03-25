@@ -14,8 +14,10 @@ ENV VITE_FIREBASE_PROJECT_ID=${VITE_FIREBASE_PROJECT_ID}
 # Install pnpm
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
-# Copy dependency files and local tarball packages used by pnpm file: deps
+# Copy dependency files, workspace config, and local tarball packages used by pnpm
 COPY package.json pnpm-lock.yaml ./
+COPY pnpm-workspace.yaml ./
+COPY packages ./packages
 COPY vendor ./vendor
 
 # Install dependencies
@@ -35,8 +37,10 @@ WORKDIR /app
 # Install pnpm
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
-# Copy package files and local tarball packages used by pnpm file: deps
+# Copy package files, workspace config, and local tarball packages used by pnpm
 COPY package.json pnpm-lock.yaml ./
+COPY pnpm-workspace.yaml ./
+COPY packages ./packages
 COPY vendor ./vendor
 
 # Install production dependencies only
