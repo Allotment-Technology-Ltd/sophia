@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Reproduce Cloud Run runtime: prod-only install + ingest module graph smoke test.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TMP="$(mktemp -d)"
+cleanup() { rm -rf "$TMP"; }
+trap cleanup EXIT
+
+for f in package.json pnpm-lock.yaml pnpm-workspace.yaml vendor packages scripts src tsconfig.json jsconfig.json; do
+  cp -R "$ROOT/$f" "$TMP/"
+done
+
+cd "$TMP"
+pnpm install --prod --frozen-lockfile
+pnpm exec tsx scripts/verify-cloud-run-ingest-modules.ts
+echo "[verify-prod-ingest-isolated] OK"
