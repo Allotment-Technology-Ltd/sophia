@@ -12,7 +12,7 @@
  * List routes (discovery): `GET .../routes?environmentId=&workload=ingestion`. Prefer `isPublished`
  * and routes whose `version` equals `publishedVersion`.
  *
- * Runtime resolve (Keys ≥0.2.10) does not require these UUIDs: `planIngestionStage` calls POST /resolve
+ * Runtime resolve (Keys ≥0.2.11) does not require these UUIDs: `planIngestionStage` calls POST /resolve
  * without routeId when env is unset, using workload=ingestion + stage=ingestion_<substage>.
  * Discovery here remains useful for admin list UX, logging, and optional preflight
  * (`restormelValidateRouteBinding`). Env overrides still pin routeId when set.

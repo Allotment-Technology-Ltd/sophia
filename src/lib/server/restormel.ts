@@ -13,7 +13,7 @@ export interface RestormelFallbackCandidate {
   [key: string]: unknown;
 }
 
-/** Enabled steps in route order on resolve/simulate success (`stepChain`). Keys ≥0.2.10 / contract 2026-03-26. */
+/** Enabled steps in route order on resolve/simulate success (`stepChain`). Keys ≥0.2.11 / contract 2026-03-26. */
 export interface RestormelStepChainEntry {
   stepId: string;
   orderIndex: number;
@@ -54,7 +54,7 @@ export interface EvaluateRequest {
 }
 
 export interface RestormelResolveResult {
-  /** Resolve/simulate contract: `2026-03-26` with Keys ≥0.2.10 (see RESTORMEL_RESOLVE_SIMULATE_CONTRACT_VERSION). */
+  /** Resolve/simulate contract: `2026-03-26` with Keys ≥0.2.11 (see RESTORMEL_RESOLVE_SIMULATE_CONTRACT_VERSION). */
   contractVersion?: string | null;
   routeId: string;
   providerType: string | null;
@@ -330,7 +330,7 @@ function publishValidationSummary(payload: unknown): string | undefined {
       const msg = typeof e.message === 'string' ? e.message : '';
       const stepId = typeof e.stepId === 'string' ? e.stepId : '';
       const order = typeof e.orderIndex === 'number' ? String(e.orderIndex) : '';
-      const head = [stepId && `step=${stepId}`, order && `order=${order}`, field && field]
+      const head = [stepId && `step=${stepId}`, order && `order=${order}`, field]
         .filter(Boolean)
         .join(' ');
       return head ? `${head}: ${msg || 'invalid'}` : msg;
@@ -446,8 +446,11 @@ function toDashboardError(
               ? 'bad_request'
               : 'request_failed';
 
+  const publishSummary = publishValidationSummary(payload);
+
   const detail =
-    isRecord(payload) && typeof payload.detail === 'string'
+    publishSummary ||
+    (isRecord(payload) && typeof payload.detail === 'string'
       ? payload.detail
       : isRecord(payload) && typeof payload.message === 'string'
         ? payload.message
@@ -455,7 +458,7 @@ function toDashboardError(
           ? `Upstream returned HTML instead of JSON (status ${status}). Check RESTORMEL_KEYS_BASE / RESTORMEL_BASE_URL and endpoint routing.`
           : payloadText
             ? payloadText.slice(0, 220)
-          : `Restormel request failed with status ${status}`;
+            : `Restormel request failed with status ${status}`);
 
   return new RestormelDashboardError({
     status,

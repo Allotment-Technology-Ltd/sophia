@@ -111,7 +111,7 @@ function latencyToDepth(latency: AAIFLatency): 'quick' | 'standard' | 'deep' {
 /**
  * Optional env pins: when set, POST /resolve includes routeId (only that route is considered).
  * When unset, resolve omits routeId; Restormel picks a published route by workload + stage
- * (dedicated ingestion_<substage> first, then shared ingestion with empty stage). Keys ≥0.2.10.
+ * (dedicated ingestion_<substage> first, then shared ingestion with empty stage). Keys ≥0.2.11.
  */
 function stageRouteBindingFromEnv(stage: IngestionStage): { routeId?: string } {
   if (stage === 'validation') {
