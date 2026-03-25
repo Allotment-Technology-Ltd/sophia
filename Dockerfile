@@ -56,6 +56,9 @@ COPY --from=builder /app/src ./src
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
 COPY --from=builder /app/jsconfig.json ./jsconfig.json
 
+# Fail the image build if prod node_modules cannot resolve the ingest.ts import graph
+RUN npx tsx scripts/verify-cloud-run-ingest-modules.ts
+
 # Writable cache for fetched sources (Cloud Run: ensure no read-only root override)
 RUN mkdir -p data/sources
 

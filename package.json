@@ -34,7 +34,8 @@
     "infra:up": "cd infra && pulumi up --stack production",
     "infra:refresh": "cd infra && pulumi refresh --stack production",
     "infra:install": "cd infra && npm install",
-    "migrate": "bash scripts/migrate-to-europe-west2.sh"
+    "migrate": "bash scripts/migrate-to-europe-west2.sh",
+    "verify:prod-ingest": "bash scripts/verify-prod-ingest-isolated.sh"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.58",
@@ -52,6 +53,7 @@
     "firebase": "^12.10.0",
     "firebase-admin": "^13.0.0",
     "google-auth-library": "^10.6.1",
+    "dotenv": "^17.3.1",
     "marked": "^17.0.3",
     "node-html-parser": "^7.1.0",
     "posthog-node": "^5.28.0",
@@ -70,7 +72,6 @@
     "@types/node": "^20.19.37",
     "@vitest/coverage-v8": "^4.0.18",
     "autoprefixer": "^10.4.27",
-    "dotenv": "^17.3.1",
     "postcss": "^8.5.6",
     "svelte": "^5.53.6",
     "svelte-check": "^4.4.4",

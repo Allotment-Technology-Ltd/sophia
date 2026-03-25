@@ -127,6 +127,9 @@ jobs:
       - name: Type check
         run: pnpm check
 
+      - name: Verify prod ingest module graph (Cloud Run parity)
+        run: bash scripts/verify-prod-ingest-isolated.sh
+
       - name: Build (verify)
         if: github.event_name == 'pull_request'
         run: pnpm build
