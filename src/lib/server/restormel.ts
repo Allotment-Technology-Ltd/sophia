@@ -13,6 +13,16 @@ export interface RestormelFallbackCandidate {
   [key: string]: unknown;
 }
 
+/** Enabled steps in route order on resolve/simulate success (`stepChain`). Keys ≥0.2.11 / contract 2026-03-26. */
+export interface RestormelStepChainEntry {
+  stepId: string;
+  orderIndex: number;
+  providerType: string | null;
+  modelId: string | null;
+  enabled: boolean;
+  selected: boolean;
+}
+
 export interface ResolveRequest {
   environmentId: string;
   routeId?: string;
@@ -44,6 +54,8 @@ export interface EvaluateRequest {
 }
 
 export interface RestormelResolveResult {
+  /** Resolve/simulate contract: `2026-03-26` with Keys ≥0.2.11 (see RESTORMEL_RESOLVE_SIMULATE_CONTRACT_VERSION). */
+  contractVersion?: string | null;
   routeId: string;
   providerType: string | null;
   modelId: string | null;
@@ -54,6 +66,7 @@ export interface RestormelResolveResult {
   estimatedCostUsd?: number | null;
   matchedCriteria?: unknown;
   fallbackCandidates?: RestormelFallbackCandidate[] | null;
+  stepChain?: RestormelStepChainEntry[] | null;
   [key: string]: unknown;
 }
 
@@ -75,6 +88,8 @@ export interface RestormelRouteRecord {
   workload?: string | null;
   stage?: string | null;
   enabled?: boolean | null;
+  /** When false, resolve should not select this route (draft / not published). */
+  isPublished?: boolean | null;
   version?: number | null;
   publishedVersion?: number | null;
   [key: string]: unknown;
@@ -139,6 +154,11 @@ import {
   isReasoningProvider,
   type ReasoningProvider
 } from '@restormel/contracts/providers';
+import type { ValidateRouteBindingResult } from '@restormel/keys/dashboard';
+import { validateRouteBinding } from '@restormel/keys/dashboard';
+
+/** Use with the headless `resolve()` helper from `@restormel/keys/dashboard`; Sophia uses `restormelResolve` + thrown errors instead. */
+export { isNoKeyAvailable, isResolveIncomplete } from '@restormel/keys/dashboard';
 
 export class RestormelDashboardError extends Error {
   readonly status: number;
@@ -260,12 +280,75 @@ function parseFallbackCandidates(value: unknown): RestormelFallbackCandidate[] |
   }));
 }
 
+function parseStepChain(value: unknown): RestormelStepChainEntry[] | null {
+  if (!Array.isArray(value)) return null;
+  const rows = value.filter(isRecord).map((row) => ({
+    stepId: typeof row.stepId === 'string' ? row.stepId : '',
+    orderIndex: typeof row.orderIndex === 'number' ? row.orderIndex : 0,
+    providerType: typeof row.providerType === 'string' ? row.providerType : null,
+    modelId: typeof row.modelId === 'string' ? row.modelId : null,
+    enabled: row.enabled !== false,
+    selected: row.selected === true
+  }));
+  return rows.length > 0 ? rows : null;
+}
+
+/** Expected `contractVersion` on resolve/simulate success (Keys dashboard API). */
+export const RESTORMEL_RESOLVE_SIMULATE_CONTRACT_VERSION = '2026-03-26';
+
+function warnIfUnexpectedResolveContract(contractVersion: string | null | undefined): void {
+  if (!contractVersion || contractVersion === RESTORMEL_RESOLVE_SIMULATE_CONTRACT_VERSION) return;
+  if (process.env.NODE_ENV === 'test') return;
+  console.warn(
+    '[restormel] Unexpected resolve/simulate contractVersion:',
+    contractVersion,
+    'expected',
+    RESTORMEL_RESOLVE_SIMULATE_CONTRACT_VERSION,
+    '— upgrade @restormel/keys or confirm dashboard release notes.'
+  );
+}
+
+function operatorMessageFromPayload(payload: unknown): string | undefined {
+  if (!isRecord(payload)) return undefined;
+  if (typeof payload.userMessage === 'string' && payload.userMessage.trim()) {
+    return payload.userMessage.trim();
+  }
+  if (typeof payload.message === 'string' && payload.message.trim()) {
+    return payload.message.trim();
+  }
+  return undefined;
+}
+
+function publishValidationSummary(payload: unknown): string | undefined {
+  if (!isRecord(payload) || payload.error !== 'publish_validation_failed') return undefined;
+  const errors = payload.errors;
+  if (!Array.isArray(errors)) return undefined;
+  const parts = errors
+    .filter(isRecord)
+    .map((e) => {
+      const field = typeof e.field === 'string' ? e.field : '';
+      const msg = typeof e.message === 'string' ? e.message : '';
+      const stepId = typeof e.stepId === 'string' ? e.stepId : '';
+      const order = typeof e.orderIndex === 'number' ? String(e.orderIndex) : '';
+      const head = [stepId && `step=${stepId}`, order && `order=${order}`, field]
+        .filter(Boolean)
+        .join(' ');
+      return head ? `${head}: ${msg || 'invalid'}` : msg;
+    })
+    .filter(Boolean);
+  if (parts.length === 0) return undefined;
+  return parts.slice(0, 12).join('; ');
+}
+
 function toResolveResult(value: unknown): RestormelResolveResult {
   if (!isRecord(value)) {
     throw new Error('Restormel resolve returned an invalid response payload');
   }
 
   return {
+    ...value,
+    contractVersion:
+      typeof value.contractVersion === 'string' ? value.contractVersion : null,
     routeId: typeof value.routeId === 'string' ? value.routeId : '',
     providerType: typeof value.providerType === 'string' ? value.providerType : null,
     modelId: typeof value.modelId === 'string' ? value.modelId : null,
@@ -279,11 +362,26 @@ function toResolveResult(value: unknown): RestormelResolveResult {
       typeof value.estimatedCostUsd === 'number' ? value.estimatedCostUsd : null,
     matchedCriteria: value.matchedCriteria ?? null,
     fallbackCandidates: parseFallbackCandidates(value.fallbackCandidates),
-    ...value
+    stepChain: parseStepChain(value.stepChain)
   };
 }
 
 function resolveUserMessage(code: string, violations: RestormelPolicyViolation[]): string {
+  if (code === 'no_route') {
+    return 'No Restormel route matches this workload/stage for the current environment. List routes in the dashboard or fix metadata.';
+  }
+  if (code === 'route_unpublished') {
+    return 'The matching route exists but is not published. Publish it in Restormel Keys so version matches publishedVersion.';
+  }
+  if (code === 'route_disabled') {
+    return 'The matching route is disabled in Restormel Keys. Enable it or pick another route.';
+  }
+  if (code === 'resolve_incomplete') {
+    return 'Restormel selected a route step that is not executable (missing or unknown provider/model). Fix the route in Keys or check workspace keys.';
+  }
+  if (code === 'publish_validation_failed') {
+    return 'Publish was rejected: one or more route steps failed validation. Review the detailed errors and fix steps before publishing again.';
+  }
   if (code === 'policy_blocked') {
     if (
       violations.some(
@@ -348,8 +446,11 @@ function toDashboardError(
               ? 'bad_request'
               : 'request_failed';
 
+  const publishSummary = publishValidationSummary(payload);
+
   const detail =
-    isRecord(payload) && typeof payload.detail === 'string'
+    publishSummary ||
+    (isRecord(payload) && typeof payload.detail === 'string'
       ? payload.detail
       : isRecord(payload) && typeof payload.message === 'string'
         ? payload.message
@@ -357,7 +458,7 @@ function toDashboardError(
           ? `Upstream returned HTML instead of JSON (status ${status}). Check RESTORMEL_KEYS_BASE / RESTORMEL_BASE_URL and endpoint routing.`
           : payloadText
             ? payloadText.slice(0, 220)
-          : `Restormel request failed with status ${status}`;
+            : `Restormel request failed with status ${status}`);
 
   return new RestormelDashboardError({
     status,
@@ -407,21 +508,22 @@ export async function restormelResolve(request: ResolveRequest): Promise<Resolve
       method: 'POST',
       body: request
     });
-    return {
-      data: toResolveResult(payload.data)
-    };
+    const data = toResolveResult(payload.data);
+    warnIfUnexpectedResolveContract(data.contractVersion);
+    return { data };
   } catch (error) {
     if (error instanceof RestormelDashboardError) {
       const violations = isRecord(error.payload)
         ? parseViolations(error.payload.violations)
         : [];
+      const fromPayload = operatorMessageFromPayload(error.payload);
       throw new RestormelResolveError({
         status: error.status,
         code: error.code,
         detail: error.detail,
         endpoint: error.endpoint,
         payload: error.payload,
-        userMessage: resolveUserMessage(error.code, violations),
+        userMessage: fromPayload ?? resolveUserMessage(error.code, violations),
         violations
       });
     }
@@ -449,8 +551,27 @@ export async function restormelEvaluatePolicies(
   });
 }
 
-export async function restormelListRoutes(): Promise<{ data: RestormelRouteRecord[] }> {
-  return requestRestormel<{ data: RestormelRouteRecord[] }>(`${projectPath()}/routes`);
+/**
+ * List routes for the project. Omit `query` to return all routes (admin UI).
+ * For ingestion discovery, pass `environmentId` + `workload: 'ingestion'` per Restormel Keys API.
+ * @see https://restormel.dev — GET .../routes?environmentId=&workload=&stage=
+ */
+export async function restormelListRoutes(
+  query?: {
+    environmentId?: string;
+    workload?: string;
+    /** Omit or leave unset to list all stages; use empty string only if the API expects it for shared routes */
+    stage?: string;
+  }
+): Promise<{ data: RestormelRouteRecord[] }> {
+  const params = new URLSearchParams();
+  if (query?.environmentId) params.set('environmentId', query.environmentId);
+  if (query?.workload) params.set('workload', query.workload);
+  if (query?.stage !== undefined) params.set('stage', query.stage);
+  const qs = params.toString();
+  return requestRestormel<{ data: RestormelRouteRecord[] }>(
+    `${projectPath()}/routes${qs ? `?${qs}` : ''}`
+  );
 }
 
 export async function restormelSaveRoute(
@@ -486,14 +607,17 @@ export async function restormelSaveRouteSteps(
 export async function restormelSimulateRoute(
   routeId: string,
   payload: Record<string, unknown>
-): Promise<{ data: Record<string, unknown> }> {
-  return requestRestormel<{ data: Record<string, unknown> }>(
+): Promise<{ data: RestormelResolveResult }> {
+  const raw = await requestRestormel<{ data: unknown }>(
     `${projectPath()}/routes/${encodeURIComponent(routeId)}/simulate`,
     {
       method: 'POST',
       body: payload
     }
   );
+  const data = toResolveResult(raw.data);
+  warnIfUnexpectedResolveContract(data.contractVersion);
+  return { data };
 }
 
 export async function restormelPublishRoute(
@@ -681,6 +805,29 @@ export async function restormelGetLiveReasoningAllowlist(): Promise<{
     }
     throw error;
   }
+}
+
+/**
+ * Preflight: route metadata vs env / workload / stage (not policy or step evaluation).
+ * Use from admin flows when you want a typed check before saving routing.
+ */
+export async function restormelValidateRouteBinding(options: {
+  routeId: string;
+  workload?: string | null;
+  stage?: string | null;
+  task?: string | null;
+}): Promise<ValidateRouteBindingResult> {
+  ensureRestormelConfig();
+  return validateRouteBinding({
+    baseUrl: RESTORMEL_BASE_URL,
+    projectId: RESTORMEL_PROJECT_ID,
+    environmentId: RESTORMEL_ENVIRONMENT_ID,
+    routeId: options.routeId,
+    workload: options.workload ?? undefined,
+    stage: options.stage ?? undefined,
+    task: options.task ?? undefined,
+    auth: { type: 'bearer', token: RESTORMEL_GATEWAY_KEY }
+  });
 }
 
 export async function restormelPostCatalogObservation(payload: {

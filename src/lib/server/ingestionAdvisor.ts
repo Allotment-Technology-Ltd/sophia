@@ -235,13 +235,24 @@ export async function runIngestionCoach(limit: number): Promise<{
     }
   });
 
-  const prompt = `You improve a document ingestion pipeline for philosophy sources.
+  const prompt = `You improve Sophia's philosophy ingestion pipeline (SvelteKit admin + scripts/ingest.ts + Vertex/Anthropic via Restormel Keys).
 
-Below are recent run reports from Firestore (issue kinds are structured signals: json_repair, retry, batch_split, truncation, etc.).
+Below are recent Firestore run summaries. Each line includes issueSummary JSON: counts by **kind**. Use these definitions exactly — do not invent separate infrastructure (there is no standalone "routing service"):
 
+- **routing_degraded**: Restormel resolve failed or returned no route; Sophia used **degraded_default** (built-in provider/model). Fix: published Restormel routes for workload=ingestion + stage, correct RESTORMEL_PROJECT_ID / RESTORMEL_ENVIRONMENT_ID / gateway key, or provider quotas.
+- **json_repair**: Model output failed JSON/schema check; repair pass ran. Fix: extraction prompt, max_tokens, batch sizes, or model choice.
+- **truncation**: max_tokens / output truncation (often triggers batch_split). Fix: smaller passage batches, higher output limits where safe, or split logic.
+- **batch_split**: oversized batch split after truncation. Expected recovery path; many splits suggest batching/token limits need tuning.
+- **retry**: transient model/API retry (e.g. 429). Fix: backoff, rate limits, different model or time of day.
+- **parse_or_schema**: parse/validation failed before repair.
+- **warning**: generic WARN lines from the worker.
+- **fetch_retry**, **sync_retry**, **ingest_retry**: automatic retries on fetch, SurrealDB sync, or full ingest.
+- **grouping_integrity**, **budget**, **resume_checkpoint**, **cancelled**, **other_signal**: as named.
+
+Reports:
 ${lines.join('\n')}
 
-Produce actionable recommendations for engineering: prompts, routing, batch sizes, validation defaults, monitoring. Be specific and prioritized.`;
+Produce actionable recommendations for **Sophia operators**: Restormel Keys routes, env vars, ingest flags (--ingest-provider, --validate), batching in scripts/ingest.ts, Vertex quotas. Avoid generic advice about mystery microservices or Firestore document size unless issue kinds or terminalError clearly support it. Be specific and prioritized.`;
 
   try {
     const result = await generateObject({

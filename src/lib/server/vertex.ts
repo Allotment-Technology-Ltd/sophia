@@ -16,7 +16,8 @@ import { loadServerEnv } from './env';
 import type { ProviderApiKeys } from './byok/types';
 import {
   restormelPostCatalogObservation,
-  type RestormelFallbackCandidate
+  type RestormelFallbackCandidate,
+  type RestormelStepChainEntry
 } from './restormel';
 import { resolveProviderDecision, type ResolveFailureKind } from './resolve-provider';
 
@@ -142,6 +143,7 @@ export interface ReasoningModelRoute {
   resolvedEstimatedCostUsd?: number | null;
   resolvedMatchedCriteria?: unknown;
   resolvedFallbackCandidates?: RestormelFallbackCandidate[] | null;
+  resolvedStepChain?: RestormelStepChainEntry[] | null;
 }
 
 export interface AvailableModelOption {
@@ -372,7 +374,8 @@ async function resolveRoute(options: {
         resolvedSwitchReasonCode: null,
         resolvedEstimatedCostUsd: null,
         resolvedMatchedCriteria: null,
-        resolvedFallbackCandidates: decision.fallbackCandidates ?? null
+        resolvedFallbackCandidates: decision.fallbackCandidates ?? null,
+        resolvedStepChain: decision.stepChain ?? null
       };
     }
 
@@ -437,7 +440,8 @@ async function resolveRoute(options: {
     resolvedSwitchReasonCode: decision.switchReasonCode ?? null,
     resolvedEstimatedCostUsd: decision.estimatedCostUsd ?? null,
     resolvedMatchedCriteria: decision.matchedCriteria ?? null,
-    resolvedFallbackCandidates: decision.fallbackCandidates ?? null
+    resolvedFallbackCandidates: decision.fallbackCandidates ?? null,
+    resolvedStepChain: decision.stepChain ?? null
   };
 }
 

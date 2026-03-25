@@ -3,6 +3,7 @@
   import { getIdToken } from '$lib/firebase';
   import { isEmbeddingModelEntry } from '$lib/ingestionModelCatalogMerge';
   import { INGESTION_SOURCE_MODEL_HINTS } from '$lib/ingestionModelCatalog';
+  import { entryMeetsPresetStageMinimum } from '$lib/ingestionPipelineModelRequirements';
   import { resolveRouteForStage } from '$lib/utils/ingestionRouting';
 
   type StageStatus = 'idle' | 'running' | 'done' | 'error' | 'skipped';
@@ -30,6 +31,9 @@
     modelId: string;
     /** e.g. 128k, 200k, 1M — from catalog / merge */
     contextWindow?: string;
+    costTier?: 'low' | 'medium' | 'high';
+    qualityTier?: 'capable' | 'strong' | 'frontier';
+    speed?: 'fast' | 'balanced' | 'thorough';
     pricing?: {
       inputPerMillion?: number | null;
       outputPerMillion?: number | null;
@@ -123,6 +127,12 @@
     embed: boolean;
   }[] = [
     {
+      key: 'ingestion_fetch',
+      label: 'Fetch & parse',
+      description: 'Download and normalize source text before model stages.',
+      embed: false
+    },
+    {
       key: 'ingestion_extraction',
       label: 'Extraction',
       description: 'Structured claims and passages from the source.',
@@ -162,6 +172,7 @@
 
   /** One-line summary per stage (long copy stays in “Learn more”). */
   const STAGE_ONE_LINE: Record<string, string> = {
+    ingestion_fetch: 'HTTP fetch, HTML or text cleanup, and canonical file layout (no LLM).',
     ingestion_extraction: 'Structured claims and passages from the source.',
     ingestion_relations: 'Support, tension, and dependency links between claims.',
     ingestion_grouping: 'Argument clusters and positions.',
@@ -334,6 +345,7 @@
   let catalogError = $state('');
   let catalogNotice = $state('');
   let stageProviders = $state<Record<string, string>>({
+    ingestion_fetch: '',
     ingestion_extraction: '',
     ingestion_relations: '',
     ingestion_grouping: '',
@@ -342,6 +354,7 @@
     ingestion_json_repair: ''
   });
   let stageModelIds = $state<Record<string, string>>({
+    ingestion_fetch: '',
     ingestion_extraction: '',
     ingestion_relations: '',
     ingestion_grouping: '',
@@ -397,6 +410,7 @@
   }
 
   function modelsForStage(row: (typeof RESTORMEL_STAGES)[number]): CatalogEntry[] {
+    if (row.key === 'ingestion_fetch') return [];
     return row.embed ? embeddingModels : chatModels;
   }
 
@@ -427,8 +441,42 @@
     return primaryStages.some((key) => map[key]?.trim() === sid);
   }
 
+  /**
+   * After any change to primary-stage models, ensure validation uses a different model when enabled.
+   * Picks the best-scoring non-conflicting chat model from the catalog for this stage.
+   */
+  function ensureValidationModelIsIndependent(): void {
+    if (!runValidate) return;
+    const row = RESTORMEL_STAGES.find((r) => r.key === 'ingestion_validation');
+    if (!row) return;
+    const list = modelsForStage(row);
+    if (list.length === 0) return;
+    const current = getCatalogEntryByStableId(stageModelIds[row.key] ?? '');
+    if (current && !validationModelConflicts(current)) return;
+
+    const nonConflicting = list.filter((e) => !validationModelConflicts(e));
+    if (nonConflicting.length === 0) return;
+
+    const presetForFloor = selectedPreset ?? 'balanced';
+    const pick =
+      nonConflicting.find(
+        (e) => isStageRecommendedModel(row, e) && isStageMinimumViableModel(row, e, presetForFloor)
+      ) ??
+      nonConflicting.find((e) => isStageMinimumViableModel(row, e, presetForFloor)) ??
+      nonConflicting[0];
+
+    stageModelIds = { ...stageModelIds, [row.key]: stableModelId(pick) };
+    stageProviders = { ...stageProviders, [row.key]: pick.provider };
+  }
+
   function stageAdvice(row: (typeof RESTORMEL_STAGES)[number]): { complexityLabel: string; body: string } {
     switch (row.key) {
+      case 'ingestion_fetch':
+        return {
+          complexityLabel: 'low',
+          body:
+            'Fetch is HTTP, redirects, and HTML or plain-text normalization into your corpus paths. It does not call a frontier LLM; separate it from extraction so costs and failure modes stay clear.'
+        };
       case 'ingestion_extraction':
         return {
           complexityLabel: 'high',
@@ -508,32 +556,18 @@
     return preScanEstimateForRow(row.key)?.totalTokens ?? 0;
   }
 
+  /** Preset-aware floors: budget / balanced / complexity (see `ingestionPipelineModelRequirements.ts`). */
   function isStageMinimumViableModel(
     row: (typeof RESTORMEL_STAGES)[number],
-    entry: CatalogEntry
+    entry: CatalogEntry,
+    preset: PipelinePreset = 'balanced'
   ): boolean {
-    const label = `${entry.label} ${entry.modelId}`.toLowerCase();
-    const tiny = /(nano|3b|7b)/i.test(label);
-    const strong =
-      /(opus|sonnet|gpt-4|gpt-5|o1|o3|gemini.*pro|reasoner|deepseek-r1|mistral-large|command-r\+|llama.*70b|qwen.*72b)/i.test(
-        label
-      );
-    const jsonFriendly = /json|instruct|mini|haiku|flash|lite|nano/i.test(label);
-
-    if (row.embed) return isLikelyEmbeddingModel(entry);
-    switch (row.key) {
-      case 'ingestion_extraction':
-      case 'ingestion_relations':
-        return strong || !tiny;
-      case 'ingestion_grouping':
-        return strong;
-      case 'ingestion_validation':
-        return !tiny;
-      case 'ingestion_json_repair':
-        return jsonFriendly || !tiny;
-      default:
-        return false;
-    }
+    if (row.key === 'ingestion_fetch') return true;
+    const embeddingHighPressure = row.embed && stageTokens(row) >= 180_000;
+    return entryMeetsPresetStageMinimum(preset, row.key, entry, {
+      embed: row.embed,
+      embeddingHighPressure
+    });
   }
 
   function choosePresetModelForStage(
@@ -542,18 +576,33 @@
     /** IDs already chosen for earlier stages in this preset apply (must include extraction/relations/grouping before validation). */
     provisionalModelIds?: Record<string, string>
   ): CatalogEntry | null {
+    if (row.key === 'ingestion_fetch') return null;
     const options = modelsForStage(row);
     if (options.length === 0) return null;
-    let minimumViable = options.filter((entry) => isStageMinimumViableModel(row, entry));
+    let minimumViable = options.filter((entry) => isStageMinimumViableModel(row, entry, preset));
     if (minimumViable.length === 0) return null;
 
     if (row.key === 'ingestion_validation' && runValidate && provisionalModelIds) {
-      const nonConflicting = minimumViable.filter((entry) => !validationModelConflictsWithMap(entry, provisionalModelIds));
-      if (nonConflicting.length > 0) {
-        minimumViable = nonConflicting;
-      } else {
+      const nonConflictingAll = options.filter(
+        (entry) => !validationModelConflictsWithMap(entry, provisionalModelIds)
+      );
+      let viable = minimumViable.filter(
+        (entry) => !validationModelConflictsWithMap(entry, provisionalModelIds)
+      );
+      if (viable.length === 0) {
+        viable = nonConflictingAll.filter((entry) => isStageMinimumViableModel(row, entry, preset));
+      }
+      if (viable.length === 0) {
+        const labelTiny = (e: CatalogEntry) => /(nano|3b|7b)/i.test(`${e.label} ${e.modelId}`);
+        viable = nonConflictingAll.filter((e) => !labelTiny(e));
+      }
+      if (viable.length === 0) {
+        viable = nonConflictingAll;
+      }
+      if (viable.length === 0) {
         return null;
       }
+      minimumViable = viable;
     }
 
     const recommendedOptions = minimumViable.filter((entry) =>
@@ -652,6 +701,11 @@
     const missingMinimumStages: string[] = [];
 
     for (const row of RESTORMEL_STAGES) {
+      if (row.key === 'ingestion_fetch') {
+        nextModelIds[row.key] = '';
+        nextProviders[row.key] = '';
+        continue;
+      }
       if (row.key === 'ingestion_validation' && !runValidate) {
         nextModelIds[row.key] = '';
         nextProviders[row.key] = '';
@@ -668,6 +722,7 @@
 
     stageProviders = nextProviders;
     stageModelIds = nextModelIds;
+    ensureValidationModelIsIndependent();
     selectedPreset = preset;
     const sourceLabel = SOURCE_TYPES.find((option) => option.value === sourceType)?.label ?? sourceType;
     const presetLabel = preset === 'budget' ? 'Budget' : preset === 'complexity' ? 'Complexity' : 'Balanced';
@@ -711,6 +766,8 @@
       // For large sources, prefer embedding variants that are less likely to bottleneck.
       return stageTokenPressure(row) !== 'high' || isRateLimitFriendly(row, entry);
     }
+
+    if (row.key === 'ingestion_fetch') return false;
 
     // Cross-provider "strong" and "fast" buckets.
     const strong =
@@ -758,6 +815,7 @@
   }
 
   function ensureStageProviderSelection(row: (typeof RESTORMEL_STAGES)[number]): void {
+    if (row.key === 'ingestion_fetch') return;
     const providers = providersForStage(row);
     const current = stageProviders[row.key]?.trim() ?? '';
     if (!current || !providers.includes(current)) {
@@ -771,6 +829,13 @@
     const list = modelsForStageProvider(row, pid);
     const nextSid = list[0] ? stableModelId(list[0]) : '';
     stageModelIds = { ...stageModelIds, [row.key]: nextSid };
+    if (
+      row.key === 'ingestion_extraction' ||
+      row.key === 'ingestion_relations' ||
+      row.key === 'ingestion_grouping'
+    ) {
+      ensureValidationModelIsIndependent();
+    }
   }
 
   function applyDefaultStageSelections(): void {
@@ -782,20 +847,34 @@
     const next: Record<string, string> = {};
     const nextProviders: Record<string, string> = {};
     for (const row of RESTORMEL_STAGES) {
+      if (row.key === 'ingestion_fetch') {
+        next[row.key] = '';
+        nextProviders[row.key] = '';
+        continue;
+      }
       const list = catalogEntries.filter((e) =>
         row.embed ? isEmbeddingModelEntry(e) : !isEmbeddingModelEntry(e)
       );
-      const first = list[0];
-      next[row.key] = first ? stableModelId(first) : '';
-      nextProviders[row.key] = first?.provider ?? '';
+      if (row.key === 'ingestion_validation') {
+        const firstNonConflict =
+          list.find((e) => !validationModelConflictsWithMap(e, next)) ?? list[0];
+        next[row.key] = firstNonConflict ? stableModelId(firstNonConflict) : '';
+        nextProviders[row.key] = firstNonConflict?.provider ?? '';
+      } else {
+        const first = list[0];
+        next[row.key] = first ? stableModelId(first) : '';
+        nextProviders[row.key] = first?.provider ?? '';
+      }
     }
     stageModelIds = next;
     stageProviders = nextProviders;
+    ensureValidationModelIsIndependent();
   }
 
   function ingestionModelsReady(): boolean {
     if (catalogEntries.length === 0) return false;
     for (const row of RESTORMEL_STAGES) {
+      if (row.key === 'ingestion_fetch') continue;
       if (row.key === 'ingestion_validation' && !runValidate) continue;
       const id = stageModelIds[row.key]?.trim() ?? '';
       if (!id) return false;
@@ -898,6 +977,7 @@
     stageModelIds = next;
     stageProviders = nextProviders;
     for (const row of RESTORMEL_STAGES) ensureStageProviderSelection(row);
+    ensureValidationModelIsIndependent();
   }
 
   async function refreshModelsAndRoutes(): Promise<void> {
@@ -913,6 +993,7 @@
     try {
       await loadRoutingContext();
       for (const row of RESTORMEL_STAGES) {
+        if (row.key === 'ingestion_fetch') continue;
         const route = resolveRouteForStage(routes, row.key);
         if (!route?.id) {
           routingError = `No Restormel route is available for “${row.label}”. Configure routes in Restormel Keys, then refresh.`;
@@ -937,7 +1018,7 @@
           ])
         });
       }
-      routingMessage = 'Saved model routing for all six ingestion stages.';
+      routingMessage = 'Saved model routing for all six LLM ingestion stages.';
     } catch (e) {
       routingError = e instanceof Error ? e.message : 'Failed to save routing';
     } finally {
@@ -1071,6 +1152,7 @@
   );
 
   const RUN_COST_STAGE_KEY_MAP: Record<string, string> = {
+    fetch: 'ingestion_fetch',
     extract: 'ingestion_extraction',
     extraction: 'ingestion_extraction',
     relate: 'ingestion_relations',
@@ -1090,6 +1172,7 @@
     const fromCostTag = line.match(/\[COST\]\s+([A-Z_]+)/i)?.[1] ?? '';
     const norm = fromCostTag.trim().toLowerCase().replace(/[^a-z_]/g, '');
     if (norm && RUN_COST_STAGE_KEY_MAP[norm]) return RUN_COST_STAGE_KEY_MAP[norm];
+    if (norm.startsWith('fetch')) return 'ingestion_fetch';
     if (norm.startsWith('extract')) return 'ingestion_extraction';
     if (norm.startsWith('relat')) return 'ingestion_relations';
     if (norm.startsWith('group')) return 'ingestion_grouping';
@@ -1117,11 +1200,13 @@
     }));
     const runningByKey: Record<string, number> = {};
     let latestTotal: number | null = null;
+    let resumeCheckpointTotal: number | null = null;
 
     for (const line of runLog) {
       const stageKey = parseCostStageFromLine(line);
       const stageMatch = line.match(/stage=\$([0-9]+(?:\.[0-9]+)?)/i);
       const totalMatch = line.match(/total=\$([0-9]+(?:\.[0-9]+)?)/i);
+      const resumeMatch = line.match(/\[COST_RESUME\].*total=\$([0-9]+(?:\.[0-9]+)?)/i);
 
       if (stageKey && stageMatch) {
         const delta = Number(stageMatch[1]);
@@ -1138,6 +1223,10 @@
         const total = Number(totalMatch[1]);
         if (Number.isFinite(total) && total >= 0) latestTotal = total;
       }
+      if (resumeMatch) {
+        const t = Number(resumeMatch[1]);
+        if (Number.isFinite(t) && t >= 0) resumeCheckpointTotal = t;
+      }
     }
 
     for (const row of rows) {
@@ -1146,17 +1235,26 @@
       }
     }
 
-    const rollingTotal =
-      latestTotal ??
-      rows
-        .map((row) => row.runningUsd)
-        .filter((v): v is number => typeof v === 'number')
-        .reduce((sum, v) => sum + v, 0);
+    const sumStageRunning = rows
+      .map((row) => row.runningUsd)
+      .filter((v): v is number => typeof v === 'number')
+      .reduce((sum, v) => sum + v, 0);
+
+    // Prefer summing per-stage [COST] deltas across the whole log (survives resume + new process).
+    // Do not use last line's total= alone — it resets each ingest.ts process and understates after resume.
+    let rollingTotal: number | null = null;
+    if (sumStageRunning > 0) {
+      rollingTotal = sumStageRunning;
+    } else if (latestTotal != null && latestTotal > 0) {
+      rollingTotal = latestTotal;
+    } else if (resumeCheckpointTotal != null && resumeCheckpointTotal > 0) {
+      rollingTotal = resumeCheckpointTotal;
+    }
 
     return {
       rows,
       estimatedTotalUsd: estimatedIngestionTotalUsd(),
-      runningTotalUsd: rollingTotal > 0 ? rollingTotal : null
+      runningTotalUsd: rollingTotal != null && rollingTotal > 0 ? rollingTotal : null
     };
   });
 
@@ -1217,6 +1315,8 @@
 
   function preScanStageForRow(rowKey: string): string {
     switch (rowKey) {
+      case 'ingestion_fetch':
+        return 'fetch';
       case 'ingestion_extraction':
         return 'extraction';
       case 'ingestion_relations':
@@ -1247,6 +1347,7 @@
   }
 
   function estimatedPhaseCostUsd(rowKey: string): number | null {
+    if (rowKey === 'ingestion_fetch') return null;
     if (rowKey === 'ingestion_validation' && !runValidate) return null;
     const phase = preScanEstimateForRow(rowKey);
     const model = selectedCatalogEntryForRow(rowKey);
@@ -1268,6 +1369,15 @@
   }[] {
     return RESTORMEL_STAGES.map((row) => {
       const entry = selectedCatalogEntryForRow(row.key);
+      if (row.key === 'ingestion_fetch') {
+        return {
+          key: row.key,
+          label: row.label,
+          provider: '—',
+          model: 'No LLM (HTTP / parse)',
+          costUsd: null
+        };
+      }
       return {
         key: row.key,
         label: row.label,
@@ -1286,7 +1396,7 @@
   }
 
   function costCoverage(): { priced: number; total: number } {
-    const rows = phaseCostRows();
+    const rows = phaseCostRows().filter((row) => row.key !== 'ingestion_fetch');
     return {
       priced: rows.filter((row) => typeof row.costUsd === 'number').length,
       total: rows.length
@@ -1308,6 +1418,7 @@
   }
 
   function stageRecommendationMatch(row: (typeof RESTORMEL_STAGES)[number]): boolean {
+    if (row.key === 'ingestion_fetch') return true;
     if (row.key === 'ingestion_validation' && !runValidate) return true;
     const selectedEntry = selectedCatalogEntryForRow(row.key);
     return selectedEntry ? isStageRecommendedModel(row, selectedEntry) : false;
@@ -1322,6 +1433,7 @@
   function pipelineNoticeItems(): { severity: 'warn' | 'bad'; text: string }[] {
     const items: { severity: 'warn' | 'bad'; text: string }[] = [];
     for (const row of RESTORMEL_STAGES) {
+      if (row.key === 'ingestion_fetch') continue;
       if (row.key === 'ingestion_validation' && !runValidate) continue;
       const sid = stageModelIds[row.key]?.trim() ?? '';
       if (!sid) continue;
@@ -1334,9 +1446,9 @@
     }
     if (validationSelectionConflictActive()) {
       items.push({
-        severity: 'warn',
+        severity: 'bad',
         text:
-          'Validation: choose a model different from Extraction / Relations / Grouping to avoid self-review bias.'
+          'Validation: must use a different model than Extraction / Relations / Grouping (self-review bias). Choose another model or use Refresh models after fixing routes.'
       });
     }
     return items;
@@ -1368,6 +1480,13 @@
     stageModelIds = { ...stageModelIds, [row.key]: stableId };
     if (entry) {
       stageProviders = { ...stageProviders, [row.key]: entry.provider };
+    }
+    if (
+      row.key === 'ingestion_extraction' ||
+      row.key === 'ingestion_relations' ||
+      row.key === 'ingestion_grouping'
+    ) {
+      ensureValidationModelIsIndependent();
     }
   }
 
@@ -1453,6 +1572,14 @@
   function complexityClass(row: (typeof RESTORMEL_STAGES)[number]): string {
     const c = stepComplexity(row);
     return c === 'high' ? 'cx-high' : c === 'medium' ? 'cx-medium' : 'cx-low';
+  }
+
+  /** Cost rail pill: workload tier, or an explicit conflict state when validation reuses a primary model. */
+  function pipelineCostPill(row: (typeof RESTORMEL_STAGES)[number]): { text: string; pillClass: string } {
+    if (row.key === 'ingestion_validation' && runValidate && validationSelectionConflictActive()) {
+      return { text: 'conflict', pillClass: 'cx-conflict' };
+    }
+    return { text: stepComplexity(row), pillClass: complexityClass(row) };
   }
 
   async function preScanSource(): Promise<void> {
@@ -2251,6 +2378,7 @@
 
                 <div class="pipeline-rail mt-6">
                   {#each RESTORMEL_STAGES as row}
+                    {@const costPill = pipelineCostPill(row)}
                     <button
                       type="button"
                       class="pipeline-node {activePipelineStageKey === row.key ? 'is-active' : ''} {row.key === 'ingestion_validation' && !runValidate ? 'pipeline-node--validation-off' : ''}"
@@ -2258,7 +2386,7 @@
                     >
                       <span class="name">{row.label}</span>
                       <span class="pipeline-node-mid">
-                        <span class="pill {complexityClass(row)}">{stepComplexity(row)}</span>
+                        <span class="pill {costPill.pillClass}" title={costPill.text === 'conflict' ? 'Validation uses the same model as Extraction, Relations, or Grouping — pick another model' : undefined}>{costPill.text}</span>
                         <span class="pill cost">{formatUsd(estimatedPhaseCostUsd(row.key))}</span>
                       </span>
                     </button>
@@ -2294,8 +2422,12 @@
                         <label class="flex cursor-pointer items-start gap-2 font-mono text-sm text-sophia-dark-muted">
                           <input
                             type="checkbox"
-                            bind:checked={runValidate}
+                            checked={runValidate}
                             disabled={runInProgress()}
+                            onchange={(e) => {
+                              runValidate = (e.currentTarget as HTMLInputElement).checked;
+                              if (runValidate) ensureValidationModelIsIndependent();
+                            }}
                             class="mt-0.5 rounded border-sophia-dark-border"
                           />
                           <span>
@@ -2314,7 +2446,12 @@
                         <p class="mt-2 text-sm text-sophia-dark-muted">{stageAdvice(row).body}</p>
                       </details>
 
-                      {#if row.key !== 'ingestion_validation' || runValidate}
+                      {#if row.key === 'ingestion_fetch'}
+                        <p class="mt-3 font-mono text-xs leading-relaxed text-sophia-dark-muted">
+                          This step uses <span class="text-sophia-dark-text">HTTP fetch and HTML/text normalization</span> only (see
+                          <code class="text-sophia-dark-dim">scripts/fetch-source.ts</code>). It does not call a Restormel-routed LLM, so there is no model picker here. Source volume below is for sizing; dollar estimates apply to extraction and later stages.
+                        </p>
+                      {:else if row.key !== 'ingestion_validation' || runValidate}
                         <div class="mt-3">
                           <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="model-select-{row.key}">Model</label>
                           <select
@@ -2361,8 +2498,10 @@
                             <p class="mt-1 font-mono text-[0.65rem] text-sophia-dark-sage">
                               {formatTokensVsSelectedModelWindow(est.inputTokens, stageEntry)}
                             </p>
-                          {:else if est?.inputTokens != null}
+                          {:else if est?.inputTokens != null && row.key !== 'ingestion_fetch'}
                             <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">Select a model above to compare input size to its context window.</p>
+                          {:else if est?.inputTokens != null && row.key === 'ingestion_fetch'}
+                            <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">Token-equivalent volume for normalized source text; not billed as LLM input.</p>
                           {/if}
                         </details>
                         <details class="rounded border border-sophia-dark-border bg-sophia-dark-bg/25 p-3">
@@ -2377,7 +2516,7 @@
                             <p class="mt-1 font-mono text-[0.65rem] text-sophia-dark-sage">
                               {formatTokensVsSelectedModelWindow(est.outputTokens, stageEntry)}
                             </p>
-                          {:else if est?.outputTokens != null}
+                          {:else if est?.outputTokens != null && row.key !== 'ingestion_fetch'}
                             <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">Select a model above to compare output estimate to its context window.</p>
                           {/if}
                         </details>

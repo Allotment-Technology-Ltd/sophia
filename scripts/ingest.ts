@@ -1481,6 +1481,8 @@ interface PartialResults {
 	embeddings?: number[][];
 	validation?: ValidationOutput | null;
 	stage_completed: string;
+	/** Cumulative estimated USD at last save; used to seed cost tracker when resuming after failure. */
+	cost_usd_snapshot?: number;
 	// Mid-extraction checkpoint: if extraction crashes mid-batch, resume from here
 	extraction_progress?: {
 		claims_so_far: PhaseOneClaim[];
@@ -1495,8 +1497,13 @@ function savePartialResults(slug: string, results: PartialResults) {
 	}
 	const partialPath = path.join(INGESTED_DIR, `${slug}-partial.json`);
 	const tmpPath = `${partialPath}.tmp`;
+	const snapshot = parseFloat(estimateCostUsd());
+	const withSnapshot: PartialResults = {
+		...results,
+		cost_usd_snapshot: Number.isFinite(snapshot) && snapshot >= 0 ? snapshot : results.cost_usd_snapshot
+	};
 	// Write to temp file first, then atomic rename — prevents corruption on crash mid-write
-	fs.writeFileSync(tmpPath, JSON.stringify(results, null, 2), 'utf-8');
+	fs.writeFileSync(tmpPath, JSON.stringify(withSnapshot, null, 2), 'utf-8');
 	fs.renameSync(tmpPath, partialPath);
 	console.log(`  [SAVE] Partial results saved to: ${partialPath}`);
 }
@@ -1879,6 +1886,14 @@ async function main() {
 	console.log('');
 
 	try {
+		// Resume: restore spend from partial checkpoint so [COST] totals/deltas stay cumulative across process restarts.
+		if (resumeFromStage && partial.cost_usd_snapshot != null && partial.cost_usd_snapshot > 0) {
+			costs.totalUsd = partial.cost_usd_snapshot;
+			console.log(
+				`  [COST_RESUME] Carried forward prior spend total=$${partial.cost_usd_snapshot.toFixed(4)} from checkpoint`
+			);
+		}
+
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 1: CLAIM EXTRACTION
 		// ═══════════════════════════════════════════════════════════════
@@ -1936,8 +1951,15 @@ async function main() {
 					const batch = batchQueue[i];
 					batchLabel++;
 					const renderedBatch = renderPassageBatch(batch);
+					const queuePos = i + 1;
+					const queueTotal = batchQueue.length;
+					const passagesTotalSegmented = passages.length;
+					const passagesAfterThisBatch = batchQueue
+						.slice(i + 1)
+						.reduce((sum, b) => sum + b.length, 0);
+					const extractionProgressSuffix = ` · ${passagesAfterThisBatch} passage(s) left after this batch · ${passagesTotalSegmented} segmented total`;
 					console.log(
-						`\n  [BATCH ${batchLabel}] ${batch.length} passage(s) (~${estimateTokens(renderedBatch).toLocaleString()} tokens)`
+						`\n  [BATCH ${batchLabel}] (${queuePos}/${queueTotal}) ${batch.length} passage(s) (~${estimateTokens(renderedBatch).toLocaleString()} tokens)${extractionProgressSuffix}`
 					);
 
 					const userMsg = EXTRACTION_USER(
@@ -1955,16 +1977,17 @@ async function main() {
 							tracker: extractionTracker,
 							systemPrompt: EXTRACTION_SYSTEM,
 							userMessage: userMsg,
-							label: `Extracting batch ${batchLabel}`
+							label: `Extracting batch ${batchLabel} (${queuePos}/${queueTotal})`
 						});
 					} catch (apiError) {
 						const apiMsg = apiError instanceof Error ? apiError.message : String(apiError);
 						if (apiMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
 							const mid = Math.ceil(batch.length / 2);
-							console.warn(
-								`  [SPLIT] Batch ${batchLabel} truncated — splitting into 2 smaller passage batches`
-							);
 							batchQueue.splice(i + 1, 0, batch.slice(0, mid), batch.slice(mid));
+							const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
+							console.warn(
+								`  [SPLIT] Batch ${batchLabel} truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
+							);
 							batchLabel--;
 							continue;
 						}
@@ -1985,7 +2008,9 @@ async function main() {
 						);
 
 						allClaims.push(...offsetClaims);
-						console.log(`  [OK] Extracted ${validated.length} claims from batch ${batchLabel}`);
+						console.log(
+							`  [OK] Extracted ${validated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
+						);
 
 						partial.extraction_progress = {
 							claims_so_far: [...allClaims],
@@ -2011,10 +2036,11 @@ async function main() {
 							const fixMsg = fixError instanceof Error ? fixError.message : String(fixError);
 							if (fixMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
 								const mid = Math.ceil(batch.length / 2);
-								console.warn(
-									`  [SPLIT] Batch ${batchLabel} repair response truncated — splitting into 2 smaller passage batches`
-								);
 								batchQueue.splice(i + 1, 0, batch.slice(0, mid), batch.slice(mid));
+								const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
+								console.warn(
+									`  [SPLIT] Batch ${batchLabel} repair response truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
+								);
 								batchLabel--;
 								continue;
 							}
@@ -2033,7 +2059,7 @@ async function main() {
 						);
 						allClaims.push(...fixedClaims);
 						console.log(
-							`  [OK] Fixed and extracted ${fixedValidated.length} claims from batch ${batchLabel}`
+							`  [OK] Fixed and extracted ${fixedValidated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
 						);
 
 						partial.extraction_progress = {
@@ -2323,7 +2349,7 @@ async function main() {
 			assertStageBudget(embeddingBudget, embeddingTracker);
 
 			console.log(`  [OK] Generated ${allEmbeddings.length} embeddings (${EMBEDDING_DIMENSIONS} dimensions)`);
-			console.log(`  [COST] Vertex chars: ${totalChars.toLocaleString()} (~$${((totalChars / 1_000_000) * 0.025).toFixed(4)})}`);
+			logStageCost('Embedding', embeddingTracker, embeddingPlan);
 
 			partial.embeddings = allEmbeddings;
 			partial.stage_completed = 'embedding';
@@ -2443,6 +2469,8 @@ async function main() {
 						console.warn(`  Error: ${err.message}`);
 					}
 				}
+
+				logStageCost('Validation', validationTracker, validationPlan);
 
 				if (batchOutputs.length > 0) {
 					validationResult = mergeValidationOutputs(batchOutputs);

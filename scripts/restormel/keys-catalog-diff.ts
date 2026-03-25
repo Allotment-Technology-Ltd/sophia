@@ -1,5 +1,5 @@
 /**
- * Compare model id lists: vendored @restormel/keys (defaultProviders) vs
+ * Compare model id lists: @restormel/keys from npm (defaultProviders) vs
  * packages/contracts DEFAULT_MODEL_CATALOG (used by allowed-models / routing).
  *
  * Run from repo root: pnpm exec tsx scripts/restormel/keys-catalog-diff.ts
@@ -29,7 +29,7 @@ function main(): void {
   lines.push('# Restormel Keys vs contracts catalog diff');
   lines.push('');
   lines.push(
-    'Source A: `@restormel/keys` `defaultProviders[].models` (vendored tarball in `vendor/restormel/`).'
+    'Source A: `@restormel/keys` `defaultProviders[].models` (workspace dependency from npm).'
   );
   lines.push('Source B: `@restormel/contracts` `DEFAULT_MODEL_CATALOG` (Sophia allowed-models candidates).');
   lines.push('');

@@ -8,11 +8,6 @@ import {
   resolveReasoningModelRoute,
   type ReasoningModelRoute
 } from '../vertex.js';
-import {
-  discoverIngestionRouteBinding,
-  type DiscoverableIngestionStage
-} from '../restormelIngestionRoutes.js';
-
 export type IngestionStage =
   | 'extraction'
   | 'relations'
@@ -22,7 +17,6 @@ export type IngestionStage =
   | 'json_repair';
 
 export type IngestProviderPreference = 'auto' | 'vertex' | 'anthropic';
-type StageRouteBindingMode = 'dedicated' | 'shared' | 'none';
 
 export interface IngestionPlanningContext {
   sourceTitle: string;
@@ -53,8 +47,11 @@ export interface IngestionStagePlan {
   route?: ReasoningModelRoute;
 }
 
+/** Pre-ingest HTTP + parse workload (not an LLM route); listed separately from extraction in cost views. */
+export type PipelinePhaseStage = 'fetch' | IngestionStage;
+
 export interface IngestionStageUsageEstimate {
-  stage: IngestionStage;
+  stage: PipelinePhaseStage;
   latency: AAIFLatency;
   complexity: 'low' | 'medium' | 'high';
   inputTokens: number;
@@ -111,93 +108,54 @@ function latencyToDepth(latency: AAIFLatency): 'quick' | 'standard' | 'deep' {
   return 'standard';
 }
 
-/** Explicit env overrides only (optional). If unset, `discoverIngestionRouteBinding` lists routes from Restormel. */
-function stageRouteBindingFromEnv(stage: IngestionStage): {
-  routeId?: string;
-  mode: StageRouteBindingMode;
-} {
+/**
+ * Optional env pins: when set, POST /resolve includes routeId (only that route is considered).
+ * When unset, resolve omits routeId; Restormel picks a published route by workload + stage
+ * (dedicated ingestion_<substage> first, then shared ingestion with empty stage). Keys ≥0.2.11.
+ */
+function stageRouteBindingFromEnv(stage: IngestionStage): { routeId?: string } {
   if (stage === 'validation') {
     const dedicated =
       process.env.RESTORMEL_INGEST_VALIDATION_ROUTE_ID?.trim() ||
       process.env.RESTORMEL_VERIFY_ROUTE_ID?.trim();
     if (dedicated) {
-      return {
-        routeId: dedicated,
-        mode: 'dedicated'
-      };
+      return { routeId: dedicated };
     }
 
     const shared =
       process.env.RESTORMEL_INGEST_ROUTE_ID?.trim() ||
       process.env.RESTORMEL_ANALYSE_ROUTE_ID?.trim();
-    return shared
-      ? {
-          routeId: shared,
-          mode: 'shared'
-        }
-      : {
-          mode: 'none'
-        };
+    return shared ? { routeId: shared } : {};
   }
 
   const dedicated = process.env[`RESTORMEL_INGEST_${stage.toUpperCase()}_ROUTE_ID`]?.trim();
   if (dedicated) {
-    return {
-      routeId: dedicated,
-      mode: 'dedicated'
-    };
+    return { routeId: dedicated };
   }
 
   const shared =
     process.env.RESTORMEL_INGEST_ROUTE_ID?.trim() ||
     process.env.RESTORMEL_ANALYSE_ROUTE_ID?.trim();
-  return shared
-    ? {
-        routeId: shared,
-        mode: 'shared'
-      }
-      : {
-        mode: 'none'
-      };
-}
-
-async function resolveStageRouteBinding(stage: IngestionStage): Promise<{
-  routeId?: string;
-  mode: StageRouteBindingMode;
-}> {
-  const fromEnv = stageRouteBindingFromEnv(stage);
-  if (fromEnv.routeId) {
-    return fromEnv;
-  }
-  return discoverIngestionRouteBinding(stage as DiscoverableIngestionStage);
+  return shared ? { routeId: shared } : {};
 }
 
 function buildStageRestormelContext(options: {
   stage: IngestionStage;
-  routeMode: StageRouteBindingMode;
   task: AAIFRequest['task'];
   estimatedInputTokens: number;
   estimatedInputChars: number;
   complexity: 'low' | 'medium' | 'high';
   constraints: AAIFRequest['constraints'];
 }) {
-  const base = {
+  return {
+    workload: 'ingestion' as const,
+    stage: `ingestion_${options.stage}`,
     task: options.task,
     attempt: 1,
     estimatedInputTokens: options.estimatedInputTokens,
     estimatedInputChars: options.estimatedInputChars,
     complexity: options.complexity,
     constraints: options.constraints
-  };
-
-  if (options.routeMode !== 'dedicated') {
-    return base;
-  }
-
-  return {
-    workload: 'ingestion',
-    stage: `ingestion_${options.stage}`,
-    ...base
   };
 }
 
@@ -290,7 +248,19 @@ export function buildIngestionStageUsageEstimates(
     'embedding',
     'json_repair'
   ];
-  return stages.map((stage) => {
+  // Fetch is HTTP + HTML/text normalization only — no Restormel LLM route. Token count is source-volume
+  // (for sizing); extraction below keeps the full LLM input estimate for claim extraction.
+  const fetchTokens = Math.max(1, Math.ceil(context.estimatedTokens));
+  const fetchRow: IngestionStageUsageEstimate = {
+    stage: 'fetch',
+    latency: 'low',
+    complexity: 'low',
+    inputTokens: fetchTokens,
+    outputTokens: 0,
+    totalTokens: fetchTokens
+  };
+
+  const rest = stages.map((stage) => {
     const usage = estimateStageUsage(stage, context);
     const latency = stageLatency(stage, context);
     const complexity: 'low' | 'medium' | 'high' =
@@ -304,6 +274,8 @@ export function buildIngestionStageUsageEstimates(
       totalTokens: usage.inputTokens + usage.outputTokens
     };
   });
+
+  return [fetchRow, ...rest];
 }
 
 function estimateReasoningCostUsd(route: ReasoningModelRoute, inputTokens: number, outputTokens: number): number {
@@ -348,19 +320,17 @@ export async function planIngestionStage(
     };
   }
 
-  const routeBinding = await resolveStageRouteBinding(stage);
-  const routeId = routeBinding.routeId;
+  const routeIdForResolve = stageRouteBindingFromEnv(stage).routeId?.trim() || undefined;
 
   const requestedProvider = (context.preferredProvider ?? 'auto') as ModelProvider;
   const route =
     stage === 'extraction'
       ? await resolveExtractionModelRoute({
           requestedProvider,
-          routeId,
+          routeId: routeIdForResolve,
           failureMode: 'degraded_default',
           restormelContext: buildStageRestormelContext({
             stage,
-            routeMode: routeBinding.mode,
             task: request.task,
             estimatedInputTokens: context.estimatedTokens,
             estimatedInputChars: context.sourceLengthChars ?? context.estimatedTokens * 4,
@@ -372,12 +342,11 @@ export async function planIngestionStage(
       : await resolveReasoningModelRoute({
           pass: stagePass(stage),
           depthMode: latencyToDepth(stageLatency(stage, context)),
-          routeId,
+          routeId: routeIdForResolve,
           requestedProvider,
           failureMode: 'degraded_default',
           restormelContext: buildStageRestormelContext({
             stage,
-            routeMode: routeBinding.mode,
             task: request.task,
             estimatedInputTokens: estimateStageUsage(stage, context).inputTokens,
             estimatedInputChars:
@@ -398,7 +367,7 @@ export async function planIngestionStage(
   return {
     stage,
     request,
-    routeId,
+    routeId: route.resolvedRouteId ?? routeIdForResolve ?? undefined,
     provider: route.provider,
     model: route.modelId,
     estimatedCostUsd: estimateReasoningCostUsd(route, usage.inputTokens, usage.outputTokens),

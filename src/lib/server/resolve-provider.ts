@@ -4,6 +4,7 @@ import {
   RestormelResolveError,
   type ResolveRequest,
   type RestormelFallbackCandidate,
+  type RestormelStepChainEntry,
   restormelResolve
 } from './restormel';
 
@@ -20,6 +21,8 @@ export interface ProviderDecision {
   estimatedCostUsd?: number | null;
   matchedCriteria?: unknown;
   fallbackCandidates?: RestormelFallbackCandidate[] | null;
+  /** Full ordered step chain when Keys returns it (resolve/simulate contract 2026-03-26+). */
+  stepChain?: RestormelStepChainEntry[] | null;
 }
 
 export type ResolveFailureKind =
@@ -54,6 +57,9 @@ export class ProviderResolutionFailure extends Error {
 function normalizeRestormelProvider(providerType: string | null): ReasoningProvider | null {
   const normalized = providerType?.trim().toLowerCase();
   if (!normalized) return null;
+  if (normalized === 'google' || normalized === 'vertex_ai') {
+    return 'vertex';
+  }
   return isReasoningProvider(normalized) ? normalized : null;
 }
 
@@ -82,6 +88,13 @@ export function classifyResolveFailure(error: unknown): {
         logContext: { code: error.code, status: error.status }
       };
     }
+    if (error.code === 'resolve_incomplete') {
+      return {
+        kind: 'unknown',
+        userMessage: error.userMessage,
+        logContext: { code: error.code, status: error.status }
+      };
+    }
     if (error.code === 'policy_blocked') {
       return {
         kind: 'policy_blocked',
@@ -89,7 +102,26 @@ export function classifyResolveFailure(error: unknown): {
         logContext: { code: error.code, status: error.status, policyTypes }
       };
     }
-    if (error.code === 'unauthorized' || error.status === 401 || error.status === 403) {
+    // Restormel Keys control plane: branch on JSON `error`, not only HTTP status (403 can be route_disabled).
+    if (
+      error.code === 'no_route' ||
+      error.code === 'route_unpublished' ||
+      error.code === 'route_disabled'
+    ) {
+      return {
+        kind: 'unknown',
+        userMessage: error.userMessage,
+        logContext: { code: error.code, status: error.status }
+      };
+    }
+    if (error.code === 'unauthorized' || error.status === 401) {
+      return {
+        kind: 'network_or_auth',
+        userMessage: error.userMessage,
+        logContext: { code: error.code, status: error.status }
+      };
+    }
+    if (error.status === 403) {
       return {
         kind: 'network_or_auth',
         userMessage: error.userMessage,
@@ -138,7 +170,8 @@ export async function resolveProviderDecision(options: {
       routeId: options.routeId ?? null,
       explanation: options.preferredModel?.trim()
         ? `User selected ${options.preferredProvider}/${options.preferredModel.trim()}.`
-        : `User selected ${options.preferredProvider}.`
+        : `User selected ${options.preferredProvider}.`,
+      stepChain: null
     };
   }
 
@@ -168,7 +201,8 @@ export async function resolveProviderDecision(options: {
       switchReasonCode: result.data.switchReasonCode ?? null,
       estimatedCostUsd: result.data.estimatedCostUsd ?? null,
       matchedCriteria: result.data.matchedCriteria ?? null,
-      fallbackCandidates: result.data.fallbackCandidates ?? null
+      fallbackCandidates: result.data.fallbackCandidates ?? null,
+      stepChain: result.data.stepChain ?? null
     };
   } catch (error) {
     const failure =
@@ -208,7 +242,8 @@ export async function resolveProviderDecision(options: {
         switchReasonCode: null,
         estimatedCostUsd: null,
         matchedCriteria: null,
-        fallbackCandidates: null
+        fallbackCandidates: null,
+        stepChain: null
       };
     }
 
