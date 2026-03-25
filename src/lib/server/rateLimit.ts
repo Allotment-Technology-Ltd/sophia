@@ -121,11 +121,27 @@ export async function consumePlatformBudget(
     resourceMode?: 'standard' | 'expanded';
     queryKind?: QueryKind;
     plan?: PlatformBudgetPlan;
+    /** When true, do not read or write platform daily budget counters (application owner). */
+    bypassQuota?: boolean;
   }
 ): Promise<PlatformBudgetResult> {
   const standardLimit = resolvePlatformStandardSearchLimit(options.plan ?? 'free');
   const deepLimit = resolvePlatformDeepSearchLimit(options.plan ?? 'free');
   const premiumLimit = resolvePlatformPremiumSearchLimit(options.plan ?? 'free');
+
+  if (options.bypassQuota) {
+    return {
+      allowed: true,
+      remainingCredits: PLATFORM_DAILY_BUDGET_CREDITS,
+      standardQueries: 0,
+      followUpQueries: 0,
+      deepQueries: 0,
+      premiumQueries: 0,
+      standardLimit,
+      deepLimit,
+      premiumLimit
+    };
+  }
 
   if (options.depthMode === 'deep' && deepLimit <= 0) {
     return {

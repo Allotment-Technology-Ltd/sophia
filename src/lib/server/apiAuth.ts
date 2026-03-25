@@ -62,6 +62,11 @@ export function isAdminUid(uid: string): boolean {
   return adminUids.includes(uid);
 }
 
+function isOwnerUid(uid: string): boolean {
+  const ownerUids = process.env.OWNER_UIDS?.split(',').map((value) => value.trim()).filter(Boolean) ?? [];
+  return ownerUids.includes(uid);
+}
+
 function getDailyQuota(record: ApiKeyRecord): number {
   const configured = record.rate_limit?.daily_quota;
   return typeof configured === 'number' && Number.isFinite(configured) ? configured : DEFAULT_DAILY_QUOTA;
@@ -109,27 +114,32 @@ export async function verifyApiKey(request: Request): Promise<ApiKeyVerification
     }
 
     const quota = getDailyQuota(latest);
+    const ownerBypass = isOwnerUid(latest.owner_uid);
 
     const resetAt = latest.daily_reset_at?.toDate?.() ?? new Date(0);
     const shouldReset = resetAt.getTime() <= now.getTime();
 
     const currentDailyCount = shouldReset ? 0 : latest.daily_count ?? 0;
-    if (currentDailyCount >= quota) {
+    if (!ownerBypass && currentDailyCount >= quota) {
       return { valid: false, error: 'rate_limited' as const, remaining: 0 };
     }
 
     tx.update(doc.ref, {
       usage_count: (latest.usage_count ?? 0) + 1,
-      daily_count: currentDailyCount + 1,
-      daily_reset_at: shouldReset
-        ? Timestamp.fromDate(new Date(now.getTime() + 24 * 60 * 60 * 1000))
-        : latest.daily_reset_at ?? Timestamp.fromDate(new Date(now.getTime() + 24 * 60 * 60 * 1000)),
+      ...(ownerBypass
+        ? {}
+        : {
+            daily_count: currentDailyCount + 1,
+            daily_reset_at: shouldReset
+              ? Timestamp.fromDate(new Date(now.getTime() + 24 * 60 * 60 * 1000))
+              : latest.daily_reset_at ?? Timestamp.fromDate(new Date(now.getTime() + 24 * 60 * 60 * 1000))
+          }),
       last_used_at: nowTimestamp
     });
 
     return {
       valid: true,
-      remaining: Math.max(0, quota - (currentDailyCount + 1)),
+      remaining: ownerBypass ? quota : Math.max(0, quota - (currentDailyCount + 1)),
       owner_uid: latest.owner_uid
     };
   });

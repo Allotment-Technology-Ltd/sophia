@@ -7,6 +7,7 @@ import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'c
 import { randomBytes } from 'crypto';
 import { EventEmitter } from 'events';
 import { buildEnvFileArgs, findFetchedSourceFile } from '$lib/server/adminOperations';
+import { appendIssueFromLogLine, persistIngestRunReport, type IngestIssueRecord } from '$lib/server/ingestRunIssues';
 
 export interface IngestRunPayload {
   source_url: string;
@@ -71,6 +72,10 @@ export interface IngestRunState {
   simulationInterval?: ReturnType<typeof setInterval> | null;
   /** Simulated Stage 6 sync timer (real mode uses a child process instead). */
   syncSimulationTimeout?: ReturnType<typeof setTimeout> | null;
+  /** Operator email (for durable Firestore reports). */
+  actorEmail: string;
+  /** Structured signals parsed from worker logs (warnings, repairs, retries, …). */
+  issues: IngestIssueRecord[];
 }
 
 /** Admin wizard / ingest UI types → `scripts/fetch-source.ts` types. */
@@ -126,6 +131,14 @@ function appendProcessOutput(runId: string, chunk: Buffer, manager: IngestRunMan
 
 const PIPELINE_STAGES = ['extract', 'relate', 'group', 'embed'] as const;
 
+/** Stages after fetch, in worker order; validate omitted when disabled in payload. */
+function orderedStagesAfterFetch(validate: boolean): string[] {
+  const out: string[] = [...PIPELINE_STAGES];
+  if (validate) out.push('validate');
+  out.push('store');
+  return out;
+}
+
 function stageAliasToKey(value: string | null | undefined): string | null {
   const low = (value ?? '').trim().toLowerCase();
   if (!low) return null;
@@ -172,7 +185,9 @@ class IngestRunManager extends EventEmitter {
       currentStageKey: 'fetch',
       currentAction: 'Queued',
       lastFailureStageKey: null,
-      resumable: false
+      resumable: false,
+      actorEmail,
+      issues: []
     };
 
     this.runs.set(runId, state);
@@ -242,11 +257,18 @@ class IngestRunManager extends EventEmitter {
     return { ok: true };
   }
 
+  private schedulePersistReport(runId: string): void {
+    const state = this.runs.get(runId);
+    if (!state) return;
+    void persistIngestRunReport(state);
+  }
+
   addLog(runId: string, line: string): void {
     const state = this.runs.get(runId);
     if (state) {
       state.logLines.push(line);
       state.lastOutputAt = Date.now();
+      appendIssueFromLogLine(state, line);
       this.ingestProgressFromLogLine(runId, line);
       if (state.logLines.length > this.maxLogLines) {
         state.logLines.shift();
@@ -272,6 +294,7 @@ class IngestRunManager extends EventEmitter {
       state.status = 'done';
       state.completedAt = Date.now();
       state.resumable = false;
+      this.schedulePersistReport(runId);
     }
   }
 
@@ -284,6 +307,7 @@ class IngestRunManager extends EventEmitter {
       state.lastFailureStageKey = state.currentStageKey ?? state.lastFailureStageKey ?? null;
       state.currentAction = `Failed: ${error}`;
       state.resumable = Boolean(state.sourceFilePath);
+      this.schedulePersistReport(runId);
     }
   }
 
@@ -307,6 +331,7 @@ class IngestRunManager extends EventEmitter {
     }
 
     this.addLog(runId, '[CANCEL] Ingestion cancelled by operator.');
+    this.schedulePersistReport(runId);
   }
 
   /**
@@ -499,16 +524,28 @@ class IngestRunManager extends EventEmitter {
     const stopBeforeStore = forSync ? false : payload.stop_before_store !== false;
 
     if (!forSync) {
-      for (const stage of PIPELINE_STAGES) {
-        this.updateStageStatus(runId, stage, options.resumeFromFailure ? 'idle' : 'running');
-      }
-      if (payload.validate) {
-        this.updateStageStatus(runId, 'validate', options.resumeFromFailure ? 'idle' : 'running');
-      }
-      if (stopBeforeStore) {
+      if (options.resumeFromFailure) {
+        for (const stage of PIPELINE_STAGES) {
+          this.updateStageStatus(runId, stage, 'idle');
+        }
+        if (payload.validate) {
+          this.updateStageStatus(runId, 'validate', 'idle');
+        } else {
+          this.updateStageStatus(runId, 'validate', 'skipped');
+        }
         this.updateStageStatus(runId, 'store', 'idle');
       } else {
-        this.updateStageStatus(runId, 'store', options.resumeFromFailure ? 'idle' : 'running');
+        // Only the first ingest stage is active; others stay pending until logs advance focus.
+        this.updateStageStatus(runId, 'extract', 'running');
+        for (const stage of ['relate', 'group', 'embed'] as const) {
+          this.updateStageStatus(runId, stage, 'idle');
+        }
+        if (payload.validate) {
+          this.updateStageStatus(runId, 'validate', 'idle');
+        } else {
+          this.updateStageStatus(runId, 'validate', 'skipped');
+        }
+        this.updateStageStatus(runId, 'store', 'idle');
       }
     } else {
       this.updateStageStatus(runId, 'store', 'running');
@@ -575,6 +612,7 @@ class IngestRunManager extends EventEmitter {
           this.updateStageStatus(runId, 'store', 'idle');
           if (s) s.status = 'awaiting_sync';
           this.addLog(runId, 'Run phases complete. Press “Sync to SurrealDB” to finish.');
+          this.schedulePersistReport(runId);
           return;
         }
         if (forSync) {
@@ -632,6 +670,49 @@ class IngestRunManager extends EventEmitter {
     });
   }
 
+  /**
+   * Keep a single "running" stage among extract→…→store: prior stages done, later stages idle/skipped.
+   */
+  private applyPipelineFocusFromLog(runId: string, activeKey: string, summaryLine: string): void {
+    const state = this.runs.get(runId);
+    if (!state) return;
+
+    const stopBeforeStore = state.payload.stop_before_store !== false;
+    const validateOn = state.payload.validate === true;
+    const order = orderedStagesAfterFetch(validateOn);
+    const idx = order.indexOf(activeKey);
+
+    if (idx === -1) {
+      return;
+    }
+
+    state.currentStageKey = activeKey;
+    state.currentAction = summaryLine;
+
+    for (let i = 0; i < idx; i++) {
+      const k = order[i];
+      if (state.stages[k]?.status === 'skipped') continue;
+      if (k === 'store' && stopBeforeStore) continue;
+      this.updateStageStatus(runId, k, 'done');
+    }
+
+    if (state.stages[activeKey]?.status !== 'skipped') {
+      this.updateStageStatus(runId, activeKey, 'running', summaryLine);
+    }
+
+    for (let i = idx + 1; i < order.length; i++) {
+      const k = order[i];
+      if (state.stages[k]?.status === 'skipped') continue;
+      if (k === 'store' && stopBeforeStore) {
+        this.updateStageStatus(runId, 'store', 'idle');
+        continue;
+      }
+      const st = state.stages[k]?.status;
+      if (st === 'done' || st === 'error' || (st as string) === 'skipped') continue;
+      this.updateStageStatus(runId, k, 'idle');
+    }
+  }
+
   private ingestProgressFromLogLine(runId: string, rawLine: string): void {
     const state = this.runs.get(runId);
     if (!state) return;
@@ -646,11 +727,15 @@ class IngestRunManager extends EventEmitter {
     const stageKey = stageAliasToKey(actionStage);
 
     if (stageKey) {
-      state.currentStageKey = stageKey;
-      state.currentAction = line;
-      if (state.stages[stageKey]?.status !== 'done') {
-        this.updateStageStatus(runId, stageKey, 'running', line);
+      if (stageKey === 'fetch') {
+        state.currentStageKey = 'fetch';
+        state.currentAction = line;
+        if (state.stages.fetch?.status !== 'done') {
+          this.updateStageStatus(runId, 'fetch', 'running', line);
+        }
+        return;
       }
+      this.applyPipelineFocusFromLog(runId, stageKey, line);
     } else if (
       /\[RESUME\]/i.test(line) ||
       /\[PHASE\]/i.test(line) ||
@@ -725,6 +810,7 @@ class IngestRunManager extends EventEmitter {
           }
           state.status = 'awaiting_sync';
           this.addLog(runId, 'Run phases complete. Press “Sync to SurrealDB” to finish.');
+          this.schedulePersistReport(runId);
         } else {
           this.addLog(runId, 'All stages complete!');
           this.completeRun(runId);

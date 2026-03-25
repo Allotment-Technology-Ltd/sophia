@@ -104,8 +104,8 @@
       <div>
         <h1 class="font-serif text-3xl text-sophia-dark-text sm:text-[2.1rem]">Ingestion runs</h1>
         <p class="mt-2 max-w-3xl text-sm leading-6 text-sophia-dark-muted">
-          Runs on this server process only (list clears after restart). Open a run to resume monitoring, logs, and sync
-          actions.
+          Runs on this server process only (list clears after restart). Open a run to view logs and monitoring; failed runs
+          stay on Review instead of resetting the wizard.
         </p>
       </div>
       <nav class="flex flex-wrap items-center gap-2" aria-label="Admin shortcuts">

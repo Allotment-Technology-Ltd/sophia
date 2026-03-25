@@ -5,6 +5,7 @@ import {
 	buildIngestionStageUsageEstimates,
 	type IngestionPlanningContext
 } from '$lib/server/aaif/ingestion-plan';
+import { runPreScanAdvisorBlock } from '$lib/server/ingestionAdvisor';
 
 const MAX_PREVIEW_BYTES = 180_000;
 const FETCH_TIMEOUT_MS = 9000;
@@ -415,6 +416,19 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			extracted.publicationYear ||
 			normalizePublicationYear(finalUrl.toString());
 
+		let advisor: Awaited<ReturnType<typeof runPreScanAdvisorBlock>> | null = null;
+		try {
+			advisor = await runPreScanAdvisorBlock({
+				sourceTitle: resolvedTitle,
+				sourceType: sourceTypeInput || undefined,
+				approxContentTokens,
+				approxContentChars,
+				phaseEstimates
+			});
+		} catch (advErr) {
+			console.warn('[ingestion-source/inspect] advisor:', advErr instanceof Error ? advErr.message : String(advErr));
+		}
+
 		return json({
 			metadata: {
 				title: resolvedTitle,
@@ -432,7 +446,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				previewChars: previewCharCount,
 				previewTokens: previewTokenEstimate,
 				phaseEstimates
-			}
+			},
+			...(advisor ? { advisor } : {})
 		});
 	} catch (error) {
 		const message =

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   DAILY_QUERY_LIMIT,
+  PLATFORM_DAILY_BUDGET_CREDITS,
   resolvePlatformDeepSearchLimit,
   resolvePlatformPremiumSearchLimit,
   resolvePlatformStandardSearchLimit,
@@ -68,6 +69,19 @@ describe('resolvePlatformPremiumSearchLimit', () => {
     expect(resolvePlatformPremiumSearchLimit('founder')).toBe(1);
     expect(resolvePlatformPremiumSearchLimit('pro')).toBe(1);
     expect(resolvePlatformPremiumSearchLimit('premium')).toBe(1);
+  });
+});
+
+describe('consumePlatformBudget bypassQuota', () => {
+  it('returns allowed without incrementing when bypassQuota is true', async () => {
+    const { consumePlatformBudget } = await import('./rateLimit');
+    const result = await consumePlatformBudget('owner-test-uid', {
+      depthMode: 'standard',
+      plan: 'free',
+      bypassQuota: true
+    });
+    expect(result.allowed).toBe(true);
+    expect(result.remainingCredits).toBe(PLATFORM_DAILY_BUDGET_CREDITS);
   });
 });
 

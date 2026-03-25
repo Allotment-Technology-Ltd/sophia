@@ -205,8 +205,16 @@ export async function getLearnEntitlementSummary(uid: string): Promise<LearnEnti
 
 export async function consumeLearnEntitlement(
   uid: string,
-  action: LearnAction
+  action: LearnAction,
+  options?: { bypassQuota?: boolean }
 ): Promise<LearnConsumeResult> {
+  if (options?.bypassQuota) {
+    return {
+      allowed: true,
+      summary: await getLearnEntitlementSummary(uid)
+    };
+  }
+
   const billing = await ensureBillingState(uid);
   const quotaRef = learnQuotaRef(uid);
 

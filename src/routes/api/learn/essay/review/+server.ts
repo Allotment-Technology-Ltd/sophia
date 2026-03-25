@@ -16,12 +16,14 @@ import {
   updateEssaySubmission
 } from '$lib/server/learn/store';
 import { loadByokProviderApiKeys } from '$lib/server/byok/store';
+import { hasOwnerRole } from '$lib/server/authRoles';
 import { consumeLearnEntitlement } from '$lib/server/learn/entitlements';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
   if (!isLearnModuleEnabled()) return learnModuleDisabledResponse();
   const uid = requireUid(locals);
   if (!uid) return unauthorizedResponse();
+  const learnQuotaBypass = hasOwnerRole(locals.user);
 
   let body: unknown;
   try {
@@ -44,7 +46,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   if (parsed.data.lesson_id) {
     const alreadyCompleted = await isLessonCompleted(uid, parsed.data.lesson_id);
     if (!alreadyCompleted) {
-      const lessonQuota = await consumeLearnEntitlement(uid, 'micro_lesson');
+      const lessonQuota = await consumeLearnEntitlement(uid, 'micro_lesson', {
+        bypassQuota: learnQuotaBypass
+      });
       if (!lessonQuota.allowed) {
         return json(
           {
@@ -58,7 +62,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     }
   }
 
-  const essayQuota = await consumeLearnEntitlement(uid, 'essay_review');
+  const essayQuota = await consumeLearnEntitlement(uid, 'essay_review', {
+    bypassQuota: learnQuotaBypass
+  });
   if (!essayQuota.allowed) {
     return json(
       {
