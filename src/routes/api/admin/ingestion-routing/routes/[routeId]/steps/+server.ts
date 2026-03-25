@@ -1,7 +1,11 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
-import { restormelListRouteSteps, restormelSaveRouteSteps } from '$lib/server/restormel';
+import {
+  restormelListRouteSteps,
+  restormelReplaceRouteSteps,
+  type RestormelStepRecord
+} from '$lib/server/restormel';
 import { parseJsonBody, restormelJsonError } from '$lib/server/restormelAdmin';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
@@ -25,9 +29,18 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
   }
 
   try {
-    const response = await restormelSaveRouteSteps(
+    const raw = body ?? {};
+    const stepsArray = Array.isArray(raw)
+      ? raw
+      : Array.isArray((raw as Record<string, unknown>).steps)
+        ? (raw as Record<string, unknown>).steps
+        : null;
+    if (!stepsArray) {
+      return json({ error: 'Expected a JSON array of steps or { steps: [...] }' }, { status: 400 });
+    }
+    const response = await restormelReplaceRouteSteps(
       params.routeId,
-      (body ?? {}) as Record<string, unknown>
+      stepsArray as RestormelStepRecord[]
     );
     return json({ steps: response.data });
   } catch (error) {

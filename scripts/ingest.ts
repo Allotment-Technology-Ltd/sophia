@@ -96,7 +96,7 @@ const LOW_CONFIDENCE_REVIEW_THRESHOLD = Number(
 // Keep sections small enough that Claude's extraction output fits within max_tokens (32768).
 // Each claim is ~150 tokens of JSON. At 10 claims/1k input tokens:
 //   5_000 tokens input → ~50 claims → ~7_500 tokens output → fits in 32768 limit with safety margin.
-const MAX_TOKENS_PER_SECTION = 5_000;
+const MAX_TOKENS_PER_SECTION = Number(process.env.INGEST_EXTRACTION_MAX_TOKENS_PER_SECTION || '5000');
 const BOOK_MAX_TOKENS_PER_SECTION = Number(process.env.BOOK_MAX_TOKENS_PER_SECTION || '3000');
 const GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS =
 	parsePositiveInt(process.env.GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS) ?? 100_000;
@@ -114,6 +114,17 @@ const VALIDATION_TOKEN_ESTIMATE_MULTIPLIER = Math.max(
 	1,
 	Number(process.env.VALIDATION_TOKEN_ESTIMATE_MULTIPLIER || '2.2')
 );
+// Relations can be expensive and trigger quota/rate exhaustion on large claim graphs.
+// Chunking is enabled when RELATIONS_BATCH_TARGET_TOKENS > 0 (set to 0 to disable).
+const RELATIONS_BATCH_TARGET_TOKENS = (() => {
+	const raw = process.env.RELATIONS_BATCH_TARGET_TOKENS;
+	if (raw == null || raw.trim() === '') return 20_000;
+	const n = Number(raw);
+	if (!Number.isFinite(n) || n <= 0) return 0;
+	return Math.trunc(n);
+})();
+const RELATIONS_BATCH_OVERLAP_CLAIMS =
+	parsePositiveInt(process.env.RELATIONS_BATCH_OVERLAP_CLAIMS) ?? 6;
 const INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE =
 	(process.env.INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE || 'true').toLowerCase() !== 'false';
 const INGEST_SAVE_GROUPING_RAW =
@@ -735,6 +746,90 @@ function buildGroupingBatches(
 			claims: batchClaims,
 			relations: batchRelations
 		};
+	});
+}
+
+function buildRelationsBatches(
+	claims: PhaseOneClaim[],
+	targetTokens: number,
+	overlapClaims: number
+): PhaseOneClaim[][] {
+	if (targetTokens <= 0 || claims.length <= 1) return [claims];
+
+	const overlap = Math.max(0, Math.min(overlapClaims, claims.length - 1));
+	const tokensPerClaim = claims.map((claim) => Math.ceil(estimateTokens(JSON.stringify(claim, null, 2))));
+	const batches: PhaseOneClaim[][] = [];
+
+	let start = 0;
+	while (start < claims.length) {
+		let tokens = 0;
+		let end = start;
+
+		while (end < claims.length) {
+			const claimTokens = tokensPerClaim[end] ?? 0;
+			const wouldExceed = end > start && tokens + claimTokens > targetTokens;
+			if (wouldExceed) break;
+			tokens += claimTokens;
+			end += 1;
+		}
+
+		if (end === start) end = start + 1;
+
+		batches.push(claims.slice(start, end));
+
+		if (end >= claims.length) break;
+		const nextStart = Math.max(end - overlap, start + 1);
+		start = nextStart;
+	}
+
+	return batches.length > 0 ? batches : [claims];
+}
+
+function relationDedupeKey(relation: PhaseOneRelation): string {
+	return `${relation.from_position}:${relation.to_position}:${relation.relation_type}`;
+}
+
+function mergeRelationsDedup(
+	existing: PhaseOneRelation[],
+	incoming: PhaseOneRelation[]
+): PhaseOneRelation[] {
+	const merged = new Map<string, PhaseOneRelation>();
+
+	for (const r of existing) {
+		merged.set(relationDedupeKey(r), { ...r, evidence_passage_ids: [...new Set(r.evidence_passage_ids)] });
+	}
+
+	for (const r of incoming) {
+		const key = relationDedupeKey(r);
+		const prev = merged.get(key);
+		if (!prev) {
+			merged.set(key, { ...r, evidence_passage_ids: [...new Set(r.evidence_passage_ids)] });
+			continue;
+		}
+
+		const evidence_passage_ids = [...new Set([...(prev.evidence_passage_ids ?? []), ...(r.evidence_passage_ids ?? [])])];
+		const prevHasNote = typeof prev.note === 'string' && prev.note.trim().length > 0;
+		const nextHasNote = typeof r.note === 'string' && r.note.trim().length > 0;
+
+		// Keep the higher-confidence relation, but preserve richer evidence/note when possible.
+		const pickHigher = (r.relation_confidence ?? 0) > (prev.relation_confidence ?? 0) ? r : prev;
+		const other = pickHigher === r ? prev : r;
+
+		merged.set(key, {
+			...pickHigher,
+			evidence_passage_ids,
+			note: (typeof pickHigher.note === 'string' && pickHigher.note.trim().length > 0)
+				? pickHigher.note
+				: nextHasNote && !prevHasNote
+					? other.note
+					: pickHigher.note
+		});
+	}
+
+	return Array.from(merged.values()).sort((a, b) => {
+		if (a.from_position !== b.from_position) return a.from_position - b.from_position;
+		if (a.to_position !== b.to_position) return a.to_position - b.to_position;
+		return a.relation_type.localeCompare(b.relation_type);
 	});
 }
 
@@ -1379,14 +1474,17 @@ async function callStageModel(params: {
 			return result.text;
 		} catch (error) {
 			lastError = error instanceof Error ? error : new Error(String(error));
+			const msg = lastError.message;
 			const retryable =
-				lastError.message.includes('429') ||
-				lastError.message.includes('529') ||
-				lastError.message.includes('500') ||
-				lastError.message.includes('overloaded') ||
-				lastError.message.includes('timeout') ||
-				lastError.message.includes('prompt_too_long') ||
-				lastError.message.includes('context_length');
+				msg.includes('429') ||
+				msg.includes('529') ||
+				msg.includes('500') ||
+				msg.includes('overloaded') ||
+				msg.includes('timeout') ||
+				msg.includes('prompt_too_long') ||
+				msg.includes('context_length') ||
+				/resource exhausted/i.test(msg) ||
+				/rate limit|quota|too many requests/i.test(msg);
 			console.warn(`  [WARN] ${stage} ${plan.provider}:${plan.model} failed: ${lastError.message}`);
 			if (isModelUnavailableError(lastError)) break;
 			if (!retryable) break;
@@ -1488,6 +1586,25 @@ interface PartialResults {
 		claims_so_far: PhaseOneClaim[];
 		remaining_batches?: PassageRecord[][];
 		remaining_sections?: string[];
+	};
+	// Mid-grouping checkpoint: resume from next unfinished grouping batch
+	grouping_progress?: {
+		grouped_outputs_so_far: GroupingOutput[];
+		next_batch_index: number;
+		total_batches: number;
+	};
+	// Mid-validation checkpoint: resume from next unfinished validation batch
+	validation_progress?: {
+		batch_outputs_so_far: ValidationOutput[];
+		next_batch_index: number;
+		total_batches: number;
+		should_validate: boolean;
+	};
+	// Mid-relations checkpoint: resume from next unfinished relations batch
+	relations_progress?: {
+		relations_so_far: PhaseOneRelation[];
+		next_batch_index: number;
+		total_batches: number;
 	};
 }
 
@@ -2134,36 +2251,84 @@ async function main() {
 			console.log('│ STAGE 2: RELATION EXTRACTION                            │');
 			console.log('└──────────────────────────────────────────────────────────┘');
 
-			const claimsJson = JSON.stringify(allClaims, null, 2);
-			const relUserMsg = RELATIONS_USER(claimsJson);
-			const relRawResponse = await callStageModel({
-				stage: 'relations',
-				plan: relationPlan,
-				budget: relationBudget,
-				tracker: relationsTracker,
-				systemPrompt: RELATIONS_SYSTEM,
-				userMessage: relUserMsg
-			});
-			logStageCost('Relations', relationsTracker, relationPlan);
+			const relationsBatches = buildRelationsBatches(
+				allClaims,
+				RELATIONS_BATCH_TARGET_TOKENS,
+				RELATIONS_BATCH_OVERLAP_CLAIMS
+			);
 
+			console.log(
+				`  [INFO] Relations in ${relationsBatches.length} batch(es), target ~${RELATIONS_BATCH_TARGET_TOKENS.toLocaleString()} tokens (overlap ${RELATIONS_BATCH_OVERLAP_CLAIMS} claim(s))`
+			);
+
+			let startBatchIndex = 0;
+			if (
+				partial.relations_progress &&
+				Array.isArray(partial.relations_progress.relations_so_far) &&
+				partial.relations_progress.total_batches === relationsBatches.length &&
+				partial.relations_progress.next_batch_index > 0
+			) {
+				relations = partial.relations_progress.relations_so_far;
+				startBatchIndex = Math.min(partial.relations_progress.next_batch_index, relationsBatches.length);
+				console.log(
+					`  [RESUME] Mid-relations checkpoint — ${relations.length} relations so far; resuming at batch ${startBatchIndex + 1}/${relationsBatches.length}`
+				);
+			}
+
+			for (let batchIndex = startBatchIndex; batchIndex < relationsBatches.length; batchIndex++) {
+				const batchClaims = relationsBatches[batchIndex]!;
+				const claimsJson = JSON.stringify(batchClaims, null, 2);
+				const relUserMsg = RELATIONS_USER(claimsJson);
+
+				console.log(
+					`  [BATCH ${batchIndex + 1}/${relationsBatches.length}] ${batchClaims.length} claims (~${estimateTokens(
+						claimsJson
+					).toLocaleString()} tokens claim JSON)`
+				);
+
+				const relRawResponse = await callStageModel({
+					stage: 'relations',
+					plan: relationPlan,
+					budget: relationBudget,
+					tracker: relationsTracker,
+					systemPrompt: RELATIONS_SYSTEM,
+					userMessage: relUserMsg
+				});
+				logStageCost('Relations', relationsTracker, relationPlan);
+
+				let batchRelations: PhaseOneRelation[] = [];
 				try {
 					const parsed = parseJsonResponse(relRawResponse);
-					relations = attachRelationMetadata(RelationsOutputSchema.parse(parsed), allClaims);
-					console.log(`  [OK] Identified ${relations.length} relations`);
+					batchRelations = attachRelationMetadata(RelationsOutputSchema.parse(parsed), allClaims);
+					console.log(`  [OK] Identified ${batchRelations.length} relations in batch ${batchIndex + 1}`);
 				} catch (parseError) {
-				console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
-				const fixedResponse = await fixJsonWithModel(
-					jsonRepairPlan,
-					jsonRepairBudget,
-					repairTracker,
-					relRawResponse,
-					parseError instanceof Error ? parseError.message : String(parseError),
-					'Array of { from_position, to_position, relation_type, strength, note? }'
-				);
+					console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
+					const fixedResponse = await fixJsonWithModel(
+						jsonRepairPlan,
+						jsonRepairBudget,
+						repairTracker,
+						relRawResponse,
+						parseError instanceof Error ? parseError.message : String(parseError),
+						'Array of { from_position, to_position, relation_type, strength, note? }'
+					);
 					const fixedParsed = parseJsonResponse(fixedResponse);
-					relations = attachRelationMetadata(RelationsOutputSchema.parse(fixedParsed), allClaims);
-					console.log(`  [OK] Fixed and identified ${relations.length} relations`);
+					batchRelations = attachRelationMetadata(RelationsOutputSchema.parse(fixedParsed), allClaims);
+					console.log(
+						`  [OK] Fixed and identified ${batchRelations.length} relations in batch ${batchIndex + 1}`
+					);
 				}
+
+				relations = mergeRelationsDedup(relations, batchRelations);
+
+				partial.relations = relations;
+				partial.relations_progress = {
+					relations_so_far: relations,
+					next_batch_index: batchIndex + 1,
+					total_batches: relationsBatches.length
+				};
+				partial.stage_completed = 'relating';
+				savePartialResults(slug, partial);
+			}
 
 			// Print breakdown
 			const relTypeBreakdown: Record<string, number> = {};
@@ -2171,28 +2336,31 @@ async function main() {
 				relTypeBreakdown[rel.relation_type] = (relTypeBreakdown[rel.relation_type] || 0) + 1;
 			}
 			console.log(`\n  Relations by type:`);
-				for (const [type, count] of Object.entries(relTypeBreakdown).sort((a, b) => b[1] - a[1])) {
-					console.log(`    ${type}: ${count}`);
-				}
-				assertRelationIntegrity(relations, allClaims);
-				assertFiniteCostEstimate();
+			for (const [type, count] of Object.entries(relTypeBreakdown).sort((a, b) => b[1] - a[1])) {
+				console.log(`    ${type}: ${count}`);
+			}
 
-				partial.relations = relations;
+			assertRelationIntegrity(relations, allClaims);
+			assertFiniteCostEstimate();
+
+			partial.relations = relations;
+			partial.relations_progress = undefined;
 			partial.stage_completed = 'relating';
 			savePartialResults(slug, partial);
+
 			await updateIngestionLog(db, sourceMeta.url, {
 				stage_completed: 'relating',
 				relations_extracted: relations.length,
 				cost_usd: parseFloat(estimateCostUsd())
 			});
-			} else {
-				console.log('  [SKIP] Stage 2: Relations (already completed)\n');
-				if (!Array.isArray(partial.relations)) {
-					throw new Error('Resume data missing relations for skipped Stage 2; rerun from Stage 2');
-				}
-				relations = partial.relations;
+		} else {
+			console.log('  [SKIP] Stage 2: Relations (already completed)\n');
+			if (!Array.isArray(partial.relations)) {
+				throw new Error('Resume data missing relations for skipped Stage 2; rerun from Stage 2');
 			}
-			assertRelationIntegrity(relations, allClaims);
+			relations = partial.relations;
+		}
+
 			groupingPlan = await planIngestionStage('grouping', {
 				...basePlanningContext,
 				claimCount: allClaims.length,
@@ -2225,9 +2393,21 @@ async function main() {
 				console.log(
 					`  [INFO] Grouping in ${groupingBatches.length} batch(es), target ~${GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS.toLocaleString()} tokens`
 				);
-				const groupedOutputs: GroupingOutput[] = [];
+				let groupedOutputs: GroupingOutput[] = [];
+				let startGroupingBatchIndex = 0;
+				if (
+					partial.grouping_progress?.grouped_outputs_so_far &&
+					partial.grouping_progress.next_batch_index > 0 &&
+					partial.grouping_progress.next_batch_index <= groupingBatches.length
+				) {
+					groupedOutputs = partial.grouping_progress.grouped_outputs_so_far;
+					startGroupingBatchIndex = partial.grouping_progress.next_batch_index;
+					console.log(
+						`  [RESUME] Mid-grouping checkpoint — resuming at batch ${startGroupingBatchIndex + 1}/${groupingBatches.length}`
+					);
+				}
 
-				for (let batchIndex = 0; batchIndex < groupingBatches.length; batchIndex++) {
+				for (let batchIndex = startGroupingBatchIndex; batchIndex < groupingBatches.length; batchIndex++) {
 					const batch = groupingBatches[batchIndex];
 					const claimsJson = JSON.stringify(batch.claims, null, 2);
 					const relationsJson = JSON.stringify(batch.relations, null, 2);
@@ -2272,6 +2452,13 @@ async function main() {
 							`  [OK] Fixed and identified ${fixedArguments.length} arguments in batch ${batchIndex + 1}`
 						);
 					}
+
+					partial.grouping_progress = {
+						grouped_outputs_so_far: groupedOutputs,
+						next_batch_index: batchIndex + 1,
+						total_batches: groupingBatches.length
+					};
+					savePartialResults(slug, partial);
 				}
 
 				arguments_ = mergeGroupingOutputs(groupedOutputs);
@@ -2296,6 +2483,7 @@ async function main() {
 			}
 
 			partial.arguments = arguments_;
+			partial.grouping_progress = undefined;
 			partial.stage_completed = 'grouping';
 			savePartialResults(slug, partial);
 			await updateIngestionLog(db, sourceMeta.url, {
@@ -2405,9 +2593,22 @@ async function main() {
 				console.log(
 					`  [INFO] Validation in ${validationBatches.length} batch(es), target ~${VALIDATION_BATCH_TARGET_TOKENS.toLocaleString()} tokens`
 				);
-				const batchOutputs: ValidationOutput[] = [];
+				let batchOutputs: ValidationOutput[] = [];
+				let startValidationBatchIndex = 0;
+				if (
+					partial.validation_progress?.should_validate &&
+					partial.validation_progress.batch_outputs_so_far &&
+					partial.validation_progress.next_batch_index > 0 &&
+					partial.validation_progress.next_batch_index <= validationBatches.length
+				) {
+					batchOutputs = partial.validation_progress.batch_outputs_so_far;
+					startValidationBatchIndex = partial.validation_progress.next_batch_index;
+					console.log(
+						`  [RESUME] Mid-validation checkpoint — resuming at batch ${startValidationBatchIndex + 1}/${validationBatches.length}`
+					);
+				}
 
-				for (let batchIndex = 0; batchIndex < validationBatches.length; batchIndex++) {
+				for (let batchIndex = startValidationBatchIndex; batchIndex < validationBatches.length; batchIndex++) {
 					const batch = validationBatches[batchIndex];
 					const claimsJson = JSON.stringify(batch.claims, null, 2);
 					const relationsJson = JSON.stringify(batch.relations, null, 2);
@@ -2468,6 +2669,13 @@ async function main() {
 						);
 						console.warn(`  Error: ${err.message}`);
 					}
+					partial.validation_progress = {
+						batch_outputs_so_far: batchOutputs,
+						next_batch_index: batchIndex + 1,
+						total_batches: validationBatches.length,
+						should_validate: true
+					};
+					savePartialResults(slug, partial);
 				}
 
 				logStageCost('Validation', validationTracker, validationPlan);
@@ -2497,9 +2705,11 @@ async function main() {
 				}
 			} else {
 				console.log('\n  [SKIP] Stage 5: Validation (use --validate flag to enable)');
+				partial.validation_progress = undefined;
 			}
 
 			partial.validation = validationResult;
+			partial.validation_progress = undefined;
 			partial.stage_completed = 'validating';
 			savePartialResults(slug, partial);
 

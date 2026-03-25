@@ -52,6 +52,15 @@ function coercePositiveInt(value: unknown): unknown {
 	return Math.max(1, Math.trunc(numberValue));
 }
 
+function nullishOptionalString(value: unknown): unknown {
+	if (value === null || value === undefined) return undefined;
+	if (typeof value === 'string') {
+		const t = value.trim();
+		return t === '' ? undefined : t;
+	}
+	return value;
+}
+
 function normalizeRelationType(value: unknown): unknown {
 	const normalized = normalizeLabel(value);
 	if (typeof normalized !== 'string') return normalized;
@@ -85,7 +94,7 @@ export const RelationSchema = z.object({
 	to_position: z.preprocess(coercePositiveInt, z.number().int().positive()).describe('position_in_source of target claim'),
 	relation_type: z.preprocess(normalizeRelationType, z.enum(RELATION_TYPE_VALUES)),
 	strength: z.preprocess(normalizeLabel, z.enum(STRENGTH_VALUES)),
-	note: z.string().optional().describe('One sentence explaining the relation')
+	note: z.preprocess(nullishOptionalString, z.string().optional()).describe('One sentence explaining the relation')
 });
 
 export const RelationsOutputSchema = z.array(RelationSchema);

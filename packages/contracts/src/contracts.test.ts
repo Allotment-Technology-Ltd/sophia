@@ -60,6 +60,27 @@ describe('@restormel/contracts schemas', () => {
     expect(metadata.claim_origin).toBe('source_grounded');
   });
 
+  it('accepts null for optional metadata strings on PhaseOneClaimMetadataSchema', () => {
+    const metadata = PhaseOneClaimMetadataSchema.parse({
+      claim_origin: 'source_grounded',
+      claim_scope: 'normative',
+      attributed_to: ['Author'],
+      concept_tags: ['tag'],
+      verification_state: 'unverified',
+      review_state: 'candidate',
+      extractor_version: 'v1',
+      contested_terms: [],
+      thinker: null,
+      tradition: null,
+      era: null,
+      subdomain: null
+    });
+    expect(metadata.thinker).toBeUndefined();
+    expect(metadata.tradition).toBeUndefined();
+    expect(metadata.era).toBeUndefined();
+    expect(metadata.subdomain).toBeUndefined();
+  });
+
   it('validates analyse request link preferences', () => {
     const request = AnalyseRequestSchema.parse({
       query: 'What is public reason?',

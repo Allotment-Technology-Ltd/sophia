@@ -24,12 +24,13 @@
 
 import type { RestormelRouteRecord, RestormelStepRecord } from '../../src/lib/server/restormel.js';
 import {
+  RestormelDashboardError,
   RESTORMEL_ENVIRONMENT_ID,
   restormelListRoutes,
   restormelPublishRoute,
+  restormelReplaceRouteSteps,
   restormelResolve,
-  restormelSaveRoute,
-  restormelSaveRouteSteps
+  restormelSaveRoute
 } from '../../src/lib/server/restormel.js';
 
 type StageDef = {
@@ -188,10 +189,38 @@ async function ensureSharedRouteRecord(options: {
   return { route: data, created: true };
 }
 
-async function applyStepsAndPublish(routeId: string): Promise<void> {
-  const steps = buildDefaultSteps();
+function isRestormelConflict(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /(^|\b)(409|conflict)(\b|$)/i.test(msg);
+}
 
-  await restormelSaveRouteSteps(routeId, steps);
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function applyStepsAndPublish(routeId: string): Promise<void> {
+  const desired = buildDefaultSteps();
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (attempt > 0) {
+        await sleep(200 * attempt);
+      }
+      await restormelReplaceRouteSteps(routeId, desired);
+      break;
+    } catch (e) {
+      if (e instanceof RestormelDashboardError) {
+        console.error(
+          `[bootstrap] save steps failed route=${routeId} status=${e.status} code=${e.code} detail=${e.detail}`
+        );
+      }
+      if (attempt < 2 && isRestormelConflict(e)) {
+        continue;
+      }
+      throw e;
+    }
+  }
+
   try {
     await restormelPublishRoute(routeId, {});
     console.log(`  Published route ${routeId}`);

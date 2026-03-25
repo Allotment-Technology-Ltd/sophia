@@ -126,6 +126,16 @@ function normalizeClaimType(value: unknown): unknown {
 	return claimTypeMap[normalized] ?? normalized;
 }
 
+/** LLMs often emit `null` for optional fields; Zod `.optional()` does not accept `null`. */
+function nullishOptionalString(value: unknown): unknown {
+	if (value === null || value === undefined) return undefined;
+	if (typeof value === 'string') {
+		const t = value.trim();
+		return t === '' ? undefined : t;
+	}
+	return value;
+}
+
 function normalizeDomain(value: unknown): unknown {
 	const normalized = normalizeLabel(value);
 	if (typeof normalized !== 'string') return normalized;
@@ -151,10 +161,10 @@ export const ExtractionClaimSchema = z.object({
 	claim_type: z.preprocess(normalizeClaimType, z.enum(CLAIM_TYPE_VALUES)),
 	claim_origin: z.preprocess(normalizeLabel, z.enum(CLAIM_ORIGIN_VALUES)).optional(),
 	domain: z.preprocess(normalizeDomain, z.enum(DOMAIN_VALUES)),
-	subdomain: z.string().optional(),
-	thinker: z.string().optional(),
-	tradition: z.string().optional(),
-	era: z.string().optional(),
+	subdomain: z.preprocess(nullishOptionalString, z.string().optional()),
+	thinker: z.preprocess(nullishOptionalString, z.string().min(1).optional()),
+	tradition: z.preprocess(nullishOptionalString, z.string().min(1).optional()),
+	era: z.preprocess(nullishOptionalString, z.string().min(1).optional()),
 	claim_scope: z.preprocess(normalizeLabel, z.enum(CLAIM_SCOPE_VALUES)).optional(),
 	concept_tags: z.preprocess(normalizeStringList, z.array(z.string()).max(8)).optional(),
 	passage_id: z.string().optional().describe('Passage id where the claim appears'),

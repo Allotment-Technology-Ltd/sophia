@@ -33,8 +33,20 @@ export function getIngestionAdvisorMode(): IngestionAdvisorMode {
   return 'off';
 }
 
+/** Optional override from admin ingest UI (takes precedence over env). */
+export function parseIngestionAdvisorModeFromRequest(value: unknown): IngestionAdvisorMode | undefined {
+  if (typeof value !== 'string') return undefined;
+  const v = value.trim().toLowerCase();
+  if (v === 'off' || v === 'shadow' || v === 'auto') return v;
+  return undefined;
+}
+
 export function getAdvisorAutoApplyFields(): Set<AdvisorAutoApplyField> {
   const raw = (process.env.INGESTION_ADVISOR_AUTO_APPLY ?? 'preset,validation').trim().toLowerCase();
+  return parseAdvisorAutoApplyList(raw);
+}
+
+function parseAdvisorAutoApplyList(raw: string): Set<AdvisorAutoApplyField> {
   const set = new Set<AdvisorAutoApplyField>();
   for (const part of raw.split(',').map((s) => s.trim())) {
     if (part === 'preset') set.add('preset');
@@ -44,6 +56,21 @@ export function getAdvisorAutoApplyFields(): Set<AdvisorAutoApplyField> {
     set.add('preset');
     set.add('validation');
   }
+  return set;
+}
+
+/** Optional overrides from admin ingest UI (checkboxes). */
+export function parseAdvisorAutoApplyFromRequest(body: unknown): Set<AdvisorAutoApplyField> | undefined {
+  if (!body || typeof body !== 'object') return undefined;
+  const o = body as Record<string, unknown>;
+  const ap = o.ingestionAdvisorAutoApply;
+  if (ap === undefined) return undefined;
+  if (!ap || typeof ap !== 'object') return undefined;
+  const p = ap as Record<string, unknown>;
+  if (!('preset' in p) && !('validation' in p)) return undefined;
+  const set = new Set<AdvisorAutoApplyField>();
+  if (p.preset === true) set.add('preset');
+  if (p.validation === true) set.add('validation');
   return set;
 }
 

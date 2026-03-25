@@ -4,7 +4,6 @@
  */
 
 import { generateObject } from 'ai';
-import { z } from 'zod';
 import { resolveReasoningModelRoute } from '$lib/server/vertex';
 import {
   clampAdvisorOutput,
@@ -13,22 +12,74 @@ import {
   heuristicPresetFromPreScan,
   PreScanAdvisorSchema,
   resolveAdvisorApply,
+  type AdvisorAutoApplyField,
   type HeuristicBaseline,
   type IngestionAdvisorMode,
   type PreScanAdvisorOutput
 } from '$lib/server/ingestionAdvisorPolicy';
 import { adminDb } from '$lib/server/firebase-admin';
+import {
+  clampCoachOutput,
+  COACH_SCHEMA,
+  type CoachAggregatedSignals,
+  type IngestionCoachOutput
+} from '$lib/ingestionCoachSchema';
 
 const REPORTS_COLLECTION = 'ingestion_run_reports';
 
-const COACH_SCHEMA = z.object({
-  executiveSummary: z.string().max(3000),
-  recommendations: z.array(z.string().max(1200)).min(1).max(12),
-  priority: z.enum(['low', 'medium', 'high']),
-  suggestedNextExperiments: z.array(z.string().max(800)).max(6).optional()
-});
+export type { CoachAggregatedSignals, IngestionCoachOutput } from '$lib/ingestionCoachSchema';
 
-export type IngestionCoachOutput = z.infer<typeof COACH_SCHEMA>;
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function mergeIssueSummaryInto(
+  target: Record<string, number>,
+  raw: unknown
+): void {
+  if (!isRecord(raw)) return;
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+      target[k] = (target[k] ?? 0) + Math.trunc(v);
+    }
+  }
+}
+
+function aggregateCoachSignalsFromReportDocs(
+  docs: Array<{ data(): Record<string, unknown> }>
+): CoachAggregatedSignals {
+  const issueKindTotals: Record<string, number> = {};
+  let totalIssues = 0;
+  let sumRoutingDegradedCalls = 0;
+  let sumRoutingFallbackUsed = 0;
+  let runsWithTerminalError = 0;
+
+  for (const doc of docs) {
+    const d = doc.data();
+    const ic = typeof d.issueCount === 'number' && Number.isFinite(d.issueCount) ? Math.trunc(d.issueCount) : 0;
+    totalIssues += Math.max(0, ic);
+    mergeIssueSummaryInto(issueKindTotals, d.issueSummary);
+
+    const rs = d.routingStats;
+    if (isRecord(rs)) {
+      const deg = rs.degradedRouteCount;
+      const fb = rs.fallbackUsedCount;
+      if (typeof deg === 'number' && Number.isFinite(deg)) sumRoutingDegradedCalls += Math.max(0, Math.trunc(deg));
+      if (typeof fb === 'number' && Number.isFinite(fb)) sumRoutingFallbackUsed += Math.max(0, Math.trunc(fb));
+    }
+    const te = d.terminalError;
+    if (typeof te === 'string' && te.trim() !== '') runsWithTerminalError += 1;
+  }
+
+  return {
+    reportsInSample: docs.length,
+    issueKindTotals,
+    totalIssues,
+    sumRoutingDegradedCalls,
+    sumRoutingFallbackUsed,
+    runsWithTerminalError
+  };
+}
 
 function buildPreScanAdvisorPrompt(input: {
   sourceTitle: string;
@@ -91,10 +142,19 @@ export interface AdvisorApiEnvelope {
   error?: string;
 }
 
+export interface PreScanAdvisorRequestOptions {
+  /** When set (e.g. from admin ingest UI), overrides `INGESTION_ADVISOR_MODE` for this pre-scan only. */
+  mode?: IngestionAdvisorMode;
+  /** When set, overrides `INGESTION_ADVISOR_AUTO_APPLY` for auto mode. */
+  autoApplyFields?: Set<AdvisorAutoApplyField>;
+}
+
 export async function runPreScanAdvisorBlock(
-  ctx: PreScanAdvisorContext
+  ctx: PreScanAdvisorContext,
+  requestOptions?: PreScanAdvisorRequestOptions
 ): Promise<AdvisorApiEnvelope> {
-  const mode = getIngestionAdvisorMode();
+  const mode = requestOptions?.mode ?? getIngestionAdvisorMode();
+  const autoFieldsForMerge = requestOptions?.autoApplyFields ?? getAdvisorAutoApplyFields();
   const baseline = heuristicPresetFromPreScan(ctx.approxContentTokens);
 
   if (mode === 'off') {
@@ -141,8 +201,7 @@ export async function runPreScanAdvisorBlock(
     });
 
     const suggestion = clampAdvisorOutput(result.object);
-    const autoFields = getAdvisorAutoApplyFields();
-    const merged = resolveAdvisorApply(mode, suggestion, baseline, autoFields);
+    const merged = resolveAdvisorApply(mode, suggestion, baseline, autoFieldsForMerge);
 
     return {
       mode,
@@ -181,6 +240,7 @@ export async function runIngestionCoach(limit: number): Promise<{
   ok: true;
   output: IngestionCoachOutput;
   reportsAnalyzed: number;
+  aggregatedSignals: CoachAggregatedSignals | null;
   model?: { provider: string; modelId: string };
   error?: string;
 }> {
@@ -196,6 +256,7 @@ export async function runIngestionCoach(limit: number): Promise<{
     return {
       ok: true,
       reportsAnalyzed: 0,
+      aggregatedSignals: null,
       output: {
         executiveSummary: 'No ingestion run reports available (Firestore query failed or collection empty).',
         recommendations: ['Run a few ingestions in the admin UI to populate ingestion_run_reports.'],
@@ -204,12 +265,19 @@ export async function runIngestionCoach(limit: number): Promise<{
     };
   }
 
+  const aggregatedSignals =
+    snap.docs.length > 0 ? aggregateCoachSignalsFromReportDocs(snap.docs) : null;
+
   const lines: string[] = [];
   for (const doc of snap.docs) {
     const d = doc.data();
     const summary = d.issueSummary && typeof d.issueSummary === 'object' ? JSON.stringify(d.issueSummary) : '{}';
+    const routingStats =
+      d.routingStats && typeof d.routingStats === 'object' ? JSON.stringify(d.routingStats) : '{}';
+    const batchOverrides =
+      d.batchOverrides && typeof d.batchOverrides === 'object' ? JSON.stringify(d.batchOverrides) : '{}';
     lines.push(
-      `- run ${doc.id} status=${d.status} url=${d.sourceUrl ?? '?'} issues=${d.issueCount ?? 0} summary=${summary} err=${d.terminalError ?? 'none'}`
+      `- run ${doc.id} status=${d.status} url=${d.sourceUrl ?? '?'} issues=${d.issueCount ?? 0} summary=${summary} routingStats=${routingStats} batchOverrides=${batchOverrides} err=${d.terminalError ?? 'none'}`
     );
   }
 
@@ -217,6 +285,7 @@ export async function runIngestionCoach(limit: number): Promise<{
     return {
       ok: true,
       reportsAnalyzed: 0,
+      aggregatedSignals: null,
       output: {
         executiveSummary: 'No completed ingestion reports yet.',
         recommendations: ['Run at least one ingestion with INGESTION_ADVISOR or issue capture enabled so reports are written to Firestore.'],
@@ -235,11 +304,18 @@ export async function runIngestionCoach(limit: number): Promise<{
     }
   });
 
+  const aggJson = JSON.stringify(aggregatedSignals ?? {}, null, 0);
+
   const prompt = `You improve Sophia's philosophy ingestion pipeline (SvelteKit admin + scripts/ingest.ts + Vertex/Anthropic via Restormel Keys).
 
-Below are recent Firestore run summaries. Each line includes issueSummary JSON: counts by **kind**. Use these definitions exactly — do not invent separate infrastructure (there is no standalone "routing service"):
+**Deterministic aggregates from the same Firestore sample (authoritative — do not invent different totals):**
+${aggJson}
+
+Below are recent Firestore run summaries (per-run detail). Each line includes issueSummary JSON: counts by **kind**. Use these definitions exactly — do not invent separate infrastructure (there is no standalone "routing service"):
 
 - **routing_degraded**: Restormel resolve failed or returned no route; Sophia used **degraded_default** (built-in provider/model). Fix: published Restormel routes for workload=ingestion + stage, correct RESTORMEL_PROJECT_ID / RESTORMEL_ENVIRONMENT_ID / gateway key, or provider quotas.
+- routingStats: derived from worker \`[ROUTE]\` log lines; includes \`routingSources\` counts (e.g. degraded_default) and \`fallbackUsedCount\` when \`order>=1\`.
+- batchOverrides: optional per-run env knobs applied to \`scripts/ingest.ts\` (e.g. extraction max tokens per section, grouping/validation target tokens, embedding batch size).
 - **json_repair**: Model output failed JSON/schema check; repair pass ran. Fix: extraction prompt, max_tokens, batch sizes, or model choice.
 - **truncation**: max_tokens / output truncation (often triggers batch_split). Fix: smaller passage batches, higher output limits where safe, or split logic.
 - **batch_split**: oversized batch split after truncation. Expected recovery path; many splits suggest batching/token limits need tuning.
@@ -252,22 +328,29 @@ Below are recent Firestore run summaries. Each line includes issueSummary JSON: 
 Reports:
 ${lines.join('\n')}
 
-Produce actionable recommendations for **Sophia operators**: Restormel Keys routes, env vars, ingest flags (--ingest-provider, --validate), batching in scripts/ingest.ts, Vertex quotas. Avoid generic advice about mystery microservices or Firestore document size unless issue kinds or terminalError clearly support it. Be specific and prioritized.`;
+Produce actionable recommendations for **Sophia operators**: Restormel Keys routes, env vars, ingest flags (--ingest-provider, --validate), batching in scripts/ingest.ts, Vertex quotas. Avoid generic advice about mystery microservices or Firestore document size unless issue kinds or terminalError clearly support it. Be specific and prioritized.
+
+**Structured outputs (required):**
+- **UI variables (\`settingTweaks\`):** For anything the operator can change **on the admin ingest pipeline page** without editing code — use scope \`ui_preset\`, \`ui_validation\`, or \`batch_override\`. Set \`uiVariableId\` to one of: pipeline_preset, cross_model_validation, batch_extractionMaxTokensPerSection, batch_groupingTargetTokens, batch_validationTargetTokens, batch_relationsTargetTokens, batch_embedBatchSize (must match the control). For \`repo_implementation\` scope, use only when the fix is **not** a single UI control (e.g. “publish new Restormel route” is repo/infrastructure, not a dropdown).
+- **Code / engineering (\`codeChangeReports\`):** For each **distinct** need that requires **editing code**, prompts under version control, Restormel dashboard publish, or env/infra outside this page — add an entry with \`title\`, \`detail\`, optional \`suggestedArea\` (ingest_worker, prompts, restormel_routes, admin_ui, infra_env, other), and \`evidenceIssueKinds\`. Do not duplicate the same work as both a UI tweak and a code report unless one is “try UI first” and the other is “if that fails, change code”.
+- Prefer \`batch_override\` when truncation, batch_split, json_repair, or grouping_integrity dominate; prefer preset/validation when routing_degraded or retry patterns dominate.`;
 
   try {
     const result = await generateObject({
       model: route.model,
       schema: COACH_SCHEMA,
-      system: 'You output only valid JSON matching the schema. Write for operators and engineers.',
+      system:
+        'You output only valid JSON matching the schema. Write for operators and engineers. settingTweaks (UI) and codeChangeReports (engineering) must reference evidenceIssueKinds that appear in the deterministic aggregates when possible. Set uiVariableId on UI tweaks.',
       prompt,
       temperature: 0.35,
-      maxOutputTokens: 2500
+      maxOutputTokens: 4500
     });
 
     return {
       ok: true,
-      output: COACH_SCHEMA.parse(result.object),
+      output: clampCoachOutput(COACH_SCHEMA.parse(result.object)),
       reportsAnalyzed: snap.docs.length,
+      aggregatedSignals,
       model: { provider: route.provider, modelId: route.modelId }
     };
   } catch (e) {
@@ -276,6 +359,7 @@ Produce actionable recommendations for **Sophia operators**: Restormel Keys rout
     return {
       ok: true,
       reportsAnalyzed: snap.docs.length,
+      aggregatedSignals,
       output: {
         executiveSummary: `Coach could not complete an AI pass (${msg}). Review recent runs manually in Firestore ingestion_run_reports.`,
         recommendations: ['Check Vertex / model routing credentials.', 'Retry after confirming Restormel routes and API quotas.'],
