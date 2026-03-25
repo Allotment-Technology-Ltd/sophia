@@ -135,7 +135,7 @@
       <a href="/learn" class="mode-link" aria-current={$page.url.pathname.startsWith('/learn') ? 'page' : undefined}>Learn</a>
     {/if}
     {#if administrator}
-      <a href="/admin" class="mode-link" aria-current={$page.url.pathname.startsWith('/admin') ? 'page' : undefined}>Expand</a>
+      <a href="/admin" class="mode-link" aria-current={$page.url.pathname.startsWith('/admin') ? 'page' : undefined}>Admin</a>
     {/if}
   </div>
 
@@ -191,7 +191,7 @@
             </div>
             {#if administrator}
               <a class="dropdown-item" href="/admin" role="menuitem">
-                Ingestion
+                Admin
               </a>
             {/if}
             <button class="dropdown-item" onclick={handleSignOut} role="menuitem">

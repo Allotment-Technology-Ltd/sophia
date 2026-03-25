@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sophia — Ingest run (prototype)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,600;1,500&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* Mirrors src/styles/design-tokens.css — standalone for this file only */
+      :root {
+        --color-bg: #1a1917;
+        --color-surface: #141312;
+        --color-surface-raised: #201f1d;
+        --color-text: #e8e6e1;
+        --color-muted: #d2cec6;
+        --color-dim: #a8a29a;
+        --color-border: #2e2c29;
+        --color-sage: #7fa383;
+        --color-sage-bg: rgba(127, 163, 131, 0.1);
+        --color-sage-border: rgba(127, 163, 131, 0.25);
+        --color-blue: #6fa3d4;
+        --color-blue-bg: rgba(111, 163, 212, 0.12);
+        --color-blue-border: rgba(111, 163, 212, 0.28);
+        --color-coral: #e27d6f;
+        --color-coral-bg: rgba(226, 125, 111, 0.12);
+        --color-amber: #c4a882;
+        --color-amber-bg: rgba(196, 168, 130, 0.1);
+        --font-display: 'Cormorant Garamond', Georgia, serif;
+        --font-ui: 'JetBrains Mono', 'Courier New', monospace;
+        --text-label: 0.6875rem;
+        --text-meta: 0.75rem;
+        --text-ui: 0.8125rem;
+        --text-body: 1.125rem;
+        --radius-ui: 12px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--color-bg);
+        color: var(--color-text);
+        font-family: var(--font-ui);
+        font-size: var(--text-ui);
+        line-height: 1.5;
+      }
+
+      .proto-banner {
+        background: var(--color-amber-bg);
+        border-bottom: 1px solid color-mix(in srgb, var(--color-amber) 35%, var(--color-border));
+        color: var(--color-muted);
+        font-size: var(--text-meta);
+        padding: 8px 20px;
+        text-align: center;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .page {
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+
+      .hero {
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-ui);
+        padding: 20px;
+        background: linear-gradient(130deg, rgba(127, 163, 131, 0.18), rgba(44, 96, 142, 0.12));
+      }
+      .hero h1 {
+        margin: 0 0 6px;
+        font-family: var(--font-display);
+        font-size: 1.75rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      .hero p {
+        margin: 0;
+        color: var(--color-muted);
+        font-size: var(--text-meta);
+        max-width: 42rem;
+      }
+
+      .layout {
+        margin-top: 24px;
+        display: grid;
+        gap: 20px;
+      }
+      @media (min-width: 1160px) {
+        .layout {
+          grid-template-columns: minmax(0, 1fr) 320px;
+          align-items: start;
+        }
+      }
+
+      .card {
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-ui);
+        background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+      }
+      .card-inner {
+        padding: 20px;
+      }
+
+      .eyebrow {
+        font-size: var(--text-label);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--color-dim);
+        margin: 0 0 8px;
+      }
+
+      /* Run summary */
+      .run-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px 24px;
+        align-items: baseline;
+        font-size: var(--text-meta);
+        color: var(--color-muted);
+      }
+      .run-strip strong {
+        color: var(--color-text);
+        font-weight: 500;
+      }
+      .status-running {
+        color: var(--color-sage);
+      }
+      .status-quiet {
+        color: var(--color-amber);
+      }
+
+      /* Stage path */
+      .stage-path-wrap {
+        margin-top: 20px;
+      }
+      .stage-path {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: stretch;
+        justify-content: flex-start;
+      }
+      .stage-node {
+        flex: 1 1 72px;
+        min-width: 64px;
+        max-width: 120px;
+        border: 1px solid var(--color-border);
+        border-radius: 6px;
+        background: var(--color-surface-raised);
+        padding: 10px 8px;
+        text-align: center;
+        position: relative;
+        transition: border-color 0.2s ease, background 0.2s ease;
+      }
+      .stage-node .name {
+        display: block;
+        font-size: 0.65rem;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--color-muted);
+        line-height: 1.25;
+      }
+      .stage-node .glyph {
+        margin-top: 6px;
+        font-size: var(--text-meta);
+      }
+      .stage-node.pending {
+        opacity: 0.65;
+      }
+      .stage-node.done {
+        border-color: var(--color-sage-border);
+        background: var(--color-sage-bg);
+      }
+      .stage-node.done .glyph {
+        color: var(--color-sage);
+      }
+      .stage-node.active {
+        border-color: var(--color-blue-border);
+        background: var(--color-blue-bg);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-blue) 25%, transparent);
+      }
+      .stage-node.active .name {
+        color: var(--color-text);
+      }
+      .stage-node.active .glyph {
+        color: var(--color-blue);
+      }
+      .stage-node.error {
+        border-color: color-mix(in srgb, var(--color-coral) 50%, var(--color-border));
+        background: var(--color-coral-bg);
+      }
+
+      .connector {
+        display: none;
+      }
+      @media (min-width: 900px) {
+        .stage-path {
+          flex-wrap: nowrap;
+        }
+        .stage-node:not(:last-child)::after {
+          content: '';
+          position: absolute;
+          right: -9px;
+          top: 50%;
+          width: 8px;
+          height: 2px;
+          background: color-mix(in srgb, var(--color-border) 80%, transparent);
+          transform: translateY(-50%);
+          z-index: 0;
+        }
+        .stage-node.done:not(:last-child)::after {
+          background: color-mix(in srgb, var(--color-sage) 45%, var(--color-border));
+        }
+      }
+
+      @keyframes pulse-line {
+        50% {
+          opacity: 0.45;
+        }
+      }
+      .stage-node.active:not(:last-child)::after {
+        animation: pulse-line 2s ease-in-out infinite;
+        background: color-mix(in srgb, var(--color-blue) 55%, var(--color-border));
+      }
+
+      .focus-block {
+        margin-top: 16px;
+      }
+      .focus-block h2 {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: 1.35rem;
+        font-weight: 600;
+      }
+      .focus-block .action {
+        margin: 6px 0 0;
+        color: var(--color-muted);
+        font-size: var(--text-meta);
+      }
+
+      /* Cost card */
+      .cost-card .totals-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+      @media (max-width: 500px) {
+        .cost-card .totals-row {
+          grid-template-columns: 1fr;
+        }
+      }
+      .cost-card .total-block .label {
+        font-size: var(--text-label);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--color-dim);
+        margin: 0 0 4px;
+      }
+      .cost-card .total-block .value {
+        margin: 0;
+        font-size: 1.65rem;
+        font-weight: 500;
+        color: var(--color-text);
+        font-variant-numeric: tabular-nums;
+      }
+      .cost-card .total-block.running .value {
+        color: var(--color-sage);
+      }
+
+      .cost-table-wrap {
+        overflow: auto;
+        border: 1px solid var(--color-border);
+        border-radius: 8px;
+      }
+      table.cost-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: var(--text-meta);
+      }
+      .cost-table th,
+      .cost-table td {
+        padding: 10px 12px;
+        text-align: left;
+        border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+      }
+      .cost-table th {
+        color: var(--color-dim);
+        font-weight: 500;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        font-size: 0.65rem;
+        background: color-mix(in srgb, var(--color-surface-raised) 85%, transparent);
+      }
+      .cost-table td.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        color: var(--color-text);
+      }
+      .cost-table tr:last-child td {
+        border-bottom: none;
+      }
+      .cost-table tr.row-active td {
+        background: var(--color-blue-bg);
+        box-shadow: inset 3px 0 0 var(--color-blue);
+      }
+      .cost-table tr.row-done td:first-child {
+        color: var(--color-sage);
+      }
+      .cost-table td.muted {
+        color: var(--color-dim);
+      }
+
+      .sticky-aside {
+        position: sticky;
+        top: 16px;
+      }
+
+      /* Activity log */
+      .log-header {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: flex-start;
+        margin-bottom: 12px;
+      }
+      .log-header p {
+        margin: 4px 0 0;
+        max-width: 36rem;
+        color: var(--color-muted);
+        font-size: var(--text-meta);
+      }
+      .raw-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        user-select: none;
+        border: 1px solid color-mix(in srgb, var(--color-border) 90%, transparent);
+        border-radius: 6px;
+        padding: 6px 12px;
+        font-size: 0.65rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--color-dim);
+        background: color-mix(in srgb, var(--color-bg) 50%, transparent);
+      }
+      .raw-toggle:hover {
+        border-color: var(--color-border);
+      }
+
+      .log-raw {
+        max-height: min(520px, 55vh);
+        overflow: auto;
+        border: 1px solid var(--color-border);
+        border-radius: 8px;
+        padding: 12px;
+        background: color-mix(in srgb, #111110 70%, var(--color-bg));
+        font-size: var(--text-meta);
+        line-height: 1.55;
+      }
+      .log-raw p {
+        margin: 0 0 4px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .log-feed-scroller {
+        max-height: min(520px, 55vh);
+        overflow: auto;
+        border: 1px solid var(--color-border);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--color-bg) 55%, transparent);
+        scrollbar-gutter: stable;
+      }
+      .log-feed {
+        list-style: none;
+        margin: 0;
+        padding: 12px 14px 16px;
+      }
+      .log-feed-row {
+        display: grid;
+        grid-template-columns: 14px minmax(0, 1fr);
+        gap: 12px;
+        padding: 8px 0;
+        border-bottom: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent);
+      }
+      .log-feed-row:last-child {
+        border-bottom: none;
+      }
+      .log-feed-rail {
+        position: relative;
+        width: 14px;
+        padding-top: 4px;
+        display: flex;
+        justify-content: center;
+      }
+      .log-feed-rail::before {
+        content: '';
+        position: absolute;
+        top: 14px;
+        bottom: -8px;
+        left: 50%;
+        width: 1px;
+        transform: translateX(-50%);
+        background: color-mix(in srgb, var(--color-border) 70%, transparent);
+      }
+      .log-feed-row:last-child .log-feed-rail::before {
+        display: none;
+      }
+      .log-feed-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: var(--color-blue);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-blue-bg) 90%, transparent);
+        z-index: 1;
+      }
+      .log-feed-row.lv-success .log-feed-dot {
+        background: var(--color-sage);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-sage-bg) 90%, transparent);
+      }
+      .log-feed-row.lv-warn .log-feed-dot {
+        background: var(--color-amber);
+      }
+      .log-feed-row.lv-error .log-feed-dot {
+        background: var(--color-coral);
+      }
+      .log-feed-row.lv-muted .log-feed-dot {
+        background: var(--color-dim);
+      }
+      .log-feed-badge {
+        display: inline-block;
+        border-radius: 999px;
+        border: 1px solid var(--color-border);
+        padding: 2px 8px;
+        margin-bottom: 4px;
+        font-size: 0.65rem;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--color-muted);
+      }
+      .log-feed-body {
+        margin: 0;
+        font-size: 0.875rem;
+        line-height: 1.45;
+        color: var(--color-text);
+        word-break: break-word;
+      }
+      .log-feed-row.lv-muted .log-feed-body {
+        color: var(--color-muted);
+        font-size: var(--text-meta);
+      }
+
+      .demo-bar {
+        margin-top: 20px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+      .demo-bar button {
+        font-family: var(--font-ui);
+        font-size: var(--text-meta);
+        padding: 8px 14px;
+        border-radius: 6px;
+        border: 1px solid var(--color-sage-border);
+        background: var(--color-sage-bg);
+        color: var(--color-sage);
+        cursor: pointer;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .demo-bar button:hover {
+        filter: brightness(1.08);
+      }
+      .demo-bar span {
+        color: var(--color-dim);
+        font-size: var(--text-meta);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="proto-banner">Standalone prototype — not wired to Sophia. Open from /prototypes/ingest-run-review-running.html</div>
+
+    <main class="page">
+      <header class="hero">
+        <h1>Final review &amp; run</h1>
+        <p>
+          Operator view while a pipeline is executing: stage path, cost estimate vs running spend, and activity stream.
+          This file is for layout and visual review only.
+        </p>
+      </header>
+
+      <div class="layout">
+        <div class="main-col">
+          <section class="card">
+            <div class="card-inner">
+              <p class="eyebrow">Run</p>
+              <div class="run-strip" id="runStrip">
+                <!-- filled by demo state -->
+              </div>
+
+              <div class="stage-path-wrap">
+                <p class="eyebrow" style="margin-bottom: 10px">Pipeline</p>
+                <div class="stage-path" id="stagePath" role="list" aria-label="Pipeline stages"></div>
+              </div>
+
+              <div class="focus-block">
+                <h2 id="focusTitle">—</h2>
+                <p class="action" id="focusAction">—</p>
+              </div>
+
+              <div class="demo-bar">
+                <button type="button" id="btnAdvance">Demo: advance stage</button>
+                <button type="button" id="btnReset">Reset demo</button>
+                <span id="demoHint">Advances fake progress for screenshots.</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="card" style="margin-top: 20px">
+            <div class="card-inner">
+              <div class="log-header">
+                <div>
+                  <p class="eyebrow" style="margin-bottom: 4px">Pipeline activity</p>
+                  <p>Structured timeline of events. Use raw output when you need exact lines for support.</p>
+                </div>
+                <label class="raw-toggle">
+                  <input type="checkbox" id="rawToggle" />
+                  Raw
+                </label>
+              </div>
+              <div id="logPanel"></div>
+            </div>
+          </section>
+        </div>
+
+        <aside class="sticky-aside">
+          <div class="card cost-card">
+            <div class="card-inner">
+              <div class="totals-row">
+                <div class="total-block">
+                  <p class="label">Estimated total</p>
+                  <p class="value" id="estTotal">$0.0000</p>
+                </div>
+                <div class="total-block running">
+                  <p class="label">Running total</p>
+                  <p class="value" id="runTotal">$0.0000</p>
+                </div>
+              </div>
+              <div class="cost-table-wrap">
+                <table class="cost-table" aria-label="Cost by stage">
+                  <thead>
+                    <tr>
+                      <th scope="col">Stage</th>
+                      <th scope="col" style="text-align: right">Est.</th>
+                      <th scope="col" style="text-align: right">Running</th>
+                    </tr>
+                  </thead>
+                  <tbody id="costBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <script>
+      (function () {
+        const STAGES = [
+          { key: 'extraction', label: 'Extraction' },
+          { key: 'relations', label: 'Relations' },
+          { key: 'grouping', label: 'Grouping' },
+          { key: 'validation', label: 'Validation' },
+          { key: 'embedding', label: 'Embedding' },
+          { key: 'json_repair', label: 'JSON repair' }
+        ];
+
+        const EST = [0.0319, 0.0125, 0.0163, 0.0191, 0.0038, 0.0008];
+
+        /** Running column: null = em dash until stage has reported */
+        let runningUsd = [null, null, null, null, null, null];
+
+        let activeIndex = 3;
+        const runId = 'a8f3c9d2e1b04716';
+        const startedAt = Date.now() - (4 * 60 + 12) * 1000;
+        let quietMs = 12000;
+
+        const LOG_LINES = [
+          '[FETCH] Resolved source — journal_article',
+          'STAGE 1: EXTRACT — structured claims',
+          '  [COST] EXTRACT: anthropic/claude-3-5 stage=$0.0319 total=$0.0319',
+          '[INFO] Batch 3/12 complete',
+          'STAGE 2: RELATE — support edges',
+          '  [COST] RELATE: anthropic/claude-3-5 stage=$0.0125 total=$0.0444',
+          'STAGE 3: GROUP — argument clusters',
+          '  [COST] GROUP: anthropic/claude-3-5 stage=$0.0163 total=$0.0607',
+          'STAGE 4: VALIDATE — cross-check',
+          '  [WARN] High token pressure on validation batch 1',
+        ];
+
+        const PARSED_PREVIEW = [
+          { lv: 'info', badge: 'FETCH', body: 'Resolved source — journal_article' },
+          { lv: 'info', badge: null, body: 'STAGE 1: EXTRACT — structured claims' },
+          { lv: 'success', badge: 'COST', body: 'EXTRACT — stage $0.0319 (total $0.0319)' },
+          { lv: 'muted', badge: 'INFO', body: 'Batch 3/12 complete' },
+          { lv: 'info', badge: null, body: 'STAGE 2: RELATE — support edges' },
+          { lv: 'success', badge: 'COST', body: 'RELATE — stage $0.0125 (total $0.0444)' },
+          { lv: 'info', badge: null, body: 'STAGE 3: GROUP — argument clusters' },
+          { lv: 'success', badge: 'COST', body: 'GROUP — stage $0.0163 (total $0.0607)' },
+          { lv: 'info', badge: null, body: 'STAGE 4: VALIDATE — cross-check' },
+          { lv: 'warn', badge: 'WARN', body: 'High token pressure on validation batch 1' },
+        ];
+
+        function sumEst() {
+          return EST.reduce((a, b) => a + b, 0);
+        }
+
+        function sumRunning() {
+          let s = 0;
+          for (const v of runningUsd) {
+            if (v != null) s += v;
+          }
+          return s;
+        }
+
+        function formatUsd(n) {
+          return '$' + n.toFixed(4);
+        }
+
+        function renderRunStrip() {
+          const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+          const m = Math.floor(elapsed / 60);
+          const s = elapsed % 60;
+          const strip = document.getElementById('runStrip');
+          strip.innerHTML = `
+            <span>Run ID: <strong>${runId}</strong></span>
+            <span>Elapsed: <strong>${m}m ${s}s</strong></span>
+            <span class="status-running">Running</span>
+            <span class="status-quiet">Quiet ${Math.floor(quietMs / 1000)}s</span>
+            <span>Last output: <strong>${new Date(Date.now() - quietMs).toLocaleTimeString()}</strong></span>
+          `;
+        }
+
+        function renderStagePath() {
+          const host = document.getElementById('stagePath');
+          host.innerHTML = '';
+          STAGES.forEach((st, i) => {
+            const el = document.createElement('div');
+            el.className = 'stage-node';
+            el.setAttribute('role', 'listitem');
+            if (i < activeIndex) el.classList.add('done');
+            else if (i === activeIndex) {
+              el.classList.add('active');
+              el.setAttribute('aria-current', 'step');
+            } else el.classList.add('pending');
+            el.innerHTML = `<span class="name">${st.label}</span><span class="glyph">${i < activeIndex ? '✓' : i === activeIndex ? '●' : '○'}</span>`;
+            host.appendChild(el);
+          });
+        }
+
+        function renderFocus() {
+          document.getElementById('focusTitle').textContent = STAGES[activeIndex]?.label ?? '—';
+          document.getElementById('focusAction').textContent =
+            activeIndex === 3
+              ? '[WARN] High token pressure on validation batch 1'
+              : activeIndex < 3
+                ? 'Stage complete; advancing…'
+                : 'Waiting for next event…';
+        }
+
+        function renderCost() {
+          document.getElementById('estTotal').textContent = formatUsd(sumEst());
+          const rt = sumRunning();
+          const runEl = document.getElementById('runTotal');
+          const anyRunning = runningUsd.some((x) => x != null);
+          runEl.textContent = anyRunning ? formatUsd(rt) : '—';
+          runEl.style.color = anyRunning ? 'var(--color-sage)' : 'var(--color-text)';
+
+          const tbody = document.getElementById('costBody');
+          tbody.innerHTML = '';
+          STAGES.forEach((st, i) => {
+            const tr = document.createElement('tr');
+            if (i === activeIndex) tr.classList.add('row-active');
+            if (i < activeIndex) tr.classList.add('row-done');
+            const est = EST[i];
+            const run = runningUsd[i];
+            tr.innerHTML = `
+              <td>${st.label}</td>
+              <td class="num">${formatUsd(est)}</td>
+              <td class="num ${run == null ? 'muted' : ''}">${run == null ? '—' : formatUsd(run)}</td>
+            `;
+            tbody.appendChild(tr);
+          });
+        }
+
+        function renderLog() {
+          const raw = document.getElementById('rawToggle').checked;
+          const panel = document.getElementById('logPanel');
+          if (raw) {
+            panel.innerHTML =
+              '<div class="log-raw" role="region" aria-label="Raw log output">' +
+              LOG_LINES.map((l) => `<p>${escapeHtml(l)}</p>`).join('') +
+              '</div>';
+          } else {
+            panel.innerHTML =
+              '<div class="log-feed-scroller"><ol class="log-feed" aria-label="Pipeline activity timeline">' +
+              PARSED_PREVIEW.map(
+                (row) => `
+              <li class="log-feed-row lv-${row.lv}">
+                <div class="log-feed-rail" aria-hidden="true"><span class="log-feed-dot"></span></div>
+                <div>
+                  ${row.badge ? `<span class="log-feed-badge">${escapeHtml(row.badge)}</span>` : ''}
+                  <p class="log-feed-body">${escapeHtml(row.body)}</p>
+                </div>
+              </li>`
+              ).join('') +
+              '</ol></div>';
+          }
+        }
+
+        function escapeHtml(s) {
+          const d = document.createElement('div');
+          d.textContent = s;
+          return d.innerHTML;
+        }
+
+        function resetDemo() {
+          activeIndex = 3;
+          runningUsd = [EST[0], EST[1], EST[2], null, null, null];
+          quietMs = 12000;
+          renderAll();
+        }
+
+        function advanceDemo() {
+          if (activeIndex < STAGES.length - 1) {
+            runningUsd[activeIndex] = EST[activeIndex];
+            activeIndex++;
+          } else {
+            for (let i = 0; i < STAGES.length; i++) runningUsd[i] = EST[i];
+          }
+          quietMs = Math.floor(2000 + Math.random() * 8000);
+          renderAll();
+        }
+
+        function renderAll() {
+          renderRunStrip();
+          renderStagePath();
+          renderFocus();
+          renderCost();
+          renderLog();
+        }
+
+        document.getElementById('rawToggle').addEventListener('change', renderLog);
+        document.getElementById('btnAdvance').addEventListener('click', advanceDemo);
+        document.getElementById('btnReset').addEventListener('click', resetDemo);
+
+        resetDemo();
+        setInterval(renderRunStrip, 1000);
+      })();
+    </script>
+  </body>
+</html>

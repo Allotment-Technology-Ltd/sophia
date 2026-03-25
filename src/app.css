@@ -57,12 +57,17 @@
 @layer components {
   :root {
     --sophia-control-min-height: 2.625rem;
-    --sophia-control-px: 0.95rem;
+    --sophia-control-px: 1rem;
     --sophia-control-py: 0.58rem;
     --sophia-control-tracking: 0.11em;
     --sophia-pill-min-height: 1.72rem;
     --sophia-pill-px: 0.74rem;
     --sophia-pill-py: 0.34rem;
+    /* 4-point rhythm (multiples of 4px). Reference: https://uxplanet.org/principles-of-spacing-in-ui-design-a-beginners-guide-to-the-4-point-spacing-system-6e88233b527a */
+    --sophia-rhythm-tight: 0.5rem; /* 8px */
+    --sophia-rhythm-default: 1rem; /* 16px — typical between related controls */
+    --sophia-rhythm-comfortable: 1.5rem; /* 24px — between field groups / card sections */
+    --sophia-rhythm-spacious: 2rem; /* 32px — before distinct action regions */
   }
 
   :where(button, a, input, select, textarea)[class*='border-sophia-dark-'][class*='font-mono'] {
@@ -71,7 +76,7 @@
 
   :where(button, a)[class*='border-sophia-dark-'][class*='font-mono'] {
     min-height: var(--sophia-control-min-height);
-    padding-inline: var(--sophia-control-px);
+    padding-inline: max(1rem, var(--sophia-control-px));
     padding-block: var(--sophia-control-py);
   }
 
@@ -102,11 +107,73 @@
     padding-inline: clamp(1.25rem, 2.4vw, 2.25rem);
   }
 
+  /* Vertical rhythm utilities: use one stack class per section/container. */
+  .sophia-stack-tight > * + * {
+    margin-top: var(--sophia-rhythm-tight);
+  }
+  .sophia-stack-default > * + * {
+    margin-top: var(--sophia-rhythm-default);
+  }
+  .sophia-stack-comfortable > * + * {
+    margin-top: var(--sophia-rhythm-comfortable);
+  }
+  .sophia-stack-spacious > * + * {
+    margin-top: var(--sophia-rhythm-spacious);
+  }
+
   @media (max-width: 720px) {
     :root {
       --sophia-control-px: 0.9rem;
       --sophia-control-py: 0.6rem;
       --sophia-pill-px: 0.75rem;
     }
+  }
+
+  /**
+   * Admin hub headers (/admin, /admin/ingest, /admin/ingest/runs): nav links + icon buttons share one control.
+   * Body is serif; without this, buttons inherit display font and look wrong next to links.
+   */
+  .admin-hub-action {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-family: var(--font-ui);
+    font-size: var(--text-meta);
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    line-height: 1.25;
+    text-transform: uppercase;
+    text-decoration: none;
+    min-height: var(--sophia-control-min-height);
+    padding-inline: var(--sophia-control-px);
+    padding-block: var(--sophia-control-py);
+    border-radius: 6px;
+    border: 1px solid var(--color-border);
+    color: var(--color-muted);
+    background: transparent;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+
+  a.admin-hub-action {
+    color: var(--color-muted);
+  }
+
+  .admin-hub-action:hover:not(:disabled) {
+    background: var(--color-surface-raised);
+    border-color: color-mix(in srgb, var(--color-border) 85%, var(--color-sage));
+    color: var(--color-text);
+  }
+
+  .admin-hub-action:focus-visible {
+    outline: 2px solid var(--color-sage);
+    outline-offset: 2px;
+  }
+
+  .admin-hub-action:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 }
