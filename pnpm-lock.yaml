@@ -43,11 +43,11 @@ importers:
         specifier: workspace:*
         version: link:packages/contracts
       '@restormel/keys':
-        specifier: 0.2.11
-        version: 0.2.11
+        specifier: 0.2.13
+        version: 0.2.13
       '@restormel/keys-svelte':
-        specifier: 0.1.4
-        version: 0.1.4(svelte@5.53.6)
+        specifier: 0.1.6
+        version: 0.1.6(svelte@5.53.6)
       ai:
         specifier: 6.0.105
         version: 6.0.105(zod@4.3.6)
@@ -997,13 +997,13 @@ packages:
       typescript:
         optional: true
 
-  '@restormel/keys-svelte@0.1.4':
-    resolution: {integrity: sha512-OcmWDEtM0KHQ/+Z4xPAUKQscivde5vq9IYlpa/sqaVJhNoO2XM3opCDKtm6Feayda8kn58g8fuFPO4nLpH1RSQ==}
+  '@restormel/keys-svelte@0.1.6':
+    resolution: {integrity: sha512-f+CqmF7jfcv2fxxPN3N4DGHCeEbEErj71Y6ULL4zFcSnIE9bWPIJ3cD8GwSenIwudCEYSr4TovfF5zQJbXzSVQ==}
     peerDependencies:
       svelte: ^5.0.0
 
-  '@restormel/keys@0.2.11':
-    resolution: {integrity: sha512-9o4XszPUwl+d951TBReb+xAuE2CVLZ/Ngmat9dYcWOWCp6CevcYWV3BqSfAWsvqZhA1IqqHxS5NhblReEW1S3g==}
+  '@restormel/keys@0.2.13':
+    resolution: {integrity: sha512-xJeoLEaAN8gKFUnQ1O5I/T0ipaGihyp4be/S6fhOFJ2lzpFOTWgdW37nI8YVD5LzX1aE9ADRhElpLx36+ZgjSw==}
 
   '@rollup/plugin-commonjs@29.0.0':
     resolution: {integrity: sha512-U2YHaxR2cU/yAiwKJtJRhnyLk7cifnQw0zUpISsocBDoHDJn+HTV74ABqnwr5bEgWUwFZC9oFL6wLe21lHu5eQ==}
@@ -4372,12 +4372,12 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@restormel/keys-svelte@0.1.4(svelte@5.53.6)':
+  '@restormel/keys-svelte@0.1.6(svelte@5.53.6)':
     dependencies:
-      '@restormel/keys': 0.2.11
+      '@restormel/keys': 0.2.13
       svelte: 5.53.6
 
-  '@restormel/keys@0.2.11': {}
+  '@restormel/keys@0.2.13': {}
 
   '@rollup/plugin-commonjs@29.0.0(rollup@4.59.0)':
     dependencies:

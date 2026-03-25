@@ -17,12 +17,75 @@ export interface IngestRunPayload {
   stop_before_store?: boolean;
   /** Preferred embedding profile (wizard / Restormel); pipeline may still use server defaults. */
   embedding_model?: string;
+  /**
+   * Optional per-run batch overrides to reduce rate-limit pressure and improve recovery.
+   * These are merged into the child process environment before spawning `scripts/ingest.ts`.
+   */
+  batch_overrides?: {
+    extractionMaxTokensPerSection?: number;
+    groupingTargetTokens?: number;
+    validationTargetTokens?: number;
+    relationsTargetTokens?: number;
+    embedBatchSize?: number;
+    /** Claim overlap between adjacent relation batches (`scripts/ingest.ts`). */
+    relationsBatchOverlapClaims?: number;
+    /** When false, disables strict grouping integrity exit (`INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE`). */
+    failOnGroupingPositionCollapse?: boolean;
+    /** Narrow provider preference for the worker (`INGEST_PROVIDER`). */
+    ingestProvider?: 'auto' | 'anthropic' | 'vertex';
+  };
   model_chain: {
     extract: string;
     relate: string;
     group: string;
     validate: string;
   };
+}
+
+function batchOverridesToEnv(
+  overrides: IngestRunPayload['batch_overrides'] | undefined
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!overrides) return out;
+
+  const {
+    extractionMaxTokensPerSection,
+    groupingTargetTokens,
+    validationTargetTokens,
+    relationsTargetTokens,
+    embedBatchSize,
+    relationsBatchOverlapClaims,
+    failOnGroupingPositionCollapse,
+    ingestProvider
+  } = overrides;
+
+  const asPositiveInt = (v: unknown): number | null => {
+    if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+    const n = Math.trunc(v);
+    return n > 0 ? n : null;
+  };
+
+  const extraction = asPositiveInt(extractionMaxTokensPerSection);
+  const grouping = asPositiveInt(groupingTargetTokens);
+  const validation = asPositiveInt(validationTargetTokens);
+  const relations = asPositiveInt(relationsTargetTokens);
+  const embed = asPositiveInt(embedBatchSize);
+  const overlap = asPositiveInt(relationsBatchOverlapClaims);
+
+  if (extraction != null) out.INGEST_EXTRACTION_MAX_TOKENS_PER_SECTION = String(extraction);
+  if (grouping != null) out.GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS = String(grouping);
+  if (validation != null) out.VALIDATION_BATCH_TARGET_TOKENS = String(validation);
+  if (relations != null) out.RELATIONS_BATCH_TARGET_TOKENS = String(relations);
+  if (embed != null) out.VERTEX_EMBED_BATCH_SIZE = String(embed);
+  if (overlap != null) out.RELATIONS_BATCH_OVERLAP_CLAIMS = String(overlap);
+  if (typeof failOnGroupingPositionCollapse === 'boolean') {
+    out.INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE = failOnGroupingPositionCollapse ? 'true' : 'false';
+  }
+  if (ingestProvider === 'auto' || ingestProvider === 'anthropic' || ingestProvider === 'vertex') {
+    out.INGEST_PROVIDER = ingestProvider;
+  }
+
+  return out;
 }
 
 export interface StageStatus {
@@ -520,6 +583,7 @@ class IngestRunManager extends EventEmitter {
     sourceFile: string,
     options: { forSyncOnly: boolean; resumeFromFailure?: boolean }
   ): void {
+    const batchEnvOverrides = batchOverridesToEnv(payload.batch_overrides);
     const forSync = options.forSyncOnly;
     const stopBeforeStore = forSync ? false : payload.stop_before_store !== false;
 
@@ -557,7 +621,7 @@ class IngestRunManager extends EventEmitter {
 
     const ingestChild = spawn('npx', ingestArgs, {
       cwd: process.cwd(),
-      env: process.env,
+      env: { ...process.env, ...batchEnvOverrides },
       stdio: 'pipe'
     }) as ChildProcessWithoutNullStreams;
 

@@ -6,6 +6,10 @@ import {
 	type IngestionPlanningContext
 } from '$lib/server/aaif/ingestion-plan';
 import { runPreScanAdvisorBlock } from '$lib/server/ingestionAdvisor';
+import {
+	parseAdvisorAutoApplyFromRequest,
+	parseIngestionAdvisorModeFromRequest
+} from '$lib/server/ingestionAdvisorPolicy';
 
 const MAX_PREVIEW_BYTES = 180_000;
 const FETCH_TIMEOUT_MS = 9000;
@@ -416,15 +420,30 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			extracted.publicationYear ||
 			normalizePublicationYear(finalUrl.toString());
 
+		const modeOverride = parseIngestionAdvisorModeFromRequest(
+			body && typeof body === 'object' ? (body as Record<string, unknown>).ingestionAdvisorMode : undefined
+		);
+		const autoApplyOverride = parseAdvisorAutoApplyFromRequest(body);
+		const advisorRequestOpts =
+			modeOverride !== undefined || autoApplyOverride !== undefined
+				? {
+						...(modeOverride !== undefined ? { mode: modeOverride } : {}),
+						...(autoApplyOverride !== undefined ? { autoApplyFields: autoApplyOverride } : {})
+					}
+				: undefined;
+
 		let advisor: Awaited<ReturnType<typeof runPreScanAdvisorBlock>> | null = null;
 		try {
-			advisor = await runPreScanAdvisorBlock({
-				sourceTitle: resolvedTitle,
-				sourceType: sourceTypeInput || undefined,
-				approxContentTokens,
-				approxContentChars,
-				phaseEstimates
-			});
+			advisor = await runPreScanAdvisorBlock(
+				{
+					sourceTitle: resolvedTitle,
+					sourceType: sourceTypeInput || undefined,
+					approxContentTokens,
+					approxContentChars,
+					phaseEstimates
+				},
+				advisorRequestOpts
+			);
 		} catch (advErr) {
 			console.warn('[ingestion-source/inspect] advisor:', advErr instanceof Error ? advErr.message : String(advErr));
 		}

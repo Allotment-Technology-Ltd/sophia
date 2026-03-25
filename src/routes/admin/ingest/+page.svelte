@@ -5,6 +5,13 @@
   import { INGESTION_SOURCE_MODEL_HINTS } from '$lib/ingestionModelCatalog';
   import { entryMeetsPresetStageMinimum } from '$lib/ingestionPipelineModelRequirements';
   import { resolveRouteForStage } from '$lib/utils/ingestionRouting';
+  import {
+    COACH_UI_VARIABLE_LABELS,
+    CODE_CHANGE_AREA_LABELS,
+    type CoachAggregatedSignals,
+    type CoachSettingTweak,
+    type IngestionCoachOutput
+  } from '$lib/ingestionCoachSchema';
 
   type StageStatus = 'idle' | 'running' | 'done' | 'error' | 'skipped';
   type FlowState = 'setup' | 'running' | 'awaiting_sync' | 'done' | 'error';
@@ -341,6 +348,22 @@
   let routingMessage = $state('');
   let routingError = $state('');
   let routes = $state<AdminRouteRecord[]>([]);
+  let batchOverridesOpen = $state(false);
+  let batchExtractionMaxTokensPerSection = $state('');
+  let batchGroupingTargetTokens = $state('');
+  let batchValidationTargetTokens = $state('');
+  let batchRelationsTargetTokens = $state('');
+  let batchEmbedBatchSize = $state('');
+  let batchOverridesError = $state('');
+  const INGEST_SETTINGS_STORAGE_KEY = 'sophia.admin.ingestSettings.v1';
+  type IngestionAdvisorModeUi = 'off' | 'shadow' | 'auto';
+  let ingestionAdvisorModeUi = $state<IngestionAdvisorModeUi>('off');
+  let ingestionAdvisorAutoApplyPreset = $state(true);
+  let ingestionAdvisorAutoApplyValidation = $state(true);
+  let workerIngestProvider = $state<'auto' | 'anthropic' | 'vertex'>('auto');
+  let workerRelationsOverlapClaims = $state('');
+  let workerFailOnGroupingCollapse = $state(true);
+  let ingestSettingsHydrated = $state(false);
   let catalogEntries = $state<CatalogEntry[]>([]);
   let catalogError = $state('');
   let catalogNotice = $state('');
@@ -354,6 +377,24 @@
     ingestion_json_repair: ''
   });
   let stageModelIds = $state<Record<string, string>>({
+    ingestion_fetch: '',
+    ingestion_extraction: '',
+    ingestion_relations: '',
+    ingestion_grouping: '',
+    ingestion_validation: '',
+    ingestion_embedding: '',
+    ingestion_json_repair: ''
+  });
+  let stageFallbackProviders = $state<Record<string, string>>({
+    ingestion_fetch: '',
+    ingestion_extraction: '',
+    ingestion_relations: '',
+    ingestion_grouping: '',
+    ingestion_validation: '',
+    ingestion_embedding: '',
+    ingestion_json_repair: ''
+  });
+  let stageFallbackModelIds = $state<Record<string, string>>({
     ingestion_fetch: '',
     ingestion_extraction: '',
     ingestion_relations: '',
@@ -384,12 +425,14 @@
   let advisorAutoApplyPreset = $state<PipelinePreset | null>(null);
   let coachBusy = $state(false);
   let coachError = $state('');
-  let coachResult = $state<{
-    executiveSummary: string;
-    recommendations: string[];
-    priority: string;
-    suggestedNextExperiments?: string[];
-  } | null>(null);
+  let coachAggregatedSignals = $state<CoachAggregatedSignals | null>(null);
+  let coachResult = $state<IngestionCoachOutput | null>(null);
+  const coachUiTweaks = $derived(
+    coachResult?.settingTweaks?.filter((t) => t.scope !== 'repo_implementation') ?? []
+  );
+  const coachRepoTweaks = $derived(
+    coachResult?.settingTweaks?.filter((t) => t.scope === 'repo_implementation') ?? []
+  );
   let activeStep = $state<'source' | 'pipeline' | 'cost' | 'review'>('source');
   let activePipelineStageKey = $state('ingestion_extraction');
   const activePipelineStage = $derived(
@@ -409,9 +452,29 @@
     return catalogEntries.find((e) => stableModelId(e) === id);
   }
 
+  /** Providers implied by Restormel stage picks + worker ingest preference (for infra checklist). */
+  const routingInfraProviders = $derived.by(() => {
+    const out = new Set<string>();
+    for (const row of RESTORMEL_STAGES) {
+      if (row.key === 'ingestion_fetch') continue;
+      const sid = stageModelIds[row.key];
+      const p = getCatalogEntryByStableId(sid);
+      if (p?.provider) out.add(p.provider.trim().toLowerCase());
+      const fb = stageFallbackModelIds[row.key]?.trim();
+      if (fb) {
+        const fe = getCatalogEntryByStableId(fb);
+        if (fe?.provider) out.add(fe.provider.trim().toLowerCase());
+      }
+    }
+    const wp = workerIngestProvider?.trim().toLowerCase();
+    if (wp && wp !== 'auto') out.add(wp);
+    return [...out].sort();
+  });
+
   function modelsForStage(row: (typeof RESTORMEL_STAGES)[number]): CatalogEntry[] {
     if (row.key === 'ingestion_fetch') return [];
-    return row.embed ? embeddingModels : chatModels;
+    const base = row.embed ? embeddingModels : chatModels;
+    return base.filter((entry) => isSupportedRouteProvider(entry.provider));
   }
 
   function providersForStage(row: (typeof RESTORMEL_STAGES)[number]): string[] {
@@ -451,22 +514,55 @@
     if (!row) return;
     const list = modelsForStage(row);
     if (list.length === 0) return;
-    const current = getCatalogEntryByStableId(stageModelIds[row.key] ?? '');
-    if (current && !validationModelConflicts(current)) return;
-
-    const nonConflicting = list.filter((e) => !validationModelConflicts(e));
-    if (nonConflicting.length === 0) return;
-
     const presetForFloor = selectedPreset ?? 'balanced';
-    const pick =
-      nonConflicting.find(
-        (e) => isStageRecommendedModel(row, e) && isStageMinimumViableModel(row, e, presetForFloor)
-      ) ??
-      nonConflicting.find((e) => isStageMinimumViableModel(row, e, presetForFloor)) ??
-      nonConflicting[0];
 
-    stageModelIds = { ...stageModelIds, [row.key]: stableModelId(pick) };
-    stageProviders = { ...stageProviders, [row.key]: pick.provider };
+    // Ensure validation PRIMARY differs from Extraction / Relations / Grouping to avoid self-review bias.
+    const currentPrimary = getCatalogEntryByStableId(stageModelIds[row.key] ?? '');
+    const nonConflictingPrimary = list.filter((e) => !validationModelConflicts(e));
+    if (nonConflictingPrimary.length === 0) return;
+
+    let primaryPick = currentPrimary && !validationModelConflicts(currentPrimary) ? currentPrimary : null;
+    if (!primaryPick) {
+      primaryPick =
+        nonConflictingPrimary.find(
+          (e) => isStageRecommendedModel(row, e) && isStageMinimumViableModel(row, e, presetForFloor)
+        ) ??
+        nonConflictingPrimary.find((e) => isStageMinimumViableModel(row, e, presetForFloor)) ??
+        nonConflictingPrimary[0];
+    }
+
+    const primarySid = stableModelId(primaryPick);
+    stageModelIds = { ...stageModelIds, [row.key]: primarySid };
+    stageProviders = { ...stageProviders, [row.key]: primaryPick.provider };
+
+    // Ensure validation FALLBACK is also independent (and not identical to primary).
+    const currentFallback = getCatalogEntryByStableId(stageFallbackModelIds[row.key] ?? '');
+    const nonConflictingFallback = nonConflictingPrimary.filter((e) => stableModelId(e) !== primarySid);
+
+    let fallbackPick: CatalogEntry | null = null;
+    if (currentFallback) {
+      const fallbackSid = stableModelId(currentFallback);
+      const isIndependent = !validationModelConflicts(currentFallback) && fallbackSid !== primarySid;
+      if (isIndependent) fallbackPick = currentFallback;
+    }
+
+    if (!fallbackPick && nonConflictingFallback.length > 0) {
+      fallbackPick =
+        nonConflictingFallback.find(
+          (e) =>
+            isStageRecommendedModel(row, e) && isStageMinimumViableModel(row, e, presetForFloor)
+        ) ??
+        nonConflictingFallback.find((e) => isStageMinimumViableModel(row, e, presetForFloor)) ??
+        nonConflictingFallback[0];
+    }
+
+    if (fallbackPick) {
+      stageFallbackModelIds = { ...stageFallbackModelIds, [row.key]: stableModelId(fallbackPick) };
+      stageFallbackProviders = { ...stageFallbackProviders, [row.key]: fallbackPick.provider };
+    } else {
+      stageFallbackModelIds = { ...stageFallbackModelIds, [row.key]: '' };
+      stageFallbackProviders = { ...stageFallbackProviders, [row.key]: '' };
+    }
   }
 
   function stageAdvice(row: (typeof RESTORMEL_STAGES)[number]): { complexityLabel: string; body: string } {
@@ -698,17 +794,23 @@
     if (runInProgress()) return;
     const nextModelIds = { ...stageModelIds };
     const nextProviders = { ...stageProviders };
+    const nextFallbackModelIds = { ...stageFallbackModelIds };
+    const nextFallbackProviders = { ...stageFallbackProviders };
     const missingMinimumStages: string[] = [];
 
     for (const row of RESTORMEL_STAGES) {
       if (row.key === 'ingestion_fetch') {
         nextModelIds[row.key] = '';
         nextProviders[row.key] = '';
+        nextFallbackModelIds[row.key] = '';
+        nextFallbackProviders[row.key] = '';
         continue;
       }
       if (row.key === 'ingestion_validation' && !runValidate) {
         nextModelIds[row.key] = '';
         nextProviders[row.key] = '';
+        nextFallbackModelIds[row.key] = '';
+        nextFallbackProviders[row.key] = '';
         continue;
       }
       const selected = choosePresetModelForStage(row, preset, nextModelIds);
@@ -718,10 +820,30 @@
       }
       nextProviders[row.key] = selected.provider;
       nextModelIds[row.key] = stableModelId(selected);
+
+      const list = modelsForStage(row);
+      const primarySid = stableModelId(selected);
+      let fallbackCandidates = list.filter((e) => stableModelId(e) !== primarySid);
+      if (row.key === 'ingestion_validation') {
+        fallbackCandidates = fallbackCandidates.filter((e) => !validationModelConflictsWithMap(e, nextModelIds));
+      }
+
+      const fallbackPick =
+        fallbackCandidates.find(
+          (e) =>
+            isStageRecommendedModel(row, e, nextModelIds) && isStageMinimumViableModel(row, e, preset)
+        ) ??
+        fallbackCandidates.find((e) => isStageMinimumViableModel(row, e, preset)) ??
+        fallbackCandidates[0];
+
+      nextFallbackModelIds[row.key] = fallbackPick ? stableModelId(fallbackPick) : '';
+      nextFallbackProviders[row.key] = fallbackPick?.provider ?? '';
     }
 
     stageProviders = nextProviders;
     stageModelIds = nextModelIds;
+    stageFallbackProviders = nextFallbackProviders;
+    stageFallbackModelIds = nextFallbackModelIds;
     ensureValidationModelIsIndependent();
     selectedPreset = preset;
     const sourceLabel = SOURCE_TYPES.find((option) => option.value === sourceType)?.label ?? sourceType;
@@ -842,32 +964,50 @@
     if (catalogEntries.length === 0) {
       stageModelIds = Object.fromEntries(RESTORMEL_STAGES.map((r) => [r.key, ''])) as Record<string, string>;
       stageProviders = Object.fromEntries(RESTORMEL_STAGES.map((r) => [r.key, ''])) as Record<string, string>;
+      stageFallbackModelIds = Object.fromEntries(RESTORMEL_STAGES.map((r) => [r.key, ''])) as Record<string, string>;
+      stageFallbackProviders = Object.fromEntries(RESTORMEL_STAGES.map((r) => [r.key, ''])) as Record<string, string>;
       return;
     }
     const next: Record<string, string> = {};
     const nextProviders: Record<string, string> = {};
+    const nextFallback: Record<string, string> = {};
+    const nextFallbackProviders: Record<string, string> = {};
     for (const row of RESTORMEL_STAGES) {
       if (row.key === 'ingestion_fetch') {
         next[row.key] = '';
         nextProviders[row.key] = '';
+        nextFallback[row.key] = '';
+        nextFallbackProviders[row.key] = '';
         continue;
       }
       const list = catalogEntries.filter((e) =>
         row.embed ? isEmbeddingModelEntry(e) : !isEmbeddingModelEntry(e)
       );
       if (row.key === 'ingestion_validation') {
-        const firstNonConflict =
-          list.find((e) => !validationModelConflictsWithMap(e, next)) ?? list[0];
-        next[row.key] = firstNonConflict ? stableModelId(firstNonConflict) : '';
-        nextProviders[row.key] = firstNonConflict?.provider ?? '';
+        const nonConflicting = list.filter((e) => !validationModelConflictsWithMap(e, next));
+        const primary = nonConflicting[0] ?? list[0];
+        const primarySid = primary ? stableModelId(primary) : '';
+        const fallback = nonConflicting.find((e) => stableModelId(e) !== primarySid) ?? null;
+
+        next[row.key] = primarySid;
+        nextProviders[row.key] = primary?.provider ?? '';
+        nextFallback[row.key] = fallback ? stableModelId(fallback) : '';
+        nextFallbackProviders[row.key] = fallback?.provider ?? '';
       } else {
-        const first = list[0];
-        next[row.key] = first ? stableModelId(first) : '';
-        nextProviders[row.key] = first?.provider ?? '';
+        const primary = list[0];
+        const primarySid = primary ? stableModelId(primary) : '';
+        const fallback = list.find((e) => stableModelId(e) !== primarySid) ?? null;
+
+        next[row.key] = primarySid;
+        nextProviders[row.key] = primary?.provider ?? '';
+        nextFallback[row.key] = fallback ? stableModelId(fallback) : '';
+        nextFallbackProviders[row.key] = fallback?.provider ?? '';
       }
     }
     stageModelIds = next;
     stageProviders = nextProviders;
+    stageFallbackModelIds = nextFallback;
+    stageFallbackProviders = nextFallbackProviders;
     ensureValidationModelIsIndependent();
   }
 
@@ -904,9 +1044,149 @@
     });
     const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
     if (!response.ok) {
+      const rm = body.restormel as { detail?: string; userMessage?: string } | undefined;
+      if (body.error === 'restormel_dashboard_error' && rm) {
+        const fromRm =
+          typeof rm.userMessage === 'string' && rm.userMessage.trim()
+            ? rm.userMessage.trim()
+            : typeof rm.detail === 'string' && rm.detail.trim()
+              ? rm.detail.trim()
+              : '';
+        if (fromRm) throw new Error(fromRm);
+      }
       throw new Error(typeof body?.error === 'string' ? body.error : `Request failed (${response.status})`);
     }
     return body;
+  }
+
+  function isRoutingConflictError(e: unknown): boolean {
+    const msg = e instanceof Error ? e.message : String(e);
+    return /(^|\b)(409|conflict)(\b|$)/i.test(msg);
+  }
+
+  function normalizeProviderPreference(provider: string): string {
+    const p = provider.trim().toLowerCase();
+    if (p.includes('voyage')) return 'voyage';
+    return p === 'vertex' ? 'google' : p;
+  }
+
+  function isSupportedRouteProvider(provider: string): boolean {
+    return ['openai', 'anthropic', 'google', 'openrouter', 'vercel', 'portkey', 'voyage'].includes(
+      normalizeProviderPreference(provider)
+    );
+  }
+
+  async function fetchRouteStepsOrdered(routeId: string): Promise<Record<string, unknown>[]> {
+    const body = await authorizedJson(`/api/admin/ingestion-routing/routes/${routeId}/steps`);
+    const raw = Array.isArray(body.steps) ? (body.steps as Record<string, unknown>[]) : [];
+    return [...raw].sort((a, b) => (Number(a.orderIndex) || 0) - (Number(b.orderIndex) || 0));
+  }
+
+  function mergeStepsForSave(
+    existing: Record<string, unknown>[],
+    primaryOpt: CatalogEntry,
+    fallbackOpt: CatalogEntry | undefined
+  ): Record<string, unknown>[] {
+    const primaryExisting =
+      existing.find((s) => Number(s.orderIndex) === 0) ?? existing[0];
+    const fallbackExisting =
+      existing.find((s) => Number(s.orderIndex) === 1) ?? existing[1];
+
+    const primary: Record<string, unknown> = {
+      ...(primaryExisting ?? {}),
+      orderIndex: 0,
+      enabled: true,
+      providerPreference: normalizeProviderPreference(primaryOpt.provider),
+      modelId: primaryOpt.modelId
+    };
+
+    if (!fallbackOpt) {
+      return [primary];
+    }
+
+    const fallback: Record<string, unknown> = {
+      ...(fallbackExisting ?? { orderIndex: 1, enabled: true }),
+      orderIndex: 1,
+      enabled: true,
+      providerPreference: normalizeProviderPreference(fallbackOpt.provider),
+      modelId: fallbackOpt.modelId
+    };
+
+    return [primary, fallback];
+  }
+
+  function comparableStepChain(
+    steps: Record<string, unknown>[]
+  ): Array<{ orderIndex: number; provider: string; model: string }> {
+    const sorted = [...steps].sort((a, b) => (Number(a.orderIndex) || 0) - (Number(b.orderIndex) || 0));
+    return sorted
+      .filter((s) => s.enabled !== false)
+      .map((s, idx) => ({
+        orderIndex: Number(s.orderIndex) ?? idx,
+        provider: String(s.providerPreference ?? '').trim().toLowerCase(),
+        model: String(s.modelId ?? '').trim()
+      }))
+      .filter((s) => s.provider.length > 0 && s.model.length > 0);
+  }
+
+  function desiredStepChain(
+    primaryOpt: CatalogEntry,
+    fallbackOpt: CatalogEntry | undefined
+  ): Array<{ orderIndex: number; provider: string; model: string }> {
+    const out: Array<{ orderIndex: number; provider: string; model: string }> = [
+      {
+        orderIndex: 0,
+        provider: normalizeProviderPreference(primaryOpt.provider),
+        model: primaryOpt.modelId.trim()
+      }
+    ];
+    if (fallbackOpt) {
+      out.push({
+        orderIndex: 1,
+        provider: normalizeProviderPreference(fallbackOpt.provider),
+        model: fallbackOpt.modelId.trim()
+      });
+    }
+    return out;
+  }
+
+  function stepChainsEqual(
+    a: Array<{ orderIndex: number; provider: string; model: string }>,
+    b: Array<{ orderIndex: number; provider: string; model: string }>
+  ): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (
+        a[i].provider.toLowerCase() !== b[i].provider.toLowerCase() ||
+        a[i].model !== b[i].model
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function sleepRoutingThrottle(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  /** Detect multiple LLM stages resolving to the same route (shared fallback) — repeated saves fight the same draft and return 409. */
+  function findRestormelRouteSharingProblem(): string | null {
+    const byRoute = new Map<string, string[]>();
+    for (const row of RESTORMEL_STAGES) {
+      if (row.key === 'ingestion_fetch') continue;
+      const route = resolveRouteForStage(routes, row.key);
+      if (!route?.id) continue;
+      const list = byRoute.get(route.id) ?? [];
+      list.push(row.label);
+      byRoute.set(route.id, list);
+    }
+    for (const [routeId, labels] of byRoute) {
+      if (labels.length > 1) {
+        return `These stages share one Restormel route (${routeId}), so saving hits the same draft repeatedly and can return HTTP 409: ${labels.join('; ')}. Create dedicated ingestion routes per stage (e.g. \`pnpm restormel:ingestion-bootstrap apply\`), publish them in Keys, then refresh this page.`;
+      }
+    }
+    return null;
   }
 
   async function loadRoutingContext(): Promise<void> {
@@ -949,6 +1229,8 @@
     if (catalogEntries.length === 0) return;
     const next = { ...stageModelIds };
     const nextProviders = { ...stageProviders };
+    const nextFallback = { ...stageFallbackModelIds };
+    const nextFallbackProviders = { ...stageFallbackProviders };
     for (const row of RESTORMEL_STAGES) {
       const route = resolveRouteForStage(routes, row.key);
       if (!route?.id) continue;
@@ -958,17 +1240,38 @@
         const ordered = [...steps].sort(
           (a, b) => (Number((a as { orderIndex?: number }).orderIndex) || 0) - (Number((b as { orderIndex?: number }).orderIndex) || 0)
         );
-        const first = ordered[0] as { providerPreference?: string | null; modelId?: string | null } | undefined;
-        const pid = first?.providerPreference?.trim() ?? '';
-        const mid = first?.modelId?.trim() ?? '';
-        if (!pid || !mid) continue;
-        const entry = catalogEntries.find((e) => e.provider === pid && e.modelId === mid);
-        if (!entry) continue;
-        const sid = stableModelId(entry);
+        const primaryStep = ordered.find((s) => (s as { orderIndex?: number | null }).orderIndex === 0) ?? ordered[0];
+        const fallbackStep = ordered.find((s) => (s as { orderIndex?: number | null }).orderIndex === 1) ?? ordered[1];
+
+        const primaryPid = (primaryStep as { providerPreference?: string | null } | undefined)?.providerPreference
+          ?.trim() ?? '';
+        const primaryMid = (primaryStep as { modelId?: string | null } | undefined)?.modelId?.trim() ?? '';
+
+        if (!primaryPid || !primaryMid) continue;
+
+        const primaryEntry = catalogEntries.find((e) => e.provider === primaryPid && e.modelId === primaryMid);
+        if (!primaryEntry) continue;
+        const primarySid = stableModelId(primaryEntry);
         const list = modelsForStage(row);
-        if (list.some((e) => stableModelId(e) === sid)) {
-          next[row.key] = sid;
-          nextProviders[row.key] = entry.provider;
+        if (list.some((e) => stableModelId(e) === primarySid)) {
+          next[row.key] = primarySid;
+          nextProviders[row.key] = primaryEntry.provider;
+        }
+
+        nextFallback[row.key] = '';
+        nextFallbackProviders[row.key] = '';
+
+        const fallbackPid = (fallbackStep as { providerPreference?: string | null } | undefined)?.providerPreference
+          ?.trim() ?? '';
+        const fallbackMid = (fallbackStep as { modelId?: string | null } | undefined)?.modelId?.trim() ?? '';
+
+        if (fallbackPid && fallbackMid) {
+          const fallbackEntry = catalogEntries.find((e) => e.provider === fallbackPid && e.modelId === fallbackMid);
+          if (fallbackEntry && list.some((e) => stableModelId(e) === stableModelId(fallbackEntry))) {
+            const fallbackSid = stableModelId(fallbackEntry);
+            nextFallback[row.key] = fallbackSid;
+            nextFallbackProviders[row.key] = fallbackEntry.provider;
+          }
         }
       } catch {
         /* ignore */
@@ -976,7 +1279,18 @@
     }
     stageModelIds = next;
     stageProviders = nextProviders;
+    stageFallbackModelIds = nextFallback;
+    stageFallbackProviders = nextFallbackProviders;
     for (const row of RESTORMEL_STAGES) ensureStageProviderSelection(row);
+    for (const row of RESTORMEL_STAGES) {
+      if (row.key === 'ingestion_fetch') continue;
+      const sid = stageFallbackModelIds[row.key]?.trim() ?? '';
+      if (!sid) continue;
+      const entry = getCatalogEntryByStableId(sid);
+      if (entry) {
+        stageFallbackProviders = { ...stageFallbackProviders, [row.key]: entry.provider };
+      }
+    }
     ensureValidationModelIsIndependent();
   }
 
@@ -991,7 +1305,14 @@
     routingError = '';
     routingMessage = '';
     try {
+      let publishFailures = 0;
+      let skippedAlreadyMatching = 0;
       await loadRoutingContext();
+      const sharing = findRestormelRouteSharingProblem();
+      if (sharing) {
+        routingError = sharing;
+        return;
+      }
       for (const row of RESTORMEL_STAGES) {
         if (row.key === 'ingestion_fetch') continue;
         const route = resolveRouteForStage(routes, row.key);
@@ -999,26 +1320,93 @@
           routingError = `No Restormel route is available for “${row.label}”. Configure routes in Restormel Keys, then refresh.`;
           return;
         }
-        const sid = stageModelIds[row.key];
-        const opt = getCatalogEntryByStableId(sid);
-        if (!opt) {
+        const primarySid = stageModelIds[row.key];
+        const primaryOpt = getCatalogEntryByStableId(primarySid);
+        if (!primaryOpt) {
           routingError = `Choose a Restormel model for “${row.label}”.`;
           return;
         }
-        await authorizedJson(`/api/admin/ingestion-routing/routes/${route.id}/steps`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify([
-            {
-              orderIndex: 0,
-              enabled: true,
-              providerPreference: opt.provider,
-              modelId: opt.modelId
+        if (!isSupportedRouteProvider(primaryOpt.provider)) {
+          routingError = `“${row.label}” uses provider “${primaryOpt.provider}”, but Restormel route steps currently accept: openai, anthropic, google (alias: vertex), openrouter, vercel, portkey, voyage. Choose a supported model for this stage.`;
+          return;
+        }
+
+        const fallbackSid = stageFallbackModelIds[row.key]?.trim() ?? '';
+        const fallbackOpt = fallbackSid ? getCatalogEntryByStableId(fallbackSid) : undefined;
+        if (fallbackOpt && !isSupportedRouteProvider(fallbackOpt.provider)) {
+          routingError = `Fallback for “${row.label}” uses provider “${fallbackOpt.provider}”, which Restormel route steps do not accept. Choose a supported fallback provider.`;
+          return;
+        }
+
+        const existingSteps = await fetchRouteStepsOrdered(route.id);
+        const desired = desiredStepChain(primaryOpt, fallbackOpt);
+        if (stepChainsEqual(comparableStepChain(existingSteps), desired)) {
+          skippedAlreadyMatching++;
+          try {
+            await authorizedJson(`/api/admin/ingestion-routing/routes/${route.id}/publish`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({})
+            });
+          } catch (publishError) {
+            publishFailures++;
+            console.warn('Failed to publish ingestion route (steps already matched)', {
+              routeId: route.id,
+              error: publishError instanceof Error ? publishError.message : String(publishError)
+            });
+          }
+          await sleepRoutingThrottle(120);
+          continue;
+        }
+
+        let savedSteps = false;
+        for (let attempt = 0; attempt < 3 && !savedSteps; attempt++) {
+          try {
+            if (attempt > 0) {
+              await refreshModelsAndRoutes();
+              await sleepRoutingThrottle(200 * attempt);
             }
-          ])
-        });
+            const freshSteps = attempt === 0 ? existingSteps : await fetchRouteStepsOrdered(route.id);
+            const merged = mergeStepsForSave(freshSteps, primaryOpt, fallbackOpt);
+            await authorizedJson(`/api/admin/ingestion-routing/routes/${route.id}/steps`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(merged)
+            });
+            savedSteps = true;
+          } catch (e) {
+            if (attempt < 2 && isRoutingConflictError(e)) {
+              continue;
+            }
+            const msg = e instanceof Error ? e.message : String(e);
+            throw new Error(`“${row.label}” (${route.id}): ${msg}`);
+          }
+        }
+
+        // Keys installations often require publishing for resolve to see updated steps.
+        try {
+          await authorizedJson(`/api/admin/ingestion-routing/routes/${route.id}/publish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          });
+        } catch (publishError) {
+          publishFailures++;
+          console.warn('Failed to publish ingestion route after saving steps', {
+            routeId: route.id,
+            error: publishError instanceof Error ? publishError.message : String(publishError)
+          });
+        }
+        await sleepRoutingThrottle(120);
       }
-      routingMessage = 'Saved model routing for all six LLM ingestion stages.';
+      const skipNote =
+        skippedAlreadyMatching > 0
+          ? ` ${skippedAlreadyMatching} stage(s) already matched Restormel (no step write).`
+          : '';
+      routingMessage =
+        publishFailures > 0
+          ? `Saved model routing for all six LLM ingestion stages, but publishing failed for ${publishFailures} route(s). Resolve may still use prior published steps.${skipNote}`
+          : `Saved model routing for all six LLM ingestion stages.${skipNote}`;
     } catch (e) {
       routingError = e instanceof Error ? e.message : 'Failed to save routing';
     } finally {
@@ -1427,7 +1815,10 @@
   function validationSelectionConflictActive(): boolean {
     if (!runValidate) return false;
     const selected = selectedCatalogEntryForRow('ingestion_validation');
-    return selected ? validationModelConflicts(selected) : false;
+    const primaryConflict = selected ? validationModelConflicts(selected) : false;
+    const fallback = getCatalogEntryByStableId(stageFallbackModelIds['ingestion_validation'] ?? '');
+    const fallbackConflict = fallback ? validationModelConflicts(fallback) : false;
+    return primaryConflict || fallbackConflict;
   }
 
   function pipelineNoticeItems(): { severity: 'warn' | 'bad'; text: string }[] {
@@ -1488,6 +1879,16 @@
     ) {
       ensureValidationModelIsIndependent();
     }
+  }
+
+  function onStageFallbackModelSelect(row: (typeof RESTORMEL_STAGES)[number], stableId: string): void {
+    selectedPreset = null;
+    const entry = getCatalogEntryByStableId(stableId);
+    stageFallbackModelIds = { ...stageFallbackModelIds, [row.key]: stableId };
+    stageFallbackProviders = {
+      ...stageFallbackProviders,
+      [row.key]: entry?.provider ?? ''
+    };
   }
 
   function sourceStepReady(): boolean {
@@ -1595,7 +1996,12 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: sourceUrl.trim(),
-          sourceType
+          sourceType,
+          ingestionAdvisorMode: ingestionAdvisorModeUi,
+          ingestionAdvisorAutoApply: {
+            preset: ingestionAdvisorAutoApplyPreset,
+            validation: ingestionAdvisorAutoApplyValidation
+          }
         })
       });
       sourcePreScanResult = body as unknown as SourcePreScanResult;
@@ -1627,27 +2033,18 @@
     if (coachBusy) return;
     coachBusy = true;
     coachError = '';
+    coachAggregatedSignals = null;
     try {
       const body = await authorizedJson('/api/admin/ingest/coach', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ limit: 30 })
       });
-      const output = body.output as
-        | {
-            executiveSummary?: string;
-            recommendations?: string[];
-            priority?: string;
-            suggestedNextExperiments?: string[];
-          }
-        | undefined;
+      const output = body.output as IngestionCoachOutput | undefined;
+      const signals = body.aggregatedSignals as CoachAggregatedSignals | null | undefined;
       if (output && typeof output.executiveSummary === 'string' && Array.isArray(output.recommendations)) {
-        coachResult = {
-          executiveSummary: output.executiveSummary,
-          recommendations: output.recommendations,
-          priority: typeof output.priority === 'string' ? output.priority : 'medium',
-          suggestedNextExperiments: output.suggestedNextExperiments
-        };
+        coachResult = output;
+        coachAggregatedSignals = signals ?? null;
       } else {
         coachError = 'Unexpected coach response.';
       }
@@ -1657,6 +2054,139 @@
       coachBusy = false;
     }
   }
+
+  function coachPipelineVariableLabel(tw: CoachSettingTweak): string {
+    if (tw.uiVariableId) return COACH_UI_VARIABLE_LABELS[tw.uiVariableId] ?? tw.uiVariableId;
+    return 'Pipeline control';
+  }
+
+  function applyCoachSettingTweak(tw: CoachSettingTweak): void {
+    if (runInProgress()) return;
+    switch (tw.scope) {
+      case 'ui_preset': {
+        const p = tw.preset;
+        if (p === 'budget' || p === 'balanced' || p === 'complexity') {
+          applyPipelinePreset(p);
+        }
+        break;
+      }
+      case 'ui_validation': {
+        if (typeof tw.runValidation === 'boolean') {
+          runValidate = tw.runValidation;
+          ensureValidationModelIsIndependent();
+        }
+        break;
+      }
+      case 'batch_override': {
+        const k = tw.batchOverrideKey;
+        const v = tw.batchOverrideValue;
+        if (k == null || v == null) break;
+        batchOverridesOpen = true;
+        const s = String(Math.trunc(v));
+        if (k === 'extractionMaxTokensPerSection') batchExtractionMaxTokensPerSection = s;
+        else if (k === 'groupingTargetTokens') batchGroupingTargetTokens = s;
+        else if (k === 'validationTargetTokens') batchValidationTargetTokens = s;
+        else if (k === 'relationsTargetTokens') batchRelationsTargetTokens = s;
+        else if (k === 'embedBatchSize') batchEmbedBatchSize = s;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  function parseOptionalBoundedInt(
+    input: string,
+    min: number,
+    max: number,
+    label: string
+  ): number | null {
+    const t = input.trim();
+    if (!t) return null;
+    const n = Number(t);
+    if (!Number.isFinite(n)) throw new Error(`${label} must be a number.`);
+    const i = Math.trunc(n);
+    if (i < min || i > max) throw new Error(`${label} must be between ${min.toLocaleString()} and ${max.toLocaleString()}.`);
+    return i;
+  }
+
+  function buildBatchOverridesFromUi(): { overrides?: Record<string, number>; error?: string } {
+    try {
+      const extractionMaxTokensPerSection = parseOptionalBoundedInt(
+        batchExtractionMaxTokensPerSection,
+        1000,
+        20000,
+        'Extraction max tokens per section'
+      );
+      const groupingTargetTokens = parseOptionalBoundedInt(batchGroupingTargetTokens, 10_000, 400_000, 'Grouping target tokens');
+      const validationTargetTokens = parseOptionalBoundedInt(batchValidationTargetTokens, 10_000, 400_000, 'Validation target tokens');
+      const relationsTargetTokens = parseOptionalBoundedInt(batchRelationsTargetTokens, 5_000, 250_000, 'Relations batch target tokens');
+      const embedBatchSize = parseOptionalBoundedInt(batchEmbedBatchSize, 25, 2000, 'Embedding batch size');
+
+      const hasAny =
+        extractionMaxTokensPerSection != null ||
+        groupingTargetTokens != null ||
+        validationTargetTokens != null ||
+        relationsTargetTokens != null ||
+        embedBatchSize != null;
+
+      if (!hasAny) return {};
+
+      const overrides: Record<string, number> = {};
+      if (extractionMaxTokensPerSection != null) overrides.extractionMaxTokensPerSection = extractionMaxTokensPerSection;
+      if (groupingTargetTokens != null) overrides.groupingTargetTokens = groupingTargetTokens;
+      if (validationTargetTokens != null) overrides.validationTargetTokens = validationTargetTokens;
+      if (relationsTargetTokens != null) overrides.relationsTargetTokens = relationsTargetTokens;
+      if (embedBatchSize != null) overrides.embedBatchSize = embedBatchSize;
+      return { overrides };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { error: msg };
+    }
+  }
+
+  function buildWorkerTuningOverrides(): {
+    ingestProvider: 'auto' | 'anthropic' | 'vertex';
+    failOnGroupingPositionCollapse: boolean;
+    relationsBatchOverlapClaims?: number;
+  } {
+    const o: {
+      ingestProvider: 'auto' | 'anthropic' | 'vertex';
+      failOnGroupingPositionCollapse: boolean;
+      relationsBatchOverlapClaims?: number;
+    } = {
+      ingestProvider: workerIngestProvider,
+      failOnGroupingPositionCollapse: workerFailOnGroupingCollapse
+    };
+    const t = workerRelationsOverlapClaims.trim();
+    if (t !== '') {
+      const n = Number(t);
+      if (Number.isFinite(n)) {
+        const i = Math.trunc(n);
+        if (i >= 1 && i <= 99) o.relationsBatchOverlapClaims = i;
+      }
+    }
+    return o;
+  }
+
+  $effect(() => {
+    if (!ingestSettingsHydrated || typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(
+        INGEST_SETTINGS_STORAGE_KEY,
+        JSON.stringify({
+          ingestionAdvisorMode: ingestionAdvisorModeUi,
+          ingestionAdvisorAutoApplyPreset,
+          ingestionAdvisorAutoApplyValidation,
+          workerIngestProvider,
+          workerRelationsOverlapClaims,
+          workerFailOnGroupingCollapse
+        })
+      );
+    } catch {
+      /* quota / private mode */
+    }
+  });
 
   async function startIngestion(): Promise<void> {
     if (starting || !validateSource()) return;
@@ -1673,6 +2203,17 @@
         'Select a Restormel model for every stage (and ensure your project lists both chat and embedding models where required).';
       return;
     }
+
+    const batchBuild = buildBatchOverridesFromUi();
+    batchOverridesError = batchBuild.error ?? '';
+    if (batchBuild.error) {
+      runError = batchBuild.error;
+      return;
+    }
+    const batchOverrides = batchBuild.overrides ?? {};
+    const workerTuning = buildWorkerTuningOverrides();
+    const mergedBatchOverrides = { ...batchOverrides, ...workerTuning };
+
     starting = true;
     monitorRunNotice = '';
     sourceRunEndedDetail = null;
@@ -1696,6 +2237,7 @@
           validate: runValidate,
           stop_before_store: true,
           embedding_model: stageModelIds.ingestion_embedding,
+          batch_overrides: mergedBatchOverrides,
           model_chain: {
             extract: stageModelIds.ingestion_extraction,
             relate: stageModelIds.ingestion_relations,
@@ -2033,6 +2575,38 @@
   }
 
   onMount(() => {
+    try {
+      const raw = localStorage.getItem(INGEST_SETTINGS_STORAGE_KEY);
+      if (raw) {
+        const p = JSON.parse(raw) as Record<string, unknown>;
+        if (p.ingestionAdvisorMode === 'off' || p.ingestionAdvisorMode === 'shadow' || p.ingestionAdvisorMode === 'auto') {
+          ingestionAdvisorModeUi = p.ingestionAdvisorMode;
+        }
+        if (typeof p.ingestionAdvisorAutoApplyPreset === 'boolean') {
+          ingestionAdvisorAutoApplyPreset = p.ingestionAdvisorAutoApplyPreset;
+        }
+        if (typeof p.ingestionAdvisorAutoApplyValidation === 'boolean') {
+          ingestionAdvisorAutoApplyValidation = p.ingestionAdvisorAutoApplyValidation;
+        }
+        if (
+          p.workerIngestProvider === 'auto' ||
+          p.workerIngestProvider === 'anthropic' ||
+          p.workerIngestProvider === 'vertex'
+        ) {
+          workerIngestProvider = p.workerIngestProvider;
+        }
+        if (typeof p.workerRelationsOverlapClaims === 'string') {
+          workerRelationsOverlapClaims = p.workerRelationsOverlapClaims;
+        }
+        if (typeof p.workerFailOnGroupingCollapse === 'boolean') {
+          workerFailOnGroupingCollapse = p.workerFailOnGroupingCollapse;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    ingestSettingsHydrated = true;
+
     void (async () => {
       await loadModelCatalog();
       await loadRoutingContext();
@@ -2270,23 +2844,394 @@
                 {/if}
               </div>
 
+              <div
+                id="ingest-worker-defaults"
+                class="rounded border border-sophia-dark-border bg-sophia-dark-bg/35 p-4"
+                role="region"
+                aria-label="Worker and advisor defaults"
+              >
+                <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Worker and advisor defaults</p>
+                <p class="mt-1 text-xs text-sophia-dark-muted">
+                  Saved in this browser. These replace the old <span class="font-mono">.env</span> knobs for admin runs and
+                  pre-scan; CLI-only ingest can still use environment variables. After changing the advisor mode, run
+                  <span class="font-mono">Source</span> pre-scan again so the Cost tab “last pre-scan” summary updates.
+                </p>
+                <div class="mt-4 space-y-4">
+                  <div>
+                    <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="ingest-advisor-mode">
+                      Ingestion advisor (pre-scan)
+                    </label>
+                    <select
+                      id="ingest-advisor-mode"
+                      disabled={runInProgress()}
+                      bind:value={ingestionAdvisorModeUi}
+                      class="mt-1 w-full max-w-md rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                    >
+                      <option value="off">Off — heuristics only (no extra model on pre-scan)</option>
+                      <option value="shadow">Shadow — show AI preset/validation vs heuristics</option>
+                      <option value="auto">Auto — apply AI suggestions when enabled below</option>
+                    </select>
+                    {#if ingestionAdvisorModeUi === 'auto'}
+                      <div class="mt-3 flex flex-wrap gap-4">
+                        <label class="flex cursor-pointer items-center gap-2 font-mono text-xs text-sophia-dark-muted">
+                          <input
+                            type="checkbox"
+                            disabled={runInProgress()}
+                            bind:checked={ingestionAdvisorAutoApplyPreset}
+                            class="rounded border-sophia-dark-border"
+                          />
+                          Auto-apply preset
+                        </label>
+                        <label class="flex cursor-pointer items-center gap-2 font-mono text-xs text-sophia-dark-muted">
+                          <input
+                            type="checkbox"
+                            disabled={runInProgress()}
+                            bind:checked={ingestionAdvisorAutoApplyValidation}
+                            class="rounded border-sophia-dark-border"
+                          />
+                          Auto-apply validation toggle
+                        </label>
+                      </div>
+                    {/if}
+                  </div>
+                  <div class="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="ingest-provider">
+                        Ingest provider preference
+                      </label>
+                      <select
+                        id="ingest-provider"
+                        disabled={runInProgress()}
+                        bind:value={workerIngestProvider}
+                        class="mt-1 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                      >
+                        <option value="auto">auto</option>
+                        <option value="vertex">vertex</option>
+                        <option value="anthropic">anthropic</option>
+                      </select>
+                      <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">Passed to <span class="font-mono">scripts/ingest.ts</span> as <span class="font-mono">INGEST_PROVIDER</span>.</p>
+                    </div>
+                    <div>
+                      <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="relations-overlap">
+                        Relations batch overlap (claims)
+                      </label>
+                      <input
+                        id="relations-overlap"
+                        type="number"
+                        min="1"
+                        max="99"
+                        step="1"
+                        placeholder="default from worker env"
+                        value={workerRelationsOverlapClaims}
+                        oninput={(e) => (workerRelationsOverlapClaims = (e.currentTarget as HTMLInputElement).value)}
+                        disabled={runInProgress()}
+                        class="mt-1 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                      />
+                      <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                        Optional. Maps to <span class="font-mono">RELATIONS_BATCH_OVERLAP_CLAIMS</span>.
+                      </p>
+                    </div>
+                  </div>
+                  <label class="flex cursor-pointer items-start gap-2 font-mono text-xs text-sophia-dark-muted">
+                    <input
+                      type="checkbox"
+                      disabled={runInProgress()}
+                      bind:checked={workerFailOnGroupingCollapse}
+                      class="mt-0.5 rounded border-sophia-dark-border"
+                    />
+                    <span>
+                      Fail ingest when grouping positions collapse (strict integrity). Uncheck to only warn.
+                      <span class="block text-[0.65rem] text-sophia-dark-dim mt-1">INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {#if routingInfraProviders.length > 0 || sourcePreScanResult?.advisor?.model}
+                <div
+                  class="mt-4 rounded border border-sophia-dark-border/80 bg-sophia-dark-bg/25 p-4"
+                  role="region"
+                  aria-label="Model and infrastructure checklist"
+                >
+                  <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
+                    Model &amp; infra checklist
+                  </p>
+                  <p class="mt-2 text-xs leading-relaxed text-sophia-dark-muted">
+                    Based on your Restormel routing picks and worker defaults (not a second pre-scan). Use it to anticipate
+                    IAM, keys, and quotas before running Source pre-scan or a full ingest.
+                  </p>
+                  <ul class="mt-3 list-disc space-y-2 pl-5 text-xs leading-relaxed text-sophia-dark-muted">
+                    {#if routingInfraProviders.includes('vertex')}
+                      <li>
+                        <span class="font-mono text-sophia-dark-text">vertex</span> — Google Cloud: the runtime identity (e.g. ingestion worker
+                        service account) needs <span class="font-mono">roles/aiplatform.user</span> (Vertex AI User) and permission to call
+                        <span class="font-mono">aiplatform.endpoints.predict</span> for the Gemini / publisher models you selected. Enable the Vertex
+                        AI API on the project if it is not already.
+                      </li>
+                    {/if}
+                    {#if routingInfraProviders.includes('anthropic')}
+                      <li>
+                        <span class="font-mono text-sophia-dark-text">anthropic</span> — Restormel Keys must have a usable Anthropic key for this
+                        environment; routing resolves against that workspace configuration.
+                      </li>
+                    {/if}
+                    {#if routingInfraProviders.includes('openai')}
+                      <li>
+                        <span class="font-mono text-sophia-dark-text">openai</span> — Restormel Keys must expose a valid OpenAI key for this
+                        environment.
+                      </li>
+                    {/if}
+                    {#if sourcePreScanResult?.advisor?.model}
+                      <li>
+                        Last pre-scan advisor call used
+                        <span class="font-mono text-sophia-dark-text"
+                          >{sourcePreScanResult.advisor.model.provider}/{sourcePreScanResult.advisor.model.modelId}</span
+                        >
+                        — the same provider rules apply (e.g. Vertex IAM for Google publisher models).
+                      </li>
+                    {/if}
+                  </ul>
+                </div>
+              {/if}
+
+              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/35 p-4">
+                <div class="flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Restormel routing steps</p>
+                    <p class="mt-1 text-xs text-sophia-dark-muted">
+                      Save primary + fallback model steps per stage into Restormel Keys before running.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={runInProgress() || routingBusy}
+                    onclick={() => void applyStageRouting()}
+                    class="shrink-0 rounded border border-sophia-dark-border/70 bg-transparent px-4 py-2.5 font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-dim hover:border-sophia-dark-border hover:bg-sophia-dark-surface-raised hover:text-sophia-dark-text disabled:opacity-50"
+                  >
+                    {routingBusy ? 'Saving…' : 'Save routing'}
+                  </button>
+                </div>
+                {#if routingError}
+                  <p class="mt-2 font-mono text-xs text-sophia-dark-copper">{routingError}</p>
+                {/if}
+                {#if routingMessage}
+                  <p class="mt-2 font-mono text-xs text-sophia-dark-sage">{routingMessage}</p>
+                {/if}
+              </div>
+
+              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/25 p-4">
+                <details bind:open={batchOverridesOpen} class="group">
+                  <summary
+                    class="cursor-pointer font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted"
+                  >
+                    Advanced: batch overrides
+                  </summary>
+                  <div class="mt-3 space-y-3">
+                    <p class="text-xs text-sophia-dark-muted">
+                      Leave blank to use server defaults. Overrides are merged into the child process environment
+                      for <code class="text-sophia-dark-text">scripts/ingest.ts</code>. Use each field’s guidance
+                      when <span class="font-mono text-sophia-dark-dim">ingestion_run_reports</span> or the offline coach
+                      point at truncation, batch splits, retries, or stage-specific pressure.
+                    </p>
+
+                    <div class="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="bo-extraction">
+                          Extraction max tokens per section
+                        </label>
+                        <details class="mt-1 rounded border border-sophia-dark-border/60 bg-sophia-dark-bg/30 px-3 py-2">
+                          <summary class="cursor-pointer font-mono text-[0.65rem] text-sophia-dark-dim">
+                            When to change this
+                          </summary>
+                          <p class="mt-2 text-xs leading-relaxed text-sophia-dark-muted">
+                            Lower if you see many <span class="font-mono">truncation</span>, <span class="font-mono">batch_split</span>,
+                            or <span class="font-mono">json_repair</span> issues in extraction: smaller sections reduce output
+                            size per call and often stabilize JSON. Raising can reduce the number of extraction calls on very
+                            long coherent passages, but stays within the min/max shown; watch for the same failure modes.
+                          </p>
+                        </details>
+                        <input
+                          id="bo-extraction"
+                          type="number"
+                          min="1000"
+                          max="20000"
+                          step="100"
+                          placeholder="e.g. 3500"
+                          value={batchExtractionMaxTokensPerSection}
+                          oninput={(e) => (batchExtractionMaxTokensPerSection = (e.currentTarget as HTMLInputElement).value)}
+                          disabled={runInProgress()}
+                          class="mt-2 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                        />
+                      </div>
+
+                      <div>
+                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="bo-grouping">
+                          Grouping target tokens
+                        </label>
+                        <details class="mt-1 rounded border border-sophia-dark-border/60 bg-sophia-dark-bg/30 px-3 py-2">
+                          <summary class="cursor-pointer font-mono text-[0.65rem] text-sophia-dark-dim">
+                            When to change this
+                          </summary>
+                          <p class="mt-2 text-xs leading-relaxed text-sophia-dark-muted">
+                            Lower if <span class="font-mono">grouping_integrity</span> warnings, timeouts, or huge sources
+                            suggest the model is juggling too many claims at once. Higher values batch more claims per grouping
+                            call (fewer round trips) but increase load per request.
+                          </p>
+                        </details>
+                        <input
+                          id="bo-grouping"
+                          type="number"
+                          min="10000"
+                          max="400000"
+                          step="1000"
+                          placeholder="e.g. 80000"
+                          value={batchGroupingTargetTokens}
+                          oninput={(e) => (batchGroupingTargetTokens = (e.currentTarget as HTMLInputElement).value)}
+                          disabled={runInProgress()}
+                          class="mt-2 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                        />
+                      </div>
+
+                      <div>
+                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="bo-validation">
+                          Validation target tokens
+                        </label>
+                        <details class="mt-1 rounded border border-sophia-dark-border/60 bg-sophia-dark-bg/30 px-3 py-2">
+                          <summary class="cursor-pointer font-mono text-[0.65rem] text-sophia-dark-dim">
+                            When to change this
+                          </summary>
+                          <p class="mt-2 text-xs leading-relaxed text-sophia-dark-muted">
+                            Only applies when cross-model validation is on. Lower if the validation stage hits truncation,
+                            timeouts, or schema pressure on large bundled inputs. Raise only when batches are unnecessarily
+                            small and the model is stable.
+                          </p>
+                        </details>
+                        <input
+                          id="bo-validation"
+                          type="number"
+                          min="10000"
+                          max="400000"
+                          step="1000"
+                          placeholder="e.g. 70000"
+                          value={batchValidationTargetTokens}
+                          oninput={(e) => (batchValidationTargetTokens = (e.currentTarget as HTMLInputElement).value)}
+                          disabled={runInProgress() || !runValidate}
+                          class="mt-2 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                        />
+                      </div>
+
+                      <div>
+                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="bo-relations">
+                          Relations batch target tokens
+                        </label>
+                        <details class="mt-1 rounded border border-sophia-dark-border/60 bg-sophia-dark-bg/30 px-3 py-2">
+                          <summary class="cursor-pointer font-mono text-[0.65rem] text-sophia-dark-dim">
+                            When to change this
+                          </summary>
+                          <p class="mt-2 text-xs leading-relaxed text-sophia-dark-muted">
+                            Lower if the relations stage shows <span class="font-mono">retry</span>, rate limits, truncation,
+                            or you chunked relations to stay under provider limits. Smaller batches mean more relation calls
+                            but less context per call.
+                          </p>
+                        </details>
+                        <input
+                          id="bo-relations"
+                          type="number"
+                          min="5000"
+                          max="250000"
+                          step="1000"
+                          placeholder="e.g. 20000"
+                          value={batchRelationsTargetTokens}
+                          oninput={(e) => (batchRelationsTargetTokens = (e.currentTarget as HTMLInputElement).value)}
+                          disabled={runInProgress()}
+                          class="mt-2 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                        />
+                      </div>
+
+                      <div>
+                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="bo-embed">
+                          Embedding batch size
+                        </label>
+                        <details class="mt-1 rounded border border-sophia-dark-border/60 bg-sophia-dark-bg/30 px-3 py-2">
+                          <summary class="cursor-pointer font-mono text-[0.65rem] text-sophia-dark-dim">
+                            When to change this
+                          </summary>
+                          <p class="mt-2 text-xs leading-relaxed text-sophia-dark-muted">
+                            Lower if embedding shows throttling, <span class="font-mono">retry</span>, or provider rate limits on
+                            large sources. Higher batches reduce HTTP round trips but can hit quotas faster.
+                          </p>
+                        </details>
+                        <input
+                          id="bo-embed"
+                          type="number"
+                          min="25"
+                          max="2000"
+                          step="25"
+                          placeholder="e.g. 150"
+                          value={batchEmbedBatchSize}
+                          oninput={(e) => (batchEmbedBatchSize = (e.currentTarget as HTMLInputElement).value)}
+                          disabled={runInProgress()}
+                          class="mt-2 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </details>
+              </div>
+
               {#if sourcePreScanResult?.advisor}
                 {@const adv = sourcePreScanResult.advisor}
+                {@const advisorStale = ingestionAdvisorModeUi !== adv.mode}
                 <div class="rounded border border-sophia-dark-border/80 bg-sophia-dark-bg/35 p-4" role="region" aria-label="Ingestion advisor">
-                  <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Ingestion advisor</p>
-                  <p class="mt-2 text-xs text-sophia-dark-muted">
-                    <span class="font-mono text-sophia-dark-text">{adv.mode}</span>
-                    {#if adv.enabled}
-                      · active
-                    {:else if adv.mode === 'off'}
-                      · disabled via <span class="font-mono">INGESTION_ADVISOR_MODE</span>
-                    {/if}
-                    {#if adv.model}
-                      · {adv.model.provider}/{adv.model.modelId}
-                    {/if}
+                  <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Ingestion advisor (last pre-scan)</p>
+                  <p class="mt-2 text-xs leading-relaxed text-sophia-dark-muted">
+                    This block is the snapshot from your last Source pre-scan, not the live
+                    <span class="font-mono">Pipeline setup</span> dropdown. Change Worker defaults, then run pre-scan again on step 1 so this card
+                    matches.
                   </p>
+                  <dl class="mt-3 grid gap-2 font-mono text-xs text-sophia-dark-muted sm:grid-cols-2">
+                    <div>
+                      <dt class="text-sophia-dark-dim">Pipeline setting (saved now)</dt>
+                      <dd class="mt-0.5 text-sophia-dark-text">{ingestionAdvisorModeUi}</dd>
+                    </div>
+                    <div>
+                      <dt class="text-sophia-dark-dim">Last pre-scan used</dt>
+                      <dd class="mt-0.5 text-sophia-dark-text">
+                        {adv.mode}
+                        {#if adv.enabled}
+                          · advisor model ran
+                        {:else if adv.mode === 'off'}
+                          · heuristics only (no advisor call that run)
+                        {/if}
+                        {#if adv.model}
+                          · {adv.model.provider}/{adv.model.modelId}
+                        {/if}
+                      </dd>
+                    </div>
+                  </dl>
+                  {#if advisorStale}
+                    <p class="mt-3 rounded border border-sophia-dark-amber/40 bg-sophia-dark-amber/10 px-3 py-2 text-xs text-sophia-dark-muted" role="status">
+                      Pipeline is set to <span class="font-mono text-sophia-dark-text">{ingestionAdvisorModeUi}</span> but this summary is from a
+                      pre-scan that used <span class="font-mono text-sophia-dark-text">{adv.mode}</span>. Go to
+                      <span class="font-mono">Source</span> and run pre-scan again to refresh.
+                    </p>
+                  {/if}
+                  {#if adv.mode === 'off' && !advisorStale}
+                    <p class="mt-2 text-xs leading-relaxed text-sophia-dark-muted">
+                      With advisor off, that pre-scan used heuristics only. To get AI preset/validation suggestions on the next pre-scan, set
+                      <a href="#ingest-worker-defaults" class="text-sophia-dark-sage underline-offset-2 hover:underline">Worker and advisor defaults</a>
+                      to Shadow or Auto, then pre-scan again.
+                    </p>
+                  {/if}
                   {#if adv.error}
                     <p class="mt-2 font-mono text-xs text-sophia-dark-copper">{adv.error}</p>
+                    {#if /aiplatform\.endpoints\.predict|aiplatform\.googleapis\.com|Vertex AI/i.test(adv.error)}
+                      <p class="mt-2 text-xs leading-relaxed text-sophia-dark-muted">
+                        In Google Cloud IAM, grant the identity used for ingestion (often the worker service account) the
+                        <span class="font-mono">Vertex AI User</span> role (<span class="font-mono">roles/aiplatform.user</span>) on the project, or
+                        ensure it can call <span class="font-mono">aiplatform.endpoints.predict</span> for the model in the error above.
+                      </p>
+                    {/if}
                   {/if}
                   <dl class="mt-3 grid gap-2 font-mono text-xs text-sophia-dark-muted sm:grid-cols-2">
                     <div>
@@ -2307,6 +3252,12 @@
                       </dd>
                     </div>
                   </dl>
+                  {#if adv.mode === 'auto'}
+                    <p class="mt-2 text-[0.7rem] leading-relaxed text-sophia-dark-dim">
+                      In auto mode, “preset yes/no” and “validation yes/no” mean whether the advisor <em>overrode</em> heuristics for that run. If both
+                      are no, the advisor matched the baseline—preset and validation above still reflect the applied run.
+                    </p>
+                  {/if}
                   {#if adv.suggestion}
                     <div class="mt-3 rounded border border-sophia-dark-border/60 bg-sophia-dark-bg/40 p-3">
                       <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Model suggestion</p>
@@ -2329,7 +3280,8 @@
                   <div>
                     <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Offline coach</p>
                     <p class="mt-1 text-xs text-sophia-dark-muted">
-                      Summarizes recent <span class="font-mono">ingestion_run_reports</span> and suggests pipeline improvements.
+                      Uses aggregated signals from recent
+                      <span class="font-mono">ingestion_run_reports</span>, then suggests UI variables you can apply on this page and engineering items that need code or infra.
                     </p>
                   </div>
                   <button
@@ -2342,6 +3294,26 @@
                   </button>
                 </div>
                 {#if coachError}<p class="mt-2 font-mono text-xs text-sophia-dark-copper">{coachError}</p>{/if}
+                {#if coachAggregatedSignals}
+                  <div class="mt-4 rounded border border-sophia-dark-border/60 bg-sophia-dark-bg/35 p-3">
+                    <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Signals from sampled reports</p>
+                    <dl class="mt-2 grid gap-2 font-mono text-xs text-sophia-dark-muted sm:grid-cols-2">
+                      <div><dt class="text-sophia-dark-dim">Reports</dt><dd>{coachAggregatedSignals.reportsInSample}</dd></div>
+                      <div><dt class="text-sophia-dark-dim">Total issue rows</dt><dd>{coachAggregatedSignals.totalIssues}</dd></div>
+                      <div><dt class="text-sophia-dark-dim">Routing degraded (sum)</dt><dd>{coachAggregatedSignals.sumRoutingDegradedCalls}</dd></div>
+                      <div><dt class="text-sophia-dark-dim">Fallback steps used (sum)</dt><dd>{coachAggregatedSignals.sumRoutingFallbackUsed}</dd></div>
+                      <div class="sm:col-span-2"><dt class="text-sophia-dark-dim">Runs with terminal error</dt><dd>{coachAggregatedSignals.runsWithTerminalError}</dd></div>
+                    </dl>
+                    {#if Object.keys(coachAggregatedSignals.issueKindTotals).length > 0}
+                      <p class="mt-2 font-mono text-[0.65rem] text-sophia-dark-dim">Issue kinds (merged)</p>
+                      <ul class="mt-1 list-none space-y-1 p-0 font-mono text-[0.7rem] text-sophia-dark-muted">
+                        {#each Object.entries(coachAggregatedSignals.issueKindTotals).sort((a, b) => b[1] - a[1]) as [kind, cnt]}
+                          <li><span class="text-sophia-dark-text">{kind}</span> — {cnt}</li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </div>
+                {/if}
                 {#if coachResult}
                   <div class="mt-4 space-y-3 border-t border-sophia-dark-border/50 pt-4">
                     <p class="text-xs leading-relaxed text-sophia-dark-muted">{coachResult.executiveSummary}</p>
@@ -2351,6 +3323,89 @@
                         <li>{line}</li>
                       {/each}
                     </ul>
+                    {#if coachUiTweaks.length > 0}
+                      <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Tweak on this page</p>
+                      <p class="mt-1 text-xs text-sophia-dark-muted">
+                        Maps to pipeline controls below (preset, validation, or Advanced batch overrides). Use Apply to set the value; review before starting the next run.
+                      </p>
+                      <ul class="mt-2 list-none space-y-3 p-0">
+                        {#each coachUiTweaks as tw}
+                          <li class="rounded border border-sophia-dark-border/55 bg-sophia-dark-bg/30 p-3">
+                            <div class="flex flex-wrap items-start justify-between gap-2">
+                              <div>
+                                <p class="font-mono text-[0.65rem] uppercase tracking-[0.08em] text-sophia-dark-dim">
+                                  {coachPipelineVariableLabel(tw)}
+                                </p>
+                                <p class="mt-1 font-mono text-xs text-sophia-dark-text">{tw.label}</p>
+                                <p class="mt-1 text-xs leading-relaxed text-sophia-dark-muted">{tw.detail}</p>
+                                {#if tw.evidenceIssueKinds?.length}
+                                  <p class="mt-2 font-mono text-[0.65rem] text-sophia-dark-dim">
+                                    Evidence kinds: {tw.evidenceIssueKinds.join(', ')}
+                                  </p>
+                                {/if}
+                                <p class="mt-1 font-mono text-[0.65rem] text-sophia-dark-dim">Confidence: {tw.confidence.toFixed(2)} · {tw.scope}</p>
+                              </div>
+                              {#if tw.scope === 'ui_preset' || tw.scope === 'ui_validation' || tw.scope === 'batch_override'}
+                                <button
+                                  type="button"
+                                  disabled={runInProgress()}
+                                  onclick={() => applyCoachSettingTweak(tw)}
+                                  class="shrink-0 rounded border border-sophia-dark-sage/45 bg-sophia-dark-sage/14 px-4 py-2 font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-sage hover:bg-sophia-dark-sage/22 disabled:opacity-50"
+                                >
+                                  Apply
+                                </button>
+                              {/if}
+                            </div>
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                    {#if coachRepoTweaks.length > 0}
+                      <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Not in this UI (track externally)</p>
+                      <p class="mt-1 text-xs text-sophia-dark-muted">
+                        Restormel publish, env outside this form, or other steps — no Apply button here.
+                      </p>
+                      <ul class="mt-2 list-none space-y-3 p-0">
+                        {#each coachRepoTweaks as tw}
+                          <li class="rounded border border-sophia-dark-border/55 bg-sophia-dark-bg/30 p-3">
+                            <p class="font-mono text-xs text-sophia-dark-text">{tw.label}</p>
+                            <p class="mt-1 text-xs leading-relaxed text-sophia-dark-muted">{tw.detail}</p>
+                            {#if tw.evidenceIssueKinds?.length}
+                              <p class="mt-2 font-mono text-[0.65rem] text-sophia-dark-dim">
+                                Evidence kinds: {tw.evidenceIssueKinds.join(', ')}
+                              </p>
+                            {/if}
+                            <p class="mt-1 font-mono text-[0.65rem] text-sophia-dark-dim">Confidence: {tw.confidence.toFixed(2)}</p>
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                    {#if coachResult.codeChangeReports?.length}
+                      <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Engineering / code follow-ups</p>
+                      <p class="mt-1 text-xs text-sophia-dark-muted">
+                        These need changes in the repo, prompts, or hosted config — not a single field on this screen.
+                      </p>
+                      <ul class="mt-2 list-none space-y-3 p-0">
+                        {#each coachResult.codeChangeReports as rep}
+                          <li class="rounded border border-sophia-dark-border/55 bg-sophia-dark-bg/30 p-3">
+                            <div class="flex flex-wrap items-center gap-2">
+                              <p class="font-mono text-xs text-sophia-dark-text">{rep.title}</p>
+                              {#if rep.suggestedArea}
+                                <span class="rounded border border-sophia-dark-border/80 px-2 py-0.5 font-mono text-[0.65rem] text-sophia-dark-muted">
+                                  {CODE_CHANGE_AREA_LABELS[rep.suggestedArea] ?? rep.suggestedArea}
+                                </span>
+                              {/if}
+                            </div>
+                            <p class="mt-2 text-xs leading-relaxed text-sophia-dark-muted">{rep.detail}</p>
+                            {#if rep.evidenceIssueKinds?.length}
+                              <p class="mt-2 font-mono text-[0.65rem] text-sophia-dark-dim">
+                                Evidence kinds: {rep.evidenceIssueKinds.join(', ')}
+                              </p>
+                            {/if}
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
                     {#if coachResult.suggestedNextExperiments?.length}
                       <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Next experiments</p>
                       <ul class="list-disc space-y-1 pl-5 text-xs text-sophia-dark-muted">
@@ -2475,6 +3530,40 @@
                               {/each}
                             {/if}
                           </select>
+                        </div>
+
+                        <div class="mt-3">
+                          <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="fallback-model-select-{row.key}">Fallback model</label>
+                          <select
+                            id="fallback-model-select-{row.key}"
+                            value={stageFallbackModelIds[row.key]}
+                            onchange={(e) => onStageFallbackModelSelect(row, (e.currentTarget as HTMLSelectElement).value)}
+                            disabled={runInProgress() || providersForStage(row).length === 0 || (row.key === 'ingestion_validation' && !runValidate)}
+                            class="mt-1 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                          >
+                            <option value="">No fallback (primary only)</option>
+                            {#if providersForStage(row).length === 0}
+                              <option value="">No providers available</option>
+                            {:else}
+                              {#each providersForStage(row) as p}
+                                <optgroup label={p} title={providerHint(p)}>
+                                  {#each modelsForStageProvider(row, p) as m}
+                                    <option value={stableModelId(m)} title={providerHint(p)}>
+                                      {modelOptionLabel(row, m)} — {p}
+                                    </option>
+                                  {/each}
+                                </optgroup>
+                              {/each}
+                            {/if}
+                          </select>
+
+                          {#if (stageFallbackModelIds[row.key]?.trim() ?? '') !== ''}
+                            {#if stageFallbackModelIds[row.key] === stageModelIds[row.key]}
+                              <p class="mt-1 text-xs text-sophia-dark-copper">Fallback equals primary; redundancy is lost.</p>
+                            {/if}
+                          {:else}
+                            <p class="mt-1 text-xs text-sophia-dark-dim">This stage uses only the primary model step.</p>
+                          {/if}
                         </div>
                       {:else}
                         <p class="mt-3 font-mono text-xs text-sophia-dark-dim">

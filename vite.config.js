@@ -11,6 +11,11 @@ const observabilitySrc = fileURLToPath(new URL('./packages/observability/src', i
 export default defineConfig({
   root: repoRoot,
   plugins: [sveltekit()],
+  // Bundle Restormel Keys for SSR so `@restormel/keys` and `@restormel/keys/dashboard`
+  // resolve via Vite (avoids flaky `nodeImport` / package-exports edge cases with externalized deps).
+  ssr: {
+    noExternal: ['@restormel/keys']
+  },
   server: {
     fs: {
       allow: [repoRoot]

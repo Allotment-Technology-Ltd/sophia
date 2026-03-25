@@ -279,6 +279,13 @@ export interface IngestRunSnapshotForReport {
     stop_before_store?: boolean;
     model_chain: { extract: string; relate: string; group: string; validate: string };
     embedding_model?: string;
+    batch_overrides?: {
+      extractionMaxTokensPerSection?: number;
+      groupingTargetTokens?: number;
+      validationTargetTokens?: number;
+      relationsTargetTokens?: number;
+      embedBatchSize?: number;
+    };
   };
   issues: IngestIssueRecord[];
   logLines: string[];
@@ -292,10 +299,42 @@ export interface IngestRunSnapshotForReport {
   cancelledByUser?: boolean;
 }
 
+function summarizeRoutingFromLogLines(logLines: string[]): {
+  routeCalls: number;
+  routingSources: Record<string, number>;
+  orderCounts: Record<string, number>;
+  degradedRouteCount: number;
+  fallbackUsedCount: number;
+} {
+  const routingSources: Record<string, number> = {};
+  const orderCounts: Record<string, number> = {};
+  let routeCalls = 0;
+  let degradedRouteCount = 0;
+  let fallbackUsedCount = 0;
+
+  for (const line of logLines) {
+    const m = line.match(/\[ROUTE\]\s+.*?\s+source=([^\s]+)\s+step=([^\s]+)\s+order=([^\s]+)\s+switch=/i);
+    if (!m) continue;
+    routeCalls++;
+
+    const source = (m[1] ?? '').trim();
+    const orderRaw = (m[3] ?? '').trim();
+    if (source) routingSources[source] = (routingSources[source] ?? 0) + 1;
+    if (orderRaw) orderCounts[orderRaw] = (orderCounts[orderRaw] ?? 0) + 1;
+
+    if (/degraded/i.test(source)) degradedRouteCount++;
+    const orderNum = Number(orderRaw);
+    if (Number.isFinite(orderNum) && orderNum >= 1) fallbackUsedCount++;
+  }
+
+  return { routeCalls, routingSources, orderCounts, degradedRouteCount, fallbackUsedCount };
+}
+
 export async function persistIngestRunReport(state: IngestRunSnapshotForReport): Promise<void> {
   try {
     const ref = adminDb.collection(FIRESTORE_COLLECTION).doc(state.id);
     const payload = state.payload;
+    const routingStats = summarizeRoutingFromLogLines(state.logLines);
     await ref.set(
       {
         runId: state.id,
@@ -307,6 +346,8 @@ export async function persistIngestRunReport(state: IngestRunSnapshotForReport):
         stopBeforeStore: payload.stop_before_store !== false,
         modelChain: payload.model_chain,
         embeddingModel: payload.embedding_model ?? null,
+        batchOverrides: payload.batch_overrides ?? null,
+        routingStats,
         createdAt: Timestamp.fromMillis(state.createdAt),
         completedAt: Timestamp.fromMillis(state.completedAt ?? Date.now()),
         terminalError: state.error ?? null,

@@ -67,6 +67,16 @@ export const PassageRecordSchema = z.object({
 
 export type PassageRecord = z.infer<typeof PassageRecordSchema>;
 
+/** JSON from models often uses `null` for absent optional strings. */
+function nullishOptionalString(value: unknown): unknown {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'string') {
+    const t = value.trim();
+    return t === '' ? undefined : t;
+  }
+  return value;
+}
+
 export const PhaseOneClaimMetadataSchema = z.object({
   passage_id: z.string().min(1).optional(),
   passage_order: z.number().int().positive().optional(),
@@ -74,10 +84,10 @@ export const PhaseOneClaimMetadataSchema = z.object({
   source_span_start: z.number().int().nonnegative().optional(),
   source_span_end: z.number().int().nonnegative().optional(),
   claim_origin: ClaimOriginSchema,
-  subdomain: z.string().min(1).optional(),
-  thinker: z.string().min(1).optional(),
-  tradition: z.string().min(1).optional(),
-  era: z.string().min(1).optional(),
+  subdomain: z.preprocess(nullishOptionalString, z.string().min(1).optional()),
+  thinker: z.preprocess(nullishOptionalString, z.string().min(1).optional()),
+  tradition: z.preprocess(nullishOptionalString, z.string().min(1).optional()),
+  era: z.preprocess(nullishOptionalString, z.string().min(1).optional()),
   claim_scope: ClaimScopeSchema,
   attributed_to: z.array(z.string().min(1)),
   concept_tags: z.array(z.string().min(1)),

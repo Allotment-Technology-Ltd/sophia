@@ -442,14 +442,25 @@ function toDashboardError(
           ? 'forbidden'
           : status === 404
             ? 'not_found'
+            : status === 409
+              ? 'conflict'
             : status === 400
               ? 'bad_request'
               : 'request_failed';
 
   const publishSummary = publishValidationSummary(payload);
 
+  const duplicateOrderIndexDetail =
+    isRecord(payload) && payload.error === 'duplicate_order_index'
+      ? 'POST /steps appends to the route draft; this request would duplicate an orderIndex. Clear existing steps first (or use replace), then post the full chain.'
+      : null;
+
+  const conflictFallback =
+    'Conflict (HTTP 409): the route may have been updated in Restormel Keys or another session. Refresh this page, then try Save routing again. If it persists, open the route in Keys and avoid concurrent edits.';
+
   const detail =
     publishSummary ||
+    duplicateOrderIndexDetail ||
     (isRecord(payload) && typeof payload.detail === 'string'
       ? payload.detail
       : isRecord(payload) && typeof payload.message === 'string'
@@ -458,7 +469,9 @@ function toDashboardError(
           ? `Upstream returned HTML instead of JSON (status ${status}). Check RESTORMEL_KEYS_BASE / RESTORMEL_BASE_URL and endpoint routing.`
           : payloadText
             ? payloadText.slice(0, 220)
-            : `Restormel request failed with status ${status}`);
+            : status === 409
+              ? conflictFallback
+              : `Restormel request failed with status ${status}`);
 
   return new RestormelDashboardError({
     status,
@@ -472,7 +485,7 @@ function toDashboardError(
 async function requestRestormel<T>(
   endpoint: string,
   options?: {
-    method?: 'GET' | 'POST';
+    method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
     body?: unknown;
     projectId?: string;
     requireProjectId?: boolean;
@@ -480,14 +493,16 @@ async function requestRestormel<T>(
 ): Promise<T> {
   ensureRestormelConfig(options?.requireProjectId ?? true);
 
+  const method = options?.method ?? 'GET';
+  const hasBody = options?.body !== undefined;
   const url = `${RESTORMEL_DASHBOARD_API_BASE}${endpoint}`;
   const res = await fetch(url, {
-    method: options?.method ?? 'GET',
+    method,
     headers: {
       Authorization: `Bearer ${RESTORMEL_GATEWAY_KEY}`,
-      'Content-Type': 'application/json'
+      ...(hasBody || method === 'POST' || method === 'PUT' ? { 'Content-Type': 'application/json' } : {})
     },
-    ...(options?.body !== undefined ? { body: JSON.stringify(options.body) } : {})
+    ...(hasBody ? { body: JSON.stringify(options.body) } : {})
   });
 
   const payload = await parseRestormelBody(res);
@@ -589,6 +604,120 @@ export async function restormelListRouteSteps(
   return requestRestormel<{ data: RestormelStepRecord[] }>(
     `${projectPath()}/routes/${encodeURIComponent(routeId)}/steps`
   );
+}
+
+/**
+ * Remove all steps from a route draft (Dashboard API). Use before re-posting a full chain when POST merges/appends.
+ * If the deployment has no DELETE handler, this throws — callers may fall back to in-place updates only.
+ */
+export async function restormelDeleteRouteSteps(routeId: string): Promise<void> {
+  await requestRestormel<{ data?: unknown }>(
+    `${projectPath()}/routes/${encodeURIComponent(routeId)}/steps`,
+    { method: 'DELETE' }
+  );
+}
+
+export async function restormelDeleteRouteStep(routeId: string, stepId: string): Promise<void> {
+  await requestRestormel<{ data?: unknown }>(
+    `${projectPath()}/routes/${encodeURIComponent(routeId)}/steps/${encodeURIComponent(stepId)}`,
+    { method: 'DELETE' }
+  );
+}
+
+/**
+ * Replace the full step chain. Dashboard POST /steps **appends**; without a bulk replace endpoint we clear
+ * (bulk DELETE when available, else per-step DELETE) then POST the new chain.
+ */
+export async function restormelReplaceRouteSteps(
+  routeId: string,
+  steps: RestormelStepRecord[]
+): Promise<{ data: RestormelStepRecord[] | RestormelStepRecord }> {
+  const allowedProviders = new Set([
+    'openai',
+    'anthropic',
+    'google',
+    'openrouter',
+    'vercel',
+    'portkey',
+    'voyage'
+  ]);
+
+  const normalizeProviderPreference = (value: unknown, modelId?: unknown): string | null => {
+    const p = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    const m = typeof modelId === 'string' ? modelId.trim().toLowerCase() : '';
+    const allowed = new Set([
+      'openai',
+      'anthropic',
+      'google',
+      'openrouter',
+      'vercel',
+      'portkey',
+      'voyage'
+    ]);
+
+    if (allowed.has(p)) return p;
+    if (!p) {
+      if (m.includes('gemini') || m.includes('text-embedding') || m.includes('gecko')) return 'google';
+      if (m.includes('claude')) return 'anthropic';
+      if (m.includes('voyage')) return 'voyage';
+      if (m.includes('gpt') || m.includes('o1') || m.includes('o3') || m.includes('o4')) return 'openai';
+      return null;
+    }
+
+    if (p === 'vertex' || p.includes('vertex') || p.includes('google')) return 'google';
+    if (p.includes('anthropic') || m.includes('claude')) return 'anthropic';
+    if (p.includes('openrouter')) return 'openrouter';
+    if (p.includes('portkey')) return 'portkey';
+    if (p.includes('vercel')) return 'vercel';
+    if (p.includes('voyage') || m.includes('voyage')) return 'voyage';
+    if (p.includes('openai') || m.includes('gpt') || m.includes('o1') || m.includes('o3') || m.includes('o4')) return 'openai';
+
+    return p;
+  };
+
+  try {
+    await restormelDeleteRouteSteps(routeId);
+  } catch {
+    const { data } = await restormelListRouteSteps(routeId);
+    const list = Array.isArray(data) ? data : [];
+    for (const step of list) {
+      const sid = typeof step.id === 'string' ? step.id.trim() : '';
+      if (!sid) continue;
+      try {
+        await restormelDeleteRouteStep(routeId, sid);
+      } catch (e) {
+        if (e instanceof RestormelDashboardError && e.status === 404) continue;
+        throw e;
+      }
+    }
+  }
+  const ordered = [...steps]
+    .sort((a, b) => (Number(a.orderIndex) || 0) - (Number(b.orderIndex) || 0))
+    .map((step, idx) => {
+      const provider = normalizeProviderPreference(step.providerPreference, step.modelId);
+      if (!provider || !allowedProviders.has(provider)) {
+        const model = typeof step.modelId === 'string' ? step.modelId : '';
+        throw new Error(
+          `Route step provider is unsupported for model "${model}". Allowed providers: openai, anthropic, google (alias: vertex), openrouter, vercel, portkey, voyage.`
+        );
+      }
+      return {
+        orderIndex: Number(step.orderIndex) || idx,
+        enabled: step.enabled !== false,
+        providerPreference: provider,
+        modelId: step.modelId ?? null,
+        ...(step.switchCriteria !== undefined ? { switchCriteria: step.switchCriteria } : {}),
+        ...(step.retryPolicy !== undefined ? { retryPolicy: step.retryPolicy } : {}),
+        ...(step.costPolicy !== undefined ? { costPolicy: step.costPolicy } : {})
+      };
+    });
+
+  let last: { data: RestormelStepRecord[] | RestormelStepRecord } | null = null;
+  for (const step of ordered) {
+    last = await restormelSaveRouteSteps(routeId, step);
+  }
+  if (last) return last;
+  return { data: [] };
 }
 
 export async function restormelSaveRouteSteps(

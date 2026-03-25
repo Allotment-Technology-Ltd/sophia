@@ -31,8 +31,11 @@ export function serializeRestormelError(error: unknown): {
       endpoint: error.endpoint
     };
     if (isRecord(error.payload)) {
-      const um =
+      let um =
         typeof error.payload.userMessage === 'string' ? error.payload.userMessage.trim() : '';
+      if (!um && error.status === 409) {
+        um = error.detail;
+      }
       const publishErrors =
         error.payload.error === 'publish_validation_failed' && Array.isArray(error.payload.errors)
           ? error.payload.errors
@@ -42,6 +45,9 @@ export function serializeRestormelError(error: unknown): {
         ...(um ? { userMessage: um } : {}),
         ...(publishErrors ? { publishErrors } : {})
       };
+    }
+    if (error.status === 409) {
+      return { ...base, userMessage: error.detail };
     }
     return base;
   }

@@ -21,7 +21,7 @@ import {
 	restormelGetRoutingCapabilities,
 	restormelListRouteSteps,
 	restormelListRoutes,
-	restormelSaveRouteSteps
+	restormelReplaceRouteSteps
 } from '../../src/lib/server/restormel.js';
 
 function printHelp(): void {
@@ -103,7 +103,7 @@ async function main(): Promise<void> {
 				}
 				const parsed = JSON.parse(raw) as unknown;
 				const body = normalizeStepsPayload(parsed);
-				const response = await restormelSaveRouteSteps(routeId, body as RestormelStepRecord[]);
+				const response = await restormelReplaceRouteSteps(routeId, body as RestormelStepRecord[]);
 				console.log(JSON.stringify(response.data, null, 2));
 				return;
 			}
