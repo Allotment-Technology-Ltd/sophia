@@ -76,6 +76,24 @@ describe('buildRestormelProjectModelEntriesOnly', () => {
 		expect(entries.every((e) => e.catalogSource === 'remote')).toBe(true);
 	});
 
+	it('parses snake_case and nested provider/model payloads', () => {
+		const remote = {
+			data: {
+				models: [
+					{ provider_type: 'anthropic', model_id: 'claude-3-5-sonnet-20241022' },
+					{ provider: { type: 'openai' }, model: { id: 'gpt-4o' } }
+				]
+			}
+		};
+		const { entries, sync } = buildRestormelProjectModelEntriesOnly(remote, null);
+		expect(sync.status).toBe('restormel');
+		expect(entries).toHaveLength(2);
+		expect(entries[0]?.provider).toBe('anthropic');
+		expect(entries[0]?.modelId).toBe('claude-3-5-sonnet-20241022');
+		expect(entries[1]?.provider).toBe('openai');
+		expect(entries[1]?.modelId).toBe('gpt-4o');
+	});
+
 	it('returns unavailable when payload parses to zero usable models', () => {
 		const { entries, sync } = buildRestormelProjectModelEntriesOnly({ data: [{ foo: 1 }] }, null);
 		expect(entries).toHaveLength(0);
