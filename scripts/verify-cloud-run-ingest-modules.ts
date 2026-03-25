@@ -9,6 +9,7 @@
 await import('../src/lib/server/env.js');
 await import('../src/lib/server/sourceIdentity.js');
 await import('../src/lib/server/embeddings.js');
+await import('../src/lib/server/restormelIngestionRoutes.js');
 await import('../src/lib/server/vertex.js');
 await import('../src/lib/server/restormel.js');
 await import('../src/lib/server/resolve-provider.js');

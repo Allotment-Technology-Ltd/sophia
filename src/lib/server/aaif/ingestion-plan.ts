@@ -8,6 +8,10 @@ import {
   resolveReasoningModelRoute,
   type ReasoningModelRoute
 } from '../vertex.js';
+import {
+  discoverIngestionRouteBinding,
+  type DiscoverableIngestionStage
+} from '../restormelIngestionRoutes.js';
 
 export type IngestionStage =
   | 'extraction'
@@ -107,7 +111,8 @@ function latencyToDepth(latency: AAIFLatency): 'quick' | 'standard' | 'deep' {
   return 'standard';
 }
 
-function stageRouteBinding(stage: IngestionStage): {
+/** Explicit env overrides only (optional). If unset, `discoverIngestionRouteBinding` lists routes from Restormel. */
+function stageRouteBindingFromEnv(stage: IngestionStage): {
   routeId?: string;
   mode: StageRouteBindingMode;
 } {
@@ -151,9 +156,20 @@ function stageRouteBinding(stage: IngestionStage): {
         routeId: shared,
         mode: 'shared'
       }
-    : {
+      : {
         mode: 'none'
       };
+}
+
+async function resolveStageRouteBinding(stage: IngestionStage): Promise<{
+  routeId?: string;
+  mode: StageRouteBindingMode;
+}> {
+  const fromEnv = stageRouteBindingFromEnv(stage);
+  if (fromEnv.routeId) {
+    return fromEnv;
+  }
+  return discoverIngestionRouteBinding(stage as DiscoverableIngestionStage);
 }
 
 function buildStageRestormelContext(options: {
@@ -312,14 +328,12 @@ export async function planIngestionStage(
   context: IngestionPlanningContext
 ): Promise<IngestionStagePlan> {
   const request = buildStageRequest(stage, context);
-  const routeBinding = stageRouteBinding(stage);
-  const routeId = routeBinding.routeId;
 
   if (stage === 'embedding') {
     return {
       stage,
       request,
-      routeId,
+      routeId: undefined,
       provider: 'vertex',
       model: EMBEDDING_MODEL,
       estimatedCostUsd: estimateEmbeddingCostUsd(context),
@@ -333,6 +347,9 @@ export async function planIngestionStage(
         'Sophia currently executes ingestion embeddings on the Vertex embedding pipeline because Restormel execution routing for embeddings is not exposed in the published runtime.'
     };
   }
+
+  const routeBinding = await resolveStageRouteBinding(stage);
+  const routeId = routeBinding.routeId;
 
   const requestedProvider = (context.preferredProvider ?? 'auto') as ModelProvider;
   const route =
