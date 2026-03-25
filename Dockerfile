@@ -18,7 +18,8 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 COPY package.json pnpm-lock.yaml ./
 COPY pnpm-workspace.yaml ./
 COPY packages ./packages
-COPY vendor ./vendor
+# Keep a vendor directory even when the repo has no vendored artifacts.
+RUN mkdir -p vendor
 
 # Install dependencies
 RUN pnpm install --frozen-lockfile
@@ -41,7 +42,8 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 COPY package.json pnpm-lock.yaml ./
 COPY pnpm-workspace.yaml ./
 COPY packages ./packages
-COPY vendor ./vendor
+# Keep a vendor directory even when the repo has no vendored artifacts.
+RUN mkdir -p vendor
 
 # Install production dependencies only
 RUN pnpm install --prod --frozen-lockfile
