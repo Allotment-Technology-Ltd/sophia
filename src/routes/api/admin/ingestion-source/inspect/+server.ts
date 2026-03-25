@@ -29,11 +29,11 @@ function normalizePublicationYear(value: string | null | undefined): string {
 function decodeBasicEntities(input: string): string {
 	return input
 		.replaceAll('&nbsp;', ' ')
-		.replaceAll('&amp;', '&')
 		.replaceAll('&lt;', '<')
 		.replaceAll('&gt;', '>')
 		.replaceAll('&quot;', '"')
-		.replaceAll('&#39;', "'");
+		.replaceAll('&#39;', "'")
+		.replaceAll('&amp;', '&');
 }
 
 function normalizeInlineText(input: string): string {
