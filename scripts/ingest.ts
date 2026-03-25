@@ -257,7 +257,7 @@ async function reconnectDbWithRetry(db: Surreal, reason: string): Promise<void> 
 			}
 
 			await db.connect(SURREAL_URL);
-			await db.signin({ username: SURREAL_USER, password: SURREAL_PASS } as any);
+			await signinSurrealWithFallback(db);
 			await db.use({ namespace: SURREAL_NAMESPACE, database: SURREAL_DATABASE });
 
 			if (attempt > 1) {
@@ -282,6 +282,71 @@ async function reconnectDbWithRetry(db: Surreal, reason: string): Promise<void> 
 	throw new Error(
 		`SurrealDB reconnect failed (${reason}): ${lastError instanceof Error ? lastError.message : String(lastError)}`
 	);
+}
+
+async function signinSurrealWithFallback(db: Surreal): Promise<void> {
+	const access = (process.env.SURREAL_ACCESS || process.env.SURREAL_RECORD_ACCESS || '').trim();
+	const attempts: Array<{ label: string; payload: Record<string, unknown> }> = [
+		{
+			label: 'root/basic',
+			payload: { username: SURREAL_USER, password: SURREAL_PASS }
+		},
+		{
+			label: 'namespace/basic',
+			payload: {
+				namespace: SURREAL_NAMESPACE,
+				database: SURREAL_DATABASE,
+				username: SURREAL_USER,
+				password: SURREAL_PASS
+			}
+		},
+		{
+			label: 'namespace/shorthand',
+			payload: {
+				NS: SURREAL_NAMESPACE,
+				DB: SURREAL_DATABASE,
+				user: SURREAL_USER,
+				pass: SURREAL_PASS
+			}
+		}
+	];
+
+	if (access) {
+		attempts.push({
+			label: `access/${access}`,
+			payload: {
+				namespace: SURREAL_NAMESPACE,
+				database: SURREAL_DATABASE,
+				access,
+				username: SURREAL_USER,
+				password: SURREAL_PASS
+			}
+		});
+		attempts.push({
+			label: `access-shorthand/${access}`,
+			payload: {
+				NS: SURREAL_NAMESPACE,
+				DB: SURREAL_DATABASE,
+				AC: access,
+				user: SURREAL_USER,
+				pass: SURREAL_PASS
+			}
+		});
+	}
+
+	let lastError: unknown;
+	for (const attempt of attempts) {
+		try {
+			await db.signin(attempt.payload as any);
+			if (attempt.label !== 'root/basic') {
+				console.log(`  [DB] Signed in via ${attempt.label} auth mode.`);
+			}
+			return;
+		} catch (error) {
+			lastError = error;
+		}
+	}
+	throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'Unknown signin error'));
 }
 
 async function dbQueryWithRetry<T>(

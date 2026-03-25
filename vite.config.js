@@ -14,6 +14,15 @@ export default defineConfig({
   server: {
     fs: {
       allow: [repoRoot]
+    },
+    watch: {
+      // Ingestion runs write artifacts during execution; ignore them so dev
+      // server doesn't hot-reload/restart mid-run.
+      ignored: [
+        '**/data/sources/**',
+        '**/data/ingested/**',
+        '**/data/monitoring/**'
+      ]
     }
   },
   resolve: {
