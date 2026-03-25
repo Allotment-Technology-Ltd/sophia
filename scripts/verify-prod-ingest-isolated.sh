@@ -6,9 +6,13 @@ TMP="$(mktemp -d)"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
-for f in package.json pnpm-lock.yaml pnpm-workspace.yaml vendor packages scripts src tsconfig.json jsconfig.json; do
+for f in package.json pnpm-lock.yaml pnpm-workspace.yaml packages scripts src tsconfig.json jsconfig.json; do
   cp -R "$ROOT/$f" "$TMP/"
 done
+# Optional local tarballs (e.g. vendored packages); omit when absent — installs use registry only.
+if [[ -d "$ROOT/vendor" ]]; then
+  cp -R "$ROOT/vendor" "$TMP/"
+fi
 
 cd "$TMP"
 pnpm install --prod --frozen-lockfile
