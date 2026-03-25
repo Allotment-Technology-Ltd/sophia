@@ -29,6 +29,18 @@ export interface StageStatus {
   summary?: string;
 }
 
+/** Lightweight row for admin “all ingestions” list (in-memory only). */
+export interface IngestRunSummary {
+  id: string;
+  status: 'running' | 'awaiting_sync' | 'done' | 'error';
+  createdAt: number;
+  completedAt?: number;
+  sourceUrl: string;
+  sourceType: string;
+  currentStageKey?: string | null;
+  error?: string;
+}
+
 export interface IngestRunState {
   id: string;
   status: 'running' | 'awaiting_sync' | 'done' | 'error';
@@ -50,6 +62,15 @@ export interface IngestRunState {
   currentAction?: string | null;
   lastFailureStageKey?: string | null;
   resumable?: boolean;
+  lastOutputAt?: number;
+  processStartedAt?: number;
+  processExitedAt?: number;
+  /** When true, child exit handlers must not retry and should finalize as cancelled. */
+  cancelledByUser?: boolean;
+  /** Simulated pipeline interval (ADMIN_INGEST_RUN_REAL unset). Cleared on cancel or completion. */
+  simulationInterval?: ReturnType<typeof setInterval> | null;
+  /** Simulated Stage 6 sync timer (real mode uses a child process instead). */
+  syncSimulationTimeout?: ReturnType<typeof setTimeout> | null;
 }
 
 /** Admin wizard / ingest UI types → `scripts/fetch-source.ts` types. */
@@ -163,6 +184,25 @@ class IngestRunManager extends EventEmitter {
     return this.runs.get(runId);
   }
 
+  /** Newest first. Only runs still held in memory (lost on server restart). */
+  listRuns(): IngestRunSummary[] {
+    const out: IngestRunSummary[] = [];
+    for (const state of this.runs.values()) {
+      out.push({
+        id: state.id,
+        status: state.status,
+        createdAt: state.createdAt,
+        completedAt: state.completedAt,
+        sourceUrl: state.payload.source_url,
+        sourceType: state.payload.source_type,
+        currentStageKey: state.currentStageKey ?? null,
+        error: state.error
+      });
+    }
+    out.sort((a, b) => b.createdAt - a.createdAt);
+    return out;
+  }
+
   /**
    * Run Stage 6 after a successful prepare phase (--stop-before-store).
    */
@@ -188,14 +228,16 @@ class IngestRunManager extends EventEmitter {
       state.syncStartedAt = Date.now();
       this.addLog(runId, 'Simulating SurrealDB sync (Stage 6)…');
       this.updateStageStatus(runId, 'store', 'running');
-      setTimeout(() => {
+      const syncTimeout = setTimeout(() => {
         const s = this.runs.get(runId);
-        if (!s) return;
+        if (!s || s.status === 'error' || s.cancelledByUser) return;
         this.updateStageStatus(runId, 'store', 'done');
         this.addLog(runId, 'SurrealDB sync completed successfully.');
         s.syncCompletedAt = Date.now();
+        s.syncSimulationTimeout = undefined;
         this.completeRun(runId);
       }, 2200);
+      state.syncSimulationTimeout = syncTimeout;
     }
     return { ok: true };
   }
@@ -204,6 +246,7 @@ class IngestRunManager extends EventEmitter {
     const state = this.runs.get(runId);
     if (state) {
       state.logLines.push(line);
+      state.lastOutputAt = Date.now();
       this.ingestProgressFromLogLine(runId, line);
       if (state.logLines.length > this.maxLogLines) {
         state.logLines.shift();
@@ -244,6 +287,74 @@ class IngestRunManager extends EventEmitter {
     }
   }
 
+  private finalizeCancel(runId: string): void {
+    const state = this.runs.get(runId);
+    if (!state) return;
+    if (state.status === 'done' || state.status === 'error') return;
+
+    state.status = 'error';
+    state.error = 'Ingestion cancelled by operator.';
+    state.completedAt = Date.now();
+    state.currentAction = 'Cancelled by operator';
+    state.process = undefined;
+    state.resumable = false;
+
+    for (const key of Object.keys(state.stages)) {
+      const st = state.stages[key];
+      if (st?.status === 'running') {
+        this.updateStageStatus(runId, key, 'error');
+      }
+    }
+
+    this.addLog(runId, '[CANCEL] Ingestion cancelled by operator.');
+  }
+
+  /**
+   * Stop an active run: kill the child process if any, stop simulation timers,
+   * or abandon a run that is waiting for SurrealDB sync. Idempotent after terminal state.
+   */
+  cancelRun(runId: string): { ok: true } | { ok: false; error: string } {
+    const state = this.runs.get(runId);
+    if (!state) return { ok: false, error: 'Run not found.' };
+    if (state.status === 'done' || state.status === 'error') {
+      return { ok: false, error: 'Run is not active.' };
+    }
+    state.cancelledByUser = true;
+
+    if (state.syncSimulationTimeout) {
+      clearTimeout(state.syncSimulationTimeout);
+      state.syncSimulationTimeout = undefined;
+    }
+
+    if (state.simulationInterval) {
+      clearInterval(state.simulationInterval);
+      state.simulationInterval = undefined;
+      this.finalizeCancel(runId);
+      return { ok: true };
+    }
+
+    if (state.process) {
+      try {
+        state.process.kill('SIGTERM');
+      } catch {
+        /* ignore */
+      }
+      return { ok: true };
+    }
+
+    if (state.status === 'awaiting_sync') {
+      this.finalizeCancel(runId);
+      return { ok: true };
+    }
+
+    if (state.status === 'running') {
+      this.finalizeCancel(runId);
+      return { ok: true };
+    }
+
+    return { ok: false, error: 'Unable to cancel run.' };
+  }
+
   resumeFromFailure(runId: string): { ok: true } | { ok: false; error: string } {
     const state = this.runs.get(runId);
     if (!state) return { ok: false, error: 'Run not found.' };
@@ -254,6 +365,7 @@ class IngestRunManager extends EventEmitter {
     state.status = 'running';
     state.error = undefined;
     state.completedAt = undefined;
+    state.cancelledByUser = false;
     state.currentAction = 'Resuming from previous checkpoint…';
     state.resumable = false;
     this.addLog(
@@ -318,21 +430,39 @@ class IngestRunManager extends EventEmitter {
     }) as ChildProcessWithoutNullStreams;
 
     const runState = this.runs.get(runId);
-    if (runState) runState.process = fetchChild;
+    if (runState) {
+      runState.process = fetchChild;
+      runState.processStartedAt = Date.now();
+      runState.processExitedAt = undefined;
+    }
 
     fetchChild.stdout.on('data', (chunk: Buffer) => appendProcessOutput(runId, chunk, this));
     fetchChild.stderr.on('data', (chunk: Buffer) => appendProcessOutput(runId, chunk, this));
 
     fetchChild.on('error', (err: Error) => {
       const s = this.runs.get(runId);
-      if (s) s.process = undefined;
+      if (s) {
+        s.process = undefined;
+        s.processExitedAt = Date.now();
+      }
+      if (s?.cancelledByUser) {
+        this.finalizeCancel(runId);
+        return;
+      }
       this.updateStageStatus(runId, 'fetch', 'error');
       this.failRun(runId, `fetch-source failed to start: ${err.message}`);
     });
 
     fetchChild.on('close', (code: number | null) => {
       const s = this.runs.get(runId);
-      if (s) s.process = undefined;
+      if (s) {
+        s.process = undefined;
+        s.processExitedAt = Date.now();
+      }
+      if (s?.cancelledByUser) {
+        this.finalizeCancel(runId);
+        return;
+      }
       if (code !== 0) {
         if (s && s.fetchRetryAttempts < 1) {
           s.fetchRetryAttempts++;
@@ -395,14 +525,25 @@ class IngestRunManager extends EventEmitter {
     }) as ChildProcessWithoutNullStreams;
 
     const runState = this.runs.get(runId);
-    if (runState) runState.process = ingestChild;
+    if (runState) {
+      runState.process = ingestChild;
+      runState.processStartedAt = Date.now();
+      runState.processExitedAt = undefined;
+    }
 
     ingestChild.stdout.on('data', (chunk: Buffer) => appendProcessOutput(runId, chunk, this));
     ingestChild.stderr.on('data', (chunk: Buffer) => appendProcessOutput(runId, chunk, this));
 
     ingestChild.on('error', (err: Error) => {
       const s = this.runs.get(runId);
-      if (s) s.process = undefined;
+      if (s) {
+        s.process = undefined;
+        s.processExitedAt = Date.now();
+      }
+      if (s?.cancelledByUser) {
+        this.finalizeCancel(runId);
+        return;
+      }
       if (forSync) {
         this.updateStageStatus(runId, 'store', 'error');
       } else {
@@ -413,7 +554,15 @@ class IngestRunManager extends EventEmitter {
 
     ingestChild.on('close', (code: number | null) => {
       const s = this.runs.get(runId);
-      if (s) s.process = undefined;
+      if (s) {
+        s.process = undefined;
+        s.processExitedAt = Date.now();
+      }
+
+      if (s?.cancelledByUser) {
+        this.finalizeCancel(runId);
+        return;
+      }
 
       if (code === 0) {
         if (stopBeforeStore) {
@@ -542,6 +691,11 @@ class IngestRunManager extends EventEmitter {
         clearInterval(progressInterval);
         return;
       }
+      if (state.cancelledByUser) {
+        clearInterval(progressInterval);
+        state.simulationInterval = undefined;
+        return;
+      }
 
       if (stageIndex < stages.length) {
         const stage = stages[stageIndex];
@@ -576,8 +730,12 @@ class IngestRunManager extends EventEmitter {
           this.completeRun(runId);
         }
         clearInterval(progressInterval);
+        state.simulationInterval = undefined;
       }
     }, 1000);
+
+    const runState = this.runs.get(runId);
+    if (runState) runState.simulationInterval = progressInterval;
   }
 }
 

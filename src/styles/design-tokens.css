@@ -78,7 +78,7 @@
   --space-paragraph: 1.5rem;
   --space-section:   3rem;
 
-  /* ── Spacing (8px base) ── */
+  /* ── Spacing (4-point system: multiples of 4px; see .cursor/rules/sophia-spacing-4pt.mdc) ── */
   --space-1:  4px;
   --space-2:  8px;
   --space-3:  16px;
