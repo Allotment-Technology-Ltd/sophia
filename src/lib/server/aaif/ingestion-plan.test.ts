@@ -49,6 +49,8 @@ describe('planIngestionStage', () => {
       routeId: 'interactive',
       failureMode: 'degraded_default',
       restormelContext: {
+        workload: 'ingestion',
+        stage: 'ingestion_extraction',
         task: 'completion',
         attempt: 1,
         estimatedInputTokens: 9_500,
@@ -139,9 +141,11 @@ describe('planIngestionStage', () => {
       sourceLengthChars: 50_000
     });
 
-    expect(estimates).toHaveLength(6);
-    expect(estimates[0]?.stage).toBe('extraction');
-    expect(estimates[0]?.inputTokens).toBeGreaterThan(12_500);
+    expect(estimates).toHaveLength(7);
+    expect(estimates[0]?.stage).toBe('fetch');
+    expect(estimates[0]?.inputTokens).toBeGreaterThan(12_000);
+    expect(estimates[1]?.stage).toBe('extraction');
+    expect(estimates[1]?.inputTokens).toBeGreaterThan(12_500);
     const grouping = estimates.find((phase) => phase.stage === 'grouping');
     expect(grouping?.complexity).toBe('high');
     expect(grouping?.totalTokens).toBeGreaterThan(0);

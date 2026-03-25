@@ -38,6 +38,12 @@ describe('discoverIngestionRouteBinding', () => {
     const { discoverIngestionRouteBinding } = await import('./restormelIngestionRoutes.js');
     const r = await discoverIngestionRouteBinding('extraction');
     expect(r).toEqual({ routeId: 'route-dedicated-extract', mode: 'dedicated' });
+    expect(mockListRoutes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentId: expect.any(String),
+        workload: 'ingestion'
+      })
+    );
   });
 
   it('matches shared route when stage is empty', async () => {

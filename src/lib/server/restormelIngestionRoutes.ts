@@ -5,15 +5,24 @@
  *
  * Convention (Restormel route records):
  * - **Dedicated** per pipeline stage: `workload: "ingestion"`, `stage: "ingestion_<stage>"`
- *   where `<stage>` is `extraction` | `relations` | `grouping` | `validation` | `json_repair`.
- * - **Shared** fallback for all completion stages: `workload: "ingestion"`, no/falsy `stage`
- *   (omit stage or empty string). Resolve uses generic payload (no workload/stage in body).
+ *   where `<stage>` is `extraction` | `relations` | `grouping` | `validation` | `json_repair`
+ *   (`ingestion_embedding` is separate if you route embeddings through Restormel).
+ * - **Shared** fallback: `workload: "ingestion"`, `stage` empty / null — resolve POST omits `stage`.
  *
- * Env overrides (`RESTORMEL_INGEST_*_ROUTE_ID`, `RESTORMEL_ANALYSE_ROUTE_ID`, …) still win when set
- * (see `stageRouteBindingFromEnv` in ingestion-plan).
+ * List routes (discovery): `GET .../routes?environmentId=&workload=ingestion`. Prefer `isPublished`
+ * and routes whose `version` equals `publishedVersion`.
+ *
+ * Runtime resolve (Keys ≥0.2.10) does not require these UUIDs: `planIngestionStage` calls POST /resolve
+ * without routeId when env is unset, using workload=ingestion + stage=ingestion_<substage>.
+ * Discovery here remains useful for admin list UX, logging, and optional preflight
+ * (`restormelValidateRouteBinding`). Env overrides still pin routeId when set.
  */
 
-import { restormelListRoutes, type RestormelRouteRecord } from './restormel.js';
+import {
+  RESTORMEL_ENVIRONMENT_ID,
+  restormelListRoutes,
+  type RestormelRouteRecord
+} from './restormel.js';
 
 /** Stages that use Restormel resolve (not embedding). */
 export type DiscoverableIngestionStage =
@@ -40,8 +49,15 @@ function isUsableRoute(route: RestormelRouteRecord): boolean {
   if (route.enabled === false) return false;
   const id = typeof route.id === 'string' ? route.id.trim() : '';
   if (!id) return false;
-  // Prefer published routes when the API exposes publishing metadata.
+  if (route.isPublished === false) return false;
   if (typeof route.publishedVersion === 'number' && route.publishedVersion <= 0) return false;
+  if (
+    typeof route.version === 'number' &&
+    typeof route.publishedVersion === 'number' &&
+    route.version !== route.publishedVersion
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -50,7 +66,10 @@ async function loadProjectRoutes(): Promise<RestormelRouteRecord[]> {
   if (cachedRoutes && now - cachedRoutes.at < LIST_CACHE_TTL_MS) {
     return cachedRoutes.routes;
   }
-  const { data } = await restormelListRoutes();
+  const { data } = await restormelListRoutes({
+    environmentId: RESTORMEL_ENVIRONMENT_ID,
+    workload: 'ingestion'
+  });
   const routes = Array.isArray(data) ? data : [];
   cachedRoutes = { at: now, routes };
   return routes;

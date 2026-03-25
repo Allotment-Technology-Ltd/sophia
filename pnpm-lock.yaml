@@ -43,8 +43,8 @@ importers:
         specifier: workspace:*
         version: link:packages/contracts
       '@restormel/keys':
-        specifier: file:vendor/restormel/restormel-keys-0.2.5.tgz
-        version: file:vendor/restormel/restormel-keys-0.2.5.tgz
+        specifier: 0.2.10
+        version: 0.2.10
       '@restormel/keys-svelte':
         specifier: file:vendor/restormel/restormel-keys-svelte-0.1.0.tgz
         version: file:vendor/restormel/restormel-keys-svelte-0.1.0.tgz(svelte@5.53.6)
@@ -1003,12 +1003,11 @@ packages:
     peerDependencies:
       svelte: ^5.0.0
 
+  '@restormel/keys@0.2.10':
+    resolution: {integrity: sha512-KKanGoSjlHw2f3g1th0Lf1/j7ikvM7J/J7gSiNzdyPPSnpkT1TUrJ+7CgRfdb0pLLVm18z1y62J0ObvLdua11A==}
+
   '@restormel/keys@0.2.5':
     resolution: {integrity: sha512-p2xHfGjC+ibDRb3+lp96rdIiz1SCDHTdm/ygolrrIZZRIGJn7Oy+R2w5Gsn86xKbCL56yjmkH3Npqc6nSJsfMA==}
-
-  '@restormel/keys@file:vendor/restormel/restormel-keys-0.2.5.tgz':
-    resolution: {integrity: sha512-ay9LGZEHlH9KxpB4wMHfBpG7zANXYgupH5WExVTh28f6jQUD7PJbN/7Ki+2nbEnrOhGYQ4Veuq/fEpc5GVSluQ==, tarball: file:vendor/restormel/restormel-keys-0.2.5.tgz}
-    version: 0.2.5
 
   '@rollup/plugin-commonjs@29.0.0':
     resolution: {integrity: sha512-U2YHaxR2cU/yAiwKJtJRhnyLk7cifnQw0zUpISsocBDoHDJn+HTV74ABqnwr5bEgWUwFZC9oFL6wLe21lHu5eQ==}
@@ -4382,9 +4381,9 @@ snapshots:
       '@restormel/keys': 0.2.5
       svelte: 5.53.6
 
-  '@restormel/keys@0.2.5': {}
+  '@restormel/keys@0.2.10': {}
 
-  '@restormel/keys@file:vendor/restormel/restormel-keys-0.2.5.tgz': {}
+  '@restormel/keys@0.2.5': {}
 
   '@rollup/plugin-commonjs@29.0.0(rollup@4.59.0)':
     dependencies:

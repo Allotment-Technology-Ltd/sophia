@@ -54,6 +54,39 @@ describe('classifyResolveFailure', () => {
       policyTypes: ['model_allowlist']
     });
   });
+
+  it('classifies resolve_incomplete (422) as unknown with operator userMessage', () => {
+    const failure = classifyResolveFailure(
+      new RestormelResolveError({
+        status: 422,
+        code: 'resolve_incomplete',
+        detail: 'Step not executable',
+        endpoint: '/projects/p/resolve',
+        payload: { error: 'resolve_incomplete', userMessage: 'Fix model on step 0.' },
+        userMessage: 'Fix model on step 0.',
+        violations: []
+      })
+    );
+    expect(failure.kind).toBe('unknown');
+    expect(failure.userMessage).toBe('Fix model on step 0.');
+    expect(failure.logContext).toMatchObject({ code: 'resolve_incomplete', status: 422 });
+  });
+
+  it('classifies route_disabled by JSON error (not generic 403 auth)', () => {
+    const failure = classifyResolveFailure(
+      new RestormelResolveError({
+        status: 403,
+        code: 'route_disabled',
+        detail: 'Route disabled',
+        endpoint: '/projects/p/resolve',
+        payload: { error: 'route_disabled' },
+        userMessage: 'The matching route is disabled in Restormel Keys. Enable it or pick another route.',
+        violations: []
+      })
+    );
+    expect(failure.kind).toBe('unknown');
+    expect(failure.logContext).toMatchObject({ code: 'route_disabled', status: 403 });
+  });
 });
 
 describe('resolveProviderDecision', () => {
@@ -63,6 +96,39 @@ describe('resolveProviderDecision', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('maps Restormel google / vertex_ai providerType aliases to vertex', async () => {
+    const restormel = await import('./restormel');
+    const { resolveProviderDecision } = await import('./resolve-provider');
+    vi.spyOn(restormel, 'restormelResolve').mockResolvedValue({
+      data: {
+        contractVersion: '2026-03-26',
+        routeId: 'r1',
+        providerType: 'google',
+        modelId: 'gemini-2.5-flash',
+        explanation: 'ok',
+        stepChain: [
+          {
+            stepId: 's0',
+            orderIndex: 0,
+            providerType: 'vertex',
+            modelId: 'gemini-2.5-flash',
+            enabled: true,
+            selected: true
+          }
+        ]
+      }
+    });
+
+    const result = await resolveProviderDecision({
+      routeId: 'r1',
+      safeDefault: { provider: 'vertex', model: 'gemini-2.5-flash' }
+    });
+
+    expect(result.provider).toBe('vertex');
+    expect(result.model).toBe('gemini-2.5-flash');
+    expect(result.stepChain?.[0]?.providerType).toBe('vertex');
   });
 
   it('logs policy-blocked resolves as warnings and returns the degraded default', async () => {
@@ -105,7 +171,8 @@ describe('resolveProviderDecision', () => {
       switchReasonCode: null,
       estimatedCostUsd: null,
       matchedCriteria: null,
-      fallbackCandidates: null
+      fallbackCandidates: null,
+      stepChain: null
     });
     expect(warn).toHaveBeenCalledWith(
       '[restormel] Policy blocked all Restormel route steps; evaluating degraded fallback',
