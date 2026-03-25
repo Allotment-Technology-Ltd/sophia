@@ -19,7 +19,7 @@ export type IngestionModelCatalogEntryMerged = IngestionModelCatalogEntry & {
 export function isEmbeddingModelEntry(e: Pick<IngestionModelCatalogEntry, 'provider' | 'modelId'>): boolean {
 	const p = e.provider.toLowerCase();
 	if (p === 'voyage') return true;
-	if (/embedding|embed/i.test(e.modelId)) return true;
+	if (/embedding|embed|vector|textembedding|gecko|e5-|bge-/i.test(e.modelId)) return true;
 	return false;
 }
 
@@ -79,7 +79,13 @@ function inferEntry(providerRaw: string, modelIdRaw: string): IngestionModelCata
 	let speed: IngestionModelCatalogEntry['speed'] = 'balanced';
 	let contextWindow = '128k';
 
-	if (low.includes('flash') || low.includes('mini') || low.includes('haiku') || low.includes('lite')) {
+	if (
+		low.includes('flash') ||
+		low.includes('mini') ||
+		low.includes('haiku') ||
+		low.includes('lite') ||
+		low.includes('nano')
+	) {
 		costTier = 'low';
 		qualityTier = 'capable';
 		speed = 'fast';
@@ -124,6 +130,98 @@ function rowToProviderModel(row: Record<string, unknown>): { provider: string; m
 		isRecord(row.provider) ? (row.provider as Record<string, unknown>) : null;
 	const modelNested =
 		isRecord(row.model) ? (row.model as Record<string, unknown>) : null;
+	const providerTypeNested =
+		isRecord(row.providerType) ? (row.providerType as Record<string, unknown>) : null;
+	const modelIdNested =
+		isRecord(row.modelId) ? (row.modelId as Record<string, unknown>) : null;
+
+	function coerceId(value: unknown): string {
+		if (typeof value === 'string') return value.trim();
+		if (!isRecord(value)) return '';
+		const hit =
+			value.id ??
+			(value as { modelId?: unknown }).modelId ??
+			(value as { model_id?: unknown }).model_id ??
+			(value as { providerType?: unknown }).providerType ??
+			(value as { provider_type?: unknown }).provider_type ??
+			value.canonicalName ??
+			value.type ??
+			value.slug ??
+			value.name ??
+			'';
+		return typeof hit === 'string' ? hit.trim() : '';
+	}
+
+	function normalizeProvider(rawProvider: string): string {
+		let provider = rawProvider.trim().toLowerCase();
+		if (!provider) return '';
+		if (provider.includes('/')) provider = provider.split('/').pop() ?? provider;
+		if (provider.includes(':')) provider = provider.split(':').pop() ?? provider;
+		if (provider === 'vertexai' || provider === 'googlevertex' || provider === 'google-vertex') {
+			return 'vertex';
+		}
+		if (provider === 'openai_compatible') return 'openai';
+		return provider;
+	}
+
+	function normalizeModelId(rawModelId: string): string {
+		let modelId = rawModelId.trim();
+		if (!modelId) return '';
+		const low = modelId.toLowerCase();
+		if (low.startsWith('publishers/google/models/')) {
+			modelId = modelId.slice('publishers/google/models/'.length);
+		} else if (low.startsWith('models/')) {
+			modelId = modelId.slice('models/'.length);
+		}
+		return modelId;
+	}
+
+	function inferProviderFromModelId(modelId: string): string {
+		const low = normalizeModelId(modelId).toLowerCase().trim();
+		if (!low) return '';
+		if (low.startsWith('claude')) return 'anthropic';
+		if (
+			low.startsWith('gpt') ||
+			low.startsWith('o1') ||
+			low.startsWith('o3') ||
+			low.startsWith('o4') ||
+			low.startsWith('text-embedding-3')
+		) {
+			return 'openai';
+		}
+		if (low.startsWith('gemini')) return 'google';
+		if (low.startsWith('text-embedding-00') || low.startsWith('text-multilingual-embedding-')) {
+			return 'google';
+		}
+		if (low.startsWith('voyage')) return 'voyage';
+		if (low.startsWith('deepseek')) return 'deepseek';
+		if (low.startsWith('grok')) return 'xai';
+		return '';
+	}
+
+	function parseCompositeModelRef(value: unknown): { provider: string; modelId: string } | null {
+		if (typeof value !== 'string') return null;
+		const raw = value.trim();
+		if (!raw) return null;
+
+		const slash = raw.indexOf('/');
+		if (slash > 0 && slash < raw.length - 1) {
+			const provider = raw.slice(0, slash).trim().toLowerCase();
+			const modelId = raw.slice(slash + 1).trim();
+			if (provider && modelId) return { provider, modelId };
+		}
+
+		const colon = raw.indexOf(':');
+		if (colon > 0 && colon < raw.length - 1) {
+			const provider = raw.slice(0, colon).trim().toLowerCase();
+			const modelId = raw.slice(colon + 1).trim();
+			if (provider && modelId) return { provider, modelId };
+		}
+
+		const inferredProvider = inferProviderFromModelId(raw);
+		if (inferredProvider) return { provider: inferredProvider, modelId: raw };
+		return null;
+	}
 
 	const providerRaw =
 		row.providerType ??
@@ -135,6 +233,8 @@ function rowToProviderModel(row: Record<string, unknown>): { provider: string; m
 		providerNested?.id ??
 		providerNested?.providerType ??
 		providerNested?.provider_type ??
+		providerTypeNested?.type ??
+		providerTypeNested?.id ??
 		row.provider ??
 		'';
 
@@ -144,6 +244,9 @@ function rowToProviderModel(row: Record<string, unknown>): { provider: string; m
 		modelNested?.id ??
 		modelNested?.modelId ??
 		modelNested?.model_id ??
+		modelIdNested?.id ??
+		modelIdNested?.modelId ??
+		modelIdNested?.model_id ??
 		row.model ??
 		row.variant ??
 		row.slug ??
@@ -151,10 +254,36 @@ function rowToProviderModel(row: Record<string, unknown>): { provider: string; m
 		row.id ??
 		'';
 
-	const provider = String(providerRaw ?? '').trim();
-	const modelId = String(modelRaw ?? '').trim();
-	if (!provider || !modelId) return null;
-	return { provider, modelId };
+	const provider = normalizeProvider(coerceId(providerRaw));
+	const modelId = normalizeModelId(coerceId(modelRaw));
+	if (provider && modelId) return { provider, modelId };
+
+	const compositeCandidates = [
+		row.canonicalName,
+		row.id,
+		row.modelId,
+		(row as { model_id?: unknown }).model_id,
+		row.model,
+		row.slug,
+		row.name
+	];
+	for (const candidate of compositeCandidates) {
+		const parsed = parseCompositeModelRef(candidate);
+		if (!parsed) continue;
+		if (provider && !modelId) return { provider, modelId: parsed.modelId };
+		if (!provider && modelId) {
+			const inferred = inferProviderFromModelId(modelId);
+			if (inferred) return { provider: inferred, modelId };
+		}
+		return parsed;
+	}
+
+	if (!provider && modelId) {
+		const inferred = inferProviderFromModelId(modelId);
+		if (inferred) return { provider: inferred, modelId };
+	}
+
+	return null;
 }
 
 /**
@@ -304,8 +433,7 @@ export function buildRestormelProjectModelEntriesOnly(
 			entries: [],
 			sync: {
 				status: 'unavailable',
-				reason:
-					'Restormel returned rows but none could be parsed (each row needs a provider and model id).',
+				reason: 'Restormel returned model rows, but none contained a usable provider/model pair.',
 				remoteRowCount: rows.length,
 				annotatedCount: 0,
 				inferredRemoteCount: 0,

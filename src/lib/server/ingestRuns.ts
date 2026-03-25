@@ -46,6 +46,10 @@ export interface IngestRunState {
   syncRetryAttempts: number;
   syncStartedAt?: number;
   syncCompletedAt?: number;
+  currentStageKey?: string | null;
+  currentAction?: string | null;
+  lastFailureStageKey?: string | null;
+  resumable?: boolean;
 }
 
 /** Admin wizard / ingest UI types → `scripts/fetch-source.ts` types. */
@@ -63,6 +67,34 @@ function ingestRunUsesRealChildProcess(): boolean {
   return v === '1' || v === 'true' || v === 'yes';
 }
 
+export interface IngestExecutionInfo {
+  mode: 'simulated' | 'real';
+  surrealTarget: string;
+  firestoreProject: string | null;
+}
+
+function redactSurrealTarget(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.host || rawUrl;
+    return `${parsed.protocol}//${host}`;
+  } catch {
+    return rawUrl;
+  }
+}
+
+export function getIngestExecutionInfo(): IngestExecutionInfo {
+  const mode = ingestRunUsesRealChildProcess() ? 'real' : 'simulated';
+  const surrealRaw = (process.env.SURREAL_URL ?? 'http://localhost:8000/rpc').trim();
+  const surrealTarget = redactSurrealTarget(surrealRaw || 'http://localhost:8000/rpc');
+  const firestoreProject =
+    (process.env.FIREBASE_PROJECT_ID ??
+      process.env.GOOGLE_CLOUD_PROJECT ??
+      process.env.GCLOUD_PROJECT ??
+      '').trim() || null;
+  return { mode, surrealTarget, firestoreProject };
+}
+
 function appendProcessOutput(runId: string, chunk: Buffer, manager: IngestRunManager): void {
   const text = chunk.toString('utf-8');
   for (const line of text.split(/\n/)) {
@@ -72,6 +104,19 @@ function appendProcessOutput(runId: string, chunk: Buffer, manager: IngestRunMan
 }
 
 const PIPELINE_STAGES = ['extract', 'relate', 'group', 'embed'] as const;
+
+function stageAliasToKey(value: string | null | undefined): string | null {
+  const low = (value ?? '').trim().toLowerCase();
+  if (!low) return null;
+  if (low.startsWith('fetch')) return 'fetch';
+  if (low.startsWith('extract')) return 'extract';
+  if (low.startsWith('relat')) return 'relate';
+  if (low.startsWith('group')) return 'group';
+  if (low.startsWith('embed')) return 'embed';
+  if (low.startsWith('validat')) return 'validate';
+  if (low.startsWith('stor')) return 'store';
+  return null;
+}
 
 class IngestRunManager extends EventEmitter {
   private runs: Map<string, IngestRunState> = new Map();
@@ -102,6 +147,11 @@ class IngestRunManager extends EventEmitter {
       fetchRetryAttempts: 0,
       ingestRetryAttempts: 0,
       syncRetryAttempts: 0
+      ,
+      currentStageKey: 'fetch',
+      currentAction: 'Queued',
+      lastFailureStageKey: null,
+      resumable: false
     };
 
     this.runs.set(runId, state);
@@ -154,6 +204,7 @@ class IngestRunManager extends EventEmitter {
     const state = this.runs.get(runId);
     if (state) {
       state.logLines.push(line);
+      this.ingestProgressFromLogLine(runId, line);
       if (state.logLines.length > this.maxLogLines) {
         state.logLines.shift();
       }
@@ -177,6 +228,7 @@ class IngestRunManager extends EventEmitter {
     if (state) {
       state.status = 'done';
       state.completedAt = Date.now();
+      state.resumable = false;
     }
   }
 
@@ -186,7 +238,33 @@ class IngestRunManager extends EventEmitter {
       state.status = 'error';
       state.error = error;
       state.completedAt = Date.now();
+      state.lastFailureStageKey = state.currentStageKey ?? state.lastFailureStageKey ?? null;
+      state.currentAction = `Failed: ${error}`;
+      state.resumable = Boolean(state.sourceFilePath);
     }
+  }
+
+  resumeFromFailure(runId: string): { ok: true } | { ok: false; error: string } {
+    const state = this.runs.get(runId);
+    if (!state) return { ok: false, error: 'Run not found.' };
+    if (state.status !== 'error') return { ok: false, error: 'Run is not in a failed state.' };
+    if (!state.sourceFilePath) {
+      return { ok: false, error: 'No source file checkpoint was found for this run.' };
+    }
+    state.status = 'running';
+    state.error = undefined;
+    state.completedAt = undefined;
+    state.currentAction = 'Resuming from previous checkpoint…';
+    state.resumable = false;
+    this.addLog(
+      runId,
+      '[RESUME] Restarting ingest.ts from checkpoint. The pipeline will continue from the last completed stage.'
+    );
+    this.startIngestChild(runId, state.payload, state.sourceFilePath, {
+      forSyncOnly: false,
+      resumeFromFailure: true
+    });
+    return { ok: true };
   }
 
   private spawnIngestionProcess(runId: string, payload: IngestRunPayload, actorEmail: string): void {
@@ -285,22 +363,22 @@ class IngestRunManager extends EventEmitter {
     runId: string,
     payload: IngestRunPayload,
     sourceFile: string,
-    options: { forSyncOnly: boolean }
+    options: { forSyncOnly: boolean; resumeFromFailure?: boolean }
   ): void {
     const forSync = options.forSyncOnly;
     const stopBeforeStore = forSync ? false : payload.stop_before_store !== false;
 
     if (!forSync) {
       for (const stage of PIPELINE_STAGES) {
-        this.updateStageStatus(runId, stage, 'running');
+        this.updateStageStatus(runId, stage, options.resumeFromFailure ? 'idle' : 'running');
       }
       if (payload.validate) {
-        this.updateStageStatus(runId, 'validate', 'running');
+        this.updateStageStatus(runId, 'validate', options.resumeFromFailure ? 'idle' : 'running');
       }
       if (stopBeforeStore) {
         this.updateStageStatus(runId, 'store', 'idle');
       } else {
-        this.updateStageStatus(runId, 'store', 'running');
+        this.updateStageStatus(runId, 'store', options.resumeFromFailure ? 'idle' : 'running');
       }
     } else {
       this.updateStageStatus(runId, 'store', 'running');
@@ -384,7 +462,7 @@ class IngestRunManager extends EventEmitter {
       if (!forSync && s && s.ingestRetryAttempts < 1) {
         s.ingestRetryAttempts++;
         this.addLog(runId, 'Ingest failed; retrying once automatically…');
-        this.startIngestChild(runId, payload, sourceFile, { forSyncOnly: false });
+        this.startIngestChild(runId, payload, sourceFile, { forSyncOnly: false, resumeFromFailure: true });
         return;
       }
 
@@ -403,6 +481,39 @@ class IngestRunManager extends EventEmitter {
         this.failRun(runId, `ingest.ts exited with code ${code ?? 1}`);
       }
     });
+  }
+
+  private ingestProgressFromLogLine(runId: string, rawLine: string): void {
+    const state = this.runs.get(runId);
+    if (!state) return;
+    const line = rawLine.trim();
+    if (!line) return;
+
+    const stageHeader = line.match(/STAGE\s+\d+:\s*([A-Z ]+)/i);
+    const routeStage = line.match(/\[ROUTE\]\s+([a-z_]+)/i);
+    const retryStage = line.match(/\[RETRY\]\s+([a-z_]+)/i);
+    const costStage = line.match(/\[COST\]\s+([A-Z_]+)/i);
+    const actionStage = stageHeader?.[1] ?? routeStage?.[1] ?? retryStage?.[1] ?? costStage?.[1] ?? null;
+    const stageKey = stageAliasToKey(actionStage);
+
+    if (stageKey) {
+      state.currentStageKey = stageKey;
+      state.currentAction = line;
+      if (state.stages[stageKey]?.status !== 'done') {
+        this.updateStageStatus(runId, stageKey, 'running', line);
+      }
+    } else if (
+      /\[RESUME\]/i.test(line) ||
+      /\[PHASE\]/i.test(line) ||
+      /\[WARN\]/i.test(line) ||
+      /\[BUDGET\]/i.test(line)
+    ) {
+      state.currentAction = line;
+    }
+
+    if (/failed|error|exited with code/i.test(line)) {
+      state.lastFailureStageKey = stageKey ?? state.currentStageKey ?? state.lastFailureStageKey ?? null;
+    }
   }
 
   private markPipelineStagesError(runId: string, payload: IngestRunPayload): void {

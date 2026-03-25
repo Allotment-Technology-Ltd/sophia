@@ -129,4 +129,24 @@ describe('planIngestionStage', () => {
     expect(plan.request.task).toBe('embedding');
     expect(plan.routingReason).toContain('Vertex embedding pipeline');
   });
+
+  it('builds phase token/complexity estimates for pre-scan', async () => {
+    const { buildIngestionStageUsageEstimates } = await import('./ingestion-plan');
+    const estimates = buildIngestionStageUsageEstimates({
+      sourceTitle: 'Pacifism',
+      sourceType: 'sep_entry',
+      estimatedTokens: 12_500,
+      sourceLengthChars: 50_000
+    });
+
+    expect(estimates).toHaveLength(6);
+    expect(estimates[0]?.stage).toBe('extraction');
+    expect(estimates[0]?.inputTokens).toBeGreaterThan(12_500);
+    const grouping = estimates.find((phase) => phase.stage === 'grouping');
+    expect(grouping?.complexity).toBe('high');
+    expect(grouping?.totalTokens).toBeGreaterThan(0);
+    const embedding = estimates.find((phase) => phase.stage === 'embedding');
+    expect(embedding?.inputTokens).toBeGreaterThan(0);
+    expect(embedding?.totalTokens).toBeGreaterThan(0);
+  });
 });

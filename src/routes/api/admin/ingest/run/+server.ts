@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
-import { ingestRunManager, type IngestRunPayload } from '$lib/server/ingestRuns';
+import { getIngestExecutionInfo, ingestRunManager, type IngestRunPayload } from '$lib/server/ingestRuns';
 
 export const POST: RequestHandler = async ({ locals, request }) => {
   const actor = assertAdminAccess(locals);
@@ -32,8 +32,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
   try {
     const runId = ingestRunManager.createRun(normalized, actor.email || 'unknown');
+    const execution = getIngestExecutionInfo();
     return json(
-      { run_id: runId, status: 'running' },
+      { run_id: runId, status: 'running', execution },
       { status: 201 }
     );
   } catch (error) {

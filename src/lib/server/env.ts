@@ -20,5 +20,15 @@ export function loadServerEnv(): void {
     config({ path: envLocalPath, override: true });
   }
 
+  // When `pnpm dev` auto-tunnel is active, preserve tunneled Surreal URL.
+  // This avoids .env.local overriding it back to private VPC IP for local runs.
+  if (
+    process.env.DEV_SURREAL_TUNNEL_ACTIVE === '1' &&
+    typeof process.env.DEV_SURREAL_TUNNEL_URL === 'string' &&
+    process.env.DEV_SURREAL_TUNNEL_URL.trim()
+  ) {
+    process.env.SURREAL_URL = process.env.DEV_SURREAL_TUNNEL_URL.trim();
+  }
+
   loaded = true;
 }

@@ -49,6 +49,15 @@ export interface IngestionStagePlan {
   route?: ReasoningModelRoute;
 }
 
+export interface IngestionStageUsageEstimate {
+  stage: IngestionStage;
+  latency: AAIFLatency;
+  complexity: 'low' | 'medium' | 'high';
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
 function claimCountEstimate(context: IngestionPlanningContext): number {
   if (typeof context.claimCount === 'number' && context.claimCount > 0) {
     return context.claimCount;
@@ -240,11 +249,45 @@ function estimateStageUsage(stage: IngestionStage, context: IngestionPlanningCon
         outputTokens: 600
       };
     case 'embedding':
+      // Embedding cost should scale with the amount of claim text that will be vectorized.
+      // Use measured claim text volume when available, otherwise derive a conservative estimate.
+      // Average claim length heuristic: ~280 chars (~70 tokens) per claim.
+      const claimTextChars =
+        typeof context.claimTextChars === 'number' && context.claimTextChars > 0
+          ? context.claimTextChars
+          : claims * 280;
       return {
-        inputTokens: 0,
+        inputTokens: Math.max(200, Math.ceil(claimTextChars / 4)),
         outputTokens: 0
       };
   }
+}
+
+export function buildIngestionStageUsageEstimates(
+  context: IngestionPlanningContext
+): IngestionStageUsageEstimate[] {
+  const stages: IngestionStage[] = [
+    'extraction',
+    'relations',
+    'grouping',
+    'validation',
+    'embedding',
+    'json_repair'
+  ];
+  return stages.map((stage) => {
+    const usage = estimateStageUsage(stage, context);
+    const latency = stageLatency(stage, context);
+    const complexity: 'low' | 'medium' | 'high' =
+      latency === 'high' ? 'high' : latency === 'balanced' ? 'medium' : 'low';
+    return {
+      stage,
+      latency,
+      complexity,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.inputTokens + usage.outputTokens
+    };
+  });
 }
 
 function estimateReasoningCostUsd(route: ReasoningModelRoute, inputTokens: number, outputTokens: number): number {
