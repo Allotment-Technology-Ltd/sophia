@@ -204,6 +204,24 @@ function getDefaultExtractionModelId(provider: ReasoningProvider): string {
   return DEFAULT_MODEL_CATALOG[provider][0] ?? DEFAULT_STANDARD_MODEL_ID;
 }
 
+/**
+ * Anthropic Messages API expects dated snapshot ids (or documented aliases like
+ * `claude-sonnet-4-0`). Catalogs and Restormel often emit bare slugs such as
+ * `claude-sonnet-4`, which return 404 from the API — map those here.
+ *
+ * @see https://docs.anthropic.com/en/docs/about-claude/models
+ */
+export function normalizeAnthropicModelIdForApi(modelId: string): string {
+  const map: Record<string, string> = {
+    'claude-sonnet-4': 'claude-sonnet-4-20250514',
+    'claude-sonnet-4-0': 'claude-sonnet-4-20250514',
+    'claude-opus-4': 'claude-opus-4-20250514',
+    'claude-opus-4-0': 'claude-opus-4-20250514'
+  };
+  const m = modelId.trim();
+  return map[m] ?? m;
+}
+
 function buildVertexRoute(modelId: string, byokVertexKey?: string): ReasoningModelRoute {
   if (byokVertexKey) {
     return {
@@ -225,20 +243,21 @@ function buildVertexRoute(modelId: string, byokVertexKey?: string): ReasoningMod
 }
 
 function buildAnthropicRoute(modelId: string, byokAnthropicKey?: string): ReasoningModelRoute {
+  const apiModelId = normalizeAnthropicModelIdForApi(modelId);
   if (byokAnthropicKey) {
     return {
-      model: getAnthropicForApiKey(byokAnthropicKey)(modelId),
+      model: getAnthropicForApiKey(byokAnthropicKey)(apiModelId),
       provider: 'anthropic',
-      modelId,
+      modelId: apiModelId,
       supportsGrounding: false,
       credentialSource: 'byok'
     };
   }
 
   return {
-    model: getAnthropicForApiKey()(modelId),
+    model: getAnthropicForApiKey()(apiModelId),
     provider: 'anthropic',
-    modelId,
+    modelId: apiModelId,
     supportsGrounding: false,
     credentialSource: 'platform'
   };
