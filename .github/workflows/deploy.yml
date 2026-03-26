@@ -3,7 +3,7 @@
 # Handles both application deployments and infrastructure changes in a single
 # workflow. Path-based filters route to the correct job(s) automatically:
 #
-#   src/**, Dockerfile, package.json, etc.  →  build + Cloud Run deploy
+#   src/**, scripts/**, Dockerfile, package.json, etc.  →  build + Cloud Run deploy
 #   infra/**                                 →  pulumi preview (PR) / up (main)
 #   both changed                             →  infra first, then app
 #
@@ -99,6 +99,7 @@ jobs:
           filters: |
             app:
               - 'src/**'
+              - 'scripts/**'
               - 'static/**'
               - 'Dockerfile'
               - 'package.json'
