@@ -101,21 +101,45 @@ function normalizePinProvider(slug: string): string | null {
 }
 
 /**
- * Maps Expand UI model labels (`provider · modelId`) into worker env vars consumed by
+ * Parses one Expand pipeline value: either `provider · modelId` (display) or
+ * `provider__modelId` (stable catalog id from admin `stableModelId()`).
+ */
+export function parseModelChainLabel(label: string): { providerRaw: string; modelId: string } | null {
+  const trimmed = label.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes('·')) {
+    const parts = trimmed.split('·').map((p) => p.trim());
+    if (parts.length < 2) return null;
+    const providerRaw = parts[0] ?? '';
+    const modelId = parts.slice(1).join('·').trim();
+    if (!providerRaw || !modelId) return null;
+    return { providerRaw, modelId };
+  }
+  const sep = '__';
+  const idx = trimmed.indexOf(sep);
+  if (idx > 0) {
+    const providerRaw = trimmed.slice(0, idx).trim();
+    const modelId = trimmed.slice(idx + sep.length).trim();
+    if (!providerRaw || !modelId) return null;
+    return { providerRaw, modelId };
+  }
+  return null;
+}
+
+/**
+ * Maps Expand UI model labels into worker env vars consumed by
  * `planIngestionStage` so `scripts/ingest.ts` honors operator picks instead of only Restormel auto-routing.
+ * Accepts both `provider · modelId` and catalog stable ids `provider__modelId`.
  */
 export function modelChainLabelsToEnv(chain: IngestRunPayload['model_chain']): Record<string, string> {
   const out: Record<string, string> = {};
   const apply = (label: string, suffix: string) => {
-    const parts = label.split('·').map((p) => p.trim());
-    if (parts.length < 2) return;
-    const providerRaw = parts[0] ?? '';
-    const modelId = parts.slice(1).join('·').trim();
-    if (!modelId) return;
-    const provider = normalizePinProvider(providerRaw);
+    const parsed = parseModelChainLabel(label);
+    if (!parsed) return;
+    const provider = normalizePinProvider(parsed.providerRaw);
     if (!provider) return;
     out[`INGEST_PIN_PROVIDER_${suffix}`] = provider;
-    out[`INGEST_PIN_MODEL_${suffix}`] = modelId;
+    out[`INGEST_PIN_MODEL_${suffix}`] = parsed.modelId;
   };
   apply(chain.extract, 'EXTRACTION');
   apply(chain.relate, 'RELATIONS');
