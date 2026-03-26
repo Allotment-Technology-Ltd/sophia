@@ -5,7 +5,8 @@ import {
 	restormelAddProjectModelBindings,
 	restormelListProjectModels,
 	restormelReplaceProjectModelAllowlist,
-	type RestormelProjectModelBindingInput
+	type RestormelProjectModelBindingInput,
+	type RestormelProjectModelBindingKind
 } from '$lib/server/restormel';
 import { parseJsonBody, restormelJsonError } from '$lib/server/restormelAdmin';
 
@@ -13,19 +14,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;
 }
 
-function parseBatchModels(
-	body: unknown
-): Array<Pick<RestormelProjectModelBindingInput, 'providerType' | 'modelId'>> | null {
+/** `undefined` = omit; `invalid` = reject body */
+function coerceBindingKind(
+	raw: unknown
+): RestormelProjectModelBindingKind | undefined | 'invalid' {
+	if (raw === undefined || raw === null) return undefined;
+	if (raw === 'execution' || raw === 'registry') return raw;
+	return 'invalid';
+}
+
+function parseBatchModels(body: unknown): RestormelProjectModelBindingInput[] | null {
 	if (!isRecord(body)) return null;
 	const models = body.models;
 	if (!Array.isArray(models)) return null;
-	const out: Array<Pick<RestormelProjectModelBindingInput, 'providerType' | 'modelId'>> = [];
+	const out: RestormelProjectModelBindingInput[] = [];
 	for (const m of models) {
 		if (!isRecord(m)) return null;
 		const providerType = typeof m.providerType === 'string' ? m.providerType.trim() : '';
 		const modelId = typeof m.modelId === 'string' ? m.modelId.trim() : '';
 		if (!providerType || !modelId) return null;
-		out.push({ providerType, modelId });
+		const bindingKind = coerceBindingKind(m.bindingKind);
+		if (bindingKind === 'invalid') return null;
+		const row: RestormelProjectModelBindingInput = { providerType, modelId };
+		if (bindingKind) row.bindingKind = bindingKind;
+		out.push(row);
 	}
 	return out;
 }
@@ -40,11 +52,12 @@ function parseAllowlist(body: unknown): RestormelProjectModelBindingInput[] | nu
 		const providerType = typeof m.providerType === 'string' ? m.providerType.trim() : '';
 		const modelId = typeof m.modelId === 'string' ? m.modelId.trim() : '';
 		if (!providerType || !modelId) return null;
-		if (typeof m.enabled === 'boolean') {
-			out.push({ providerType, modelId, enabled: m.enabled });
-		} else {
-			out.push({ providerType, modelId });
-		}
+		const bindingKind = coerceBindingKind(m.bindingKind);
+		if (bindingKind === 'invalid') return null;
+		const row: RestormelProjectModelBindingInput = { providerType, modelId };
+		if (typeof m.enabled === 'boolean') row.enabled = m.enabled;
+		if (bindingKind) row.bindingKind = bindingKind;
+		out.push(row);
 	}
 	return out;
 }
@@ -70,7 +83,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	const models = parseBatchModels(body);
 	if (!models) {
 		return json(
-			{ error: 'Expected JSON body { models: [{ providerType, modelId }, ...] } with non-empty strings.' },
+			{
+				error:
+					'Expected JSON body { models: [{ providerType, modelId, bindingKind? }, ...] } with non-empty strings; bindingKind must be execution or registry when set.'
+			},
 			{ status: 400 }
 		);
 	}
@@ -95,7 +111,7 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 		return json(
 			{
 				error:
-					'Expected JSON body { models: [{ providerType, modelId, enabled? }, ...] } with non-empty providerType and modelId.'
+					'Expected JSON body { models: [{ providerType, modelId, enabled?, bindingKind? }, ...] } with non-empty providerType and modelId; bindingKind must be execution or registry when set.'
 			},
 			{ status: 400 }
 		);

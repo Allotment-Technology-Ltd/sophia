@@ -156,6 +156,7 @@ import {
 } from '@restormel/contracts/providers';
 import type { ValidateRouteBindingResult } from '@restormel/keys/dashboard';
 import { validateRouteBinding } from '@restormel/keys/dashboard';
+import { readRestormelCatalogDataModels } from './restormelCatalogRows';
 
 /** Use with the headless `resolve()` helper from `@restormel/keys/dashboard`; Sophia uses `restormelResolve` + thrown errors instead. */
 export { isNoKeyAvailable, isResolveIncomplete } from '@restormel/keys/dashboard';
@@ -340,6 +341,37 @@ function publishValidationSummary(payload: unknown): string | undefined {
   return parts.slice(0, 12).join('; ');
 }
 
+/** Per-row errors from `PUT|POST …/projects/{id}/models` (`project_models_validation_failed`, `errors[]`). */
+function projectModelsValidationSummary(payload: unknown): string | undefined {
+  if (!isRecord(payload)) return undefined;
+  if (payload.error === 'publish_validation_failed') return undefined;
+  const errors = payload.errors;
+  if (!Array.isArray(errors) || errors.length === 0) return undefined;
+  const parts = errors
+    .map((e) => {
+      if (typeof e === 'string') return e.trim().slice(0, 240);
+      if (!isRecord(e)) return '';
+      const pt = typeof e.providerType === 'string' ? e.providerType : '';
+      const mid = typeof e.modelId === 'string' ? e.modelId : '';
+      const msg =
+        typeof e.message === 'string'
+          ? e.message
+          : typeof e.detail === 'string'
+            ? e.detail
+            : typeof e.reason === 'string'
+              ? e.reason
+              : '';
+      const idx = typeof e.index === 'number' ? `[${e.index}]` : '';
+      const head = pt && mid ? `${pt}/${mid}` : pt || mid || idx;
+      const body = msg || (Object.keys(e).length ? JSON.stringify(e).slice(0, 200) : '');
+      if (head && body) return `${head}: ${body}`;
+      return head || body;
+    })
+    .filter(Boolean);
+  if (parts.length === 0) return undefined;
+  return parts.slice(0, 32).join('; ');
+}
+
 function toResolveResult(value: unknown): RestormelResolveResult {
   if (!isRecord(value)) {
     throw new Error('Restormel resolve returned an invalid response payload');
@@ -449,6 +481,7 @@ function toDashboardError(
               : 'request_failed';
 
   const publishSummary = publishValidationSummary(payload);
+  const projectModelsSummary = projectModelsValidationSummary(payload);
 
   const duplicateOrderIndexDetail =
     isRecord(payload) && payload.error === 'duplicate_order_index'
@@ -458,20 +491,26 @@ function toDashboardError(
   const conflictFallback =
     'Conflict (HTTP 409): the route may have been updated in Restormel Keys or another session. Refresh this page, then try Save routing again. If it persists, open the route in Keys and avoid concurrent edits.';
 
+  const rawDetail = isRecord(payload) && typeof payload.detail === 'string' ? payload.detail.trim() : '';
+  const rawMessage = isRecord(payload) && typeof payload.message === 'string' ? payload.message.trim() : '';
+  const combinedProjectModels =
+    projectModelsSummary && rawDetail
+      ? `${rawDetail} — ${projectModelsSummary}`
+      : projectModelsSummary || null;
+
   const detail =
     publishSummary ||
     duplicateOrderIndexDetail ||
-    (isRecord(payload) && typeof payload.detail === 'string'
-      ? payload.detail
-      : isRecord(payload) && typeof payload.message === 'string'
-        ? payload.message
-        : isLikelyHtml
-          ? `Upstream returned HTML instead of JSON (status ${status}). Check RESTORMEL_KEYS_BASE / RESTORMEL_BASE_URL and endpoint routing.`
-          : payloadText
-            ? payloadText.slice(0, 220)
-            : status === 409
-              ? conflictFallback
-              : `Restormel request failed with status ${status}`);
+    combinedProjectModels ||
+    rawDetail ||
+    rawMessage ||
+    (isLikelyHtml
+      ? `Upstream returned HTML instead of JSON (status ${status}). Check RESTORMEL_KEYS_BASE / RESTORMEL_BASE_URL and endpoint routing.`
+      : payloadText
+        ? payloadText.slice(0, 220)
+        : status === 409
+          ? conflictFallback
+          : `Restormel request failed with status ${status}`);
 
   return new RestormelDashboardError({
     status,
@@ -806,7 +845,7 @@ export async function restormelGetSwitchCriteriaEnums(): Promise<RestormelSwitch
 /**
  * Project model **index** (Gateway Key / dashboard): `GET …/projects/{projectId}/models`.
  * Canonical JSON: binding rows are the array at **`data`** (not `data.bindings`); see
- * restormel-keys `docs/restormel-integration/keys-catalog-sync.md` and OpenAPI 1.3.1+.
+ * restormel-keys `docs/restormel-integration/keys-catalog-sync.md` and OpenAPI 1.3.2+.
  * @see docs/restormel-integration/keys-catalog-sync.md
  */
 export async function restormelListProjectModels(): Promise<unknown> {
@@ -820,15 +859,26 @@ export async function restormelListGlobalDashboardModels(): Promise<unknown> {
   return requestRestormel<unknown>('/models', { requireProjectId: false });
 }
 
+/**
+ * Per OpenAPI `ProjectModelBindingKind`: **execution** — canonical provider + catalog model + variants;
+ * **registry** — host merge metadata / pickers only; arbitrary provider/model strings; does not extend Keys resolve or routes.
+ */
+export type RestormelProjectModelBindingKind = 'execution' | 'registry';
+
 export type RestormelProjectModelBindingInput = {
   providerType: string;
   modelId: string;
   enabled?: boolean;
+  /**
+   * Omit or `execution` when the pair is Keys catalog-backed. `registry` for extra providers (e.g. mistral, deepseek)
+   * or ids without a catalog row — index accepts them; execution stack unchanged until Keys adds product support.
+   */
+  bindingKind?: RestormelProjectModelBindingKind;
 };
 
 /** Batch add bindings (idempotent). Gateway: `POST …/projects/{id}/models` body `{ models: [...] }`. */
 export async function restormelAddProjectModelBindings(
-  models: Array<Pick<RestormelProjectModelBindingInput, 'providerType' | 'modelId'>>
+  models: RestormelProjectModelBindingInput[]
 ): Promise<unknown> {
   return requestRestormel<unknown>(`${projectPath()}/models`, {
     method: 'POST',
@@ -886,11 +936,7 @@ function providerFromCatalog(raw: unknown): ReasoningProvider | null {
 }
 
 function readModelRows(payload: unknown): Array<Record<string, unknown>> {
-  const obj = isRecord(payload) ? payload : null;
-  const data = isRecord(obj?.data) ? obj.data : null;
-  const rows = data?.models ?? obj?.models;
-  if (!Array.isArray(rows)) return [];
-  return rows.filter(isRecord);
+  return readRestormelCatalogDataModels(payload);
 }
 
 function isDefaultAllowlisted(row: Record<string, unknown>): boolean {
@@ -912,7 +958,13 @@ function parseCatalogAllowlist(payload: unknown): Partial<Record<ReasoningProvid
     if (!isDefaultAllowlisted(row)) continue;
     const provider = providerFromCatalog(row.providerType ?? row.provider ?? row.providerId);
     if (!provider) continue;
-    const modelIdRaw = row.modelId ?? row.model ?? row.modelVariant ?? row.variant ?? row.id;
+    const modelIdRaw =
+      row.providerModelId ??
+      row.modelId ??
+      row.model ??
+      row.modelVariant ??
+      row.variant ??
+      row.id;
     const modelId = typeof modelIdRaw === 'string' ? modelIdRaw.trim() : '';
     if (!modelId) continue;
     const set = allowlist[provider] ?? new Set<string>();
@@ -989,6 +1041,11 @@ export async function restormelGetLiveReasoningAllowlist(): Promise<{
     }
     throw error;
   }
+}
+
+/** Fresh `GET /catalog` (no live-allowlist cache). Admin model surfaces + ingestion catalog. */
+export async function restormelFetchCatalogPayloadUncached(): Promise<unknown> {
+  return requestRestormel<unknown>('/catalog', { requireProjectId: false });
 }
 
 /**

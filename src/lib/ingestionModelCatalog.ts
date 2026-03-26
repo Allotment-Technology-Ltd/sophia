@@ -232,6 +232,15 @@ const INGESTION_MODEL_CATALOG_ROWS: CatalogRow[] = [
 		'2k',
 		'Vertex text-embedding-005 (768-dim class); Sophia ingest default embedding family.'
 	],
+	[
+		'vertex',
+		'text-multilingual-embedding-002',
+		'low',
+		'capable',
+		'fast',
+		'2k',
+		'Vertex multilingual embedding (002 family); pairs with google · text-multilingual-embedding-002.'
+	],
 	['vertex', 'text-embedding-004', 'low', 'capable', 'fast', '2k', 'Legacy Vertex embedding id.'],
 	[
 		'vertex',

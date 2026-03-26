@@ -10,10 +10,12 @@ import { getEnabledReasoningProviders, isByokProviderEnabled } from '$lib/server
 import { loadInquiryEffectiveProviderApiKeys } from '$lib/server/byok/effectiveKeys';
 import type { ByokProvider, ProviderApiKeys } from '$lib/server/byok/types';
 import { getAvailableReasoningModels } from '$lib/server/vertex';
+import { isEmbeddingModelByProviderAndId } from '$lib/modelKind';
 import {
   RESTORMEL_CATALOG_V5_CONTRACT_VERSION,
   restormelGetLiveReasoningAllowlist
 } from '$lib/server/restormel';
+import { loadModelSurfacesConfig, modelAllowedForInquiries } from '$lib/server/modelSurfaces';
 
 /**
  * Allowed-models lists candidates from the contracts catalog + BYOK/platform rules.
@@ -120,8 +122,17 @@ export const GET: RequestHandler = async ({ locals, url }) => {
     });
   }
 
-  const filteredModels = candidateModels.filter((model) =>
+  let filteredModels = candidateModels.filter((model) =>
     liveAllowlist?.[model.provider]?.has(model.id) === true
+  );
+
+  filteredModels = filteredModels.filter(
+    (model) => !isEmbeddingModelByProviderAndId(model.provider, model.id)
+  );
+
+  const surfaces = await loadModelSurfacesConfig();
+  filteredModels = filteredModels.filter((model) =>
+    modelAllowedForInquiries(surfaces, model.provider, model.id)
   );
 
   const routeId = getRouteId(url);

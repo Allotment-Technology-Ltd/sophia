@@ -20,6 +20,13 @@
       description:
         'Govern operational provider keys on the OWNER_UIDS target: status, save, validate, and revoke. Used as fallback when tenant keys are empty (see effective-key resolver).',
       emphasis: false
+    },
+    {
+      href: '/admin/model-availability',
+      title: 'Model availability',
+      description:
+        'Choose which Restormel catalog models are available for ingestion (operations) versus user inquiries; syncs the project model index on save. Embeddings stay operations-only.',
+      emphasis: false
     }
   ] as const;
 </script>
