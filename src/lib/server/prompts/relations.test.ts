@@ -31,6 +31,35 @@ describe('RelationsOutputSchema', () => {
 		]);
 	});
 
+	it('normalizes common modern alias labels emitted by frontier models', () => {
+		const parsed = RelationsOutputSchema.parse([
+			{
+				from_position: 1,
+				to_position: 2,
+				relation_type: 'rebuts',
+				strength: 'moderate'
+			},
+			{
+				from_position: 2,
+				to_position: 3,
+				relation_type: 'requires',
+				strength: 'strong'
+			},
+			{
+				from_position: 3,
+				to_position: 4,
+				relation_type: 'answers',
+				strength: 'weak'
+			}
+		]);
+
+		expect(parsed.map((relation) => relation.relation_type)).toEqual([
+			'contradicts',
+			'depends_on',
+			'responds_to'
+		]);
+	});
+
 	it('rejects unsupported garbage relation labels', () => {
 		expect(() =>
 			RelationsOutputSchema.parse([

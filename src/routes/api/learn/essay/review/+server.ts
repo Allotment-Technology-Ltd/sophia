@@ -15,7 +15,7 @@ import {
   markLessonCompleted,
   updateEssaySubmission
 } from '$lib/server/learn/store';
-import { loadByokProviderApiKeys } from '$lib/server/byok/store';
+import { loadInquiryEffectiveProviderApiKeys } from '$lib/server/byok/effectiveKeys';
 import { hasOwnerRole } from '$lib/server/authRoles';
 import { consumeLearnEntitlement } from '$lib/server/learn/entitlements';
 
@@ -75,7 +75,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     );
   }
 
-  const providerApiKeys = await loadByokProviderApiKeys(uid).catch(() => ({}));
+  const providerApiKeys = await loadInquiryEffectiveProviderApiKeys(
+    locals.user,
+    'learn essay review route'
+  );
 
   const feedback = await generateEssayFeedback(parsed.data.question, parsed.data.text, {
     providerApiKeys,

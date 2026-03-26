@@ -17,7 +17,7 @@ import type { ExtractedClaim, ExtractedRelation, ReasoningEvaluation } from '@re
 import { evaluateReasoning } from '$lib/server/reasoningEval';
 import { evaluateConstitutionWithTelemetry } from '$lib/server/constitution/evaluator';
 import { getAvailableReasoningModels } from '$lib/server/vertex';
-import { loadByokProviderApiKeys } from '$lib/server/byok/store';
+import { loadInquiryEffectiveProviderApiKeys } from '$lib/server/byok/effectiveKeys';
 import type { ByokProvider, ProviderApiKeys } from '$lib/server/byok/types';
 import { isByokProviderEnabled, isReasoningProviderEnabled } from '$lib/server/byok/config';
 import { restormelEvaluatePolicies } from '$lib/server/restormel';
@@ -837,16 +837,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   // A2/A3: uid is guaranteed non-null here — hooks.server.ts already verified the Bearer token
   const uid = locals.user?.uid ?? null;
   const isOwner = hasOwnerRole(locals.user);
-  let providerApiKeys: ProviderApiKeys = {};
-  if (uid) {
-    try {
-      providerApiKeys = await loadByokProviderApiKeys(uid);
-    } catch (err) {
-      if (process.env.NODE_ENV !== 'test') {
-        console.warn('[BYOK] Failed to load provider keys for analyse route:', err instanceof Error ? err.message : String(err));
-      }
-    }
-  }
+  const providerApiKeys: ProviderApiKeys = await loadInquiryEffectiveProviderApiKeys(
+    locals.user,
+    'analyse route'
+  );
 
   let body: {
     query?: string;

@@ -15,7 +15,7 @@ import {
   markLessonCompleted,
   updateEssaySubmission
 } from '$lib/server/learn/store';
-import { loadByokProviderApiKeys } from '$lib/server/byok/store';
+import { loadInquiryEffectiveProviderApiKeys } from '$lib/server/byok/effectiveKeys';
 import { hasOwnerRole } from '$lib/server/authRoles';
 import { consumeLearnEntitlement } from '$lib/server/learn/entitlements';
 import { getLessonById } from '$lib/server/learn/content';
@@ -86,7 +86,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       { status: 402 }
     );
   }
-  const providerApiKeys = await loadByokProviderApiKeys(uid).catch(() => ({}));
+  const providerApiKeys = await loadInquiryEffectiveProviderApiKeys(
+    locals.user,
+    'learn short-review route'
+  );
 
   const review = await generateShortAnswerReview(parsed.data.question, parsed.data.response_text, {
     providerApiKeys,

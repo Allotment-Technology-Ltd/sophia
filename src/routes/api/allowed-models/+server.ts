@@ -7,7 +7,7 @@ import {
   type ReasoningProvider
 } from '@restormel/contracts/providers';
 import { getEnabledReasoningProviders, isByokProviderEnabled } from '$lib/server/byok/config';
-import { loadByokProviderApiKeys } from '$lib/server/byok/store';
+import { loadInquiryEffectiveProviderApiKeys } from '$lib/server/byok/effectiveKeys';
 import type { ByokProvider, ProviderApiKeys } from '$lib/server/byok/types';
 import { getAvailableReasoningModels } from '$lib/server/vertex';
 import {
@@ -43,20 +43,10 @@ function getRouteId(url: URL): string | undefined {
 }
 
 export const GET: RequestHandler = async ({ locals, url }) => {
-  let providerApiKeys: ProviderApiKeys = {};
-  const uid = locals.user?.uid;
-  if (uid) {
-    try {
-      providerApiKeys = await loadByokProviderApiKeys(uid);
-    } catch (err) {
-      if (process.env.NODE_ENV !== 'test') {
-        console.warn(
-          '[BYOK] Failed to load provider keys for allowed-models route:',
-          err instanceof Error ? err.message : String(err)
-        );
-      }
-    }
-  }
+  const providerApiKeys: ProviderApiKeys = await loadInquiryEffectiveProviderApiKeys(
+    locals.user,
+    'allowed-models route'
+  );
 
   const credentialModeParam = (url.searchParams.get('credential_mode') ?? 'auto').trim().toLowerCase();
   const byokProviderParam = (url.searchParams.get('byok_provider') ?? '').trim().toLowerCase();
