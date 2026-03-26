@@ -70,6 +70,18 @@ function normalizeUrl(url?: string | null): string {
 	return url.trim().replace(/\/+$/, '');
 }
 
+/** Parse for hostname/path checks without substring false positives on path/query (CodeQL). */
+function tryParseHttpUrl(raw: string): URL | null {
+	const trimmed = raw.trim();
+	if (!trimmed) return null;
+	const withProto = /^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(trimmed) ? trimmed : `https://${trimmed}`;
+	try {
+		return new URL(withProto);
+	} catch {
+		return null;
+	}
+}
+
 function nonEmptyString(value: unknown): string | null {
 	if (typeof value !== 'string') return null;
 	const trimmed = value.trim();
@@ -148,11 +160,24 @@ function loadMetaIndex(): {
 }
 
 function inferSourceType(url?: string): string {
-	const normalized = normalizeUrl(url).toLowerCase();
-	if (normalized.includes('plato.stanford.edu/entries/')) return 'sep_entry';
-	if (normalized.includes('iep.utm.edu/')) return 'iep_entry';
-	if (normalized.includes('gutenberg.org/')) return 'book';
-	if (normalized.includes('unesco.org') || normalized.includes('oecd.ai') || normalized.includes('artificialintelligenceact.eu')) {
+	const normalized = normalizeUrl(url);
+	if (!normalized) return 'paper';
+	const parsed = tryParseHttpUrl(normalized);
+	if (!parsed) return 'paper';
+	const host = parsed.hostname.toLowerCase();
+	const path = parsed.pathname.toLowerCase();
+
+	if (host === 'plato.stanford.edu' && path.startsWith('/entries/')) return 'sep_entry';
+	if (host === 'iep.utm.edu' || host.endsWith('.iep.utm.edu')) return 'iep_entry';
+	if (host === 'gutenberg.org' || host.endsWith('.gutenberg.org')) return 'book';
+	if (
+		host === 'unesco.org' ||
+		host.endsWith('.unesco.org') ||
+		host === 'oecd.ai' ||
+		host.endsWith('.oecd.ai') ||
+		host === 'artificialintelligenceact.eu' ||
+		host.endsWith('.artificialintelligenceact.eu')
+	) {
 		return 'institutional';
 	}
 	return 'paper';

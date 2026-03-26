@@ -1,6 +1,12 @@
+import { createHash } from 'node:crypto';
 import { hasAdministratorRole, hasOwnerRole } from '$lib/server/authRoles';
 import { loadByokProviderApiKeys } from './store';
 import type { ProviderApiKeys } from './types';
+
+/** Short stable fingerprint for logs — avoids logging raw Firebase UIDs (CodeQL / privacy). */
+function uidLogFingerprint(uid: string): string {
+  return createHash('sha256').update(uid, 'utf8').digest('hex').slice(0, 12);
+}
 
 type AuthLikeUser = {
   uid?: string | null;
@@ -38,7 +44,7 @@ export async function loadInquiryEffectiveProviderApiKeys(
   } catch (err) {
     if (process.env.NODE_ENV !== 'test') {
       console.warn(
-        `[BYOK] Failed to load provider keys for ${logContext} (uid=${uid}):`,
+        `[BYOK] Failed to load provider keys for ${logContext} (uid#=${uidLogFingerprint(uid)}):`,
         err instanceof Error ? err.message : String(err)
       );
     }
@@ -55,14 +61,14 @@ export async function loadInquiryEffectiveProviderApiKeys(
       if (!hasAnyProviderKey(ownerKeys)) continue;
       if (process.env.NODE_ENV !== 'test') {
         console.info(
-          `[BYOK] Using owner fallback provider keys for ${logContext} (actor=${uid}, owner=${ownerUid})`
+          `[BYOK] Using owner fallback provider keys for ${logContext} (actor#=${uidLogFingerprint(uid)}, owner#=${uidLogFingerprint(ownerUid)})`
         );
       }
       return ownerKeys;
     } catch (err) {
       if (process.env.NODE_ENV !== 'test') {
         console.warn(
-          `[BYOK] Failed loading owner fallback keys for ${logContext} (owner=${ownerUid}):`,
+          `[BYOK] Failed loading owner fallback keys for ${logContext} (owner#=${uidLogFingerprint(ownerUid)}):`,
           err instanceof Error ? err.message : String(err)
         );
       }
@@ -90,7 +96,7 @@ export async function mergeOwnerEnvFallbackIfEmpty(
       if (Object.keys(ownerKeys).length > 0) {
         if (process.env.NODE_ENV !== 'test') {
           console.info(
-            `[BYOK] Using OWNER_UIDS fallback provider keys for ${logContext} (owner=${ownerUid})`
+            `[BYOK] Using OWNER_UIDS fallback provider keys for ${logContext} (owner#=${uidLogFingerprint(ownerUid)})`
           );
         }
         return ownerKeys;
@@ -98,7 +104,7 @@ export async function mergeOwnerEnvFallbackIfEmpty(
     } catch (err) {
       if (process.env.NODE_ENV !== 'test') {
         console.warn(
-          `[BYOK] Failed loading OWNER_UIDS fallback for ${logContext} (owner=${ownerUid}):`,
+          `[BYOK] Failed loading OWNER_UIDS fallback for ${logContext} (owner#=${uidLogFingerprint(ownerUid)}):`,
           err instanceof Error ? err.message : String(err)
         );
       }
