@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
 import {
   RESTORMEL_ENVIRONMENT_ID,
+  getRestormelIngestWorkerDiagnostics,
   restormelGetProvidersHealth,
   restormelGetRoutingCapabilities,
   restormelGetSwitchCriteriaEnums,
@@ -23,6 +24,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 
   return json({
     environmentId: RESTORMEL_ENVIRONMENT_ID,
+    ingestWorkerDiagnostics: getRestormelIngestWorkerDiagnostics(),
     recommendations: getRestormelRecommendationSupport(),
     capabilities: capabilities.status === 'fulfilled' ? capabilities.value.data : null,
     switchCriteria: switchCriteria.status === 'fulfilled' ? switchCriteria.value.data : null,

@@ -38,6 +38,22 @@ export interface IngestRunPayload {
     ingestProvider?: 'auto' | 'anthropic' | 'vertex';
     /** When true, worker logs `[INGEST_PINS]` diagnostics (`INGEST_LOG_PINS=1`). */
     ingestLogPins?: boolean;
+    /** Per-run model call timeout for most ingest stages (`scripts/ingest.ts` → `INGEST_MODEL_TIMEOUT_MS`). */
+    ingestModelTimeoutMs?: number;
+    /** Per-run validation-stage default timeout (`VALIDATION_MODEL_TIMEOUT_MS` — fallback when stage env unset). */
+    validationModelTimeoutMs?: number;
+    /** Per-run validation stage budget timeout (`INGEST_STAGE_VALIDATION_TIMEOUT_MS`). */
+    ingestStageValidationTimeoutMs?: number;
+    /** Per-run extraction stage timeout override (`INGEST_STAGE_EXTRACTION_TIMEOUT_MS`). */
+    ingestStageExtractionTimeoutMs?: number;
+    /** Per-run relations stage timeout (`INGEST_STAGE_RELATIONS_TIMEOUT_MS`). */
+    ingestStageRelationsTimeoutMs?: number;
+    /** Per-run grouping stage timeout (`INGEST_STAGE_GROUPING_TIMEOUT_MS`). */
+    ingestStageGroupingTimeoutMs?: number;
+    /** Per-run embedding stage timeout (`INGEST_STAGE_EMBEDDING_TIMEOUT_MS`). */
+    ingestStageEmbeddingTimeoutMs?: number;
+    /** Per-run JSON repair stage timeout (`INGEST_STAGE_JSON_REPAIR_TIMEOUT_MS`). */
+    ingestStageJsonRepairTimeoutMs?: number;
   };
   model_chain: {
     extract: string;
@@ -64,7 +80,15 @@ function batchOverridesToEnv(
     relationsBatchOverlapClaims,
     failOnGroupingPositionCollapse,
     ingestProvider,
-    ingestLogPins
+    ingestLogPins,
+    ingestModelTimeoutMs,
+    validationModelTimeoutMs,
+    ingestStageValidationTimeoutMs,
+    ingestStageExtractionTimeoutMs,
+    ingestStageRelationsTimeoutMs,
+    ingestStageGroupingTimeoutMs,
+    ingestStageEmbeddingTimeoutMs,
+    ingestStageJsonRepairTimeoutMs
   } = overrides;
 
   const asPositiveInt = (v: unknown): number | null => {
@@ -95,6 +119,28 @@ function batchOverridesToEnv(
   if (typeof ingestLogPins === 'boolean') {
     out.INGEST_LOG_PINS = ingestLogPins ? '1' : '0';
   }
+
+  const ingestTimeout = asPositiveInt(ingestModelTimeoutMs);
+  const validationTimeout = asPositiveInt(validationModelTimeoutMs);
+  const validationStageTimeout = asPositiveInt(ingestStageValidationTimeoutMs);
+  const extractionStageTimeout = asPositiveInt(ingestStageExtractionTimeoutMs);
+  if (ingestTimeout != null) out.INGEST_MODEL_TIMEOUT_MS = String(ingestTimeout);
+  if (validationTimeout != null) out.VALIDATION_MODEL_TIMEOUT_MS = String(validationTimeout);
+  if (validationStageTimeout != null) {
+    out.INGEST_STAGE_VALIDATION_TIMEOUT_MS = String(validationStageTimeout);
+  }
+  if (extractionStageTimeout != null) {
+    out.INGEST_STAGE_EXTRACTION_TIMEOUT_MS = String(extractionStageTimeout);
+  }
+
+  const relT = asPositiveInt(ingestStageRelationsTimeoutMs);
+  const grpT = asPositiveInt(ingestStageGroupingTimeoutMs);
+  const embT = asPositiveInt(ingestStageEmbeddingTimeoutMs);
+  const jrT = asPositiveInt(ingestStageJsonRepairTimeoutMs);
+  if (relT != null) out.INGEST_STAGE_RELATIONS_TIMEOUT_MS = String(relT);
+  if (grpT != null) out.INGEST_STAGE_GROUPING_TIMEOUT_MS = String(grpT);
+  if (embT != null) out.INGEST_STAGE_EMBEDDING_TIMEOUT_MS = String(embT);
+  if (jrT != null) out.INGEST_STAGE_JSON_REPAIR_TIMEOUT_MS = String(jrT);
 
   return out;
 }
@@ -287,6 +333,22 @@ function appendProcessOutput(runId: string, chunk: Buffer, manager: IngestRunMan
     const trimmed = line.replace(/\r$/, '');
     if (trimmed.length > 0) manager.addLog(runId, trimmed);
   }
+}
+
+/** Lines that usually carry the real reason ingest.ts exited 1 (shown on failRun, not only in log scrollback). */
+const INGEST_WORKER_FAILURE_LINE =
+  /\[(FATAL ERROR|ERROR)\]|^Error:|\[extraction\]|\[validation\]|\[relations\]|\[grouping\]|Planned route exhausted|timed out after|BUDGET\]|ECONNRESET|ETIMEDOUT|SyntaxError|TypeError|ReferenceError|not_found_error/i;
+
+function extractIngestWorkerFailureHint(logLines: string[], maxLen = 900): string {
+  const hits: string[] = [];
+  for (let i = logLines.length - 1; i >= 0 && hits.length < 5; i--) {
+    const line = logLines[i]?.trim() ?? '';
+    if (!line) continue;
+    if (INGEST_WORKER_FAILURE_LINE.test(line)) hits.push(line);
+  }
+  let out = hits.length > 0 ? hits.reverse().join(' | ') : logLines.slice(-4).join(' | ').trim();
+  if (out.length > maxLen) out = `${out.slice(0, maxLen - 3)}...`;
+  return out;
 }
 
 const PIPELINE_STAGES = ['extract', 'relate', 'group', 'embed'] as const;
@@ -890,7 +952,13 @@ class IngestRunManager extends EventEmitter {
 
       if (forSync) {
         this.updateStageStatus(runId, 'store', 'error');
-        this.failRun(runId, `SurrealDB sync (ingest.ts) exited with code ${code ?? 1}`);
+        const hint = s ? extractIngestWorkerFailureHint(s.logLines) : '';
+        this.failRun(
+          runId,
+          hint
+            ? `SurrealDB sync (ingest.ts) exited with code ${code ?? 1} — ${hint}`
+            : `SurrealDB sync (ingest.ts) exited with code ${code ?? 1}`
+        );
       } else {
         const terminalStages = [
           ...PIPELINE_STAGES,
@@ -900,7 +968,13 @@ class IngestRunManager extends EventEmitter {
         for (const stage of terminalStages) {
           this.updateStageStatus(runId, stage, 'error');
         }
-        this.failRun(runId, `ingest.ts exited with code ${code ?? 1}`);
+        const hint = s ? extractIngestWorkerFailureHint(s.logLines) : '';
+        this.failRun(
+          runId,
+          hint
+            ? `ingest.ts exited with code ${code ?? 1} — ${hint}`
+            : `ingest.ts exited with code ${code ?? 1}`
+        );
       }
     });
   }

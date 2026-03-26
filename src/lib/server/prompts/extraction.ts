@@ -41,7 +41,16 @@ RULES:
 - Do not extract claims that are purely expository (e.g., 'In this section I will argue...').
 - If a claim is clearly stated multiple times, extract it once with the earliest position_in_source.
 
-Respond ONLY with a valid JSON array. No preamble, no markdown backticks, no explanation.`;
+OUTPUT — MACHINE-PARSEABLE JSON ONLY:
+- Return exactly one JSON array of claim objects. No wrapper object, no key wrapping the array.
+- The first non-whitespace character must be "[" and the last must be "]".
+- Use double quotes for every key and string value. Escape literal double-quotes inside strings as \\" and line breaks as \\n.
+- No trailing commas after the last property or array element. No comments, no NaN/Infinity, no undefined.
+- Do not wrap the array in markdown code fences or add any text before or after the array.
+
+Example shape (illustrative): [{"text":"…","claim_type":"premise",…}]
+
+Respond ONLY with that JSON array. No preamble, no markdown, no explanation.`;
 
 export function EXTRACTION_USER(
 	sourceTitle: string,

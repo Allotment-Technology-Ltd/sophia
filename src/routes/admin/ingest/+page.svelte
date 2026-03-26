@@ -378,6 +378,23 @@
   let batchValidationTargetTokens = $state('');
   let batchRelationsTargetTokens = $state('');
   let batchEmbedBatchSize = $state('');
+  /** Per-run worker timeouts (ms); merged into ingest child env via `batch_overrides`. */
+  let batchIngestModelTimeoutMs = $state('');
+  let batchValidationModelTimeoutMs = $state('');
+  let batchValidationStageTimeoutMs = $state('');
+  let batchExtractionStageTimeoutMs = $state('');
+  let batchRelationsStageTimeoutMs = $state('');
+  let batchGroupingStageTimeoutMs = $state('');
+  let batchEmbeddingStageTimeoutMs = $state('');
+  let batchJsonRepairStageTimeoutMs = $state('');
+  let pipelineDebugOpen = $state(false);
+  type IngestWorkerDiagnostics = {
+    keysBaseHost: string | null;
+    environmentId: string;
+    projectIdConfigured: boolean;
+    gatewayKeyConfigured: boolean;
+  };
+  let ingestWorkerDiagnostics = $state<IngestWorkerDiagnostics | null>(null);
   let batchOverridesError = $state('');
   const INGEST_SETTINGS_STORAGE_KEY = 'sophia.admin.ingestSettings.v1';
   type IngestionAdvisorModeUi = 'off' | 'shadow' | 'auto';
@@ -1243,8 +1260,26 @@
     try {
       const body = await authorizedJson('/api/admin/ingestion-routing/context');
       routes = Array.isArray(body.routes) ? (body.routes as AdminRouteRecord[]) : [];
+      const raw = body.ingestWorkerDiagnostics as Record<string, unknown> | undefined;
+      if (
+        raw &&
+        typeof raw.environmentId === 'string' &&
+        typeof raw.projectIdConfigured === 'boolean' &&
+        typeof raw.gatewayKeyConfigured === 'boolean'
+      ) {
+        const host = raw.keysBaseHost;
+        ingestWorkerDiagnostics = {
+          keysBaseHost: typeof host === 'string' ? host : null,
+          environmentId: raw.environmentId,
+          projectIdConfigured: raw.projectIdConfigured,
+          gatewayKeyConfigured: raw.gatewayKeyConfigured
+        };
+      } else {
+        ingestWorkerDiagnostics = null;
+      }
     } catch {
       routes = [];
+      ingestWorkerDiagnostics = null;
     }
   }
 
@@ -2206,13 +2241,69 @@
       const validationTargetTokens = parseOptionalBoundedInt(batchValidationTargetTokens, 10_000, 400_000, 'Validation target tokens');
       const relationsTargetTokens = parseOptionalBoundedInt(batchRelationsTargetTokens, 5_000, 250_000, 'Relations batch target tokens');
       const embedBatchSize = parseOptionalBoundedInt(batchEmbedBatchSize, 25, 2000, 'Embedding batch size');
+      const ingestModelTimeoutMs = parseOptionalBoundedInt(
+        batchIngestModelTimeoutMs,
+        10_000,
+        3_600_000,
+        'Ingest model timeout (ms)'
+      );
+      const validationModelTimeoutMs = parseOptionalBoundedInt(
+        batchValidationModelTimeoutMs,
+        10_000,
+        3_600_000,
+        'Validation model timeout (ms)'
+      );
+      const ingestStageValidationTimeoutMs = parseOptionalBoundedInt(
+        batchValidationStageTimeoutMs,
+        10_000,
+        3_600_000,
+        'Validation stage timeout (ms)'
+      );
+      const ingestStageExtractionTimeoutMs = parseOptionalBoundedInt(
+        batchExtractionStageTimeoutMs,
+        10_000,
+        3_600_000,
+        'Extraction stage timeout (ms)'
+      );
+      const ingestStageRelationsTimeoutMs = parseOptionalBoundedInt(
+        batchRelationsStageTimeoutMs,
+        10_000,
+        3_600_000,
+        'Relations stage timeout (ms)'
+      );
+      const ingestStageGroupingTimeoutMs = parseOptionalBoundedInt(
+        batchGroupingStageTimeoutMs,
+        10_000,
+        3_600_000,
+        'Grouping stage timeout (ms)'
+      );
+      const ingestStageEmbeddingTimeoutMs = parseOptionalBoundedInt(
+        batchEmbeddingStageTimeoutMs,
+        10_000,
+        3_600_000,
+        'Embedding stage timeout (ms)'
+      );
+      const ingestStageJsonRepairTimeoutMs = parseOptionalBoundedInt(
+        batchJsonRepairStageTimeoutMs,
+        10_000,
+        3_600_000,
+        'JSON repair stage timeout (ms)'
+      );
 
       const hasAny =
         extractionMaxTokensPerSection != null ||
         groupingTargetTokens != null ||
         validationTargetTokens != null ||
         relationsTargetTokens != null ||
-        embedBatchSize != null;
+        embedBatchSize != null ||
+        ingestModelTimeoutMs != null ||
+        validationModelTimeoutMs != null ||
+        ingestStageValidationTimeoutMs != null ||
+        ingestStageExtractionTimeoutMs != null ||
+        ingestStageRelationsTimeoutMs != null ||
+        ingestStageGroupingTimeoutMs != null ||
+        ingestStageEmbeddingTimeoutMs != null ||
+        ingestStageJsonRepairTimeoutMs != null;
 
       if (!hasAny) return {};
 
@@ -2222,6 +2313,26 @@
       if (validationTargetTokens != null) overrides.validationTargetTokens = validationTargetTokens;
       if (relationsTargetTokens != null) overrides.relationsTargetTokens = relationsTargetTokens;
       if (embedBatchSize != null) overrides.embedBatchSize = embedBatchSize;
+      if (ingestModelTimeoutMs != null) overrides.ingestModelTimeoutMs = ingestModelTimeoutMs;
+      if (validationModelTimeoutMs != null) overrides.validationModelTimeoutMs = validationModelTimeoutMs;
+      if (ingestStageValidationTimeoutMs != null) {
+        overrides.ingestStageValidationTimeoutMs = ingestStageValidationTimeoutMs;
+      }
+      if (ingestStageExtractionTimeoutMs != null) {
+        overrides.ingestStageExtractionTimeoutMs = ingestStageExtractionTimeoutMs;
+      }
+      if (ingestStageRelationsTimeoutMs != null) {
+        overrides.ingestStageRelationsTimeoutMs = ingestStageRelationsTimeoutMs;
+      }
+      if (ingestStageGroupingTimeoutMs != null) {
+        overrides.ingestStageGroupingTimeoutMs = ingestStageGroupingTimeoutMs;
+      }
+      if (ingestStageEmbeddingTimeoutMs != null) {
+        overrides.ingestStageEmbeddingTimeoutMs = ingestStageEmbeddingTimeoutMs;
+      }
+      if (ingestStageJsonRepairTimeoutMs != null) {
+        overrides.ingestStageJsonRepairTimeoutMs = ingestStageJsonRepairTimeoutMs;
+      }
       return { overrides };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -2268,7 +2379,16 @@
           workerIngestProvider,
           workerRelationsOverlapClaims,
           workerFailOnGroupingCollapse,
-          workerIngestLogPins
+          workerIngestLogPins,
+          batchIngestModelTimeoutMs,
+          batchValidationModelTimeoutMs,
+          batchValidationStageTimeoutMs,
+          batchExtractionStageTimeoutMs,
+          batchRelationsStageTimeoutMs,
+          batchGroupingStageTimeoutMs,
+          batchEmbeddingStageTimeoutMs,
+          batchJsonRepairStageTimeoutMs,
+          pipelineDebugOpen
         })
       );
     } catch {
@@ -2760,6 +2880,33 @@
         if (typeof p.workerIngestLogPins === 'boolean') {
           workerIngestLogPins = p.workerIngestLogPins;
         }
+        if (typeof p.batchIngestModelTimeoutMs === 'string') {
+          batchIngestModelTimeoutMs = p.batchIngestModelTimeoutMs;
+        }
+        if (typeof p.batchValidationModelTimeoutMs === 'string') {
+          batchValidationModelTimeoutMs = p.batchValidationModelTimeoutMs;
+        }
+        if (typeof p.batchValidationStageTimeoutMs === 'string') {
+          batchValidationStageTimeoutMs = p.batchValidationStageTimeoutMs;
+        }
+        if (typeof p.batchExtractionStageTimeoutMs === 'string') {
+          batchExtractionStageTimeoutMs = p.batchExtractionStageTimeoutMs;
+        }
+        if (typeof p.batchRelationsStageTimeoutMs === 'string') {
+          batchRelationsStageTimeoutMs = p.batchRelationsStageTimeoutMs;
+        }
+        if (typeof p.batchGroupingStageTimeoutMs === 'string') {
+          batchGroupingStageTimeoutMs = p.batchGroupingStageTimeoutMs;
+        }
+        if (typeof p.batchEmbeddingStageTimeoutMs === 'string') {
+          batchEmbeddingStageTimeoutMs = p.batchEmbeddingStageTimeoutMs;
+        }
+        if (typeof p.batchJsonRepairStageTimeoutMs === 'string') {
+          batchJsonRepairStageTimeoutMs = p.batchJsonRepairStageTimeoutMs;
+        }
+        if (typeof p.pipelineDebugOpen === 'boolean') {
+          pipelineDebugOpen = p.pipelineDebugOpen;
+        }
       }
     } catch {
       /* ignore */
@@ -3222,6 +3369,242 @@
                     </span>
                   </label>
                 </div>
+              </div>
+
+              <div
+                class="rounded border border-sophia-dark-border bg-sophia-dark-bg/35 p-4"
+                role="region"
+                aria-label="Pipeline debugging"
+              >
+                <details bind:open={pipelineDebugOpen} class="group">
+                  <summary
+                    class="cursor-pointer font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted"
+                  >
+                    Pipeline debugging
+                  </summary>
+                  <div class="mt-4 space-y-4">
+                    <p class="text-xs text-sophia-dark-muted">
+                      Per-run worker timeout overrides (milliseconds). Leave blank to use the server
+                      <span class="font-mono">.env</span> defaults (ingest typically uses 180000 ms fallbacks). Stage-specific fields map to
+                      <span class="font-mono">INGEST_STAGE_*_TIMEOUT_MS</span> in
+                      <span class="font-mono">scripts/ingest.ts</span>. Saved in this browser with worker defaults above.
+                    </p>
+                    {#if ingestWorkerDiagnostics}
+                      <div class="rounded border border-sophia-dark-border/70 bg-sophia-dark-bg/25 p-4">
+                        <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">
+                          Server Restormel resolve env (redacted)
+                        </p>
+                        <ul class="mt-3 list-none space-y-2 font-mono text-xs text-sophia-dark-muted">
+                          <li>
+                            <span class="text-sophia-dark-dim">Keys base host:</span>
+                            {ingestWorkerDiagnostics.keysBaseHost ?? '—'}
+                          </li>
+                          <li>
+                            <span class="text-sophia-dark-dim">RESTORMEL_ENVIRONMENT_ID:</span>
+                            {ingestWorkerDiagnostics.environmentId}
+                          </li>
+                          <li>
+                            <span class="text-sophia-dark-dim">RESTORMEL_PROJECT_ID:</span>
+                            {ingestWorkerDiagnostics.projectIdConfigured ? 'set' : 'missing'}
+                          </li>
+                          <li>
+                            <span class="text-sophia-dark-dim">RESTORMEL_GATEWAY_KEY:</span>
+                            {ingestWorkerDiagnostics.gatewayKeyConfigured ? 'set' : 'missing'}
+                          </li>
+                        </ul>
+                        <p class="mt-3 text-[0.65rem] leading-relaxed text-sophia-dark-dim">
+                          If logs show routing degraded, publish ingestion routes per stage and fix missing credentials in the deployment
+                          environment. Reference:
+                          <span class="font-mono">src/lib/server/restormelIngestionRoutes.ts</span>.
+                        </p>
+                      </div>
+                    {/if}
+                    <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">
+                      Default model timeouts
+                    </p>
+                    <div class="mt-2 grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-ingest-timeout">
+                          Ingest model timeout (ms)
+                        </label>
+                        <input
+                          id="dbg-ingest-timeout"
+                          type="number"
+                          min="10000"
+                          max="3600000"
+                          step="1000"
+                          placeholder="e.g. 300000"
+                          value={batchIngestModelTimeoutMs}
+                          oninput={(e) =>
+                            (batchIngestModelTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
+                          disabled={runInProgress()}
+                          class="mt-2 w-full min-h-11 rounded border border-sophia-dark-border bg-sophia-dark-bg px-4 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                        />
+                        <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                          <span class="font-mono">INGEST_MODEL_TIMEOUT_MS</span> — fallback for stages without a per-stage override.
+                        </p>
+                      </div>
+                      <div>
+                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-validation-timeout">
+                          Validation model timeout (ms)
+                        </label>
+                        <input
+                          id="dbg-validation-timeout"
+                          type="number"
+                          min="10000"
+                          max="3600000"
+                          step="1000"
+                          placeholder="e.g. 300000"
+                          value={batchValidationModelTimeoutMs}
+                          oninput={(e) =>
+                            (batchValidationModelTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
+                          disabled={runInProgress()}
+                          class="mt-2 w-full min-h-11 rounded border border-sophia-dark-border bg-sophia-dark-bg px-4 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                        />
+                        <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                          <span class="font-mono">VALIDATION_MODEL_TIMEOUT_MS</span> — worker fallback when
+                          <span class="font-mono">INGEST_STAGE_VALIDATION_TIMEOUT_MS</span> is unset.
+                        </p>
+                      </div>
+                    </div>
+
+                    <p class="mt-6 font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">
+                      Per-stage timeouts
+                    </p>
+                    <p class="mt-1 text-[0.65rem] leading-relaxed text-sophia-dark-dim">
+                      Optional overrides for each <span class="font-mono">StageKey</span> budget in the worker. When set, these win over the ingest /
+                      validation defaults above for that stage only.
+                    </p>
+                    <div class="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                      <div>
+                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-validation-stage-timeout">
+                          Validation (ms)
+                        </label>
+                        <input
+                          id="dbg-validation-stage-timeout"
+                          type="number"
+                          min="10000"
+                          max="3600000"
+                          step="1000"
+                          placeholder="e.g. 300000"
+                          value={batchValidationStageTimeoutMs}
+                          oninput={(e) =>
+                            (batchValidationStageTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
+                          disabled={runInProgress()}
+                          class="mt-2 w-full min-h-11 rounded border border-sophia-dark-border bg-sophia-dark-bg px-4 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                        />
+                        <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                          <span class="font-mono">INGEST_STAGE_VALIDATION_TIMEOUT_MS</span>
+                        </p>
+                      </div>
+                      <div>
+                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-extraction-timeout">
+                          Extraction (ms)
+                        </label>
+                        <input
+                          id="dbg-extraction-timeout"
+                          type="number"
+                          min="10000"
+                          max="3600000"
+                          step="1000"
+                          placeholder="e.g. 600000"
+                          value={batchExtractionStageTimeoutMs}
+                          oninput={(e) =>
+                            (batchExtractionStageTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
+                          disabled={runInProgress()}
+                          class="mt-2 w-full min-h-11 rounded border border-sophia-dark-border bg-sophia-dark-bg px-4 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                        />
+                        <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                          <span class="font-mono">INGEST_STAGE_EXTRACTION_TIMEOUT_MS</span>
+                        </p>
+                      </div>
+                      <div>
+                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-relations-timeout">
+                          Relations (ms)
+                        </label>
+                        <input
+                          id="dbg-relations-timeout"
+                          type="number"
+                          min="10000"
+                          max="3600000"
+                          step="1000"
+                          placeholder="e.g. 300000"
+                          value={batchRelationsStageTimeoutMs}
+                          oninput={(e) =>
+                            (batchRelationsStageTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
+                          disabled={runInProgress()}
+                          class="mt-2 w-full min-h-11 rounded border border-sophia-dark-border bg-sophia-dark-bg px-4 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                        />
+                        <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                          <span class="font-mono">INGEST_STAGE_RELATIONS_TIMEOUT_MS</span>
+                        </p>
+                      </div>
+                      <div>
+                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-grouping-timeout">
+                          Grouping (ms)
+                        </label>
+                        <input
+                          id="dbg-grouping-timeout"
+                          type="number"
+                          min="10000"
+                          max="3600000"
+                          step="1000"
+                          placeholder="e.g. 300000"
+                          value={batchGroupingStageTimeoutMs}
+                          oninput={(e) =>
+                            (batchGroupingStageTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
+                          disabled={runInProgress()}
+                          class="mt-2 w-full min-h-11 rounded border border-sophia-dark-border bg-sophia-dark-bg px-4 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                        />
+                        <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                          <span class="font-mono">INGEST_STAGE_GROUPING_TIMEOUT_MS</span>
+                        </p>
+                      </div>
+                      <div>
+                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-embedding-timeout">
+                          Embedding (ms)
+                        </label>
+                        <input
+                          id="dbg-embedding-timeout"
+                          type="number"
+                          min="10000"
+                          max="3600000"
+                          step="1000"
+                          placeholder="e.g. 600000"
+                          value={batchEmbeddingStageTimeoutMs}
+                          oninput={(e) =>
+                            (batchEmbeddingStageTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
+                          disabled={runInProgress()}
+                          class="mt-2 w-full min-h-11 rounded border border-sophia-dark-border bg-sophia-dark-bg px-4 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                        />
+                        <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                          <span class="font-mono">INGEST_STAGE_EMBEDDING_TIMEOUT_MS</span>
+                        </p>
+                      </div>
+                      <div>
+                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-json-repair-timeout">
+                          JSON repair (ms)
+                        </label>
+                        <input
+                          id="dbg-json-repair-timeout"
+                          type="number"
+                          min="10000"
+                          max="3600000"
+                          step="1000"
+                          placeholder="e.g. 120000"
+                          value={batchJsonRepairStageTimeoutMs}
+                          oninput={(e) =>
+                            (batchJsonRepairStageTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
+                          disabled={runInProgress()}
+                          class="mt-2 w-full min-h-11 rounded border border-sophia-dark-border bg-sophia-dark-bg px-4 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                        />
+                        <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                          <span class="font-mono">INGEST_STAGE_JSON_REPAIR_TIMEOUT_MS</span>
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </details>
               </div>
 
               {#if routingInfraProviders.length > 0 || sourcePreScanResult?.advisor?.model}

@@ -524,6 +524,26 @@ function parsePositiveFloat(value: string | undefined): number | undefined {
 	return parsed;
 }
 
+/**
+ * Providers routed via `createOpenAI(...).chat(model)` map `system` to role `developer`
+ * (AI SDK v2 compatibility). Mistral and several other strict Chat Completions APIs only
+ * accept system | user | assistant | tool — folding avoids HTTP 422 on validation/repair.
+ */
+const OPENAI_COMPAT_CHAT_PROVIDERS_FOLD_SYSTEM = new Set([
+	'mistral',
+	'groq',
+	'deepseek',
+	'together',
+	'cohere',
+	'openrouter',
+	'perplexity'
+]);
+
+function shouldFoldSystemPromptIntoUserForProvider(provider: string | undefined): boolean {
+	if (!provider) return false;
+	return OPENAI_COMPAT_CHAT_PROVIDERS_FOLD_SYSTEM.has(provider.toLowerCase());
+}
+
 function makeStageBudget(stage: StageKey): StageBudget {
 	const upper = stage.toUpperCase();
 	const timeoutFallback = stage === 'validation' ? VALIDATION_MODEL_TIMEOUT_MS : INGEST_MODEL_TIMEOUT_MS;
@@ -1537,14 +1557,30 @@ async function callStageModel(params: {
 			}
 
 			const callStarted = Date.now();
+			const routingProvider = plan.route.provider ?? plan.provider;
+			const foldSystem = shouldFoldSystemPromptIntoUserForProvider(routingProvider);
 			const result = await withTimeout(
-				generateText({
-					model: plan.route.model,
-					system: systemPrompt,
-					messages: [{ role: 'user', content: userMessage }],
-					temperature: 0.1,
-					maxOutputTokens: maxTokens
-				}),
+				generateText(
+					foldSystem
+						? {
+								model: plan.route.model,
+								messages: [
+									{
+										role: 'user',
+										content: `${systemPrompt}\n\n${userMessage}`
+									}
+								],
+								temperature: 0.1,
+								maxOutputTokens: maxTokens
+							}
+						: {
+								model: plan.route.model,
+								system: systemPrompt,
+								messages: [{ role: 'user', content: userMessage }],
+								temperature: 0.1,
+								maxOutputTokens: maxTokens
+							}
+				),
 				budget.timeoutMs,
 				`${stage} ${plan.provider}:${plan.model}`
 			);
@@ -2206,7 +2242,9 @@ async function main() {
 	console.log(`Validation route: ${validationPlan.provider}:${validationPlan.model} (${validationPlan.routingSource}) step=${validationPlan.selectedStepId ?? '—'} switch=${validationPlan.switchReasonCode ?? '—'}`);
 	console.log(`Embedding route:  ${embeddingPlan.provider}:${embeddingPlan.model} (${embeddingPlan.routingSource}) step=${embeddingPlan.selectedStepId ?? '—'} switch=${embeddingPlan.switchReasonCode ?? '—'}`);
 	console.log(`Repair route:     ${jsonRepairPlan.provider}:${jsonRepairPlan.model} (${jsonRepairPlan.routingSource}) step=${jsonRepairPlan.selectedStepId ?? '—'} switch=${jsonRepairPlan.switchReasonCode ?? '—'}`);
-	console.log(`Validate: ${shouldValidate ? 'YES (Gemini)' : 'No'}`);
+	console.log(
+		`Validate: ${shouldValidate ? `YES (${validationPlan.provider}:${validationPlan.model})` : 'No'}`
+	);
 	if (resumeFromStage) {
 		console.log(`Resume from: ${resumeFromStage}`);
 	}

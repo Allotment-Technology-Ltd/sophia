@@ -276,6 +276,27 @@ export const RESTORMEL_ENVIRONMENT_ID =
 const RESTORMEL_GATEWAY_KEY = process.env.RESTORMEL_GATEWAY_KEY?.trim() || '';
 const RESTORMEL_PROJECT_ID = process.env.RESTORMEL_PROJECT_ID?.trim() || '';
 
+/** Redacted flags for admin pipeline UI (no secrets). */
+export function getRestormelIngestWorkerDiagnostics(): {
+  keysBaseHost: string | null;
+  environmentId: string;
+  projectIdConfigured: boolean;
+  gatewayKeyConfigured: boolean;
+} {
+  let keysBaseHost: string | null = null;
+  try {
+    keysBaseHost = new URL(RESTORMEL_BASE_URL).host;
+  } catch {
+    keysBaseHost = null;
+  }
+  return {
+    keysBaseHost,
+    environmentId: RESTORMEL_ENVIRONMENT_ID,
+    projectIdConfigured: RESTORMEL_PROJECT_ID.length > 0,
+    gatewayKeyConfigured: RESTORMEL_GATEWAY_KEY.length > 0
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
