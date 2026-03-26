@@ -35,6 +35,8 @@ export interface IngestRunPayload {
     failOnGroupingPositionCollapse?: boolean;
     /** Narrow provider preference for the worker (`INGEST_PROVIDER`). */
     ingestProvider?: 'auto' | 'anthropic' | 'vertex';
+    /** When true, worker logs `[INGEST_PINS]` diagnostics (`INGEST_LOG_PINS=1`). */
+    ingestLogPins?: boolean;
   };
   model_chain: {
     extract: string;
@@ -60,7 +62,8 @@ function batchOverridesToEnv(
     embedBatchSize,
     relationsBatchOverlapClaims,
     failOnGroupingPositionCollapse,
-    ingestProvider
+    ingestProvider,
+    ingestLogPins
   } = overrides;
 
   const asPositiveInt = (v: unknown): number | null => {
@@ -87,6 +90,9 @@ function batchOverridesToEnv(
   }
   if (ingestProvider === 'auto' || ingestProvider === 'anthropic' || ingestProvider === 'vertex') {
     out.INGEST_PROVIDER = ingestProvider;
+  }
+  if (typeof ingestLogPins === 'boolean') {
+    out.INGEST_LOG_PINS = ingestLogPins ? '1' : '0';
   }
 
   return out;
