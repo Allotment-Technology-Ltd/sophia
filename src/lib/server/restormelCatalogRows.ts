@@ -202,7 +202,6 @@ export function catalogRowToKeysProviderModel(
 		provider = inferred;
 	}
 
-	if (!provider || !modelId) return null;
 	return { providerType: provider, modelId };
 }
 
