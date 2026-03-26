@@ -4,7 +4,7 @@
     "orderIndex": 0,
     "enabled": true,
     "providerPreference": "anthropic",
-    "modelId": "claude-sonnet-4-5-20250514"
+    "modelId": "claude-sonnet-4-20250514"
   },
   {
     "id": "fallback_openai",

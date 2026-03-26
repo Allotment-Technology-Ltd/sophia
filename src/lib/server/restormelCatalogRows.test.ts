@@ -26,7 +26,7 @@ describe('restormelCatalogRows', () => {
 		const payload = {
 			contractVersion: '2026-03-23.catalog.v1',
 			data: [
-				{ providerType: 'anthropic', providerModelId: 'claude-3-5-sonnet-20241022' },
+				{ providerType: 'anthropic', providerModelId: 'claude-sonnet-4-20250514' },
 				{ providerType: 'openai', modelId: 'gpt-4o' }
 			]
 		};
@@ -45,10 +45,10 @@ describe('restormelCatalogRows', () => {
 	});
 
 	it('extracts provider and model from catalog row', () => {
-		const row = { providerType: 'anthropic', modelId: 'claude-3-5-sonnet-20241022' };
+		const row = { providerType: 'anthropic', modelId: 'claude-sonnet-4-20250514' };
 		expect(catalogRowToKeysProviderModel(row)).toEqual({
 			providerType: 'anthropic',
-			modelId: 'claude-3-5-sonnet-20241022'
+			modelId: 'claude-sonnet-4-20250514'
 		});
 	});
 

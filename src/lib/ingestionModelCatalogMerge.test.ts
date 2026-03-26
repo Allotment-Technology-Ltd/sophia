@@ -18,7 +18,7 @@ describe('extractModelRowsFromRestormelPayload', () => {
 
 	it('reads data array', () => {
 		const rows = extractModelRowsFromRestormelPayload({
-			data: [{ provider: 'anthropic', modelId: 'claude-3-5-haiku-20241022' }]
+			data: [{ provider: 'anthropic', modelId: 'claude-haiku-4-5-20251001' }]
 		});
 		expect(rows).toHaveLength(1);
 	});
@@ -83,14 +83,14 @@ describe('mergeCatalogWithRestormelModels', () => {
 	it('merges remote rows with static annotations', () => {
 		const remote = {
 			data: [
-				{ providerType: 'anthropic', modelId: 'claude-3-5-sonnet-20241022' },
+				{ providerType: 'anthropic', modelId: 'claude-sonnet-4-20250514' },
 				{ providerType: 'custom', modelId: 'other-model' }
 			]
 		};
 		const { entries, sync } = mergeCatalogWithRestormelModels(remote, null);
 		expect(sync.annotatedCount).toBeGreaterThanOrEqual(1);
 		expect(sync.inferredRemoteCount).toBeGreaterThanOrEqual(1);
-		const sonnet = entries.find((e) => e.label.includes('claude-3-5-sonnet-20241022'));
+		const sonnet = entries.find((e) => e.label.includes('claude-sonnet-4-20250514'));
 		expect(sonnet?.catalogSource).toBe('annotated');
 		const custom = entries.find((e) => e.modelId === 'other-model');
 		expect(custom?.catalogSource).toBe('remote');
@@ -108,7 +108,7 @@ describe('buildRestormelProjectModelEntriesOnly', () => {
 	it('returns only Restormel rows with no static supplement', () => {
 		const remote = {
 			data: [
-				{ providerType: 'anthropic', modelId: 'claude-3-5-sonnet-20241022' },
+				{ providerType: 'anthropic', modelId: 'claude-sonnet-4-20250514' },
 				{ providerType: 'vertex', modelId: 'text-embedding-005' }
 			]
 		};
@@ -123,7 +123,7 @@ describe('buildRestormelProjectModelEntriesOnly', () => {
 		const remote = {
 			data: {
 				models: [
-					{ provider_type: 'anthropic', model_id: 'claude-3-5-sonnet-20241022' },
+					{ provider_type: 'anthropic', model_id: 'claude-sonnet-4-20250514' },
 					{ provider: { type: 'openai' }, model: { id: 'gpt-4o' } }
 				]
 			}
@@ -132,7 +132,7 @@ describe('buildRestormelProjectModelEntriesOnly', () => {
 		expect(sync.status).toBe('restormel');
 		expect(entries).toHaveLength(2);
 		expect(entries[0]?.provider).toBe('anthropic');
-		expect(entries[0]?.modelId).toBe('claude-3-5-sonnet-20241022');
+		expect(entries[0]?.modelId).toBe('claude-sonnet-4-20250514');
 		expect(entries[1]?.provider).toBe('openai');
 		expect(entries[1]?.modelId).toBe('gpt-4o');
 	});
@@ -140,21 +140,21 @@ describe('buildRestormelProjectModelEntriesOnly', () => {
 	it('parses object-valued providerType/modelId fields', () => {
 		const remote = {
 			data: [
-				{ providerType: { id: 'anthropic' }, modelId: { id: 'claude-3-5-haiku-20241022' } }
+				{ providerType: { id: 'anthropic' }, modelId: { id: 'claude-haiku-4-5-20251001' } }
 			]
 		};
 		const { entries, sync } = buildRestormelProjectModelEntriesOnly(remote, null);
 		expect(sync.status).toBe('restormel');
 		expect(entries).toHaveLength(1);
 		expect(entries[0]?.provider).toBe('anthropic');
-		expect(entries[0]?.modelId).toBe('claude-3-5-haiku-20241022');
+		expect(entries[0]?.modelId).toBe('claude-haiku-4-5-20251001');
 	});
 
 	it('parses composite refs when provider is implicit', () => {
 		const remote = {
 			data: [
 				{ id: 'openai/gpt-4o', canonicalName: 'openai:gpt-4o' },
-				{ id: 'claude-3-5-sonnet-20241022', canonicalName: 'anthropic:claude-3-5-sonnet-20241022' }
+				{ id: 'claude-sonnet-4-20250514', canonicalName: 'anthropic:claude-sonnet-4-20250514' }
 			]
 		};
 		const { entries, sync } = buildRestormelProjectModelEntriesOnly(remote, null);
@@ -163,7 +163,7 @@ describe('buildRestormelProjectModelEntriesOnly', () => {
 		expect(entries[0]?.provider).toBe('openai');
 		expect(entries[0]?.modelId).toBe('gpt-4o');
 		expect(entries[1]?.provider).toBe('anthropic');
-		expect(entries[1]?.modelId).toBe('claude-3-5-sonnet-20241022');
+		expect(entries[1]?.modelId).toBe('claude-sonnet-4-20250514');
 	});
 
 	it('normalizes provider/model resource paths for embedding rows', () => {
@@ -194,7 +194,7 @@ describe('buildRestormelProjectModelEntriesOnly', () => {
 			data: {
 				bindings: [
 					{ id: 'b1', providerType: 'openai', modelId: 'gpt-4o', enabled: true },
-					{ id: 'b2', providerType: 'anthropic', modelId: 'claude-3-5-haiku-20241022', enabled: false }
+					{ id: 'b2', providerType: 'anthropic', modelId: 'claude-haiku-4-5-20251001', enabled: false }
 				]
 			}
 		};
