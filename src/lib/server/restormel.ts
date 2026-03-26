@@ -485,7 +485,7 @@ function toDashboardError(
 async function requestRestormel<T>(
   endpoint: string,
   options?: {
-    method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+    method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
     body?: unknown;
     projectId?: string;
     requireProjectId?: boolean;
@@ -500,7 +500,9 @@ async function requestRestormel<T>(
     method,
     headers: {
       Authorization: `Bearer ${RESTORMEL_GATEWAY_KEY}`,
-      ...(hasBody || method === 'POST' || method === 'PUT' ? { 'Content-Type': 'application/json' } : {})
+      ...(hasBody || method === 'POST' || method === 'PUT' || method === 'PATCH'
+        ? { 'Content-Type': 'application/json' }
+        : {})
     },
     ...(hasBody ? { body: JSON.stringify(options.body) } : {})
   });
@@ -802,11 +804,63 @@ export async function restormelGetSwitchCriteriaEnums(): Promise<RestormelSwitch
 }
 
 /**
- * Project model index (Restormel Dashboard). Shape may vary; callers should parse defensively.
- * @see docs/restormel-integration/ingestion-control-plane-spec.md — metadata endpoint
+ * Project model **index** (Gateway Key / dashboard): `GET …/projects/{projectId}/models` returns
+ * **bindings** (enabled, providerType, modelId, nested catalog model) — not the full global catalog.
+ * @see docs/restormel-integration/keys-catalog-sync.md
  */
 export async function restormelListProjectModels(): Promise<unknown> {
   return requestRestormel<unknown>(`${projectPath()}/models`);
+}
+
+/**
+ * Global dashboard model catalog: `GET …/models` (no project segment). Distinct from the per-project index.
+ */
+export async function restormelListGlobalDashboardModels(): Promise<unknown> {
+  return requestRestormel<unknown>('/models', { requireProjectId: false });
+}
+
+export type RestormelProjectModelBindingInput = {
+  providerType: string;
+  modelId: string;
+  enabled?: boolean;
+};
+
+/** Batch add bindings (idempotent). Gateway: `POST …/projects/{id}/models` body `{ models: [...] }`. */
+export async function restormelAddProjectModelBindings(
+  models: Array<Pick<RestormelProjectModelBindingInput, 'providerType' | 'modelId'>>
+): Promise<unknown> {
+  return requestRestormel<unknown>(`${projectPath()}/models`, {
+    method: 'POST',
+    body: { models }
+  });
+}
+
+/** Replace full project allowlist; empty `models` clears. `PUT …/projects/{id}/models`. */
+export async function restormelReplaceProjectModelAllowlist(
+  models: RestormelProjectModelBindingInput[]
+): Promise<unknown> {
+  return requestRestormel<unknown>(`${projectPath()}/models`, {
+    method: 'PUT',
+    body: { models }
+  });
+}
+
+/** Soft enable/disable a binding. `PATCH …/projects/{id}/models/{bindingId}` */
+export async function restormelPatchProjectModelBinding(
+  bindingId: string,
+  body: { enabled: boolean }
+): Promise<unknown> {
+  return requestRestormel<unknown>(
+    `${projectPath()}/models/${encodeURIComponent(bindingId)}`,
+    { method: 'PATCH', body }
+  );
+}
+
+/** Hard delete a binding. `DELETE …/projects/{id}/models/{bindingId}` */
+export async function restormelDeleteProjectModelBinding(bindingId: string): Promise<unknown> {
+  return requestRestormel<unknown>(`${projectPath()}/models/${encodeURIComponent(bindingId)}`, {
+    method: 'DELETE'
+  });
 }
 
 export const RESTORMEL_CATALOG_V5_CONTRACT_VERSION = '2026-03-25.catalog.v5';

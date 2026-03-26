@@ -1,0 +1,49 @@
+name: Relay dogfood issue to Restormel Keys
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  relay:
+    if: >-
+      github.event.label.name == 'restormel-feedback' &&
+      github.repository == 'Allotment-Technology-Ltd/sophia'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.RESTORMEL_KEYS_ISSUE_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            const body = [
+              'Relayed from a **dogfood** consumer repository.',
+              '',
+              '| Field | Value |',
+              '|--------|--------|',
+              `| Source repo | \`${{ github.repository }}\` |`,
+              `| Source issue | #${issue.number} |`,
+              '',
+              '### Source title',
+              '',
+              issue.title,
+              '',
+              '### Source body',
+              '',
+              issue.body || '_(empty)_',
+              '',
+              '---',
+              `[View source issue](${issue.html_url})`,
+            ].join('\n');
+            const rawTitle = `[Dogfood] ${issue.title}`;
+            const title = rawTitle.length > 256 ? rawTitle.slice(0, 253) + '...' : rawTitle;
+            await github.rest.issues.create({
+              owner: 'Allotment-Technology-Ltd',
+              repo: 'restormel-keys',
+              title,
+              body,
+              labels: ['task'],
+            });

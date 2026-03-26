@@ -28,6 +28,16 @@ describe('extractModelRowsFromRestormelPayload', () => {
 		});
 		expect(rows).toHaveLength(1);
 	});
+
+	it('reads data.bindings (project model index)', () => {
+		const rows = extractModelRowsFromRestormelPayload({
+			data: {
+				bindings: [{ id: 'bind_1', providerType: 'voyage', modelId: 'voyage-3', enabled: true }]
+			}
+		});
+		expect(rows).toHaveLength(1);
+		expect(rows[0].modelId).toBe('voyage-3');
+	});
 });
 
 describe('mergeCatalogWithRestormelModels', () => {
@@ -145,5 +155,20 @@ describe('buildRestormelProjectModelEntriesOnly', () => {
 		const { entries, sync } = buildRestormelProjectModelEntriesOnly({ data: [{ foo: 1 }] }, null);
 		expect(entries).toHaveLength(0);
 		expect(sync.status).toBe('unavailable');
+	});
+
+	it('skips bindings with enabled: false', () => {
+		const remote = {
+			data: {
+				bindings: [
+					{ id: 'b1', providerType: 'openai', modelId: 'gpt-4o', enabled: true },
+					{ id: 'b2', providerType: 'anthropic', modelId: 'claude-3-5-haiku-20241022', enabled: false }
+				]
+			}
+		};
+		const { entries, sync } = buildRestormelProjectModelEntriesOnly(remote, null);
+		expect(sync.status).toBe('restormel');
+		expect(entries).toHaveLength(1);
+		expect(entries[0]?.modelId).toBe('gpt-4o');
 	});
 });

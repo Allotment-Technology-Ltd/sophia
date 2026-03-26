@@ -1,0 +1,29 @@
+name: Restormel Keys dogfood feedback
+description: Upstream improvement or question from dogfooding (relays to restormel-keys via Actions).
+title: "Restormel Keys: "
+labels:
+  - restormel-feedback
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Submitting applies **`restormel-feedback`**. Actions opens a linked issue on **restormel-keys** with a `[Dogfood]` title. **Do not paste API keys, tokens, or other secrets** — redact first.
+
+        See `docs/restormel-dogfood-relay.md` in this repository for CLI and automation options.
+  - type: textarea
+    id: feedback
+    attributes:
+      label: Feedback / request
+      description: What should change upstream? Repro steps, API or SDK gaps, documentation, dashboard behaviour, etc.
+      placeholder: |
+        - Observed behaviour vs expected
+        - Minimal repro or integration context
+        - Suggested fix or doc location (optional)
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context (optional)
+      description: Sophia area, package versions, links to code or internal docs.
+      placeholder: e.g. admin ingestion routing, @restormel/keys 0.x, link to PR or doc

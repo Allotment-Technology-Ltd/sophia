@@ -31,6 +31,7 @@
     "restormel:route-steps": "tsx --env-file=.env scripts/restormel/route-steps.ts",
     "restormel:ingestion-bootstrap": "tsx --env-file=.env scripts/restormel/bootstrap-ingestion-routes.ts",
     "restormel:keys-catalog-diff": "tsx scripts/restormel/keys-catalog-diff.ts",
+    "restormel:dogfood-issue": "bash scripts/restormel/create_dogfood_issue.sh",
     "infra:preview": "cd infra && pulumi preview --stack production",
     "infra:up": "cd infra && pulumi up --stack production",
     "infra:refresh": "cd infra && pulumi refresh --stack production",

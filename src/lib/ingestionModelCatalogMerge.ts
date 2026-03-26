@@ -1,6 +1,6 @@
 /**
- * Merges Restormel GET /projects/{id}/models responses with the static ingestion catalog.
- * Remote payload shapes may vary; we accept common patterns.
+ * Merges Restormel `GET /projects/{id}/models` (**project model index**: bindings + nested catalog model)
+ * with the static ingestion catalog. Rows with `enabled: false` are ignored for pickers.
  */
 
 import type { IngestionModelCatalogEntry } from './ingestionModelCatalog';
@@ -38,7 +38,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;
 }
 
-/** Accept { data: [...] }, { data: { models: [...] } }, { models: [...] }, or a bare array */
+/** Accept bindings index, { data: { models | bindings } }, { models }, or a bare array */
 export function extractModelRowsFromRestormelPayload(payload: unknown): Record<string, unknown>[] {
 	if (payload === null || payload === undefined) return [];
 	if (Array.isArray(payload)) {
@@ -51,6 +51,11 @@ export function extractModelRowsFromRestormelPayload(payload: unknown): Record<s
 		return topModels.filter(isRecord);
 	}
 
+	const topBindings = (payload as { bindings?: unknown }).bindings;
+	if (Array.isArray(topBindings)) {
+		return topBindings.filter(isRecord);
+	}
+
 	const data = payload.data;
 	if (Array.isArray(data)) {
 		return data.filter(isRecord);
@@ -60,12 +65,21 @@ export function extractModelRowsFromRestormelPayload(payload: unknown): Record<s
 		if (Array.isArray(inner)) {
 			return inner.filter(isRecord);
 		}
+		const bindings = (data as { bindings?: unknown }).bindings;
+		if (Array.isArray(bindings)) {
+			return bindings.filter(isRecord);
+		}
 		if (Array.isArray((data as { items?: unknown }).items)) {
 			return ((data as { items: unknown[] }).items).filter(isRecord);
 		}
 	}
 
 	return [];
+}
+
+/** Restormel project index bindings may set `enabled: false` for soft-off rows. */
+export function isRestormelBindingRowEnabled(row: Record<string, unknown>): boolean {
+	return row.enabled !== false;
 }
 
 function inferEntry(providerRaw: string, modelIdRaw: string): IngestionModelCatalogEntry {
@@ -332,6 +346,7 @@ export function mergeCatalogWithRestormelModels(
 	let inferredRemoteCount = 0;
 
 	for (const row of rows) {
+		if (!isRestormelBindingRowEnabled(row)) continue;
 		const ids = rowToProviderModel(row);
 		if (!ids) continue;
 		const label = `${ids.provider} · ${ids.modelId}`;
@@ -420,6 +435,7 @@ export function buildRestormelProjectModelEntriesOnly(
 	const entries: IngestionModelCatalogEntryMerged[] = [];
 
 	for (const row of rows) {
+		if (!isRestormelBindingRowEnabled(row)) continue;
 		const ids = rowToProviderModel(row);
 		if (!ids) continue;
 		const key = `${ids.provider} · ${ids.modelId}`;

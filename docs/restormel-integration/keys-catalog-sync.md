@@ -44,9 +44,13 @@ This prints a Markdown table of model ids that appear **only** in Keys or **only
 
 Manually merge missing ids into `packages/contracts/src/providers.ts`. It is normal for contracts to list **extra** ids Keys does not ship (e.g. Vertex embedding models) — keep those for ingestion / platform behaviour.
 
-## 3. Restormel project model index (optional, different use case)
+## 3. Project model index vs global catalog (dashboard / Gateway Key)
 
-`restormelListProjectModels()` calls **`GET …/projects/{id}/models`** on the Restormel dashboard API. That index is used for **ingestion** merging (`ingestionModelCatalogMerge.ts`), not for the reasoning allowed-models path. It complements — but does not replace — Keys + contracts for analyse routing.
+- **`GET …/projects/{projectId}/models`** (via `restormelListProjectModels()`) returns the **project model index**: bindings (`providerType`, `modelId`, `enabled`, `id`, nested catalog `model`). Sophia ingestion pickers and recommendations merge this response in `ingestionModelCatalogMerge.ts`. Rows with **`enabled: false`** are ignored.
+- **Global catalog** for the tenant is **`GET …/models`** (`restormelListGlobalDashboardModels()`). Use when you need the full catalog, not the per-project allowlist.
+- **Mutations** (automation with `RESTORMEL_GATEWAY_KEY` + `RESTORMEL_PROJECT_ID`): `restormelAddProjectModelBindings`, `restormelReplaceProjectModelAllowlist`, `restormelPatchProjectModelBinding`, `restormelDeleteProjectModelBinding` in `src/lib/server/restormel.ts`.
+
+Reasoning / analyse **allowed-models** still flow from **`@restormel/contracts`** and policy evaluation — the project index is complementary for ingestion control-plane UX.
 
 ## 4. Policy / allowed-models
 
