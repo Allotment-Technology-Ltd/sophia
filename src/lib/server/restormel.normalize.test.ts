@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeRestormelBaseUrl } from './restormel';
+import {
+	isRestormelCatalogContractSupported,
+	normalizeRestormelBaseUrl,
+	RESTORMEL_CATALOG_V5_CONTRACT_VERSION,
+	RESTORMEL_CATALOG_V6_CONTRACT_VERSION
+} from './restormel';
+
+describe('isRestormelCatalogContractSupported', () => {
+	it('accepts catalog v5 and v6', () => {
+		expect(isRestormelCatalogContractSupported(RESTORMEL_CATALOG_V5_CONTRACT_VERSION)).toBe(true);
+		expect(isRestormelCatalogContractSupported(RESTORMEL_CATALOG_V6_CONTRACT_VERSION)).toBe(true);
+	});
+
+	it('rejects unknown contract strings', () => {
+		expect(isRestormelCatalogContractSupported('2099-01-01.catalog.v99')).toBe(false);
+		expect(isRestormelCatalogContractSupported('')).toBe(false);
+	});
+});
 
 describe('normalizeRestormelBaseUrl', () => {
   it('defaults empty to keys dashboard', () => {

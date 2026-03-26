@@ -1,5 +1,5 @@
 /**
- * Parse Restormel Keys live catalog v5 (`GET /catalog`) model rows for admin model surfaces
+ * Parse Restormel Keys live catalog (`GET /catalog`, contract v5 or v6) model rows for admin model surfaces
  * (operations vs user queries). Row shape aligns with `readModelRows` usage in restormel.ts.
  */
 
