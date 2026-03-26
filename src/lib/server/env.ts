@@ -4,8 +4,27 @@ import { join } from 'node:path';
 
 let loaded = false;
 
+/** Admin-spawned ingest pins must survive dotenv (especially `.env.local` with `override: true`). */
+function snapshotIngestPinEnv(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of Object.keys(process.env)) {
+    if (!key.startsWith('INGEST_PIN_')) continue;
+    const v = process.env[key];
+    if (typeof v === 'string' && v.trim() !== '') out[key] = v;
+  }
+  return out;
+}
+
+function restoreIngestPinEnv(snapshot: Record<string, string>): void {
+  for (const [k, v] of Object.entries(snapshot)) {
+    process.env[k] = v;
+  }
+}
+
 export function loadServerEnv(): void {
   if (loaded) return;
+
+  const pinSnapshot = snapshotIngestPinEnv();
 
   const cwd = process.cwd();
   const envPath = join(cwd, '.env');
@@ -19,6 +38,8 @@ export function loadServerEnv(): void {
   if (existsSync(envLocalPath)) {
     config({ path: envLocalPath, override: true });
   }
+
+  restoreIngestPinEnv(pinSnapshot);
 
   // When `pnpm dev` auto-tunnel is active, preserve tunneled Surreal URL.
   // This avoids .env.local overriding it back to private VPC IP for local runs.

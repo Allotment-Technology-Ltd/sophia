@@ -148,6 +148,23 @@ export function modelChainLabelsToEnv(chain: IngestRunPayload['model_chain']): R
   return out;
 }
 
+const PIN_STAGE_SUFFIXES = ['EXTRACTION', 'RELATIONS', 'GROUPING', 'VALIDATION', 'JSON_REPAIR'] as const;
+
+/**
+ * Base64url JSON for `scripts/ingest.ts --ingest-pins-json=…` so operator pins survive
+ * dotenv / `--env-file` ordering (see `loadServerEnv` + admin spawn).
+ */
+export function encodeIngestPinsJsonCliArg(pinEnv: Record<string, string>): string | null {
+  const out: Record<string, { provider: string; model: string }> = {};
+  for (const s of PIN_STAGE_SUFFIXES) {
+    const p = pinEnv[`INGEST_PIN_PROVIDER_${s}`]?.trim();
+    const m = pinEnv[`INGEST_PIN_MODEL_${s}`]?.trim();
+    if (p && m) out[s] = { provider: p, model: m };
+  }
+  if (Object.keys(out).length === 0) return null;
+  return Buffer.from(JSON.stringify(out), 'utf8').toString('base64url');
+}
+
 export interface StageStatus {
   status: 'idle' | 'running' | 'done' | 'error' | 'skipped';
   summary?: string;
@@ -678,10 +695,12 @@ class IngestRunManager extends EventEmitter {
     sourceFile: string,
     options: { forSyncOnly: boolean; resumeFromFailure?: boolean }
   ): void {
+    const pinEnvFlat = modelChainLabelsToEnv(payload.model_chain);
     const batchEnvOverrides = {
       ...batchOverridesToEnv(payload.batch_overrides),
-      ...modelChainLabelsToEnv(payload.model_chain)
+      ...pinEnvFlat
     };
+    const ingestPinsJsonCli = encodeIngestPinsJsonCliArg(pinEnvFlat);
     const forSync = options.forSyncOnly;
     const stopBeforeStore = forSync ? false : payload.stop_before_store !== false;
 
@@ -714,6 +733,9 @@ class IngestRunManager extends EventEmitter {
     }
 
     const ingestArgs = ['tsx', ...buildEnvFileArgs(), 'scripts/ingest.ts', sourceFile];
+    if (ingestPinsJsonCli) {
+      ingestArgs.push(`--ingest-pins-json=${ingestPinsJsonCli}`);
+    }
     if (payload.validate) ingestArgs.push('--validate');
     if (stopBeforeStore) ingestArgs.push('--stop-before-store');
 

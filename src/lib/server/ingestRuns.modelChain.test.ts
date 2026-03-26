@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { modelChainLabelsToEnv, type IngestRunPayload } from './ingestRuns';
+import {
+  encodeIngestPinsJsonCliArg,
+  modelChainLabelsToEnv,
+  type IngestRunPayload
+} from './ingestRuns';
 
 describe('modelChainLabelsToEnv', () => {
   it('maps Expand labels to INGEST_PIN env keys and normalizes google to vertex', () => {
@@ -43,5 +47,22 @@ describe('modelChainLabelsToEnv', () => {
     expect(env.INGEST_PIN_MODEL_GROUPING).toBe('claude-sonnet-4');
     expect(env.INGEST_PIN_PROVIDER_VALIDATION).toBe('mistral');
     expect(env.INGEST_PIN_MODEL_VALIDATION).toBe('mistral-large-latest');
+  });
+
+  it('encodeIngestPinsJsonCliArg round-trips stable ids for CLI', () => {
+    const env = modelChainLabelsToEnv({
+      extract: 'anthropic__claude-3-5-sonnet-20241022',
+      relate: 'anthropic__claude-3-5-sonnet-20241022',
+      group: 'anthropic__claude-sonnet-4',
+      validate: 'mistral__mistral-large-latest'
+    });
+    const b64 = encodeIngestPinsJsonCliArg(env);
+    expect(b64).toBeTruthy();
+    const parsed = JSON.parse(Buffer.from(b64!, 'base64url').toString('utf8')) as Record<
+      string,
+      { provider: string; model: string }
+    >;
+    expect(parsed.EXTRACTION).toEqual({ provider: 'anthropic', model: 'claude-3-5-sonnet-20241022' });
+    expect(parsed.VALIDATION).toEqual({ provider: 'mistral', model: 'mistral-large-latest' });
   });
 });

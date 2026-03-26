@@ -1880,8 +1880,37 @@ function normalizeResumeStage(
 }
 
 // ─── MAIN PIPELINE ─────────────────────────────────────────────────────────
+
+/** Admin spawn passes base64url JSON so INGEST_PIN_* survives dotenv / env-file ordering. */
+function applyIngestPinsJsonArg(argv: string[]): void {
+	const prefix = '--ingest-pins-json=';
+	const raw = argv.find((a) => a.startsWith(prefix));
+	if (!raw) return;
+	const b64 = raw.slice(prefix.length);
+	if (!b64.trim()) return;
+	try {
+		const json = Buffer.from(b64, 'base64url').toString('utf8');
+		const data = JSON.parse(json) as Record<string, { provider?: string; model?: string }>;
+		for (const [suffix, v] of Object.entries(data)) {
+			if (
+				v &&
+				typeof v.provider === 'string' &&
+				typeof v.model === 'string' &&
+				v.provider.trim() &&
+				v.model.trim()
+			) {
+				process.env[`INGEST_PIN_PROVIDER_${suffix}`] = v.provider.trim();
+				process.env[`INGEST_PIN_MODEL_${suffix}`] = v.model.trim();
+			}
+		}
+	} catch {
+		console.warn('[ingest] Ignoring invalid --ingest-pins-json');
+	}
+}
+
 async function main() {
 	const args = process.argv.slice(2);
+	applyIngestPinsJsonArg(args);
 	const filePath = args.find((a) => !a.startsWith('--'));
 	const shouldValidate = args.includes('--validate');
 	const ingestProviderFlagIdx = args.findIndex((a) => a === '--ingest-provider');
@@ -1928,6 +1957,7 @@ async function main() {
 		console.error('  RESTORMEL_INGEST_EXTRACTION_ROUTE_ID, RESTORMEL_INGEST_RELATIONS_ROUTE_ID, RESTORMEL_INGEST_GROUPING_ROUTE_ID, RESTORMEL_INGEST_JSON_REPAIR_ROUTE_ID');
 		console.error('\nAdmin Expand pins (optional; set by server when using stage picks):');
 		console.error('  INGEST_PIN_PROVIDER_EXTRACTION, INGEST_PIN_MODEL_EXTRACTION (same for RELATIONS, GROUPING, VALIDATION, JSON_REPAIR)');
+		console.error('  --ingest-pins-json=<base64url JSON>  Preferred when spawned from admin (survives dotenv)');
 		console.error('\nResume is automatic — re-run the same source to pick up where it left off.');
 		process.exit(1);
 	}
