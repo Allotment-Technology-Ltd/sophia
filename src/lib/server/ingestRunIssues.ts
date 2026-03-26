@@ -286,6 +286,14 @@ export interface IngestRunSnapshotForReport {
       validationTargetTokens?: number;
       relationsTargetTokens?: number;
       embedBatchSize?: number;
+      ingestModelTimeoutMs?: number;
+      validationModelTimeoutMs?: number;
+      ingestStageValidationTimeoutMs?: number;
+      ingestStageExtractionTimeoutMs?: number;
+      ingestStageRelationsTimeoutMs?: number;
+      ingestStageGroupingTimeoutMs?: number;
+      ingestStageEmbeddingTimeoutMs?: number;
+      ingestStageJsonRepairTimeoutMs?: number;
     };
   };
   issues: IngestIssueRecord[];
