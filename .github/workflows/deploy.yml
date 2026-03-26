@@ -25,6 +25,16 @@
 # AIKIDO: This repo uses the GitHub App for PR checks. Do NOT add AikidoSec/github-actions-workflow
 #   here — Aikido returns 422 if both are enabled. PR scans appear as a separate check from the app.
 #
+# AIKIDO / PR CHECKS (mutually exclusive with the Aikido GitHub Action):
+#   If the repo uses Aikido’s GitHub App for PR checks, do NOT add
+#   AikidoSec/github-actions-workflow — Aikido returns 422. PR scans and status on PRs
+#   come from the installed GitHub App (see user-facing locations below), not from this file.
+#
+# AIKIDO / PR CHECKS (mutually exclusive with the Aikido GitHub Action):
+#   If the repo uses Aikido’s GitHub App for PR checks, do NOT add
+#   AikidoSec/github-actions-workflow — Aikido returns 422. PR scans and status on PRs
+#   come from the installed GitHub App (see user-facing locations below), not from this file.
+#
 # FIRST-TIME INFRA SETUP (run once from your local machine before CI manages it):
 #   pnpm install --filter sophia-infra   # from repo root (infra is a pnpm workspace)
 #   pulumi stack init production
@@ -40,6 +50,14 @@
 #   Infrastructure rollback: revert the infra/ commit and re-run the pipeline.
 #
 # AIKIDO: https://app.aikido.dev/ — GitHub App posts PR checks; Settings → GitHub Apps → Aikido.
+# AIKIDO: Configure in https://app.aikido.dev/ (PR gating, AutoFix). On GitHub: Settings →
+#   Integrations → GitHub Apps (org or user) → Aikido, or repo Settings → GitHub Apps /
+#   Installed GitHub Apps. The app posts PR checks; add that check name under branch
+#   protection if merges should wait on Aikido.
+# AIKIDO: Dashboard (https://app.aikido.dev/) handles PR gating and AutoFix. Either:
+#   (A) GitHub App — Settings → GitHub Apps → Aikido; the app posts its own PR check name.
+#   (B) Action — the `aikido` job below (needs AIKIDO_SECRET_KEY); add job id `aikido` to
+#       branch protection. Do not enable both the App scan and this Action (422 risk).
 
 name: CI/CD
 
