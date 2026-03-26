@@ -46,11 +46,16 @@ Manually merge missing ids into `packages/contracts/src/providers.ts`. It is nor
 
 ## 3. Project model index vs global catalog (dashboard / Gateway Key)
 
-- **`GET …/projects/{projectId}/models`** (via `restormelListProjectModels()`) returns the **project model index**: bindings (`providerType`, `modelId`, `enabled`, `id`, nested catalog `model`). Sophia ingestion pickers and recommendations merge this response in `ingestionModelCatalogMerge.ts`. Rows with **`enabled: false`** are ignored.
-- **Global catalog** for the tenant is **`GET …/models`** (`restormelListGlobalDashboardModels()`). Use when you need the full catalog, not the per-project allowlist.
-- **Mutations** (automation with `RESTORMEL_GATEWAY_KEY` + `RESTORMEL_PROJECT_ID`): `restormelAddProjectModelBindings`, `restormelReplaceProjectModelAllowlist`, `restormelPatchProjectModelBinding`, `restormelDeleteProjectModelBinding` in `src/lib/server/restormel.ts`.
+**Upstream integrator reference (canonical):** [restormel-keys — keys-catalog-sync.md](https://github.com/Allotment-Technology-Ltd/restormel-keys/blob/main/docs/restormel-integration/keys-catalog-sync.md), OpenAPI **1.3.1+** in [openapi.yaml](https://github.com/Allotment-Technology-Ltd/restormel-keys/blob/main/docs/api/openapi.yaml), behaviour [project-model-index-gateway-api.md](https://github.com/Allotment-Technology-Ltd/restormel-keys/blob/main/docs/requirements/project-model-index-gateway-api.md).
+
+- **`GET …/projects/{projectId}/models`** (via `restormelListProjectModels()`) returns the **project model index**. The binding list is the JSON array at **`data`** (each row: `id`, `providerType`, `modelId`, `enabled`, nested `model`, etc.). Sophia merges this in `ingestionModelCatalogMerge.ts`. Rows with **`enabled: false`** are ignored in our pickers. The API does **not** emit `data.bindings`; our parser still accepts `data.models` / `data.bindings` defensively.
+- Do **not** rely on **`?source=catalog`** on the project path for new code; prefer **`GET …/models`** for the **global** tenant catalog (`restormelListGlobalDashboardModels()`).
+- **`POST` / `PUT`** failures: **`error: project_models_validation_failed`**, optional **`detail`**, **`errors[]`** per row — branch in automation on `error` and parse `errors[]` (see upstream OpenAPI component `ProjectModelsValidationError`).
+- **Mutations** (Gateway key + `RESTORMEL_PROJECT_ID`): `restormelAddProjectModelBindings`, `restormelReplaceProjectModelAllowlist`, `restormelPatchProjectModelBinding`, `restormelDeleteProjectModelBinding` in `src/lib/server/restormel.ts`. Request bodies use **`models`** (array of `{ providerType, modelId [, enabled] }`).
 
 Reasoning / analyse **allowed-models** still flow from **`@restormel/contracts`** and policy evaluation — the project index is complementary for ingestion control-plane UX.
+
+**Keys deploy:** Postgres migration **`020_project_model_bindings.sql`** on the dashboard DB when rolling an image that serves the index (operator step on Keys, not Sophia).
 
 ## 4. Policy / allowed-models
 
