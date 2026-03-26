@@ -1926,6 +1926,8 @@ async function main() {
 		console.error('\nRestormel route env vars (optional):');
 		console.error('  RESTORMEL_INGEST_ROUTE_ID, RESTORMEL_INGEST_VALIDATION_ROUTE_ID');
 		console.error('  RESTORMEL_INGEST_EXTRACTION_ROUTE_ID, RESTORMEL_INGEST_RELATIONS_ROUTE_ID, RESTORMEL_INGEST_GROUPING_ROUTE_ID, RESTORMEL_INGEST_JSON_REPAIR_ROUTE_ID');
+		console.error('\nAdmin Expand pins (optional; set by server when using stage picks):');
+		console.error('  INGEST_PIN_PROVIDER_EXTRACTION, INGEST_PIN_MODEL_EXTRACTION (same for RELATIONS, GROUPING, VALIDATION, JSON_REPAIR)');
 		console.error('\nResume is automatic — re-run the same source to pick up where it left off.');
 		process.exit(1);
 	}

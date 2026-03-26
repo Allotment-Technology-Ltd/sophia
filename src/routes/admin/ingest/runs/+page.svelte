@@ -62,6 +62,12 @@
     window.location.href = `/admin/ingest?${params.toString()}`;
   }
 
+  function viewSavedReport(runId: string): void {
+    const params = new URLSearchParams();
+    params.set('reportRunId', runId);
+    window.location.href = `/admin/ingest?${params.toString()}`;
+  }
+
   async function copyRunId(runId: string): Promise<void> {
     try {
       await navigator.clipboard.writeText(runId);
@@ -223,8 +229,11 @@
             Recent Firestore reports
           </h2>
           <p class="mt-1 text-xs text-sophia-dark-muted">
-            “Open” only works if this instance still holds that run in memory; otherwise use the worker / same source URL
-            to resume from disk checkpoints (<code class="font-mono text-[0.65rem] text-sophia-dark-text">*-partial.json</code>).
+            <strong class="text-sophia-dark-text">Open</strong> only works while this Cloud Run instance still holds the run
+            in memory (lost after deploy or scale-to-zero).
+            Use <strong class="text-sophia-dark-text">View report</strong> to load the saved Firestore snapshot on Expand
+            (read-only: no live log polling). To continue ingestion, use the same source URL so the worker can pick up
+            <code class="font-mono text-[0.65rem] text-sophia-dark-text">*-partial.json</code> checkpoints on disk.
           </p>
           <div class="mt-2 overflow-auto rounded border border-sophia-dark-border">
             <table class="min-w-full text-left font-mono text-xs text-sophia-dark-muted">
@@ -266,12 +275,18 @@
                         >
                         <button
                           type="button"
+                          class="rounded border border-sophia-dark-border px-3 py-1.5 font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-text hover:bg-sophia-dark-surface-raised"
+                          title="Load saved Firestore report on Expand (works after restarts)"
+                          onclick={() => viewSavedReport(rep.runId)}>View report</button
+                        >
+                        <button
+                          type="button"
                           class="rounded border border-sophia-dark-border px-3 py-1.5 font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-sage hover:bg-sophia-dark-surface-raised disabled:opacity-40"
                           disabled={!runs.some((r) => r.id === rep.runId)}
                           title={runs.some((r) => r.id === rep.runId)
-                            ? 'Open monitor for this run'
-                            : 'Run is not on this instance — reopen from Expand with the same source if checkpoints exist'}
-                          onclick={() => openRun(rep.runId)}>Open</button
+                            ? 'Live monitor for this run (same server instance only)'
+                            : 'Run is not in memory on this instance — use View report or same source URL + checkpoints'}
+                          onclick={() => openRun(rep.runId)}>Open live</button
                         >
                       </div>
                     </td>
