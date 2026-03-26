@@ -2,6 +2,8 @@
 
 Use this checklist to compare **before/after** throughput work: telemetry in the worker, admin UI, and Firestore `ingestion_run_reports`.
 
+**Related:** [ingestion-preset-evidence.md](./ingestion-preset-evidence.md) (how to read `GET /api/admin/ingest/analytics` for preset tuning). Longer-term **golden-set gates** are outlined in [docs/sophia/roadmap.md](../sophia/roadmap.md) under *Future enhancements (ingestion presets)*.
+
 ## What to capture
 
 1. **Wall time** — total run time and per-stage ms from `[INGEST_TIMING]` / `timingTelemetry`.

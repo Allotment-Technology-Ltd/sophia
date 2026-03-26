@@ -18,11 +18,13 @@ describe('isDeniedProjectModelPutModelId', () => {
 });
 
 describe('isRestormelProjectModelPutProvider', () => {
-	it('matches Keys PUT canonical list', () => {
+	it('matches Keys PUT canonical execution providers (OpenAPI / catalog; perplexity off-list)', () => {
 		expect(isRestormelProjectModelPutProvider('openai')).toBe(true);
 		expect(isRestormelProjectModelPutProvider('vertex')).toBe(true);
-		expect(isRestormelProjectModelPutProvider('xai')).toBe(false);
-		expect(isRestormelProjectModelPutProvider('mistral')).toBe(false);
+		expect(isRestormelProjectModelPutProvider('mistral')).toBe(true);
+		expect(isRestormelProjectModelPutProvider('deepseek')).toBe(true);
+		expect(isRestormelProjectModelPutProvider('together')).toBe(true);
+		expect(isRestormelProjectModelPutProvider('perplexity')).toBe(false);
 	});
 });
 
@@ -70,17 +72,17 @@ describe('computeEffectiveOperationsBindings + bindable filter', () => {
 		data: {
 			models: [
 				{ providerType: 'openai', modelId: 'gpt-4o' },
-				{ providerType: 'xai', modelId: 'grok-3' }
+				{ providerType: 'perplexity', modelId: 'sonar-pro' }
 			]
 		}
 	};
 
 	const keyOpenai = catalogSurfaceStableKey('openai', 'gpt-4o');
-	const keyXai = catalogSurfaceStableKey('xai', 'grok-3');
+	const keyPerplexity = catalogSurfaceStableKey('perplexity', 'sonar-pro');
 
 	const assignments: Record<string, SurfaceRole> = {
 		[keyOpenai]: 'ingestion_only',
-		[keyXai]: 'ingestion_only'
+		[keyPerplexity]: 'ingestion_only'
 	};
 
 	const config: ModelSurfacesStored = {
@@ -90,7 +92,7 @@ describe('computeEffectiveOperationsBindings + bindable filter', () => {
 		lastRestormelSyncError: null
 	};
 
-	it('without bindable set drops non-canonical PUT providers (e.g. xai)', () => {
+	it('without bindable set drops non-canonical PUT providers (e.g. perplexity)', () => {
 		const out = computeEffectiveOperationsBindings(catalogPayload, config, undefined, {
 			registryBindings: false
 		});
@@ -155,23 +157,23 @@ describe('computeEffectiveOperationsBindings (registry bindings mode)', () => {
 		data: {
 			models: [
 				{ providerType: 'openai', modelId: 'gpt-4o' },
-				{ providerType: 'xai', modelId: 'grok-3' }
+				{ providerType: 'perplexity', modelId: 'sonar-pro' }
 			]
 		}
 	};
 	const keyOpenai = catalogSurfaceStableKey('openai', 'gpt-4o');
-	const keyXai = catalogSurfaceStableKey('xai', 'grok-3');
+	const keyPerplexity = catalogSurfaceStableKey('perplexity', 'sonar-pro');
 	const config: ModelSurfacesStored = {
 		operationsMode: 'default',
 		userQueriesMode: 'default',
 		surfaceAssignments: {
 			[keyOpenai]: 'ingestion_only',
-			[keyXai]: 'ingestion_only'
+			[keyPerplexity]: 'ingestion_only'
 		},
 		lastRestormelSyncError: null
 	};
 
-	it('emits registry for non-bindable providers (e.g. xai) and execution for bindable chat', () => {
+	it('emits registry for non-bindable providers (e.g. perplexity) and execution for bindable chat', () => {
 		const bindable = new Set([keyOpenai]);
 		const out = computeEffectiveOperationsBindings(catalogPayload, config, bindable, {
 			registryBindings: true
@@ -180,8 +182,8 @@ describe('computeEffectiveOperationsBindings (registry bindings mode)', () => {
 			expect.arrayContaining([
 				{ providerType: 'openai', modelId: 'gpt-4o', enabled: true },
 				{
-					providerType: 'xai',
-					modelId: 'grok-3',
+					providerType: 'perplexity',
+					modelId: 'sonar-pro',
 					enabled: true,
 					bindingKind: 'registry'
 				}
@@ -222,6 +224,89 @@ describe('computeEffectiveOperationsBindings (registry bindings mode)', () => {
 					enabled: true,
 					bindingKind: 'registry'
 				}
+			])
+		);
+		expect(out).toHaveLength(2);
+	});
+
+	it('emits registry for embeddings even when bindable set lists them (avoid Keys execution unknown-model on PUT)', () => {
+		const embPayload = {
+			data: {
+				models: [
+					{ providerType: 'vertex', modelId: 'text-embedding-005' },
+					{ providerType: 'voyage', modelId: 'voyage-3-large' },
+					{ providerType: 'openai', modelId: 'gpt-4o' }
+				]
+			}
+		};
+		const kEmb = catalogSurfaceStableKey('vertex', 'text-embedding-005');
+		const kVoy = catalogSurfaceStableKey('voyage', 'voyage-3-large');
+		const kChat = catalogSurfaceStableKey('openai', 'gpt-4o');
+		const cfg: ModelSurfacesStored = {
+			operationsMode: 'default',
+			userQueriesMode: 'default',
+			surfaceAssignments: {
+				[kEmb]: 'embeddings_only',
+				[kVoy]: 'embeddings_only',
+				[kChat]: 'ingestion_only'
+			},
+			lastRestormelSyncError: null
+		};
+		const bindable = new Set([kEmb, kVoy, kChat]);
+		const out = computeEffectiveOperationsBindings(embPayload, cfg, bindable, {
+			registryBindings: true
+		});
+		expect(out).toEqual(
+			expect.arrayContaining([
+				{ providerType: 'openai', modelId: 'gpt-4o', enabled: true },
+				{
+					providerType: 'vertex',
+					modelId: 'text-embedding-005',
+					enabled: true,
+					bindingKind: 'registry'
+				},
+				{
+					providerType: 'voyage',
+					modelId: 'voyage-3-large',
+					enabled: true,
+					bindingKind: 'registry'
+				}
+			])
+		);
+		expect(out).toHaveLength(3);
+	});
+
+	it('emits registry for legacy Mistral ids not in Keys seed (avoid execution PUT variant errors)', () => {
+		const payload = {
+			data: {
+				models: [
+					{ providerType: 'mistral', modelId: 'mixtral-8x7b-32768' },
+					{ providerType: 'mistral', modelId: 'mistral-large-latest' }
+				]
+			}
+		};
+		const kLegacy = catalogSurfaceStableKey('mistral', 'mixtral-8x7b-32768');
+		const kSeeded = catalogSurfaceStableKey('mistral', 'mistral-large-latest');
+		const cfg: ModelSurfacesStored = {
+			operationsMode: 'default',
+			userQueriesMode: 'default',
+			surfaceAssignments: {
+				[kLegacy]: 'ingestion_only',
+				[kSeeded]: 'ingestion_only'
+			},
+			lastRestormelSyncError: null
+		};
+		const bindable = new Set([kLegacy, kSeeded]);
+		const out = computeEffectiveOperationsBindings(payload, cfg, bindable, { registryBindings: true });
+		expect(out).toEqual(
+			expect.arrayContaining([
+				{
+					providerType: 'mistral',
+					modelId: 'mixtral-8x7b-32768',
+					enabled: true,
+					bindingKind: 'registry'
+				},
+				{ providerType: 'mistral', modelId: 'mistral-large-latest', enabled: true }
 			])
 		);
 		expect(out).toHaveLength(2);

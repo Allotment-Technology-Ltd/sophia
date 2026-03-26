@@ -30,6 +30,10 @@ describe('minimumQualityTierForStage', () => {
 		expect(minimumQualityTierForStage('complexity', 'ingestion_grouping')).toBe('frontier');
 		expect(minimumQualityTierForStage('complexity', 'ingestion_validation')).toBe('frontier');
 	});
+
+	it('uses strong json repair for balanced preset', () => {
+		expect(minimumQualityTierForStage('balanced', 'ingestion_json_repair')).toBe('strong');
+	});
 });
 
 describe('entryMeetsPresetStageMinimum', () => {
@@ -53,6 +57,29 @@ describe('entryMeetsPresetStageMinimum', () => {
 				costTier: 'low'
 			})
 		).toBe(false);
+	});
+
+
+	it('requires strong relations for budget preset (Wave 1 relation-density signal)', () => {
+		expect(
+			entryMeetsPresetStageMinimum('budget', 'ingestion_relations', {
+				label: 'openai · gpt-4o-mini',
+				provider: 'openai',
+				modelId: 'gpt-4o-mini',
+				qualityTier: 'capable',
+				costTier: 'low'
+			})
+		).toBe(false);
+
+		expect(
+			entryMeetsPresetStageMinimum('budget', 'ingestion_relations', {
+				label: 'openai · gpt-4o',
+				provider: 'openai',
+				modelId: 'gpt-4o',
+				qualityTier: 'strong',
+				costTier: 'medium'
+			})
+		).toBe(true);
 	});
 
 	it('requires strong grouping for budget preset', () => {

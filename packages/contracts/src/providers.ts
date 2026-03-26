@@ -4,7 +4,6 @@ export const BYOK_PROVIDER_ORDER = [
   'vertex',
   'anthropic',
   'openai',
-  'xai',
   'groq',
   'mistral',
   'deepseek',
@@ -23,7 +22,6 @@ export const REASONING_PROVIDER_ORDER = [
   'vertex',
   'anthropic',
   'openai',
-  'xai',
   'groq',
   'mistral',
   'deepseek',
@@ -66,12 +64,6 @@ export const PROVIDER_UI_META: Record<ByokProvider, ProviderUiMeta> = {
     modelLabel: 'OpenAI',
     hint: 'Use an OpenAI API key. Stored encrypted per account.',
     placeholder: 'sk-proj-...'
-  },
-  xai: {
-    label: 'xAI / Grok',
-    modelLabel: 'Grok',
-    hint: 'Use an xAI API key for Grok models. Stored encrypted per account.',
-    placeholder: 'xai-...'
   },
   groq: {
     label: 'Groq',
@@ -159,7 +151,6 @@ export const DEFAULT_MODEL_CATALOG: Record<ReasoningProvider, string[]> = {
     'o3-mini',
     'o4-mini'
   ],
-  xai: ['grok-3-beta', 'grok-3-mini-beta', 'grok-2-latest'],
   groq: [
     'llama-3.3-70b-versatile',
     'deepseek-r1-distill-llama-70b',
@@ -230,7 +221,6 @@ export const VOYAGE_EMBEDDING_MODEL_CATALOG: string[] = [
 export const REASONING_PROVIDER_PLATFORM_API_KEY_ENV: Partial<Record<ReasoningProvider, string>> = {
   anthropic: 'ANTHROPIC_API_KEY',
   openai: 'OPENAI_API_KEY',
-  xai: 'XAI_API_KEY',
   groq: 'GROQ_API_KEY',
   mistral: 'MISTRAL_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
@@ -242,7 +232,6 @@ export const REASONING_PROVIDER_PLATFORM_API_KEY_ENV: Partial<Record<ReasoningPr
 
 export const REASONING_PROVIDER_BASE_URL_ENV: Partial<Record<ReasoningProvider, string>> = {
   openai: 'OPENAI_BASE_URL',
-  xai: 'XAI_BASE_URL',
   groq: 'GROQ_BASE_URL',
   mistral: 'MISTRAL_BASE_URL',
   deepseek: 'DEEPSEEK_BASE_URL',
@@ -253,7 +242,6 @@ export const REASONING_PROVIDER_BASE_URL_ENV: Partial<Record<ReasoningProvider, 
 };
 
 export const REASONING_PROVIDER_DEFAULT_BASE_URL: Partial<Record<ReasoningProvider, string>> = {
-  xai: 'https://api.x.ai/v1',
   groq: 'https://api.groq.com/openai/v1',
   mistral: 'https://api.mistral.ai/v1',
   deepseek: 'https://api.deepseek.com/v1',

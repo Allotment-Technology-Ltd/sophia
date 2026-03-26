@@ -11,6 +11,7 @@ import {
 	catalogEntryForLabel,
 	INGESTION_MODEL_CATALOG
 } from './ingestionModelCatalog';
+import { isExcludedXaiGrokCatalogRef } from './modelCatalogEthics';
 import { isEmbeddingModelByProviderAndId } from './modelKind';
 
 export type CatalogEntrySource = 'annotated' | 'remote' | 'static_supplement';
@@ -218,7 +219,6 @@ export function rowToProviderModel(row: Record<string, unknown>): { provider: st
 		}
 		if (low.startsWith('voyage')) return 'voyage';
 		if (low.startsWith('deepseek')) return 'deepseek';
-		if (low.startsWith('grok')) return 'xai';
 		if (
 			low.startsWith('mistral') ||
 			low.startsWith('ministral') ||
@@ -326,15 +326,18 @@ export function mergeCatalogWithRestormelModels(
 	fetchError?: string | null
 ): { entries: IngestionModelCatalogEntryMerged[]; sync: CatalogSyncMeta } {
 	if (fetchError) {
+		const staticEntries = INGESTION_MODEL_CATALOG.filter(
+			(e) => !isExcludedXaiGrokCatalogRef(e.provider, e.modelId)
+		);
 		return {
-			entries: INGESTION_MODEL_CATALOG.map((e) => ({ ...e, catalogSource: 'static_supplement' as const })),
+			entries: staticEntries.map((e) => ({ ...e, catalogSource: 'static_supplement' as const })),
 			sync: {
 				status: 'static',
 				reason: fetchError,
 				remoteRowCount: 0,
 				annotatedCount: 0,
 				inferredRemoteCount: 0,
-				staticSupplementCount: INGESTION_MODEL_CATALOG.length
+				staticSupplementCount: staticEntries.length
 			}
 		};
 	}
@@ -342,8 +345,11 @@ export function mergeCatalogWithRestormelModels(
 	const rows = extractModelRowsFromRestormelPayload(remoteResponse);
 	if (rows.length === 0) {
 		const hadPayload = remoteResponse !== null && remoteResponse !== undefined;
+		const staticEntries = INGESTION_MODEL_CATALOG.filter(
+			(e) => !isExcludedXaiGrokCatalogRef(e.provider, e.modelId)
+		);
 		return {
-			entries: INGESTION_MODEL_CATALOG.map((e) => ({ ...e, catalogSource: 'static_supplement' as const })),
+			entries: staticEntries.map((e) => ({ ...e, catalogSource: 'static_supplement' as const })),
 			sync: {
 				status: 'static',
 				reason: hadPayload
@@ -352,7 +358,7 @@ export function mergeCatalogWithRestormelModels(
 				remoteRowCount: 0,
 				annotatedCount: 0,
 				inferredRemoteCount: 0,
-				staticSupplementCount: INGESTION_MODEL_CATALOG.length
+				staticSupplementCount: staticEntries.length
 			}
 		};
 	}
@@ -366,6 +372,7 @@ export function mergeCatalogWithRestormelModels(
 		if (!isRestormelBindingRowEnabled(row)) continue;
 		const ids = rowToProviderModel(row);
 		if (!ids) continue;
+		if (isExcludedXaiGrokCatalogRef(ids.provider, ids.modelId)) continue;
 		const label = `${ids.provider} · ${ids.modelId}`;
 		if (seen.has(label)) continue;
 		seen.add(label);
@@ -384,6 +391,7 @@ export function mergeCatalogWithRestormelModels(
 
 	let staticSupplementCount = 0;
 	for (const staticEntry of INGESTION_MODEL_CATALOG) {
+		if (isExcludedXaiGrokCatalogRef(staticEntry.provider, staticEntry.modelId)) continue;
 		if (seen.has(staticEntry.label)) continue;
 		entries.push({ ...staticEntry, catalogSource: 'static_supplement' });
 		staticSupplementCount++;
@@ -455,6 +463,7 @@ export function buildRestormelProjectModelEntriesOnly(
 		if (!isRestormelBindingRowEnabled(row)) continue;
 		const ids = rowToProviderModel(row);
 		if (!ids) continue;
+		if (isExcludedXaiGrokCatalogRef(ids.provider, ids.modelId)) continue;
 		const key = `${ids.provider} · ${ids.modelId}`;
 		if (seen.has(key)) continue;
 		seen.add(key);

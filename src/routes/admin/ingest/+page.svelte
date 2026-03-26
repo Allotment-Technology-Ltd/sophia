@@ -1,10 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { getIdToken } from '$lib/firebase';
-  import {
-    extractModelRowsFromRestormelPayload,
-    isEmbeddingModelEntry
-  } from '$lib/ingestionModelCatalogMerge';
+  import { isEmbeddingModelEntry } from '$lib/ingestionModelCatalogMerge';
   import { INGESTION_SOURCE_MODEL_HINTS } from '$lib/ingestionModelCatalog';
   import { entryMeetsPresetStageMinimum } from '$lib/ingestionPipelineModelRequirements';
   import { resolveRouteForStage } from '$lib/utils/ingestionRouting';
@@ -125,7 +122,7 @@
   const SOURCE_TYPES = [
     { value: 'sep_entry', label: 'Stanford Encyclopedia of Philosophy' },
     { value: 'iep_entry', label: 'Internet Encyclopedia of Philosophy' },
-    { value: 'journal_article', label: 'Academic paper / journal article' },
+    { value: 'journal_article', label: 'Academic paper / PhilPapers / journal' },
     { value: 'book', label: 'Book (Project Gutenberg or plain text)' },
     { value: 'web_article', label: 'General web source' }
   ] as const;
@@ -375,10 +372,6 @@
   let catalogEntries = $state<CatalogEntry[]>([]);
   let catalogError = $state('');
   let catalogNotice = $state('');
-  let projectBindingsPayload = $state<unknown>(null);
-  let projectBindingsBusy = $state(false);
-  let projectBindingsError = $state('');
-  let projectBindingsMessage = $state('');
   let stageProviders = $state<Record<string, string>>({
     ingestion_fetch: '',
     ingestion_extraction: '',
@@ -425,27 +418,6 @@
 
   let chatModels = $derived(catalogEntries.filter((e) => !isLikelyEmbeddingModel(e)));
   let embeddingModels = $derived(catalogEntries.filter((e) => isLikelyEmbeddingModel(e)));
-
-  const projectBindingRows = $derived(extractModelRowsFromRestormelPayload(projectBindingsPayload));
-
-  function projectBindingRowId(row: Record<string, unknown>): string {
-    const raw = row.id ?? row.bindingId;
-    return typeof raw === 'string' ? raw.trim() : '';
-  }
-
-  function projectBindingProvider(row: Record<string, unknown>): string {
-    const v = row.providerType ?? row.providerId ?? row.provider;
-    return typeof v === 'string' ? v.trim() : '';
-  }
-
-  function projectBindingModelId(row: Record<string, unknown>): string {
-    const v = row.modelId ?? row.model;
-    return typeof v === 'string' ? v.trim() : '';
-  }
-
-  function projectBindingEnabled(row: Record<string, unknown>): boolean {
-    return row.enabled !== false;
-  }
 
   let syncDurationLabel = $state('');
   let completionMessage = $state('');
@@ -504,10 +476,10 @@
     return [...out].sort();
   });
 
+  /** Chat vs embedding split of the merged catalog (same surface as Model availability). Save routing still enforces Restormel route-step providers separately. */
   function modelsForStage(row: (typeof RESTORMEL_STAGES)[number]): CatalogEntry[] {
     if (row.key === 'ingestion_fetch') return [];
-    const base = row.embed ? embeddingModels : chatModels;
-    return base.filter((entry) => isSupportedRouteProvider(entry.provider));
+    return row.embed ? embeddingModels : chatModels;
   }
 
   function providersForStage(row: (typeof RESTORMEL_STAGES)[number]): string[] {
@@ -658,9 +630,10 @@
         return 'gutenberg_text';
       case 'sep_entry':
         return 'sep_entry';
-      case 'journal_article':
-        return 'journal_article';
       case 'iep_entry':
+        return 'iep_entry';
+      case 'journal_article':
+        return 'philpapers_paper';
       case 'web_article':
       default:
         return 'web_article';
@@ -926,7 +899,7 @@
 
     // Cross-provider "strong" and "fast" buckets.
     const strong =
-      /(opus|sonnet|gpt-4|gpt-5|gpt-4o|o1|o3|gemini.*pro|grok-[23]|deepseek-r1|mistral-large|command-r\+|llama.*70b|qwen.*72b)/i.test(
+      /(opus|sonnet|gpt-4|gpt-5|gpt-4o|o1|o3|gemini.*pro|deepseek-r1|mistral-large|command-r\+|llama.*70b|qwen.*72b)/i.test(
         label
       ) || (provider === 'google' && /gemini-2\.5/.test(label));
     const fast = /(haiku|mini|small|flash|lite|nano|8b|7b|3b|fast)/i.test(label);
@@ -1077,14 +1050,24 @@
     });
     const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
     if (!response.ok) {
-      const rm = body.restormel as { detail?: string; userMessage?: string } | undefined;
+      const rm = body.restormel as {
+        detail?: string;
+        userMessage?: string;
+        routeStepAllowedProviders?: string[];
+      } | undefined;
       if (body.error === 'restormel_dashboard_error' && rm) {
-        const fromRm =
+        let fromRm =
           typeof rm.userMessage === 'string' && rm.userMessage.trim()
             ? rm.userMessage.trim()
             : typeof rm.detail === 'string' && rm.detail.trim()
               ? rm.detail.trim()
               : '';
+        if (Array.isArray(rm.routeStepAllowedProviders) && rm.routeStepAllowedProviders.length > 0) {
+          const allow = rm.routeStepAllowedProviders.join(', ');
+          fromRm = fromRm
+            ? `${fromRm} Allowed route-step providers (from Keys): ${allow}.`
+            : `Route-step provider not allowed. Keys accepts: ${allow}.`;
+        }
         if (fromRm) throw new Error(fromRm);
       }
       throw new Error(typeof body?.error === 'string' ? body.error : `Request failed (${response.status})`);
@@ -1103,20 +1086,24 @@
     return p === 'vertex' ? 'google' : p;
   }
 
+  /** Matches Restormel Keys route-step `providerPreference` (OpenAPI 1.3.4+; still narrower than full catalog / registry). */
   function isSupportedRouteProvider(provider: string): boolean {
     return [
-      'openai',
       'anthropic',
-      'google',
-      'openrouter',
-      'vercel',
-      'portkey',
-      'voyage',
-      'mistral',
       'deepseek',
-      'xai'
+      'google',
+      'mistral',
+      'openai',
+      'openrouter',
+      'portkey',
+      'together',
+      'vercel',
+      'voyage'
     ].includes(normalizeProviderPreference(provider));
   }
+
+  const ROUTE_STEP_PROVIDER_HINT =
+    'anthropic, deepseek, google (Vertex uses google), mistral, openai, openrouter, portkey, together, vercel, voyage';
 
   async function fetchRouteStepsOrdered(routeId: string): Promise<Record<string, unknown>[]> {
     const body = await authorizedJson(`/api/admin/ingestion-routing/routes/${routeId}/steps`);
@@ -1251,7 +1238,7 @@
         catalogError =
           'Restormel model list is currently unavailable. Check your project model index and provider configuration, then refresh.';
       } else if (catalogEntries.length > 0) {
-        catalogNotice = `${catalogEntries.length} models from Restormel Keys project bindings.`;
+        catalogNotice = `${catalogEntries.length} models in picker list (Restormel project index merged with catalog).`;
       }
       applyDefaultStageSelections();
       for (const row of RESTORMEL_STAGES) ensureStageProviderSelection(row);
@@ -1259,85 +1246,6 @@
       catalogEntries = [];
       catalogError = e instanceof Error ? e.message : 'Failed to load models from Restormel.';
       applyDefaultStageSelections();
-    }
-  }
-
-  async function loadProjectBindings(): Promise<void> {
-    projectBindingsError = '';
-    try {
-      const body = await authorizedJson('/api/admin/ingestion-routing/project-models');
-      projectBindingsPayload = body.payload ?? null;
-    } catch (e) {
-      projectBindingsPayload = null;
-      projectBindingsError =
-        e instanceof Error ? e.message : 'Failed to load Restormel project model bindings.';
-    }
-  }
-
-  async function addProjectModelBinding(providerType: string, modelId: string): Promise<void> {
-    projectBindingsBusy = true;
-    projectBindingsMessage = '';
-    projectBindingsError = '';
-    try {
-      await authorizedJson('/api/admin/ingestion-routing/project-models', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ models: [{ providerType, modelId }] })
-      });
-      projectBindingsMessage = `Registered ${providerType} / ${modelId} in Restormel Keys.`;
-      await loadProjectBindings();
-      await loadModelCatalog();
-      await hydrateSelectionsFromRoutes();
-    } catch (e) {
-      projectBindingsError = e instanceof Error ? e.message : 'Failed to add binding.';
-    } finally {
-      projectBindingsBusy = false;
-    }
-  }
-
-  async function deleteProjectBinding(bindingId: string): Promise<void> {
-    if (!bindingId) return;
-    projectBindingsBusy = true;
-    projectBindingsMessage = '';
-    projectBindingsError = '';
-    try {
-      await authorizedJson(
-        `/api/admin/ingestion-routing/project-models/${encodeURIComponent(bindingId)}`,
-        { method: 'DELETE' }
-      );
-      projectBindingsMessage = 'Removed binding from Restormel Keys.';
-      await loadProjectBindings();
-      await loadModelCatalog();
-      await hydrateSelectionsFromRoutes();
-    } catch (e) {
-      projectBindingsError = e instanceof Error ? e.message : 'Failed to remove binding.';
-    } finally {
-      projectBindingsBusy = false;
-    }
-  }
-
-  async function setProjectBindingEnabled(bindingId: string, enabled: boolean): Promise<void> {
-    if (!bindingId) return;
-    projectBindingsBusy = true;
-    projectBindingsMessage = '';
-    projectBindingsError = '';
-    try {
-      await authorizedJson(
-        `/api/admin/ingestion-routing/project-models/${encodeURIComponent(bindingId)}`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled })
-        }
-      );
-      projectBindingsMessage = enabled ? 'Binding enabled.' : 'Binding disabled.';
-      await loadProjectBindings();
-      await loadModelCatalog();
-      await hydrateSelectionsFromRoutes();
-    } catch (e) {
-      projectBindingsError = e instanceof Error ? e.message : 'Failed to update binding.';
-    } finally {
-      projectBindingsBusy = false;
     }
   }
 
@@ -1411,7 +1319,7 @@
   }
 
   async function refreshModelsAndRoutes(): Promise<void> {
-    await Promise.all([loadModelCatalog(), loadProjectBindings()]);
+    await loadModelCatalog();
     await loadRoutingContext();
     await hydrateSelectionsFromRoutes();
   }
@@ -1443,14 +1351,14 @@
           return;
         }
         if (!isSupportedRouteProvider(primaryOpt.provider)) {
-          routingError = `“${row.label}” uses provider “${primaryOpt.provider}”, but Restormel route steps currently accept: openai, anthropic, google (alias: vertex), openrouter, vercel, portkey, voyage, mistral, deepseek, xai. Choose a supported model for this stage.`;
+          routingError = `“${row.label}” uses provider “${primaryOpt.provider}”, but Restormel Keys route steps only allow: ${ROUTE_STEP_PROVIDER_HINT}. Use a listed provider (Mistral / DeepSeek / Together need Keys OpenAPI 1.3.4+ and catalog seed), OpenRouter, or another supported slug. For Together, use the catalog model id (e.g. together-…), not the raw vendor API id.`;
           return;
         }
 
         const fallbackSid = stageFallbackModelIds[row.key]?.trim() ?? '';
         const fallbackOpt = fallbackSid ? getCatalogEntryByStableId(fallbackSid) : undefined;
         if (fallbackOpt && !isSupportedRouteProvider(fallbackOpt.provider)) {
-          routingError = `Fallback for “${row.label}” uses provider “${fallbackOpt.provider}”, which Restormel route steps do not accept. Choose a supported fallback provider.`;
+          routingError = `Fallback for “${row.label}” uses provider “${fallbackOpt.provider}”, which Keys route steps do not accept (${ROUTE_STEP_PROVIDER_HINT}).`;
           return;
         }
 
@@ -1958,6 +1866,25 @@
           'Validation: must use a different model than Extraction / Relations / Grouping (self-review bias). Choose another model or use Refresh models after fixing routes.'
       });
     }
+    for (const row of RESTORMEL_STAGES) {
+      if (row.key === 'ingestion_fetch') continue;
+      if (row.key === 'ingestion_validation' && !runValidate) continue;
+      const primary = getCatalogEntryByStableId(stageModelIds[row.key] ?? '');
+      if (primary && !isSupportedRouteProvider(primary.provider)) {
+        items.push({
+          severity: 'bad',
+          text: `${row.label}: primary uses provider “${primary.provider}”, which Restormel route steps do not allow (${ROUTE_STEP_PROVIDER_HINT}). Pick a supported provider or upgrade Keys; registry-only catalog rows still need OpenRouter or another listed slug here.`
+        });
+      }
+      const fbSid = stageFallbackModelIds[row.key]?.trim() ?? '';
+      const fallback = fbSid ? getCatalogEntryByStableId(fbSid) : undefined;
+      if (fallback && !isSupportedRouteProvider(fallback.provider)) {
+        items.push({
+          severity: 'bad',
+          text: `${row.label}: fallback uses provider “${fallback.provider}”, which Keys route steps do not accept (${ROUTE_STEP_PROVIDER_HINT}).`
+        });
+      }
+    }
     return items;
   }
 
@@ -1969,8 +1896,9 @@
     if (p === 'anthropic') return 'Strong reasoning; good for long, careful passes.';
     if (p === 'google') return 'Often cost-competitive; good multimodal and long-context options.';
     if (p === 'mistral') return 'Frequently fast and economical for mid-tier workloads.';
+    if (p === 'deepseek') return 'Strong reasoning/coder lines; confirm Keys catalog + route steps for your deployment.';
+    if (p === 'together') return 'Open-models gateway; use catalog together-… ids for Restormel route steps.';
     if (p === 'cohere') return 'Solid embeddings and enterprise throughput options.';
-    if (p === 'xai' || p === 'x.ai') return 'Alternative frontier options; compare latency in your project.';
     return 'Compare pricing, limits, and latency in your provider dashboard.';
   }
 
@@ -2355,6 +2283,7 @@
           source_type: sourceType,
           validate: runValidate,
           stop_before_store: true,
+          pipeline_preset: selectedPreset ?? 'balanced',
           embedding_model: stageModelIds.ingestion_embedding,
           batch_overrides: mergedBatchOverrides,
           model_chain: {
@@ -2782,7 +2711,7 @@
     ingestSettingsHydrated = true;
 
     void (async () => {
-      await Promise.all([loadModelCatalog(), loadProjectBindings()]);
+      await loadModelCatalog();
       await loadRoutingContext();
       await hydrateSelectionsFromRoutes();
     })();
@@ -3178,6 +3107,9 @@
                     <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Restormel routing steps</p>
                     <p class="mt-1 text-xs text-sophia-dark-muted">
                       Save primary + fallback model steps per stage into Restormel Keys before running.
+                    </p>
+                    <p class="mt-2 text-[0.65rem] leading-relaxed text-sophia-dark-dim">
+                      Route-step providers follow Keys OpenAPI 1.3.4+ ({ROUTE_STEP_PROVIDER_HINT}) — still narrower than the full merged catalog (e.g. xAI, Groq). Together models must use the catalog id (together-…) in steps. If Keys returns an error, it may include the current allowed list from the server.
                     </p>
                   </div>
                   <button
@@ -3643,106 +3575,19 @@
 
               <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/30 p-4">
                 <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
-                  Restormel project model bindings
+                  Project model index
                 </p>
                 <p class="mt-2 text-xs leading-relaxed text-sophia-dark-muted">
-                  Pickers follow the <a
+                  Stage pickers use models from the Restormel project index merged with this catalog. Add, remove, and
+                  sync bindings in
+                  <a
                     href="/admin/model-availability"
                     class="text-sophia-dark-text underline decoration-sophia-dark-border underline-offset-2 hover:decoration-sophia-dark-text"
                     >Model availability</a
                   >
-                  policy (live catalog + sync to this project). Quick-add embeddings below still calls the Keys Dashboard API with your server
-                  <span class="font-mono text-sophia-dark-text">RESTORMEL_GATEWAY_KEY</span>.
+                  (save updates Firestore and replaces the Keys project allowlist). Per-binding POST/PATCH/DELETE on this
+                  page is no longer offered here to avoid drifting from that policy.
                 </p>
-                {#if projectBindingsError}
-                  <p class="mt-3 font-mono text-xs text-sophia-dark-copper">{projectBindingsError}</p>
-                {/if}
-                {#if projectBindingsMessage}
-                  <p class="mt-3 font-mono text-xs text-sophia-dark-sage">{projectBindingsMessage}</p>
-                {/if}
-                <div class="mt-4 flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    disabled={runInProgress() || projectBindingsBusy}
-                    onclick={() => void addProjectModelBinding('google', 'text-embedding-005')}
-                    class="min-h-11 rounded border border-sophia-dark-border/70 bg-transparent px-4 py-2.5 font-mono text-xs text-sophia-dark-dim hover:border-sophia-dark-border hover:bg-sophia-dark-surface-raised hover:text-sophia-dark-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sophia-dark-sage disabled:opacity-50"
-                  >
-                    Add google · text-embedding-005
-                  </button>
-                  <button
-                    type="button"
-                    disabled={runInProgress() || projectBindingsBusy}
-                    onclick={() => void addProjectModelBinding('google', 'text-multilingual-embedding-002')}
-                    class="min-h-11 rounded border border-sophia-dark-border/70 bg-transparent px-4 py-2.5 font-mono text-xs text-sophia-dark-dim hover:border-sophia-dark-border hover:bg-sophia-dark-surface-raised hover:text-sophia-dark-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sophia-dark-sage disabled:opacity-50"
-                  >
-                    Add google · text-multilingual-embedding-002
-                  </button>
-                  <button
-                    type="button"
-                    disabled={runInProgress() || projectBindingsBusy}
-                    onclick={() => void addProjectModelBinding('vertex', 'text-embedding-005')}
-                    class="min-h-11 rounded border border-sophia-dark-border/70 bg-transparent px-4 py-2.5 font-mono text-xs text-sophia-dark-dim hover:border-sophia-dark-border hover:bg-sophia-dark-surface-raised hover:text-sophia-dark-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sophia-dark-sage disabled:opacity-50"
-                  >
-                    Add vertex · text-embedding-005
-                  </button>
-                </div>
-                {#if projectBindingRows.length > 0}
-                  <div class="mt-4 overflow-x-auto rounded border border-sophia-dark-border/60">
-                    <table class="w-full min-w-[32rem] border-collapse font-mono text-xs text-sophia-dark-muted">
-                      <thead>
-                        <tr class="border-b border-sophia-dark-border/60 bg-sophia-dark-bg/40 text-left text-[0.65rem] uppercase tracking-[0.08em] text-sophia-dark-dim">
-                          <th class="px-3 py-3">Provider</th>
-                          <th class="px-3 py-3">Model</th>
-                          <th class="px-3 py-3">Enabled</th>
-                          <th class="px-3 py-3 text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {#each projectBindingRows as row}
-                          {@const bid = projectBindingRowId(row)}
-                          {@const pid = projectBindingProvider(row)}
-                          {@const mid = projectBindingModelId(row)}
-                          {@const en = projectBindingEnabled(row)}
-                          <tr class="border-b border-sophia-dark-border/40 last:border-b-0">
-                            <td class="px-3 py-3 text-sophia-dark-text">{pid || '—'}</td>
-                            <td class="px-3 py-3 text-sophia-dark-text">{mid || '—'}</td>
-                            <td class="px-3 py-3">{en ? 'yes' : 'no'}</td>
-                            <td class="px-3 py-3 text-right">
-                              <div class="flex flex-wrap items-center justify-end gap-2">
-                                {#if bid}
-                                  <button
-                                    type="button"
-                                    disabled={runInProgress() || projectBindingsBusy}
-                                    onclick={() => void setProjectBindingEnabled(bid, !en)}
-                                    class="min-h-11 rounded border border-sophia-dark-border/70 px-4 py-2 font-mono text-[0.65rem] uppercase tracking-[0.08em] text-sophia-dark-dim hover:border-sophia-dark-border hover:bg-sophia-dark-surface-raised hover:text-sophia-dark-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sophia-dark-sage disabled:opacity-50"
-                                  >
-                                    {en ? 'Disable' : 'Enable'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={runInProgress() || projectBindingsBusy}
-                                    onclick={() => {
-                                      if (window.confirm(`Remove binding ${pid} / ${mid} from Restormel Keys?`)) {
-                                        void deleteProjectBinding(bid);
-                                      }
-                                    }}
-                                    class="min-h-11 rounded border border-sophia-dark-copper/50 bg-sophia-dark-copper/10 px-4 py-2 font-mono text-[0.65rem] uppercase tracking-[0.08em] text-sophia-dark-copper hover:bg-sophia-dark-copper/18 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sophia-dark-copper disabled:opacity-50"
-                                  >
-                                    Remove
-                                  </button>
-                                {:else}
-                                  <span class="text-sophia-dark-dim">No binding id</span>
-                                {/if}
-                              </div>
-                            </td>
-                          </tr>
-                        {/each}
-                      </tbody>
-                    </table>
-                  </div>
-                {:else if !projectBindingsError}
-                  <p class="mt-4 font-mono text-xs text-sophia-dark-dim">No bindings returned yet, or the list is empty.</p>
-                {/if}
               </div>
 
               <div class="border-t border-sophia-dark-border/60 pt-6">

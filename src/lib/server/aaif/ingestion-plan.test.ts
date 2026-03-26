@@ -153,4 +153,25 @@ describe('planIngestionStage', () => {
     expect(embedding?.inputTokens).toBeGreaterThan(0);
     expect(embedding?.totalTokens).toBeGreaterThan(0);
   });
+
+  it('treats long books as higher grouping load before encyclopedia-scale thresholds', async () => {
+    const { buildIngestionStageUsageEstimates } = await import('./ingestion-plan');
+    const book = buildIngestionStageUsageEstimates({
+      sourceTitle: 'Groundwork',
+      sourceType: 'book',
+      estimatedTokens: 9_000,
+      sourceLengthChars: 36_000
+    });
+    const bookGrouping = book.find((phase) => phase.stage === 'grouping');
+    expect(bookGrouping?.latency).toBe('high');
+
+    const sep = buildIngestionStageUsageEstimates({
+      sourceTitle: 'Short SEP note',
+      sourceType: 'sep_entry',
+      estimatedTokens: 5_000,
+      sourceLengthChars: 20_000
+    });
+    const sepGrouping = sep.find((phase) => phase.stage === 'grouping');
+    expect(sepGrouping?.latency).toBe('balanced');
+  });
 });

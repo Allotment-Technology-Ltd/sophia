@@ -59,6 +59,19 @@ export interface IngestionStageUsageEstimate {
   totalTokens: number;
 }
 
+
+function isBookSource(st?: string): boolean {
+  return st === 'book';
+}
+
+function isEncyclopediaSource(st?: string): boolean {
+  return st === 'sep_entry' || st === 'iep_entry';
+}
+
+function isPaperSource(st?: string): boolean {
+  return st === 'paper' || st === 'journal_article';
+}
+
 function claimCountEstimate(context: IngestionPlanningContext): number {
   if (typeof context.claimCount === 'number' && context.claimCount > 0) {
     return context.claimCount;
@@ -83,14 +96,29 @@ function argumentCountEstimate(context: IngestionPlanningContext): number {
 function stageLatency(stage: IngestionStage, context: IngestionPlanningContext): AAIFLatency {
   if (stage === 'json_repair') return 'low';
   if (stage === 'embedding') return 'low';
+  const tokens = context.estimatedTokens;
+  const claims = claimCountEstimate(context);
   if (stage === 'grouping') {
-    return context.estimatedTokens > 12_000 || claimCountEstimate(context) > 50 ? 'high' : 'balanced';
+    if (isBookSource(context.sourceType)) {
+      return tokens > 8_000 || claims > 40 ? 'high' : 'balanced';
+    }
+    if (isPaperSource(context.sourceType)) {
+      return tokens > 10_000 || claims > 45 ? 'high' : 'balanced';
+    }
+    if (isEncyclopediaSource(context.sourceType)) {
+      return tokens > 12_000 || claims > 50 ? 'high' : 'balanced';
+    }
+    return tokens > 12_000 || claims > 50 ? 'high' : 'balanced';
   }
   if (stage === 'validation') {
-    return claimCountEstimate(context) > 60 ? 'high' : 'balanced';
+    if (isBookSource(context.sourceType) && claims > 55) return 'high';
+    return claims > 60 ? 'high' : 'balanced';
   }
   if (stage === 'extraction') {
-    return context.estimatedTokens > 18_000 ? 'balanced' : 'low';
+    if (isBookSource(context.sourceType)) {
+      return tokens > 10_000 ? 'balanced' : 'low';
+    }
+    return tokens > 18_000 ? 'balanced' : 'low';
   }
   return 'balanced';
 }

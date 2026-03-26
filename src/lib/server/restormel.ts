@@ -158,6 +158,28 @@ import type { ValidateRouteBindingResult } from '@restormel/keys/dashboard';
 import { validateRouteBinding } from '@restormel/keys/dashboard';
 import { readRestormelCatalogDataModels } from './restormelCatalogRows';
 
+/**
+ * `providerPreference` slugs allowed when replacing route steps (Dashboard API).
+ * Aligned with Restormel Keys OpenAPI **1.3.5+** (`cohere`, `groq` on steps; `mistral`, `deepseek`, `together` from prior trains).
+ * Still narrower than full BYOK / registry lists — bump when Keys extends the route-step enum.
+ *
+ * @see https://github.com/Allotment-Technology-Ltd/restormel-keys/blob/main/zuplo-gateway/docs/pages/dashboard-api/routes-steps.md
+ */
+const ROUTE_STEP_ALLOWED_PROVIDERS = new Set<string>([
+	'anthropic',
+	'cohere',
+	'deepseek',
+	'google',
+	'groq',
+	'mistral',
+	'openai',
+	'openrouter',
+	'portkey',
+	'together',
+	'vercel',
+	'voyage'
+]);
+
 /** Use with the headless `resolve()` helper from `@restormel/keys/dashboard`; Sophia uses `restormelResolve` + thrown errors instead. */
 export { isNoKeyAvailable, isResolveIncomplete } from '@restormel/keys/dashboard';
 
@@ -673,35 +695,27 @@ export async function restormelReplaceRouteSteps(
   routeId: string,
   steps: RestormelStepRecord[]
 ): Promise<{ data: RestormelStepRecord[] | RestormelStepRecord }> {
-  const allowedProviders = new Set([
-    'openai',
-    'anthropic',
-    'google',
-    'openrouter',
-    'vercel',
-    'portkey',
-    'voyage'
-  ]);
-
   const normalizeProviderPreference = (value: unknown, modelId?: unknown): string | null => {
     const p = typeof value === 'string' ? value.trim().toLowerCase() : '';
     const m = typeof modelId === 'string' ? modelId.trim().toLowerCase() : '';
-    const allowed = new Set([
-      'openai',
-      'anthropic',
-      'google',
-      'openrouter',
-      'vercel',
-      'portkey',
-      'voyage'
-    ]);
 
-    if (allowed.has(p)) return p;
+    if (ROUTE_STEP_ALLOWED_PROVIDERS.has(p)) return p;
     if (!p) {
       if (m.includes('gemini') || m.includes('text-embedding') || m.includes('gecko')) return 'google';
       if (m.includes('claude')) return 'anthropic';
       if (m.includes('voyage')) return 'voyage';
       if (m.includes('gpt') || m.includes('o1') || m.includes('o3') || m.includes('o4')) return 'openai';
+      if (
+        m.includes('mistral') ||
+        m.includes('ministral') ||
+        m.includes('mixtral') ||
+        m.includes('codestral') ||
+        m.includes('pixtral')
+      ) {
+        return 'mistral';
+      }
+      if (m.includes('deepseek')) return 'deepseek';
+      if (m.startsWith('together-')) return 'together';
       return null;
     }
 
@@ -711,7 +725,12 @@ export async function restormelReplaceRouteSteps(
     if (p.includes('portkey')) return 'portkey';
     if (p.includes('vercel')) return 'vercel';
     if (p.includes('voyage') || m.includes('voyage')) return 'voyage';
-    if (p.includes('openai') || m.includes('gpt') || m.includes('o1') || m.includes('o3') || m.includes('o4')) return 'openai';
+    if (p.includes('openai') || m.includes('gpt') || m.includes('o1') || m.includes('o3') || m.includes('o4')) {
+      return 'openai';
+    }
+    if (p.includes('mistral') || m.includes('mistral')) return 'mistral';
+    if (p.includes('deepseek') || m.includes('deepseek')) return 'deepseek';
+    if (p.includes('together')) return 'together';
 
     return p;
   };
@@ -736,10 +755,11 @@ export async function restormelReplaceRouteSteps(
     .sort((a, b) => (Number(a.orderIndex) || 0) - (Number(b.orderIndex) || 0))
     .map((step, idx) => {
       const provider = normalizeProviderPreference(step.providerPreference, step.modelId);
-      if (!provider || !allowedProviders.has(provider)) {
+      if (!provider || !ROUTE_STEP_ALLOWED_PROVIDERS.has(provider)) {
         const model = typeof step.modelId === 'string' ? step.modelId : '';
+        const allowed = [...ROUTE_STEP_ALLOWED_PROVIDERS].sort().join(', ');
         throw new Error(
-          `Route step provider is unsupported for model "${model}". Allowed providers: openai, anthropic, google (alias: vertex), openrouter, vercel, portkey, voyage.`
+          `Route step provider is unsupported for model "${model}". Allowed providers: ${allowed}.`
         );
       }
       return {

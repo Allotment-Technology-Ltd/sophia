@@ -2,7 +2,7 @@
 status: active
 owner: adam
 source_of_truth: true
-last_reviewed: 2026-03-13
+last_reviewed: 2026-03-26
 ---
 
 # Roadmap
@@ -40,6 +40,20 @@ This roadmap is intentionally narrower than the older phase-plan set. It capture
 - allow reusable infrastructure to mature in-repo
 - hand platform-wide strategy, packaging, and ecosystem decisions to Restormel docs
 - update SOPHIA docs when extraction materially changes app boundaries
+
+## Future enhancements (ingestion presets)
+
+Deferred from the ingestion preset refinement plan — implement when analytics justify the extra automation.
+
+### Phase 4 — Stability knobs tied to presets
+
+- Wire or document **preset → suggested concurrency / embed delay** defaults (`ADMIN_INGEST_MAX_CONCURRENT`, `VERTEX_EMBED_BATCH_DELAY_MS`, relation overlap), using classified retries and provider limit headers where available.
+- Goal: reduce **429 / retry storms** without starving throughput.
+
+### Phase 5 — Golden-set release gate
+
+- Maintain a **small golden corpus** (e.g. one SEP, one long book, one PhilPapers-style paper) and run the procedure in [ingestion-benchmarks.md](../operations/ingestion-benchmarks.md) before promoting preset or catalog changes.
+- **Ship** only when wall time and cost move as intended without a proportional rise in `json_repair`, `batch_split`, or failed stages vs the prior baseline.
 
 ## Explicitly de-emphasised
 

@@ -7,6 +7,7 @@ import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'c
 import { randomBytes } from 'crypto';
 import { EventEmitter } from 'events';
 import { buildEnvFileArgs, findFetchedSourceFile } from '$lib/server/adminOperations';
+import type { IngestionPipelinePreset } from '$lib/ingestionPipelineModelRequirements';
 import { appendIssueFromLogLine, persistIngestRunReport, type IngestIssueRecord } from '$lib/server/ingestRunIssues';
 
 export interface IngestRunPayload {
@@ -40,6 +41,8 @@ export interface IngestRunPayload {
     group: string;
     validate: string;
   };
+  /** Recorded in Firestore for analytics (budget / balanced / complexity). */
+  pipeline_preset?: IngestionPipelinePreset;
 }
 
 function batchOverridesToEnv(
