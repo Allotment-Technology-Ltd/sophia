@@ -26,6 +26,7 @@ import {
 	type IngestionStagePlan,
 	type IngestProviderPreference
 } from '../src/lib/server/aaif/ingestion-plan.js';
+import { summarizeIngestPinsForLog } from '../src/lib/server/ingestRuns.js';
 import { startSpinner } from './progress.js';
 
 // ─── Prompt imports (relative paths for standalone script) ─────────────────
