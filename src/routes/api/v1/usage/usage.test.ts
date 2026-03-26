@@ -34,10 +34,7 @@ vi.mock('$lib/server/firebase-admin', () => ({
 }));
 
 vi.mock('$lib/server/authRoles', () => ({
-  hasAdministratorRole: vi.fn(
-    (user: { role?: string | null }) =>
-      user?.role === 'administrator' || user?.role === 'owner'
-  )
+  hasOwnerRole: vi.fn((user: { role?: string | null }) => user?.role === 'owner')
 }));
 
 vi.mock('$lib/server/analytics', () => ({

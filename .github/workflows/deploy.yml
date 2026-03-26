@@ -3,7 +3,7 @@
 # Handles both application deployments and infrastructure changes in a single
 # workflow. Path-based filters route to the correct job(s) automatically:
 #
-#   src/**, Dockerfile, package.json, etc.  →  build + Cloud Run deploy
+#   src/**, scripts/**, Dockerfile, package.json, etc.  →  build + Cloud Run deploy
 #   infra/**                                 →  pulumi preview (PR) / up (main)
 #   both changed                             →  infra first, then app
 #
@@ -21,6 +21,8 @@
 #     WIF_SERVICE_ACCOUNT github-deploy@sophia-488807.iam.gserviceaccount.com
 #     GCP_PROJECT_ID      sophia-488807
 #     PULUMI_ACCESS_TOKEN Pulumi Cloud access token (https://app.pulumi.com/account/tokens)
+#     AIKIDO_SECRET_KEY   Aikido CI integration key (pull requests only) — create at
+#                         https://app.aikido.dev/settings/integrations/continuous-integration
 #
 # FIRST-TIME INFRA SETUP (run once from your local machine before CI manages it):
 #   pnpm install --filter sophia-infra   # from repo root (infra is a pnpm workspace)
@@ -36,10 +38,9 @@
 #   Trigger the "Rollback App" workflow_dispatch with a Cloud Run revision name.
 #   Infrastructure rollback: revert the infra/ commit and re-run the pipeline.
 #
-# AIKIDO (operator — not configured in this file):
-#   PR gating + AutoFix live in https://app.aikido.dev/ (dashboard). Add Aikido’s GitHub
-#   status as a required check on main if merges should wait on it. Prefer bundled
-#   post-release AutoFix PRs when the product supports batching.
+# AIKIDO: Dashboard PR gating + AutoFix remain in https://app.aikido.dev/ . The `aikido`
+#   job below triggers an in-PR scan via the official Action so checks appear on every PR
+#   (requires AIKIDO_SECRET_KEY). Add job `aikido` as a required check on main if desired.
 
 name: CI/CD
 
@@ -99,6 +100,7 @@ jobs:
           filters: |
             app:
               - 'src/**'
+              - 'scripts/**'
               - 'static/**'
               - 'Dockerfile'
               - 'package.json'
@@ -203,10 +205,31 @@ jobs:
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
 
+  # ── 2c. Aikido (PRs only — triggers scan + GitHub check; needs AIKIDO_SECRET_KEY) ──
+  aikido:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Aikido Security scan
+        uses: AikidoSec/github-actions-workflow@v1.0.13
+        with:
+          secret-key: ${{ secrets.AIKIDO_SECRET_KEY }}
+          fail-on-timeout: true
+          fail-on-dependency-scan: true
+          fail-on-sast-scan: false
+          fail-on-iac-scan: false
+          minimum-severity: CRITICAL
+          timeout-seconds: 180
+          post-scan-status-comment: only_if_new_findings
+          post-sast-review-comments: off
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
   # ── 3. Pulumi preview (PRs) ────────────────────────────────────────────────
   infra-preview:
     if: github.event_name == 'pull_request' && needs.changes.outputs.infra == 'true'
-    needs: [changes, security, codeql]
+    needs: [changes, security, codeql, aikido]
     runs-on: ubuntu-latest
     defaults:
       run:

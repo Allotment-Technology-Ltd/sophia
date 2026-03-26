@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { hasAdministratorRole, hasOwnerRole } from '$lib/server/authRoles';
+import { hasOwnerRole } from '$lib/server/authRoles';
 import { loadByokProviderApiKeys } from './store';
 import type { ProviderApiKeys } from './types';
 
@@ -51,7 +51,7 @@ export async function loadInquiryEffectiveProviderApiKeys(
   }
   if (hasAnyProviderKey(userKeys)) return userKeys;
 
-  if (!hasAdministratorRole(user) && !hasOwnerRole(user)) {
+  if (!hasOwnerRole(user)) {
     return userKeys;
   }
 

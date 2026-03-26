@@ -27,6 +27,13 @@
       description:
         'Choose which Restormel catalog models are available for ingestion (operations) versus user inquiries; syncs the project model index on save. Embeddings stay operations-only.',
       emphasis: false
+    },
+    {
+      href: '/admin/users',
+      title: 'User management',
+      description:
+        'List registered users and set each account to owner or user. At least one owner must remain. Emails in OWNER_EMAILS are re-promoted to owner on their next API-authenticated request.',
+      emphasis: false
     }
   ] as const;
 </script>

@@ -10,6 +10,7 @@ import { EventEmitter } from 'events';
 import { buildEnvFileArgs, findFetchedSourceFile } from '$lib/server/adminOperations';
 import type { IngestionPipelinePreset } from '$lib/ingestionPipelineModelRequirements';
 import { appendIssueFromLogLine, persistIngestRunReport, type IngestIssueRecord } from '$lib/server/ingestRunIssues';
+import { buildOperatorByokProcessEnv } from '$lib/server/byok/buildOperatorIngestEnv';
 
 export interface IngestRunPayload {
   source_url: string;
@@ -419,7 +420,7 @@ class IngestRunManager extends EventEmitter {
       state.syncStartedAt = Date.now();
       state.syncCompletedAt = undefined;
       this.addLog(runId, 'Starting SurrealDB sync (Stage 6)…');
-      this.startIngestChild(runId, state.payload, state.sourceFilePath, { forSyncOnly: true });
+      void this.execStartIngestChild(runId, state.payload, state.sourceFilePath, { forSyncOnly: true });
     } else {
       state.status = 'running';
       state.syncStartedAt = Date.now();
@@ -589,7 +590,7 @@ class IngestRunManager extends EventEmitter {
       runId,
       '[RESUME] Restarting ingest.ts from checkpoint. The pipeline will continue from the last completed stage.'
     );
-    this.startIngestChild(runId, state.payload, state.sourceFilePath, {
+    void this.execStartIngestChild(runId, state.payload, state.sourceFilePath, {
       forSyncOnly: false,
       resumeFromFailure: true
     });
@@ -702,7 +703,7 @@ class IngestRunManager extends EventEmitter {
         return;
       }
       if (s) s.sourceFilePath = sourceFile;
-      this.startIngestChild(runId, payload, sourceFile, { forSyncOnly: false });
+      void this.execStartIngestChild(runId, payload, sourceFile, { forSyncOnly: false });
     });
   }
 
@@ -712,6 +713,25 @@ class IngestRunManager extends EventEmitter {
     sourceFile: string,
     options: { forSyncOnly: boolean; resumeFromFailure?: boolean }
   ): void {
+    void this.execStartIngestChild(runId, payload, sourceFile, options);
+  }
+
+  private async execStartIngestChild(
+    runId: string,
+    payload: IngestRunPayload,
+    sourceFile: string,
+    options: { forSyncOnly: boolean; resumeFromFailure?: boolean }
+  ): Promise<void> {
+    let operatorByokEnv: Record<string, string> = {};
+    try {
+      operatorByokEnv = await buildOperatorByokProcessEnv();
+    } catch (e) {
+      console.warn(
+        '[ingest-runs] Could not load operator BYOK for ingest worker:',
+        e instanceof Error ? e.message : String(e)
+      );
+    }
+
     const pinEnvFlat = modelChainLabelsToEnv(payload.model_chain);
     const batchEnvOverrides = {
       ...batchOverridesToEnv(payload.batch_overrides),
@@ -720,6 +740,13 @@ class IngestRunManager extends EventEmitter {
     const ingestPinsJsonCli = encodeIngestPinsJsonCliArg(pinEnvFlat);
     const forSync = options.forSyncOnly;
     const stopBeforeStore = forSync ? false : payload.stop_before_store !== false;
+
+    if (Object.keys(operatorByokEnv).length > 0) {
+      this.addLog(
+        runId,
+        `[ingest] operator BYOK: merged ${Object.keys(operatorByokEnv).join(', ')} into worker env (same bucket as Admin → Operator BYOK)`
+      );
+    }
 
     if (!forSync) {
       if (options.resumeFromFailure) {
@@ -762,7 +789,7 @@ class IngestRunManager extends EventEmitter {
 
     const ingestChild = spawn('npx', ingestArgs, {
       cwd: process.cwd(),
-      env: { ...process.env, ...batchEnvOverrides },
+      env: { ...process.env, ...batchEnvOverrides, ...operatorByokEnv },
       stdio: 'pipe'
     }) as ChildProcessWithoutNullStreams;
 
@@ -847,14 +874,17 @@ class IngestRunManager extends EventEmitter {
         s.syncRetryAttempts++;
         this.addLog(runId, 'SurrealDB sync failed; retrying once automatically…');
         this.updateStageStatus(runId, 'store', 'running');
-        this.startIngestChild(runId, payload, sourceFile, { forSyncOnly: true });
+        void this.execStartIngestChild(runId, payload, sourceFile, { forSyncOnly: true });
         return;
       }
 
       if (!forSync && s && s.ingestRetryAttempts < 1) {
         s.ingestRetryAttempts++;
         this.addLog(runId, 'Ingest failed; retrying once automatically…');
-        this.startIngestChild(runId, payload, sourceFile, { forSyncOnly: false, resumeFromFailure: true });
+        void this.execStartIngestChild(runId, payload, sourceFile, {
+          forSyncOnly: false,
+          resumeFromFailure: true
+        });
         return;
       }
 

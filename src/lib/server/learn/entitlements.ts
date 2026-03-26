@@ -189,7 +189,10 @@ function consumeFromState(
   };
 }
 
-export async function getLearnEntitlementSummary(uid: string): Promise<LearnEntitlementSummary> {
+export async function getLearnEntitlementSummary(
+  uid: string,
+  options?: { ownerBypass?: boolean }
+): Promise<LearnEntitlementSummary> {
   const [billing, quotaSnap] = await Promise.all([
     ensureBillingState(uid),
     learnQuotaRef(uid).get()
@@ -200,7 +203,8 @@ export async function getLearnEntitlementSummary(uid: string): Promise<LearnEnti
     await learnQuotaRef(uid).set({ ...normalized, updated_at: FieldValue.serverTimestamp() }, { merge: true });
   }
 
-  return summarize(billing.effectiveTier, normalized);
+  const tier = options?.ownerBypass ? 'premium' : billing.effectiveTier;
+  return summarize(tier, normalized);
 }
 
 export async function consumeLearnEntitlement(

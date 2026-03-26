@@ -31,7 +31,7 @@ describe('/api/admin/api-keys', () => {
 
 		const { POST } = await import('./+server');
 		const response = await POST({
-			locals: { user: { uid: 'admin-1', email: 'admin@example.com', role: 'administrator' } },
+			locals: { user: { uid: 'admin-1', email: 'admin@example.com', role: 'owner' } },
 			request: new Request('http://localhost/api/admin/api-keys', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -56,7 +56,7 @@ describe('/api/admin/api-keys', () => {
 	it('rejects malformed JSON bodies', async () => {
 		const { POST } = await import('./+server');
 		const response = await POST({
-			locals: { user: { uid: 'admin-1', email: 'admin@example.com', role: 'administrator' } },
+			locals: { user: { uid: 'admin-1', email: 'admin@example.com', role: 'owner' } },
 			request: new Request('http://localhost/api/admin/api-keys', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },

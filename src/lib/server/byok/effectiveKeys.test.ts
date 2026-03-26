@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderApiKeys } from './types';
 
 const mockLoadByokProviderApiKeys = vi.fn<(uid: string) => Promise<ProviderApiKeys>>();
-const mockHasAdministratorRole = vi.fn<(user: { role?: string | null; roles?: string[] | null } | null | undefined) => boolean>();
 const mockHasOwnerRole = vi.fn<(user: { role?: string | null; roles?: string[] | null } | null | undefined) => boolean>();
 
 vi.mock('./store', () => ({
@@ -10,8 +9,6 @@ vi.mock('./store', () => ({
 }));
 
 vi.mock('$lib/server/authRoles', () => ({
-	hasAdministratorRole: (user: { role?: string | null; roles?: string[] | null } | null | undefined) =>
-		mockHasAdministratorRole(user),
 	hasOwnerRole: (user: { role?: string | null; roles?: string[] | null } | null | undefined) =>
 		mockHasOwnerRole(user)
 }));
@@ -20,7 +17,6 @@ describe('loadInquiryEffectiveProviderApiKeys', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		delete process.env.OWNER_UIDS;
-		mockHasAdministratorRole.mockReturnValue(false);
 		mockHasOwnerRole.mockReturnValue(false);
 	});
 
@@ -42,21 +38,21 @@ describe('loadInquiryEffectiveProviderApiKeys', () => {
 		expect(mockLoadByokProviderApiKeys).toHaveBeenCalledWith('user-1');
 	});
 
-	it('falls back to owner keys for administrator when user has no keys', async () => {
+	it('falls back to owner keys for owner when user has no keys', async () => {
 		process.env.OWNER_UIDS = 'owner-1,owner-2';
-		mockHasAdministratorRole.mockReturnValue(true);
+		mockHasOwnerRole.mockReturnValue(true);
 		mockLoadByokProviderApiKeys
 			.mockResolvedValueOnce({})
 			.mockResolvedValueOnce({ openai: 'sk-openai-owner' });
 		const { loadInquiryEffectiveProviderApiKeys } = await import('./effectiveKeys');
 
 		const keys = await loadInquiryEffectiveProviderApiKeys(
-			{ uid: 'admin-1', role: 'administrator' },
+			{ uid: 'owner-actor-1', role: 'owner' },
 			'analyse route'
 		);
 
 		expect(keys).toEqual({ openai: 'sk-openai-owner' });
-		expect(mockLoadByokProviderApiKeys).toHaveBeenNthCalledWith(1, 'admin-1');
+		expect(mockLoadByokProviderApiKeys).toHaveBeenNthCalledWith(1, 'owner-actor-1');
 		expect(mockLoadByokProviderApiKeys).toHaveBeenNthCalledWith(2, 'owner-1');
 	});
 

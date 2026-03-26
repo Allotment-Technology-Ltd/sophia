@@ -1,10 +1,5 @@
 import { adminAuth } from '$lib/server/firebase-admin';
-import {
-  isSeedAdministratorEmail,
-  isSeedOwnerEmail,
-  syncAuthenticatedUserRole,
-  type UserRoleRecord
-} from '$lib/server/authRoles';
+import { isSeedOwnerEmail, syncAuthenticatedUserRole, type UserRoleRecord } from '$lib/server/authRoles';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
 import type { Handle } from '@sveltejs/kit';
 
@@ -33,11 +28,7 @@ export const handle: Handle = async ({ event, resolve }) => {
     try {
       const token = authHeader.slice(7);
       const decoded = await adminAuth.verifyIdToken(token);
-      const fallbackRole = isSeedOwnerEmail(decoded.email)
-        ? 'owner'
-        : isSeedAdministratorEmail(decoded.email)
-          ? 'administrator'
-          : 'user';
+      const fallbackRole = isSeedOwnerEmail(decoded.email) ? 'owner' : 'user';
       let roleRecord: UserRoleRecord = {
         role: fallbackRole,
         roles: [fallbackRole]

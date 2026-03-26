@@ -1,18 +1,19 @@
 import { error, redirect } from '@sveltejs/kit';
-import { hasAdministratorRole } from '$lib/server/authRoles';
+import { hasOwnerRole } from '$lib/server/authRoles';
 
 export interface AdminActor {
   uid: string;
   email?: string | null;
 }
 
+/** Admin APIs and operator UI: owners only. */
 export function assertAdminAccess(locals: App.Locals): AdminActor {
   if (!locals.user) {
     throw redirect(302, '/auth');
   }
 
-  if (!hasAdministratorRole(locals.user)) {
-    throw error(403, 'Forbidden: Admin access required');
+  if (!hasOwnerRole(locals.user)) {
+    throw error(403, 'Forbidden: Owner access required');
   }
 
   return {
@@ -21,6 +22,6 @@ export function assertAdminAccess(locals: App.Locals): AdminActor {
   };
 }
 
-export function isAdminLocals(locals: App.Locals): boolean {
-  return hasAdministratorRole(locals.user);
+export function isOwnerLocals(locals: App.Locals): boolean {
+  return hasOwnerRole(locals.user);
 }

@@ -31,7 +31,7 @@ describe('/api/admin/dashboard', () => {
 
 		const { GET } = await import('./+server');
 		const response = await GET({
-			locals: { user: { uid: 'admin-1', email: 'admin@example.com', role: 'administrator' } }
+			locals: { user: { uid: 'admin-1', email: 'admin@example.com', role: 'owner' } }
 		} as any);
 
 		expect(response.status).toBe(200);
