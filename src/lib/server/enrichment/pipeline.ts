@@ -34,10 +34,24 @@ function makeId(prefix: string): string {
   return `${prefix}:${crypto.randomUUID()}`;
 }
 
+function tryParseUrlHostname(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const withProto = /^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    return new URL(withProto).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 function sourceCredibilityFromUrl(url?: string): number {
   if (!url) return 0.4;
-  if (url.includes('.gov') || url.includes('.edu')) return 0.9;
-  if (url.includes('stanford.edu') || url.includes('ox.ac.uk')) return 0.85;
+  const host = tryParseUrlHostname(url);
+  if (!host) return 0.65;
+  if (host.endsWith('.gov') || host.endsWith('.edu')) return 0.9;
+  if (host === 'stanford.edu' || host.endsWith('.stanford.edu')) return 0.85;
+  if (host === 'ox.ac.uk' || host.endsWith('.ox.ac.uk')) return 0.85;
   return 0.65;
 }
 
