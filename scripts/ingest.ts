@@ -1924,11 +1924,23 @@ function collectIngestPinEnvFromProcess(): Record<string, string> {
 	return out;
 }
 
+/** Mirrors `summarizeIngestPinsForLog` in `ingestRuns.ts` — kept local so `ingest.ts` never imports `$lib` modules. */
+function summarizeIngestPinsEnvForLog(pinEnvFlat: Record<string, string>): string {
+	const stages = ['EXTRACTION', 'RELATIONS', 'GROUPING', 'VALIDATION', 'JSON_REPAIR'] as const;
+	const parts: string[] = [];
+	for (const s of stages) {
+		const p = pinEnvFlat[`INGEST_PIN_PROVIDER_${s}`]?.trim();
+		const m = pinEnvFlat[`INGEST_PIN_MODEL_${s}`]?.trim();
+		if (p && m) parts.push(`${s}:${p}/${m}`);
+	}
+	return parts.length ? parts.join(' | ') : '(no parsed pins)';
+}
+
 /** Set INGEST_LOG_PINS=1 for full pin + routing lines from ingestion-plan. */
 function logIngestPinsWorkerSnapshot(phase: string, argv: string[]): void {
 	const cli = argv.some((a) => a.startsWith('--ingest-pins-json='));
 	const env = collectIngestPinEnvFromProcess();
-	const summary = summarizeIngestPinsForLog(env);
+	const summary = summarizeIngestPinsEnvForLog(env);
 	const verbose = process.env.INGEST_LOG_PINS === '1' || process.env.INGEST_LOG_PINS === 'true';
 	if (!cli && Object.keys(env).length === 0 && !verbose) return;
 	const pairCount = Object.keys(env).length;
