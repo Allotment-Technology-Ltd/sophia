@@ -3,8 +3,8 @@
  * (operations vs user queries). Row shape aligns with `readModelRows` usage in restormel.ts.
  */
 
-import { INGESTION_MODEL_CATALOG } from '$lib/ingestionModelCatalog';
-import { isEmbeddingModelByProviderAndId } from '$lib/modelKind';
+import { INGESTION_MODEL_CATALOG } from '../ingestionModelCatalog';
+import { isEmbeddingModelByProviderAndId } from '../modelKind';
 import type { ReasoningProvider } from '@restormel/contracts/providers';
 import { isReasoningProvider } from '@restormel/contracts/providers';
 

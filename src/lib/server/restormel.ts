@@ -156,7 +156,7 @@ import {
 } from '@restormel/contracts/providers';
 import type { ValidateRouteBindingResult } from '@restormel/keys/dashboard';
 import { validateRouteBinding } from '@restormel/keys/dashboard';
-import { readRestormelCatalogDataModels } from '$lib/server/restormelCatalogRows';
+import { readRestormelCatalogDataModels } from './restormelCatalogRows';
 
 /** Use with the headless `resolve()` helper from `@restormel/keys/dashboard`; Sophia uses `restormelResolve` + thrown errors instead. */
 export { isNoKeyAvailable, isResolveIncomplete } from '@restormel/keys/dashboard';
