@@ -35,7 +35,7 @@
     "infra:preview": "cd infra && pulumi preview --stack production",
     "infra:up": "cd infra && pulumi up --stack production",
     "infra:refresh": "cd infra && pulumi refresh --stack production",
-    "infra:install": "cd infra && npm install",
+    "infra:install": "pnpm install --filter sophia-infra",
     "migrate": "bash scripts/migrate-to-europe-west2.sh",
     "verify:prod-ingest": "bash scripts/verify-prod-ingest-isolated.sh"
   },
