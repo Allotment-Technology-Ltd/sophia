@@ -41,6 +41,15 @@ export function loadServerEnv(): void {
 
   restoreIngestPinEnv(pinSnapshot);
 
+  if (
+    Object.keys(pinSnapshot).length > 0 &&
+    (process.env.INGEST_LOG_PINS === '1' || process.env.INGEST_LOG_PINS === 'true')
+  ) {
+    console.log(
+      `[INGEST_PINS] loadServerEnv: restored ${Object.keys(pinSnapshot).length} INGEST_PIN_* key(s) after dotenv`
+    );
+  }
+
   // When `pnpm dev` auto-tunnel is active, preserve tunneled Surreal URL.
   // This avoids .env.local overriding it back to private VPC IP for local runs.
   if (

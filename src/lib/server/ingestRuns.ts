@@ -165,6 +165,17 @@ export function encodeIngestPinsJsonCliArg(pinEnv: Record<string, string>): stri
   return Buffer.from(JSON.stringify(out), 'utf8').toString('base64url');
 }
 
+/** One-line summary for admin run logs / ingest stdout (no secrets). */
+export function summarizeIngestPinsForLog(pinEnvFlat: Record<string, string>): string {
+  const parts: string[] = [];
+  for (const s of PIN_STAGE_SUFFIXES) {
+    const p = pinEnvFlat[`INGEST_PIN_PROVIDER_${s}`]?.trim();
+    const m = pinEnvFlat[`INGEST_PIN_MODEL_${s}`]?.trim();
+    if (p && m) parts.push(`${s}:${p}/${m}`);
+  }
+  return parts.length ? parts.join(' | ') : '(no parsed pins)';
+}
+
 export interface StageStatus {
   status: 'idle' | 'running' | 'done' | 'error' | 'skipped';
   summary?: string;
@@ -736,6 +747,10 @@ class IngestRunManager extends EventEmitter {
     if (ingestPinsJsonCli) {
       ingestArgs.push(`--ingest-pins-json=${ingestPinsJsonCli}`);
     }
+    this.addLog(
+      runId,
+      `[INGEST_PINS] spawn: model_chain=${summarizeIngestPinsForLog(pinEnvFlat)} flat_env_keys=${Object.keys(pinEnvFlat).length} cli_json=${ingestPinsJsonCli ? `yes(len=${ingestPinsJsonCli.length})` : 'no'}`
+    );
     if (payload.validate) ingestArgs.push('--validate');
     if (stopBeforeStore) ingestArgs.push('--stop-before-store');
 
