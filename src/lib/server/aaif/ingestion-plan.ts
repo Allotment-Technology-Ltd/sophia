@@ -371,6 +371,12 @@ export async function planIngestionStage(
   const pin = readPinnedModel(stage);
   const requestedProvider = (pin.provider ?? context.preferredProvider ?? 'auto') as ModelProvider;
   const requestedModelId = pin.modelId;
+  const routeIdForLog = routeIdForResolve ? '(bound)' : '(none)';
+  if (process.env.INGEST_LOG_PINS === '1' || process.env.INGEST_LOG_PINS === 'true') {
+    console.log(
+      `[INGEST_PINS] plan stage=${stage} pin_provider=${pin.provider ?? '—'} pin_model=${pin.modelId ?? '—'} preferred=${String(context.preferredProvider ?? 'auto')} restormel_route_id=${routeIdForLog}`
+    );
+  }
   const route =
     stage === 'extraction'
       ? await resolveExtractionModelRoute({

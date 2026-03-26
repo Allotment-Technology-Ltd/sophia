@@ -387,6 +387,8 @@
   let workerIngestProvider = $state<'auto' | 'anthropic' | 'vertex'>('auto');
   let workerRelationsOverlapClaims = $state('');
   let workerFailOnGroupingCollapse = $state(true);
+  /** Maps to `INGEST_LOG_PINS` on the ingest worker. */
+  let workerIngestLogPins = $state(false);
   let ingestSettingsHydrated = $state(false);
   let catalogEntries = $state<CatalogEntry[]>([]);
   let catalogError = $state('');
@@ -2211,15 +2213,18 @@
   function buildWorkerTuningOverrides(): {
     ingestProvider: 'auto' | 'anthropic' | 'vertex';
     failOnGroupingPositionCollapse: boolean;
+    ingestLogPins: boolean;
     relationsBatchOverlapClaims?: number;
   } {
     const o: {
       ingestProvider: 'auto' | 'anthropic' | 'vertex';
       failOnGroupingPositionCollapse: boolean;
+      ingestLogPins: boolean;
       relationsBatchOverlapClaims?: number;
     } = {
       ingestProvider: workerIngestProvider,
-      failOnGroupingPositionCollapse: workerFailOnGroupingCollapse
+      failOnGroupingPositionCollapse: workerFailOnGroupingCollapse,
+      ingestLogPins: workerIngestLogPins
     };
     const t = workerRelationsOverlapClaims.trim();
     if (t !== '') {
@@ -2243,7 +2248,8 @@
           ingestionAdvisorAutoApplyValidation,
           workerIngestProvider,
           workerRelationsOverlapClaims,
-          workerFailOnGroupingCollapse
+          workerFailOnGroupingCollapse,
+          workerIngestLogPins
         })
       );
     } catch {
@@ -2732,6 +2738,9 @@
         if (typeof p.workerFailOnGroupingCollapse === 'boolean') {
           workerFailOnGroupingCollapse = p.workerFailOnGroupingCollapse;
         }
+        if (typeof p.workerIngestLogPins === 'boolean') {
+          workerIngestLogPins = p.workerIngestLogPins;
+        }
       }
     } catch {
       /* ignore */
@@ -3178,6 +3187,19 @@
                     <span>
                       Fail ingest when grouping positions collapse (strict integrity). Uncheck to only warn.
                       <span class="block text-[0.65rem] text-sophia-dark-dim mt-1">INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE</span>
+                    </span>
+                  </label>
+                  <label class="flex cursor-pointer items-start gap-2 font-mono text-xs text-sophia-dark-muted">
+                    <input
+                      type="checkbox"
+                      disabled={runInProgress()}
+                      bind:checked={workerIngestLogPins}
+                      class="mt-0.5 rounded border-sophia-dark-border"
+                    />
+                    <span>
+                      Log Expand pin and routing diagnostics on the worker (extra <span class="font-mono">[INGEST_PINS]</span> lines in
+                      Cloud Logging / run output).
+                      <span class="block text-[0.65rem] text-sophia-dark-dim mt-1">INGEST_LOG_PINS</span>
                     </span>
                   </label>
                 </div>

@@ -26,6 +26,7 @@ import {
 	type IngestionStagePlan,
 	type IngestProviderPreference
 } from '../src/lib/server/aaif/ingestion-plan.js';
+import { summarizeIngestPinsForLog } from '../src/lib/server/ingestRuns.js';
 import { startSpinner } from './progress.js';
 
 // ─── Prompt imports (relative paths for standalone script) ─────────────────
@@ -1880,8 +1881,69 @@ function normalizeResumeStage(
 }
 
 // ─── MAIN PIPELINE ─────────────────────────────────────────────────────────
+
+/** Admin spawn passes base64url JSON so INGEST_PIN_* survives dotenv / env-file ordering. */
+function applyIngestPinsJsonArg(argv: string[]): void {
+	const prefix = '--ingest-pins-json=';
+	const raw = argv.find((a) => a.startsWith(prefix));
+	if (!raw) return;
+	const b64 = raw.slice(prefix.length);
+	if (!b64.trim()) return;
+	try {
+		const json = Buffer.from(b64, 'base64url').toString('utf8');
+		const data = JSON.parse(json) as Record<string, { provider?: string; model?: string }>;
+		let applied = 0;
+		for (const [suffix, v] of Object.entries(data)) {
+			if (
+				v &&
+				typeof v.provider === 'string' &&
+				typeof v.model === 'string' &&
+				v.provider.trim() &&
+				v.model.trim()
+			) {
+				process.env[`INGEST_PIN_PROVIDER_${suffix}`] = v.provider.trim();
+				process.env[`INGEST_PIN_MODEL_${suffix}`] = v.model.trim();
+				applied++;
+			}
+		}
+		if (applied > 0) {
+			console.log(`[INGEST_PINS] --ingest-pins-json applied ${applied} stage pin(s)`);
+		}
+	} catch {
+		console.warn('[ingest] Ignoring invalid --ingest-pins-json');
+	}
+}
+
+function collectIngestPinEnvFromProcess(): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const k of Object.keys(process.env)) {
+		if (!k.startsWith('INGEST_PIN_')) continue;
+		const v = process.env[k];
+		if (typeof v === 'string' && v.length) out[k] = v;
+	}
+	return out;
+}
+
+/** Set INGEST_LOG_PINS=1 for full pin + routing lines from ingestion-plan. */
+function logIngestPinsWorkerSnapshot(phase: string, argv: string[]): void {
+	const cli = argv.some((a) => a.startsWith('--ingest-pins-json='));
+	const env = collectIngestPinEnvFromProcess();
+	const summary = summarizeIngestPinsForLog(env);
+	const verbose = process.env.INGEST_LOG_PINS === '1' || process.env.INGEST_LOG_PINS === 'true';
+	if (!cli && Object.keys(env).length === 0 && !verbose) return;
+	const pairCount = Object.keys(env).length;
+	console.log(
+		`[INGEST_PINS] ${phase}: cli_arg=${cli ? 'yes' : 'no'} env_vars=${pairCount} ${summary}`
+	);
+	if (verbose) {
+		console.log(`[INGEST_PINS] ${phase} verbose:`, env);
+	}
+}
+
 async function main() {
 	const args = process.argv.slice(2);
+	applyIngestPinsJsonArg(args);
+	logIngestPinsWorkerSnapshot('after_cli_json', args);
 	const filePath = args.find((a) => !a.startsWith('--'));
 	const shouldValidate = args.includes('--validate');
 	const ingestProviderFlagIdx = args.findIndex((a) => a === '--ingest-provider');
@@ -1928,6 +1990,8 @@ async function main() {
 		console.error('  RESTORMEL_INGEST_EXTRACTION_ROUTE_ID, RESTORMEL_INGEST_RELATIONS_ROUTE_ID, RESTORMEL_INGEST_GROUPING_ROUTE_ID, RESTORMEL_INGEST_JSON_REPAIR_ROUTE_ID');
 		console.error('\nAdmin Expand pins (optional; set by server when using stage picks):');
 		console.error('  INGEST_PIN_PROVIDER_EXTRACTION, INGEST_PIN_MODEL_EXTRACTION (same for RELATIONS, GROUPING, VALIDATION, JSON_REPAIR)');
+		console.error('  --ingest-pins-json=<base64url JSON>  Preferred when spawned from admin (survives dotenv)');
+		console.error('  INGEST_LOG_PINS=1            Log pin + routing diagnostics (per-stage planning, dotenv restore)');
 		console.error('\nResume is automatic — re-run the same source to pick up where it left off.');
 		process.exit(1);
 	}
@@ -2056,6 +2120,7 @@ async function main() {
 	let embeddingPlan: IngestionStagePlan;
 	let jsonRepairPlan: IngestionStagePlan;
 	const planInitialStart = Date.now();
+	logIngestPinsWorkerSnapshot('before_initial_plan', args);
 	[
 		extractionPlan,
 		relationPlan,

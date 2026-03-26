@@ -35,6 +35,8 @@ export interface IngestRunPayload {
     failOnGroupingPositionCollapse?: boolean;
     /** Narrow provider preference for the worker (`INGEST_PROVIDER`). */
     ingestProvider?: 'auto' | 'anthropic' | 'vertex';
+    /** When true, worker logs `[INGEST_PINS]` diagnostics (`INGEST_LOG_PINS=1`). */
+    ingestLogPins?: boolean;
   };
   model_chain: {
     extract: string;
@@ -60,7 +62,8 @@ function batchOverridesToEnv(
     embedBatchSize,
     relationsBatchOverlapClaims,
     failOnGroupingPositionCollapse,
-    ingestProvider
+    ingestProvider,
+    ingestLogPins
   } = overrides;
 
   const asPositiveInt = (v: unknown): number | null => {
@@ -88,6 +91,9 @@ function batchOverridesToEnv(
   if (ingestProvider === 'auto' || ingestProvider === 'anthropic' || ingestProvider === 'vertex') {
     out.INGEST_PROVIDER = ingestProvider;
   }
+  if (typeof ingestLogPins === 'boolean') {
+    out.INGEST_LOG_PINS = ingestLogPins ? '1' : '0';
+  }
 
   return out;
 }
@@ -101,27 +107,79 @@ function normalizePinProvider(slug: string): string | null {
 }
 
 /**
- * Maps Expand UI model labels (`provider · modelId`) into worker env vars consumed by
+ * Parses one Expand pipeline value: either `provider · modelId` (display) or
+ * `provider__modelId` (stable catalog id from admin `stableModelId()`).
+ */
+export function parseModelChainLabel(label: string): { providerRaw: string; modelId: string } | null {
+  const trimmed = label.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes('·')) {
+    const parts = trimmed.split('·').map((p) => p.trim());
+    if (parts.length < 2) return null;
+    const providerRaw = parts[0] ?? '';
+    const modelId = parts.slice(1).join('·').trim();
+    if (!providerRaw || !modelId) return null;
+    return { providerRaw, modelId };
+  }
+  const sep = '__';
+  const idx = trimmed.indexOf(sep);
+  if (idx > 0) {
+    const providerRaw = trimmed.slice(0, idx).trim();
+    const modelId = trimmed.slice(idx + sep.length).trim();
+    if (!providerRaw || !modelId) return null;
+    return { providerRaw, modelId };
+  }
+  return null;
+}
+
+/**
+ * Maps Expand UI model labels into worker env vars consumed by
  * `planIngestionStage` so `scripts/ingest.ts` honors operator picks instead of only Restormel auto-routing.
+ * Accepts both `provider · modelId` and catalog stable ids `provider__modelId`.
  */
 export function modelChainLabelsToEnv(chain: IngestRunPayload['model_chain']): Record<string, string> {
   const out: Record<string, string> = {};
   const apply = (label: string, suffix: string) => {
-    const parts = label.split('·').map((p) => p.trim());
-    if (parts.length < 2) return;
-    const providerRaw = parts[0] ?? '';
-    const modelId = parts.slice(1).join('·').trim();
-    if (!modelId) return;
-    const provider = normalizePinProvider(providerRaw);
+    const parsed = parseModelChainLabel(label);
+    if (!parsed) return;
+    const provider = normalizePinProvider(parsed.providerRaw);
     if (!provider) return;
     out[`INGEST_PIN_PROVIDER_${suffix}`] = provider;
-    out[`INGEST_PIN_MODEL_${suffix}`] = modelId;
+    out[`INGEST_PIN_MODEL_${suffix}`] = parsed.modelId;
   };
   apply(chain.extract, 'EXTRACTION');
   apply(chain.relate, 'RELATIONS');
   apply(chain.group, 'GROUPING');
   apply(chain.validate, 'VALIDATION');
   return out;
+}
+
+const PIN_STAGE_SUFFIXES = ['EXTRACTION', 'RELATIONS', 'GROUPING', 'VALIDATION', 'JSON_REPAIR'] as const;
+
+/**
+ * Base64url JSON for `scripts/ingest.ts --ingest-pins-json=…` so operator pins survive
+ * dotenv / `--env-file` ordering (see `loadServerEnv` + admin spawn).
+ */
+export function encodeIngestPinsJsonCliArg(pinEnv: Record<string, string>): string | null {
+  const out: Record<string, { provider: string; model: string }> = {};
+  for (const s of PIN_STAGE_SUFFIXES) {
+    const p = pinEnv[`INGEST_PIN_PROVIDER_${s}`]?.trim();
+    const m = pinEnv[`INGEST_PIN_MODEL_${s}`]?.trim();
+    if (p && m) out[s] = { provider: p, model: m };
+  }
+  if (Object.keys(out).length === 0) return null;
+  return Buffer.from(JSON.stringify(out), 'utf8').toString('base64url');
+}
+
+/** One-line summary for admin run logs / ingest stdout (no secrets). */
+export function summarizeIngestPinsForLog(pinEnvFlat: Record<string, string>): string {
+  const parts: string[] = [];
+  for (const s of PIN_STAGE_SUFFIXES) {
+    const p = pinEnvFlat[`INGEST_PIN_PROVIDER_${s}`]?.trim();
+    const m = pinEnvFlat[`INGEST_PIN_MODEL_${s}`]?.trim();
+    if (p && m) parts.push(`${s}:${p}/${m}`);
+  }
+  return parts.length ? parts.join(' | ') : '(no parsed pins)';
 }
 
 export interface StageStatus {
@@ -654,10 +712,12 @@ class IngestRunManager extends EventEmitter {
     sourceFile: string,
     options: { forSyncOnly: boolean; resumeFromFailure?: boolean }
   ): void {
+    const pinEnvFlat = modelChainLabelsToEnv(payload.model_chain);
     const batchEnvOverrides = {
       ...batchOverridesToEnv(payload.batch_overrides),
-      ...modelChainLabelsToEnv(payload.model_chain)
+      ...pinEnvFlat
     };
+    const ingestPinsJsonCli = encodeIngestPinsJsonCliArg(pinEnvFlat);
     const forSync = options.forSyncOnly;
     const stopBeforeStore = forSync ? false : payload.stop_before_store !== false;
 
@@ -690,6 +750,13 @@ class IngestRunManager extends EventEmitter {
     }
 
     const ingestArgs = ['tsx', ...buildEnvFileArgs(), 'scripts/ingest.ts', sourceFile];
+    if (ingestPinsJsonCli) {
+      ingestArgs.push(`--ingest-pins-json=${ingestPinsJsonCli}`);
+    }
+    this.addLog(
+      runId,
+      `[INGEST_PINS] spawn: model_chain=${summarizeIngestPinsForLog(pinEnvFlat)} flat_env_keys=${Object.keys(pinEnvFlat).length} cli_json=${ingestPinsJsonCli ? `yes(len=${ingestPinsJsonCli.length})` : 'no'}`
+    );
     if (payload.validate) ingestArgs.push('--validate');
     if (stopBeforeStore) ingestArgs.push('--stop-before-store');
 
