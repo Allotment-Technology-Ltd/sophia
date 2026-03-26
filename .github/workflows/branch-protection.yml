@@ -1,8 +1,10 @@
 # SOPHIA — Branch Protection Setup
 #
 # Applies branch protection rules to main:
-#   - Required status checks: "security", "codeql", and "aikido" (job ids in deploy.yml).
-#     Ensure repository secret AIKIDO_SECRET_KEY is set before requiring "aikido" or PRs will fail.
+#   - Required status checks: "security", "codeql", and "aikido" (the job id in deploy.yml).
+#     Set AIKIDO_SECRET_KEY before requiring "aikido", or PRs will fail that job.
+#   - If you use Aikido’s GitHub App for PR checks only (no Action), remove "aikido" from
+#     contexts below and add the App’s check name as shown on PRs — do not run both.
 #   - Strict status checks (branch must be up-to-date before merging)
 #   - Required pull request review (at least 0 approving reviews — enforces PR workflow)
 #   - No push restrictions (any collaborator may push via PR)

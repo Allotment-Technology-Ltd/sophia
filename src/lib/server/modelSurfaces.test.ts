@@ -57,13 +57,13 @@ describe('buildKeysBindableModelKeySet', () => {
 			data: [
 				{
 					providerType: 'anthropic',
-					modelId: 'claude-3-5-haiku-20241022',
-					model: { providerType: 'anthropic', modelId: 'claude-3-5-haiku-20241022' }
+					modelId: 'claude-haiku-4-5-20251001',
+					model: { providerType: 'anthropic', modelId: 'claude-haiku-4-5-20251001' }
 				}
 			]
 		};
 		const set = buildKeysBindableModelKeySet({ data: [] }, project);
-		expect(set.has(catalogSurfaceStableKey('anthropic', 'claude-3-5-haiku-20241022'))).toBe(true);
+		expect(set.has(catalogSurfaceStableKey('anthropic', 'claude-haiku-4-5-20251001'))).toBe(true);
 	});
 });
 

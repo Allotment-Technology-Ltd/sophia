@@ -438,14 +438,49 @@ async function dbQueryWithRetry<T>(
 		`DB query failed after ${maxAttempts} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`
 	);
 }
+/** Extra detail for provider errors (AI SDK / fetch) — avoids losing nested causes in logs. */
+function formatModelCallErrorDetails(error: unknown): string {
+	if (!(error instanceof Error)) return String(error);
+	const parts = [error.message];
+	const anyErr = error as Error & {
+		cause?: unknown;
+		responseBody?: unknown;
+		statusCode?: number;
+	};
+	if (anyErr.cause instanceof Error) {
+		parts.push(`cause: ${anyErr.cause.message}`);
+	} else if (anyErr.cause != null && typeof anyErr.cause !== 'object') {
+		parts.push(`cause: ${String(anyErr.cause)}`);
+	}
+	if (typeof anyErr.statusCode === 'number') {
+		parts.push(`http: ${anyErr.statusCode}`);
+	}
+	if (anyErr.responseBody != null) {
+		const raw =
+			typeof anyErr.responseBody === 'string'
+				? anyErr.responseBody
+				: JSON.stringify(anyErr.responseBody);
+		parts.push(`body: ${raw.slice(0, 2000)}`);
+	}
+	return parts.join(' | ');
+}
+
 function isModelUnavailableError(error: unknown): boolean {
-	const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+	const raw = error instanceof Error ? error.message : String(error);
+	const message = raw.toLowerCase();
+	// Anthropic sometimes returns a terse single-line invalid model message; do not use broad `model:`
+	// substring (it appears inside many unrelated errors and skips retries incorrectly).
+	if (/^model:\s*[\w.-]+$/.test(raw.trim())) return true;
 	return (
 		message.includes('not_found') ||
-		message.includes('model:') ||
+		message.includes('model_not_found') ||
 		message.includes('not available') ||
 		message.includes('unsupported model') ||
-		message.includes('invalid model')
+		message.includes('invalid model') ||
+		message.includes('unknown model') ||
+		message.includes('no longer available') ||
+		message.includes('has been retired') ||
+		message.includes('invalid_request_error')
 	);
 }
 
@@ -1543,14 +1578,18 @@ async function callStageModel(params: {
 				msg.includes('context_length') ||
 				/resource exhausted/i.test(msg) ||
 				/rate limit|quota|too many requests/i.test(msg);
-			console.warn(`  [WARN] ${stage} ${plan.provider}:${plan.model} failed: ${lastError.message}`);
+			console.warn(
+				`  [WARN] ${stage} ${plan.provider}:${plan.model} failed: ${formatModelCallErrorDetails(error)}`
+			);
 			if (isModelUnavailableError(lastError)) break;
 			if (!retryable) break;
 		}
 	}
 
+	const detail =
+		lastError != null ? formatModelCallErrorDetails(lastError) : 'Unknown error';
 	throw new Error(
-		`[${stage}] Planned route exhausted (${plan.provider}:${plan.model}): ${lastError?.message || 'Unknown error'}`
+		`[${stage}] Planned route exhausted (${plan.provider}:${plan.model}): ${detail}. If this is Anthropic, check the model id is not retired (see https://docs.anthropic.com/en/docs/about-claude/model-deprecations).`
 	);
 }
 
