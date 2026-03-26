@@ -176,11 +176,22 @@ export async function resolveProviderDecision(options: {
   }
 
   try {
-    const result = await restormelResolve({
+    let result = await restormelResolve({
       environmentId: RESTORMEL_ENVIRONMENT_ID,
       routeId: options.routeId,
       ...options.restormelContext
     });
+    const stageName = options.restormelContext?.stage;
+    const canRetryWithoutStage = !options.routeId && Boolean(stageName);
+    if (!result?.data?.providerType && canRetryWithoutStage) {
+      // Defensive guard for unexpected empty payloads; re-resolve on the shared workload route.
+      const { stage: _stage, ...contextWithoutStage } = options.restormelContext ?? {};
+      result = await restormelResolve({
+        environmentId: RESTORMEL_ENVIRONMENT_ID,
+        routeId: options.routeId,
+        ...contextWithoutStage
+      });
+    }
     const providerType = normalizeRestormelProvider(result.data.providerType);
     if (!providerType) {
       throw new ProviderResolutionFailure({
@@ -205,6 +216,40 @@ export async function resolveProviderDecision(options: {
       stepChain: result.data.stepChain ?? null
     };
   } catch (error) {
+    if (
+      error instanceof RestormelResolveError &&
+      error.code === 'no_route' &&
+      !options.routeId &&
+      options.restormelContext?.stage
+    ) {
+      try {
+        const { stage: _stage, ...contextWithoutStage } = options.restormelContext;
+        const retried = await restormelResolve({
+          environmentId: RESTORMEL_ENVIRONMENT_ID,
+          routeId: options.routeId,
+          ...contextWithoutStage
+        });
+        const providerType = normalizeRestormelProvider(retried.data.providerType);
+        if (providerType) {
+          return {
+            provider: providerType,
+            model: retried.data.modelId ?? options.preferredModel ?? null,
+            source: 'restormel',
+            routeId: retried.data.routeId,
+            explanation: retried.data.explanation,
+            selectedStepId: retried.data.selectedStepId ?? null,
+            selectedOrderIndex: retried.data.selectedOrderIndex ?? null,
+            switchReasonCode: retried.data.switchReasonCode ?? null,
+            estimatedCostUsd: retried.data.estimatedCostUsd ?? null,
+            matchedCriteria: retried.data.matchedCriteria ?? null,
+            fallbackCandidates: retried.data.fallbackCandidates ?? null,
+            stepChain: retried.data.stepChain ?? null
+          };
+        }
+      } catch {
+        // Preserve original no_route handling below.
+      }
+    }
     const failure =
       error instanceof ProviderResolutionFailure
         ? {

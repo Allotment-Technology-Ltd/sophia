@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { runVerificationPass } from '$lib/server/engine';
-import { loadByokProviderApiKeys } from '$lib/server/byok/store';
+import { loadInquiryEffectiveProviderApiKeys } from '$lib/server/byok/effectiveKeys';
 import type { ProviderApiKeys } from '$lib/server/byok/types';
 import type { Claim } from '$lib/types/references';
 
@@ -11,17 +11,10 @@ interface VerifyRequest {
 }
 
 export const POST: RequestHandler = async ({ request, locals }) => {
-  let providerApiKeys: ProviderApiKeys = {};
-  const uid = locals.user?.uid;
-  if (uid) {
-    try {
-      providerApiKeys = await loadByokProviderApiKeys(uid);
-    } catch (err) {
-      if (process.env.NODE_ENV !== 'test') {
-        console.warn('[BYOK] Failed to load provider keys for verify route:', err instanceof Error ? err.message : String(err));
-      }
-    }
-  }
+  const providerApiKeys: ProviderApiKeys = await loadInquiryEffectiveProviderApiKeys(
+    locals.user,
+    'verify route'
+  );
 
   let body: VerifyRequest;
   try {

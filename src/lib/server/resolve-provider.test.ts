@@ -183,4 +183,53 @@ describe('resolveProviderDecision', () => {
       })
     );
   });
+
+  it('retries without stage when stage-specific resolve returns no_route', async () => {
+    const restormel = await import('./restormel');
+    const { resolveProviderDecision } = await import('./resolve-provider');
+    const noRoute = new restormel.RestormelResolveError({
+      status: 404,
+      code: 'no_route',
+      detail: 'No route found for this stage',
+      endpoint: '/projects/project-id/resolve',
+      payload: { error: 'no_route' },
+      userMessage: 'No route found for this stage.',
+      violations: []
+    });
+    const resolveSpy = vi.spyOn(restormel, 'restormelResolve');
+    resolveSpy
+      .mockRejectedValueOnce(noRoute)
+      .mockResolvedValueOnce({
+        data: {
+          contractVersion: '2026-03-26',
+          routeId: 'fallback-shared-route',
+          providerType: 'google',
+          modelId: 'gemini-2.5-flash',
+          explanation: 'Matched shared ingestion route',
+          stepChain: null
+        }
+      });
+
+    const result = await resolveProviderDecision({
+      restormelContext: {
+        workload: 'ingestion',
+        stage: 'relations'
+      },
+      safeDefault: { provider: 'vertex', model: 'gemini-2.5-flash' }
+    });
+
+    expect(resolveSpy).toHaveBeenCalledTimes(2);
+    expect(resolveSpy.mock.calls[0]?.[0]).toMatchObject({
+      workload: 'ingestion',
+      stage: 'relations'
+    });
+    expect(resolveSpy.mock.calls[1]?.[0]).toMatchObject({
+      workload: 'ingestion'
+    });
+    expect(resolveSpy.mock.calls[1]?.[0]).not.toHaveProperty('stage');
+    expect(result.source).toBe('restormel');
+    expect(result.provider).toBe('vertex');
+    expect(result.model).toBe('gemini-2.5-flash');
+    expect(result.routeId).toBe('fallback-shared-route');
+  });
 });

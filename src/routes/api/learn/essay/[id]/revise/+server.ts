@@ -18,7 +18,7 @@ import {
   getLatestEssayVersion,
   updateEssaySubmission
 } from '$lib/server/learn/store';
-import { loadByokProviderApiKeys } from '$lib/server/byok/store';
+import { loadInquiryEffectiveProviderApiKeys } from '$lib/server/byok/effectiveKeys';
 import { hasOwnerRole } from '$lib/server/authRoles';
 import { consumeLearnEntitlement } from '$lib/server/learn/entitlements';
 
@@ -66,7 +66,10 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
   const latest = await getLatestEssayVersion(uid, params.id);
   const priorFeedback = latest?.feedback ? EssayFeedbackSchema.safeParse(latest.feedback) : null;
 
-  const providerApiKeys = await loadByokProviderApiKeys(uid).catch(() => ({}));
+  const providerApiKeys = await loadInquiryEffectiveProviderApiKeys(
+    locals.user,
+    'learn essay revise route'
+  );
 
   const question = parsed.data.question ?? String(submission.question ?? '');
   const feedback = await generateEssayRevision(
