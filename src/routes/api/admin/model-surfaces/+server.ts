@@ -27,7 +27,8 @@ import {
 	parseCatalogFreshnessFromPayload
 } from '$lib/server/restormelCatalogRows';
 import {
-	RESTORMEL_CATALOG_V5_CONTRACT_VERSION,
+	isRestormelCatalogContractSupported,
+	RESTORMEL_CATALOG_SUPPORTED_CONTRACT_VERSIONS,
 	restormelFetchCatalogPayloadUncached,
 	restormelReplaceProjectModelAllowlist
 } from '$lib/server/restormel';
@@ -64,8 +65,8 @@ export const GET: RequestHandler = async ({ locals }) => {
 		contractVersion = ctx.contractVersion;
 		allFresh = ctx.allFresh;
 		freshnessSignalsPresent = ctx.freshnessSignalsPresent;
-		if (contractVersion !== RESTORMEL_CATALOG_V5_CONTRACT_VERSION) {
-			catalogError = `catalog_contract_mismatch:${contractVersion || 'missing'}`;
+		if (!isRestormelCatalogContractSupported(contractVersion)) {
+			catalogError = `catalog_contract_mismatch:${contractVersion || 'missing'} supported=${RESTORMEL_CATALOG_SUPPORTED_CONTRACT_VERSIONS.join('|')}`;
 		}
 	} catch (e) {
 		catalogError = e instanceof Error ? e.message : String(e);
@@ -180,10 +181,10 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 		);
 	}
 
-	if (contractVersion !== RESTORMEL_CATALOG_V5_CONTRACT_VERSION) {
-		console.warn('[model-surfaces] catalog contract differs from Sophia default', {
+	if (!isRestormelCatalogContractSupported(contractVersion)) {
+		console.warn('[model-surfaces] catalog contract not supported by Sophia', {
 			received: contractVersion || 'missing',
-			expected: RESTORMEL_CATALOG_V5_CONTRACT_VERSION
+			supported: [...RESTORMEL_CATALOG_SUPPORTED_CONTRACT_VERSIONS]
 		});
 	}
 

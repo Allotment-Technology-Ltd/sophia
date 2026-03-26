@@ -12,7 +12,8 @@ import type { ByokProvider, ProviderApiKeys } from '$lib/server/byok/types';
 import { getAvailableReasoningModels } from '$lib/server/vertex';
 import { isEmbeddingModelByProviderAndId } from '$lib/modelKind';
 import {
-  RESTORMEL_CATALOG_V5_CONTRACT_VERSION,
+  isRestormelCatalogContractSupported,
+  RESTORMEL_CATALOG_SUPPORTED_CONTRACT_VERSIONS,
   restormelGetLiveReasoningAllowlist
 } from '$lib/server/restormel';
 import { loadModelSurfacesConfig, modelAllowedForInquiries } from '$lib/server/modelSurfaces';
@@ -89,9 +90,9 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   let liveAllowlist: Partial<Record<ReasoningProvider, Set<string>>> | null = null;
   try {
     const catalog = await restormelGetLiveReasoningAllowlist();
-    if (catalog.contractVersion !== RESTORMEL_CATALOG_V5_CONTRACT_VERSION) {
+    if (!isRestormelCatalogContractSupported(catalog.contractVersion)) {
       throw new Error(
-        `catalog_contract_mismatch:${catalog.contractVersion} expected=${RESTORMEL_CATALOG_V5_CONTRACT_VERSION}`
+        `catalog_contract_mismatch:${catalog.contractVersion} supported=${RESTORMEL_CATALOG_SUPPORTED_CONTRACT_VERSIONS.join('|')}`
       );
     }
     if (!catalog.allFresh) {
@@ -108,7 +109,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   } catch (err) {
     if (process.env.NODE_ENV !== 'test') {
       console.warn(
-        '[restormel] Failed loading live catalog v5 for allowed-models:',
+        '[restormel] Failed loading live catalog for allowed-models:',
         err instanceof Error ? err.message : String(err)
       );
     }

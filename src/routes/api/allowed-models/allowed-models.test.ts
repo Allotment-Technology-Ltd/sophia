@@ -22,6 +22,10 @@ vi.mock('$lib/server/vertex', () => ({
 
 vi.mock('$lib/server/restormel', () => ({
   RESTORMEL_CATALOG_V5_CONTRACT_VERSION: '2026-03-25.catalog.v5',
+  RESTORMEL_CATALOG_V6_CONTRACT_VERSION: '2026-03-26.catalog.v6',
+  RESTORMEL_CATALOG_SUPPORTED_CONTRACT_VERSIONS: ['2026-03-25.catalog.v5', '2026-03-26.catalog.v6'],
+  isRestormelCatalogContractSupported: (v: string) =>
+    v === '2026-03-25.catalog.v5' || v === '2026-03-26.catalog.v6',
   restormelGetLiveReasoningAllowlist: mockRestormelGetLiveReasoningAllowlist
 }));
 

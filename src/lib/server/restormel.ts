@@ -935,6 +935,18 @@ export async function restormelDeleteProjectModelBinding(bindingId: string): Pro
 }
 
 export const RESTORMEL_CATALOG_V5_CONTRACT_VERSION = '2026-03-25.catalog.v5';
+/** Keys dogfood #60 / npm keys-v0.2.14 — lifecycle fields on catalog rows (`deprecationDate`, `retirementDate`, `replacementModelId`). */
+export const RESTORMEL_CATALOG_V6_CONTRACT_VERSION = '2026-03-26.catalog.v6';
+
+export const RESTORMEL_CATALOG_SUPPORTED_CONTRACT_VERSIONS = [
+	RESTORMEL_CATALOG_V5_CONTRACT_VERSION,
+	RESTORMEL_CATALOG_V6_CONTRACT_VERSION
+] as const;
+
+export function isRestormelCatalogContractSupported(version: string): boolean {
+	const v = version.trim();
+	return (RESTORMEL_CATALOG_SUPPORTED_CONTRACT_VERSIONS as readonly string[]).includes(v);
+}
 const LIVE_ALLOWLIST_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const LIVE_ALLOWLIST_REFRESH_MIN_INTERVAL_MS = 60 * 1000;
 
@@ -1036,9 +1048,9 @@ export async function restormelGetLiveReasoningAllowlist(): Promise<{
   try {
     const payload = await requestRestormel<unknown>('/catalog', { requireProjectId: false });
     const contractVersion = parseCatalogContractVersion(payload);
-    if (contractVersion !== RESTORMEL_CATALOG_V5_CONTRACT_VERSION) {
+    if (!isRestormelCatalogContractSupported(contractVersion)) {
       throw new Error(
-        `catalog_contract_mismatch:${contractVersion || 'missing'} expected=${RESTORMEL_CATALOG_V5_CONTRACT_VERSION}`
+        `catalog_contract_mismatch:${contractVersion || 'missing'} supported=${RESTORMEL_CATALOG_SUPPORTED_CONTRACT_VERSIONS.join('|')}`
       );
     }
     const allowlist = parseCatalogAllowlist(payload);
