@@ -1,6 +1,7 @@
 import { createVertex } from '@ai-sdk/google-vertex';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createAnthropic } from '@ai-sdk/anthropic';
+import { createMistral } from '@ai-sdk/mistral';
 import { createOpenAI } from '@ai-sdk/openai';
 import {
   DEFAULT_MODEL_CATALOG,
@@ -62,6 +63,7 @@ let anthropicInstance: ReturnType<typeof createAnthropic> | null = null;
 const anthropicByApiKey = new Map<string, ReturnType<typeof createAnthropic>>();
 const googleByApiKey = new Map<string, ReturnType<typeof createGoogleGenerativeAI>>();
 const openAICompatibleByCacheKey = new Map<string, ReturnType<typeof createOpenAI>>();
+const mistralByApiKey = new Map<string, ReturnType<typeof createMistral>>();
 
 function getAnthropicForApiKey(apiKey?: string) {
   if (apiKey) {
@@ -100,6 +102,24 @@ function getProviderBaseUrl(provider: Exclude<ReasoningProvider, 'vertex' | 'ant
   const envName = REASONING_PROVIDER_BASE_URL_ENV[provider];
   const fromEnv = envName ? process.env[envName]?.trim() : undefined;
   return fromEnv || REASONING_PROVIDER_DEFAULT_BASE_URL[provider];
+}
+
+function getMistralForApiKey(apiKey?: string) {
+  const resolvedApiKey = apiKey?.trim() || getPlatformApiKey('mistral');
+  if (!resolvedApiKey) {
+    throw new Error('mistral provider requested but no API key is configured');
+  }
+  const baseURL = getProviderBaseUrl('mistral');
+  const cacheKey = `${resolvedApiKey}:${baseURL ?? ''}`;
+  const existing = mistralByApiKey.get(cacheKey);
+  if (existing) return existing;
+
+  const instance = createMistral({
+    apiKey: resolvedApiKey,
+    ...(baseURL ? { baseURL } : {})
+  });
+  mistralByApiKey.set(cacheKey, instance);
+  return instance;
 }
 
 function getOpenAICompatibleForProvider(
@@ -263,6 +283,21 @@ function buildAnthropicRoute(modelId: string, byokAnthropicKey?: string): Reason
   };
 }
 
+/**
+ * Mistral must use `@ai-sdk/mistral`, not `createOpenAI` against api.mistral.ai:
+ * `@ai-sdk/openai` treats non-`gpt-*` ids as “reasoning” models and sends
+ * `max_completion_tokens`, which Mistral rejects (`extra_forbidden`).
+ */
+function buildMistralRoute(modelId: string, byokMistralKey?: string): ReasoningModelRoute {
+  return {
+    model: getMistralForApiKey(byokMistralKey)(modelId),
+    provider: 'mistral',
+    modelId,
+    supportsGrounding: false,
+    credentialSource: byokMistralKey ? 'byok' : 'platform'
+  };
+}
+
 function buildOpenAICompatibleRoute(
   provider: Exclude<ReasoningProvider, 'vertex' | 'anthropic'>,
   modelId: string,
@@ -294,6 +329,9 @@ function buildRouteForProvider(
   }
   if (provider === 'anthropic') {
     return buildAnthropicRoute(modelId, byokKey);
+  }
+  if (provider === 'mistral') {
+    return buildMistralRoute(modelId, byokKey);
   }
   return buildOpenAICompatibleRoute(provider, modelId, byokKey);
 }

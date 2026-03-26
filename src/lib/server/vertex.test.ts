@@ -4,6 +4,7 @@ const {
   mockCreateVertex,
   mockCreateAnthropic,
   mockCreateGoogleGenerativeAI,
+  mockCreateMistral,
   mockCreateOpenAI,
   mockLoadServerEnv,
   mockResolveProviderDecision
@@ -11,6 +12,7 @@ const {
   mockCreateVertex: vi.fn(() => vi.fn((modelId: string) => `vertex:${modelId}`)),
   mockCreateAnthropic: vi.fn(() => vi.fn((modelId: string) => `anthropic:${modelId}`)),
   mockCreateGoogleGenerativeAI: vi.fn(() => vi.fn((modelId: string) => `google:${modelId}`)),
+  mockCreateMistral: vi.fn(() => vi.fn((modelId: string) => `mistral:${modelId}`)),
   mockCreateOpenAI: vi.fn(() => {
     const provider = ((modelId: string) => `openai-responses:${modelId}`) as any;
     provider.chat = vi.fn((modelId: string) => `openai-chat:${modelId}`);
@@ -36,6 +38,10 @@ vi.mock('@ai-sdk/openai', () => ({
   createOpenAI: mockCreateOpenAI
 }));
 
+vi.mock('@ai-sdk/mistral', () => ({
+  createMistral: mockCreateMistral
+}));
+
 vi.mock('./env', () => ({
   loadServerEnv: mockLoadServerEnv
 }));
@@ -50,6 +56,7 @@ describe('resolveReasoningModelRoute', () => {
     vi.clearAllMocks();
     process.env.GOOGLE_VERTEX_PROJECT = 'test-project';
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.MISTRAL_API_KEY;
   });
 
   it('uses the degraded default when Restormel selects a provider Sophia cannot execute locally', async () => {
@@ -114,6 +121,25 @@ describe('resolveReasoningModelRoute', () => {
 
     expect(route.provider).toBe('openrouter');
     expect(route.model).toBe('openai-chat:openrouter/auto');
+  });
+
+  it('uses @ai-sdk/mistral for Mistral (not OpenAI-compatible client; avoids max_completion_tokens 422)', async () => {
+    process.env.MISTRAL_API_KEY = 'mistral-test-key';
+    mockResolveProviderDecision.mockResolvedValue({
+      provider: 'mistral',
+      model: 'mistral-large-latest',
+      source: 'restormel',
+      routeId: 'ingestion_relations',
+      explanation: 'route=ingestion_relations step=0 provider=mistral model=mistral-large-latest'
+    });
+
+    const { resolveReasoningModelRoute } = await import('./vertex');
+    const route = await resolveReasoningModelRoute({ routeId: 'ingestion_relations' });
+
+    expect(route.provider).toBe('mistral');
+    expect(route.model).toBe('mistral:mistral-large-latest');
+    expect(mockCreateMistral).toHaveBeenCalled();
+    expect(mockCreateOpenAI).not.toHaveBeenCalled();
   });
 
   it('normalizes bare claude-sonnet-4 slug to dated Anthropic API id (extraction / ingest pins)', async () => {
