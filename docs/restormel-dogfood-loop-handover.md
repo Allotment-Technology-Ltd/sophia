@@ -81,6 +81,12 @@ See upstream runbook and [github-dogfood-feedback.md](https://github.com/Allotme
 
 ---
 
+## Closing the Sophia source issue
+
+When all follow-up is done, add a **completion comment** on the original **`restormel-feedback`** issue and **close** it. See [docs/restormel-dogfood-issue-closure.md](restormel-dogfood-issue-closure.md).
+
+---
+
 ## Security reminders (both repos)
 
 - Do **not** paste API keys, gateway keys, or PATs into issue bodies or PR descriptions.  

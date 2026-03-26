@@ -6,6 +6,8 @@
 
 **Bidirectional loop + Keys-side workflows (upstream notify, hint comment, optional CI agent):** [docs/restormel-dogfood-loop-handover.md](restormel-dogfood-loop-handover.md)
 
+**Closing the loop:** When Keys + Sophia follow-up is done, add a **completion comment** on the **original Sophia** `restormel-feedback` issue and **close** it. Policy, agent prompt, and optional Actions workflow: [docs/restormel-dogfood-issue-closure.md](restormel-dogfood-issue-closure.md).
+
 ---
 
 ## Standard (trusted projects)
