@@ -2,7 +2,6 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
 import { buildRestormelProjectModelEntriesOnly } from '$lib/ingestionModelCatalogMerge';
-import { INGESTION_MODEL_CATALOG } from '$lib/ingestionModelCatalog';
 import { restormelListProjectModels } from '$lib/server/restormel';
 import { defaultProviders, estimateCost } from '@restormel/keys';
 
@@ -43,27 +42,10 @@ export const GET: RequestHandler = async ({ locals }) => {
 	}
 
 	const { entries, sync } = buildRestormelProjectModelEntriesOnly(remote, fetchError);
-	const combined = [...entries];
-	const seen = new Set(combined.map((entry) => `${entry.provider}::${entry.modelId}`.toLowerCase()));
-	const providersInProject = new Set(combined.map((entry) => entry.provider.toLowerCase()));
+	// Project embeddings and other models are configured via Restormel Keys project
+	// model bindings (POST …/projects/{id}/models). No static embedding supplement.
 
-	// Ensure non-Voyage embedding options remain available in the picker even if
-	// the project-scoped Restormel index omits them in a given response.
-	// Only supplement providers already present in the project model set to
-	// avoid offering models that are likely not usable with current key config.
-	let staticEmbeddingSupplementCount = 0;
-	for (const entry of INGESTION_MODEL_CATALOG) {
-		if (!isEmbeddingModelId(entry.modelId)) continue;
-		if (entry.provider.toLowerCase() === 'voyage') continue;
-		if (!providersInProject.has(entry.provider.toLowerCase())) continue;
-		const key = `${entry.provider}::${entry.modelId}`.toLowerCase();
-		if (seen.has(key)) continue;
-		combined.push(entry);
-		seen.add(key);
-		staticEmbeddingSupplementCount++;
-	}
-
-	const compactEntries = combined.map((entry) => {
+	const compactEntries = entries.map((entry) => {
 		const estimate =
 			estimateCost(entry.modelId, defaultProviders) ??
 			estimateCost(`${entry.provider}/${entry.modelId}`, defaultProviders) ??
@@ -95,7 +77,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 		entries: compactEntries,
 		catalogSync: sync,
 		supplementation: {
-			staticEmbeddingCount: staticEmbeddingSupplementCount
+			staticEmbeddingCount: 0
 		}
 	});
 };

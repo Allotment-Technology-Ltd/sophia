@@ -1,6 +1,9 @@
 /**
- * Merges Restormel `GET /projects/{id}/models` (**project model index**: bindings + nested catalog model)
- * with the static ingestion catalog. Rows with `enabled: false` are ignored for pickers.
+ * Merges Restormel `GET /projects/{id}/models` (**project model index**) with the static ingestion catalog.
+ * Canonical response: binding rows are the JSON array at **`data`** (see restormel-keys
+ * `docs/restormel-integration/keys-catalog-sync.md`). We also accept legacy/alternate
+ * envelopes (`data.models`, `data.bindings`, top-level `bindings`) defensively.
+ * Rows with `enabled: false` are ignored for pickers.
  */
 
 import type { IngestionModelCatalogEntry } from './ingestionModelCatalog';

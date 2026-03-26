@@ -1,7 +1,10 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { getIdToken } from '$lib/firebase';
-  import { isEmbeddingModelEntry } from '$lib/ingestionModelCatalogMerge';
+  import {
+    extractModelRowsFromRestormelPayload,
+    isEmbeddingModelEntry
+  } from '$lib/ingestionModelCatalogMerge';
   import { INGESTION_SOURCE_MODEL_HINTS } from '$lib/ingestionModelCatalog';
   import { entryMeetsPresetStageMinimum } from '$lib/ingestionPipelineModelRequirements';
   import { resolveRouteForStage } from '$lib/utils/ingestionRouting';
@@ -372,6 +375,10 @@
   let catalogEntries = $state<CatalogEntry[]>([]);
   let catalogError = $state('');
   let catalogNotice = $state('');
+  let projectBindingsPayload = $state<unknown>(null);
+  let projectBindingsBusy = $state(false);
+  let projectBindingsError = $state('');
+  let projectBindingsMessage = $state('');
   let stageProviders = $state<Record<string, string>>({
     ingestion_fetch: '',
     ingestion_extraction: '',
@@ -418,6 +425,27 @@
 
   let chatModels = $derived(catalogEntries.filter((e) => !isLikelyEmbeddingModel(e)));
   let embeddingModels = $derived(catalogEntries.filter((e) => isLikelyEmbeddingModel(e)));
+
+  const projectBindingRows = $derived(extractModelRowsFromRestormelPayload(projectBindingsPayload));
+
+  function projectBindingRowId(row: Record<string, unknown>): string {
+    const raw = row.id ?? row.bindingId;
+    return typeof raw === 'string' ? raw.trim() : '';
+  }
+
+  function projectBindingProvider(row: Record<string, unknown>): string {
+    const v = row.providerType ?? row.providerId ?? row.provider;
+    return typeof v === 'string' ? v.trim() : '';
+  }
+
+  function projectBindingModelId(row: Record<string, unknown>): string {
+    const v = row.modelId ?? row.model;
+    return typeof v === 'string' ? v.trim() : '';
+  }
+
+  function projectBindingEnabled(row: Record<string, unknown>): boolean {
+    return row.enabled !== false;
+  }
 
   let syncDurationLabel = $state('');
   let completionMessage = $state('');
@@ -1210,16 +1238,11 @@
       const body = await authorizedJson('/api/admin/ingestion-routing/model-catalog');
       catalogEntries = Array.isArray(body.entries) ? (body.entries as CatalogEntry[]) : [];
       const sync = body.catalogSync as { status?: string; reason?: string } | undefined;
-      const supplementation = body.supplementation as { staticEmbeddingCount?: number } | undefined;
       if (sync?.status === 'unavailable') {
         catalogError =
           'Restormel model list is currently unavailable. Check your project model index and provider configuration, then refresh.';
       } else if (catalogEntries.length > 0) {
-        const staticEmbeddingCount = supplementation?.staticEmbeddingCount ?? 0;
-        catalogNotice =
-          staticEmbeddingCount > 0
-            ? `${catalogEntries.length} models available (${staticEmbeddingCount} static embedding fallbacks added).`
-            : `${catalogEntries.length} models from Restormel Keys.`;
+        catalogNotice = `${catalogEntries.length} models from Restormel Keys project bindings.`;
       }
       applyDefaultStageSelections();
       for (const row of RESTORMEL_STAGES) ensureStageProviderSelection(row);
@@ -1227,6 +1250,85 @@
       catalogEntries = [];
       catalogError = e instanceof Error ? e.message : 'Failed to load models from Restormel.';
       applyDefaultStageSelections();
+    }
+  }
+
+  async function loadProjectBindings(): Promise<void> {
+    projectBindingsError = '';
+    try {
+      const body = await authorizedJson('/api/admin/ingestion-routing/project-models');
+      projectBindingsPayload = body.payload ?? null;
+    } catch (e) {
+      projectBindingsPayload = null;
+      projectBindingsError =
+        e instanceof Error ? e.message : 'Failed to load Restormel project model bindings.';
+    }
+  }
+
+  async function addProjectModelBinding(providerType: string, modelId: string): Promise<void> {
+    projectBindingsBusy = true;
+    projectBindingsMessage = '';
+    projectBindingsError = '';
+    try {
+      await authorizedJson('/api/admin/ingestion-routing/project-models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ models: [{ providerType, modelId }] })
+      });
+      projectBindingsMessage = `Registered ${providerType} / ${modelId} in Restormel Keys.`;
+      await loadProjectBindings();
+      await loadModelCatalog();
+      await hydrateSelectionsFromRoutes();
+    } catch (e) {
+      projectBindingsError = e instanceof Error ? e.message : 'Failed to add binding.';
+    } finally {
+      projectBindingsBusy = false;
+    }
+  }
+
+  async function deleteProjectBinding(bindingId: string): Promise<void> {
+    if (!bindingId) return;
+    projectBindingsBusy = true;
+    projectBindingsMessage = '';
+    projectBindingsError = '';
+    try {
+      await authorizedJson(
+        `/api/admin/ingestion-routing/project-models/${encodeURIComponent(bindingId)}`,
+        { method: 'DELETE' }
+      );
+      projectBindingsMessage = 'Removed binding from Restormel Keys.';
+      await loadProjectBindings();
+      await loadModelCatalog();
+      await hydrateSelectionsFromRoutes();
+    } catch (e) {
+      projectBindingsError = e instanceof Error ? e.message : 'Failed to remove binding.';
+    } finally {
+      projectBindingsBusy = false;
+    }
+  }
+
+  async function setProjectBindingEnabled(bindingId: string, enabled: boolean): Promise<void> {
+    if (!bindingId) return;
+    projectBindingsBusy = true;
+    projectBindingsMessage = '';
+    projectBindingsError = '';
+    try {
+      await authorizedJson(
+        `/api/admin/ingestion-routing/project-models/${encodeURIComponent(bindingId)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled })
+        }
+      );
+      projectBindingsMessage = enabled ? 'Binding enabled.' : 'Binding disabled.';
+      await loadProjectBindings();
+      await loadModelCatalog();
+      await hydrateSelectionsFromRoutes();
+    } catch (e) {
+      projectBindingsError = e instanceof Error ? e.message : 'Failed to update binding.';
+    } finally {
+      projectBindingsBusy = false;
     }
   }
 
@@ -1300,7 +1402,7 @@
   }
 
   async function refreshModelsAndRoutes(): Promise<void> {
-    await loadModelCatalog();
+    await Promise.all([loadModelCatalog(), loadProjectBindings()]);
     await loadRoutingContext();
     await hydrateSelectionsFromRoutes();
   }
@@ -2671,7 +2773,7 @@
     ingestSettingsHydrated = true;
 
     void (async () => {
-      await loadModelCatalog();
+      await Promise.all([loadModelCatalog(), loadProjectBindings()]);
       await loadRoutingContext();
       await hydrateSelectionsFromRoutes();
     })();
@@ -3529,6 +3631,105 @@
 
               {#if catalogNotice}<p class="font-mono text-xs text-sophia-dark-sage">{catalogNotice}</p>{/if}
               {#if catalogError}<p class="font-mono text-xs text-sophia-dark-copper">{catalogError}</p>{/if}
+
+              <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/30 p-4">
+                <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
+                  Restormel project model bindings
+                </p>
+                <p class="mt-2 text-xs leading-relaxed text-sophia-dark-muted">
+                  Pickers below only list models registered for this Restormel project. Add embeddings or other models here; changes call the Keys Dashboard API with your server
+                  <span class="font-mono text-sophia-dark-text">RESTORMEL_GATEWAY_KEY</span>.
+                </p>
+                {#if projectBindingsError}
+                  <p class="mt-3 font-mono text-xs text-sophia-dark-copper">{projectBindingsError}</p>
+                {/if}
+                {#if projectBindingsMessage}
+                  <p class="mt-3 font-mono text-xs text-sophia-dark-sage">{projectBindingsMessage}</p>
+                {/if}
+                <div class="mt-4 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    disabled={runInProgress() || projectBindingsBusy}
+                    onclick={() => void addProjectModelBinding('google', 'text-embedding-005')}
+                    class="min-h-11 rounded border border-sophia-dark-border/70 bg-transparent px-4 py-2.5 font-mono text-xs text-sophia-dark-dim hover:border-sophia-dark-border hover:bg-sophia-dark-surface-raised hover:text-sophia-dark-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sophia-dark-sage disabled:opacity-50"
+                  >
+                    Add google · text-embedding-005
+                  </button>
+                  <button
+                    type="button"
+                    disabled={runInProgress() || projectBindingsBusy}
+                    onclick={() => void addProjectModelBinding('google', 'text-multilingual-embedding-002')}
+                    class="min-h-11 rounded border border-sophia-dark-border/70 bg-transparent px-4 py-2.5 font-mono text-xs text-sophia-dark-dim hover:border-sophia-dark-border hover:bg-sophia-dark-surface-raised hover:text-sophia-dark-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sophia-dark-sage disabled:opacity-50"
+                  >
+                    Add google · text-multilingual-embedding-002
+                  </button>
+                  <button
+                    type="button"
+                    disabled={runInProgress() || projectBindingsBusy}
+                    onclick={() => void addProjectModelBinding('vertex', 'text-embedding-005')}
+                    class="min-h-11 rounded border border-sophia-dark-border/70 bg-transparent px-4 py-2.5 font-mono text-xs text-sophia-dark-dim hover:border-sophia-dark-border hover:bg-sophia-dark-surface-raised hover:text-sophia-dark-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sophia-dark-sage disabled:opacity-50"
+                  >
+                    Add vertex · text-embedding-005
+                  </button>
+                </div>
+                {#if projectBindingRows.length > 0}
+                  <div class="mt-4 overflow-x-auto rounded border border-sophia-dark-border/60">
+                    <table class="w-full min-w-[32rem] border-collapse font-mono text-xs text-sophia-dark-muted">
+                      <thead>
+                        <tr class="border-b border-sophia-dark-border/60 bg-sophia-dark-bg/40 text-left text-[0.65rem] uppercase tracking-[0.08em] text-sophia-dark-dim">
+                          <th class="px-3 py-3">Provider</th>
+                          <th class="px-3 py-3">Model</th>
+                          <th class="px-3 py-3">Enabled</th>
+                          <th class="px-3 py-3 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {#each projectBindingRows as row}
+                          {@const bid = projectBindingRowId(row)}
+                          {@const pid = projectBindingProvider(row)}
+                          {@const mid = projectBindingModelId(row)}
+                          {@const en = projectBindingEnabled(row)}
+                          <tr class="border-b border-sophia-dark-border/40 last:border-b-0">
+                            <td class="px-3 py-3 text-sophia-dark-text">{pid || '—'}</td>
+                            <td class="px-3 py-3 text-sophia-dark-text">{mid || '—'}</td>
+                            <td class="px-3 py-3">{en ? 'yes' : 'no'}</td>
+                            <td class="px-3 py-3 text-right">
+                              <div class="flex flex-wrap items-center justify-end gap-2">
+                                {#if bid}
+                                  <button
+                                    type="button"
+                                    disabled={runInProgress() || projectBindingsBusy}
+                                    onclick={() => void setProjectBindingEnabled(bid, !en)}
+                                    class="min-h-11 rounded border border-sophia-dark-border/70 px-4 py-2 font-mono text-[0.65rem] uppercase tracking-[0.08em] text-sophia-dark-dim hover:border-sophia-dark-border hover:bg-sophia-dark-surface-raised hover:text-sophia-dark-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sophia-dark-sage disabled:opacity-50"
+                                  >
+                                    {en ? 'Disable' : 'Enable'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={runInProgress() || projectBindingsBusy}
+                                    onclick={() => {
+                                      if (window.confirm(`Remove binding ${pid} / ${mid} from Restormel Keys?`)) {
+                                        void deleteProjectBinding(bid);
+                                      }
+                                    }}
+                                    class="min-h-11 rounded border border-sophia-dark-copper/50 bg-sophia-dark-copper/10 px-4 py-2 font-mono text-[0.65rem] uppercase tracking-[0.08em] text-sophia-dark-copper hover:bg-sophia-dark-copper/18 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sophia-dark-copper disabled:opacity-50"
+                                  >
+                                    Remove
+                                  </button>
+                                {:else}
+                                  <span class="text-sophia-dark-dim">No binding id</span>
+                                {/if}
+                              </div>
+                            </td>
+                          </tr>
+                        {/each}
+                      </tbody>
+                    </table>
+                  </div>
+                {:else if !projectBindingsError}
+                  <p class="mt-4 font-mono text-xs text-sophia-dark-dim">No bindings returned yet, or the list is empty.</p>
+                {/if}
+              </div>
 
               <div class="border-t border-sophia-dark-border/60 pt-6">
                 {#key activePipelineStageKey}
