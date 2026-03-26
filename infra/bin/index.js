@@ -228,7 +228,7 @@ const appService = new gcp.cloudrunv2.Service("sophia-app", {
                     },
                     {
                         name: "OWNER_UIDS",
-                        valueSource: { secretKeyRef: { secret: "owner-uids", version: "latest" } },
+                        valueSource: { secretKeyRef: { secret: "owner_uids", version: "latest" } },
                     },
                 ],
             }],
