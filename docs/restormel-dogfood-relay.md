@@ -4,6 +4,8 @@
 
 **Canonical upstream doc (Restormel Keys repo):** `docs/github-dogfood-feedback.md` — if this copy drifts, prefer the version in the restormel-keys repository.
 
+**Bidirectional loop + Keys-side workflows (upstream notify, hint comment, optional CI agent):** [docs/restormel-dogfood-loop-handover.md](restormel-dogfood-loop-handover.md)
+
 ---
 
 ## Standard (trusted projects)
