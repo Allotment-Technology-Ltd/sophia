@@ -1,3 +1,4 @@
+# Restormel docs: kept separate from deploy.yml (Python toolchain + path filters).
 name: Restormel Docs Lint
 
 on:
@@ -28,6 +29,10 @@ on:
       - "scripts/restormel/**"
       - ".github/workflows/docs-lint.yml"
   workflow_dispatch:
+
+concurrency:
+  group: restormel-docs-lint-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

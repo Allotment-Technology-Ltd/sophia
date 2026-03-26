@@ -11,6 +11,10 @@ on:
         default: "60"
         type: string
 
+concurrency:
+  group: restormel-docs-freshness-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

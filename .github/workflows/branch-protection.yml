@@ -1,7 +1,9 @@
 # SOPHIA — Branch Protection Setup
 #
 # Applies branch protection rules to main:
-#   - Required status check: "security" (runs on every PR and push to main)
+#   - Required status checks: "security" and "codeql" (CI/CD workflow jobs in deploy.yml)
+#   - Add Aikido’s GitHub check name here too once you copy it from a PR’s checks UI
+#     (Settings → Branches cannot be fully scripted if the context name varies by integration).
 #   - Strict status checks (branch must be up-to-date before merging)
 #   - Required pull request review (at least 0 approving reviews — enforces PR workflow)
 #   - No push restrictions (any collaborator may push via PR)
@@ -32,7 +34,7 @@ jobs:
               branch: 'main',
               required_status_checks: {
                 strict: true,
-                contexts: ['security']
+                contexts: ['security', 'codeql']
               },
               enforce_admins: false,
               required_pull_request_reviews: {

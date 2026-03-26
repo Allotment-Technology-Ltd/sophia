@@ -35,6 +35,11 @@
 # ROLLBACK:
 #   Trigger the "Rollback App" workflow_dispatch with a Cloud Run revision name.
 #   Infrastructure rollback: revert the infra/ commit and re-run the pipeline.
+#
+# AIKIDO (operator — not configured in this file):
+#   PR gating + AutoFix live in https://app.aikido.dev/ (dashboard). Add Aikido’s GitHub
+#   status as a required check on main if merges should wait on it. Prefer bundled
+#   post-release AutoFix PRs when the product supports batching.
 
 name: CI/CD
 
@@ -59,6 +64,10 @@ on:
         required: false
         default: false
         type: boolean
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -111,12 +120,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Scan for secrets
+      - name: Scan for secrets (PR diff)
+        if: github.event_name == 'pull_request'
+        uses: trufflesecurity/trufflehog@v3.93.7
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          extra_args: --only-verified
+
+      - name: Scan for secrets (full repo)
+        if: github.event_name != 'pull_request'
         uses: trufflesecurity/trufflehog@v3.93.7
         with:
           path: ./
           extra_args: --only-verified
-        continue-on-error: true
 
       - uses: pnpm/action-setup@v4
         with:
@@ -130,12 +148,39 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
+      - name: Assert Restormel staging verification secrets
+        if: github.event_name == 'pull_request'
+        env:
+          RESTORMEL_GATEWAY_KEY: ${{ secrets.RESTORMEL_GATEWAY_KEY_STAGING }}
+          RESTORMEL_PROJECT_ID: ${{ secrets.RESTORMEL_PROJECT_ID_STAGING }}
+          RESTORMEL_ENVIRONMENT_ID: ${{ secrets.RESTORMEL_ENVIRONMENT_ID_STAGING }}
+        run: |
+          test -n "$RESTORMEL_GATEWAY_KEY" || { echo "Missing RESTORMEL_GATEWAY_KEY_STAGING"; exit 1; }
+          test -n "$RESTORMEL_PROJECT_ID" || { echo "Missing RESTORMEL_PROJECT_ID_STAGING"; exit 1; }
+          test -n "$RESTORMEL_ENVIRONMENT_ID" || { echo "Missing RESTORMEL_ENVIRONMENT_ID_STAGING"; exit 1; }
+
+      - name: Restormel Doctor
+        if: github.event_name == 'pull_request'
+        run: npx @restormel/doctor
+
+      - name: Restormel Validate
+        if: github.event_name == 'pull_request'
+        env:
+          RESTORMEL_GATEWAY_KEY: ${{ secrets.RESTORMEL_GATEWAY_KEY_STAGING }}
+          RESTORMEL_PROJECT_ID: ${{ secrets.RESTORMEL_PROJECT_ID_STAGING }}
+          RESTORMEL_ENVIRONMENT_ID: ${{ secrets.RESTORMEL_ENVIRONMENT_ID_STAGING }}
+          RESTORMEL_KEYS_BASE: ${{ secrets.RESTORMEL_KEYS_BASE_STAGING }}
+        run: npx @restormel/validate
+
       - name: Audit dependencies
         run: pnpm audit --audit-level=high
         continue-on-error: true
 
       - name: Type check
         run: pnpm check
+
+      - name: Minimal TS project (ingest CLI)
+        run: pnpm exec tsc -p tsconfig.json --noEmit
 
       - name: Verify prod ingest module graph (Cloud Run parity)
         run: bash scripts/verify-prod-ingest-isolated.sh
