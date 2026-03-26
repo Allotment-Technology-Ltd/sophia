@@ -1664,6 +1664,11 @@ interface PartialResults {
 		next_batch_index: number;
 		total_batches: number;
 	};
+	// Mid-embedding checkpoint: resume after each successful Vertex batch (see embedTexts onBatchComplete)
+	embedding_progress?: {
+		embeddings_so_far: number[][];
+		next_index: number;
+	};
 }
 
 function savePartialResults(slug: string, results: PartialResults) {
@@ -1856,6 +1861,17 @@ function normalizeResumeStage(
 	if (!hasArguments && ['grouping', 'embedding', 'validating', 'storing'].includes(lastCompleted)) {
 		return 'relating';
 	}
+	// Surreal stage_completed stays at 'grouping' until all claim embeddings exist (see embedding checkpoints).
+	const emb = partial.embeddings;
+	const embPartial =
+		Array.isArray(emb) &&
+		Array.isArray(partial.claims) &&
+		emb.length > 0 &&
+		emb.length < partial.claims.length;
+	if (embPartial && ['embedding', 'validating', 'storing'].includes(lastCompleted)) {
+		return 'grouping';
+	}
+
 	if (!hasEmbeddings && ['embedding', 'validating', 'storing'].includes(lastCompleted)) {
 		return 'grouping';
 	}
@@ -2619,29 +2635,76 @@ async function main() {
 			if (embeddingPlan.provider !== 'vertex') {
 				throw new Error('Embedding model profile currently supports only vertex provider');
 			}
-			console.log(
-				`  Embedding ${claimTexts.length} claims via ${embeddingPlan.model} (${EMBEDDING_DIMENSIONS}-dim)...`
-			);
 
-			allEmbeddings = await withTimeout(
-				embedTexts(claimTexts),
-				embeddingBudget.timeoutMs,
-				`embedding ${embeddingPlan.model}`
-			);
+			const priorEmbeddings =
+				partial.embedding_progress?.embeddings_so_far ??
+				(Array.isArray(partial.embeddings) ? partial.embeddings : []);
+			if (priorEmbeddings.length > claimTexts.length) {
+				throw new Error(
+					'[INTEGRITY] Partial embedding vectors exceed claim count — remove *-partial.json or use --force-stage embedding'
+				);
+			}
+			if (priorEmbeddings.length === claimTexts.length && priorEmbeddings.length > 0) {
+				console.log(
+					`  [RESUME] Embedding already complete on disk (${priorEmbeddings.length} vectors) — skipping API calls`
+				);
+				allEmbeddings = priorEmbeddings;
+			} else {
+				const prefix = priorEmbeddings.slice();
+				const remainingTexts = claimTexts.slice(prefix.length);
+				if (prefix.length > 0) {
+					console.log(
+						`  [RESUME] Mid-embedding checkpoint — ${prefix.length}/${claimTexts.length} vectors on disk; embedding ${remainingTexts.length} remaining`
+					);
+				}
+				console.log(
+					`  Embedding ${claimTexts.length} claims via ${embeddingPlan.model} (${EMBEDDING_DIMENSIONS}-dim)${
+						prefix.length > 0 ? ` (${prefix.length} restored)` : ''
+					}...`
+				);
+
+				const embedPromise = embedTexts(remainingTexts, {
+					onBatchComplete: async ({ cumulativeEmbeddings }) => {
+						partial.embeddings = [...prefix, ...cumulativeEmbeddings];
+						partial.embedding_progress = {
+							embeddings_so_far: partial.embeddings,
+							next_index: partial.embeddings.length
+						};
+						// Keep stage_completed at 'grouping' until every claim has a vector (Surreal log uses stage_completed for resume).
+						savePartialResults(slug, partial);
+						console.log(
+							`  [SAVE] Embedding checkpoint: ${partial.embeddings.length}/${claimTexts.length} vectors`
+						);
+					}
+				});
+
+				const newVectors = await withTimeout(
+					embedPromise,
+					embeddingBudget.timeoutMs,
+					`embedding ${embeddingPlan.model}`
+				);
+				allEmbeddings = [...prefix, ...newVectors];
+			}
+
 			const embedMs = Date.now() - stageEmbedStart;
 			if (activeIngestTiming) {
 				activeIngestTiming.embed_wall_ms += embedMs;
 				bumpStageMs('embedding', embedMs);
 			}
 
-			const totalChars = claimTexts.reduce((sum, t) => sum + t.length, 0);
-			trackEmbeddingCost(totalChars);
+			const newCharCount = claimTexts
+				.slice(priorEmbeddings.length)
+				.reduce((sum, t) => sum + t.length, 0);
+			if (newCharCount > 0) {
+				trackEmbeddingCost(newCharCount);
+			}
 			assertStageBudget(embeddingBudget, embeddingTracker);
 
 			console.log(`  [OK] Generated ${allEmbeddings.length} embeddings (${EMBEDDING_DIMENSIONS} dimensions)`);
 			logStageCost('Embedding', embeddingTracker, embeddingPlan);
 
 			partial.embeddings = allEmbeddings;
+			partial.embedding_progress = undefined;
 			partial.stage_completed = 'embedding';
 			savePartialResults(slug, partial);
 			await updateIngestionLog(db, sourceMeta.url, {

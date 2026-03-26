@@ -185,12 +185,26 @@ export async function embedText(text: string): Promise<number[]> {
 	}
 }
 
+export type EmbedTextsBatchProgress = {
+	/** Start index in the `texts` array for this Vertex request */
+	batchStartIndex: number;
+	batchSize: number;
+	/** Embeddings produced so far for this `embedTexts` call (same length as batchStartIndex + batchSize after each batch) */
+	cumulativeEmbeddings: number[][];
+};
+
 /**
  * Embed multiple texts in batches
  * Vertex AI supports up to 250 instances per request
  * Automatically chunks larger arrays
  */
-export async function embedTexts(texts: string[]): Promise<number[][]> {
+export async function embedTexts(
+	texts: string[],
+	options?: {
+		/** Called after each successful Vertex batch (for disk checkpoints). */
+		onBatchComplete?: (progress: EmbedTextsBatchProgress) => void | Promise<void>;
+	}
+): Promise<number[][]> {
 	const BATCH_SIZE = Math.max(1, EMBED_BATCH_SIZE);
 	const embeddings: number[][] = [];
 
@@ -242,6 +256,14 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
 			console.log(
 				`[EMBED] Batch ${batchNum} complete (session total: ${totalTokensUsed} tokens)`
 			);
+
+			if (options?.onBatchComplete) {
+				await options.onBatchComplete({
+					batchStartIndex: i,
+					batchSize: batch.length,
+					cumulativeEmbeddings: embeddings
+				});
+			}
 
 			if (EMBED_BATCH_DELAY_MS > 0 && i + BATCH_SIZE < texts.length) {
 				await sleep(EMBED_BATCH_DELAY_MS);

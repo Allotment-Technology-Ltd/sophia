@@ -13,7 +13,19 @@
     error?: string;
   };
 
+  type ReportRow = {
+    runId: string;
+    status: string;
+    sourceUrl: string;
+    sourceType: string;
+    createdAtMs: number;
+    completedAtMs: number;
+    terminalError: string | null;
+    lastFailureStageKey: string | null;
+  };
+
   let runs = $state<RunRow[]>([]);
+  let recentReports = $state<ReportRow[]>([]);
   let loadError = $state('');
   let loading = $state(true);
 
@@ -33,9 +45,11 @@
         throw new Error(typeof body?.error === 'string' ? body.error : 'Failed to load runs.');
       }
       runs = Array.isArray(body?.runs) ? (body.runs as RunRow[]) : [];
+      recentReports = Array.isArray(body?.recentReports) ? (body.recentReports as ReportRow[]) : [];
     } catch (e) {
       loadError = e instanceof Error ? e.message : 'Failed to load runs.';
       runs = [];
+      recentReports = [];
     } finally {
       loading = false;
     }
@@ -46,6 +60,21 @@
     params.set('runId', runId);
     params.set('monitor', '1');
     window.location.href = `/admin/ingest?${params.toString()}`;
+  }
+
+  async function copyRunId(runId: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(runId);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function reportStatusLabel(s: string): string {
+    if (s === 'running' || s === 'awaiting_sync') return 'In progress (snapshot)';
+    if (s === 'done') return 'Done';
+    if (s === 'error') return 'Failed';
+    return s;
   }
 
   function formatWhen(ts: number): string {
@@ -104,8 +133,14 @@
       <div>
         <h1 class="font-serif text-3xl text-sophia-dark-text sm:text-[2.1rem]">Ingestion runs</h1>
         <p class="mt-2 max-w-3xl text-sm leading-6 text-sophia-dark-muted">
-          Runs on this server process only (list clears after restart). Open a run to view logs and monitoring; failed runs
-          stay on Review instead of resetting the wizard.
+          <strong class="text-sophia-dark-text">In-memory list</strong> — only runs held by the current app instance (clears
+          on deploy, scale-to-zero, or restart). Use it to reopen live monitoring.
+        </p>
+        <p class="mt-2 max-w-3xl text-sm leading-6 text-sophia-dark-muted">
+          <strong class="text-sophia-dark-text">Firestore reports</strong> — durable rows in
+          <code class="font-mono text-xs text-sophia-dark-text">ingestion_run_reports</code> (merged on completion,
+          failure, cancel, and periodically while running). The app does not auto-delete them; retention is your Firestore
+          / lifecycle policy.
         </p>
       </div>
       <nav class="flex flex-wrap items-center gap-2" aria-label="Admin shortcuts">
@@ -122,11 +157,11 @@
           <div class="runs-toolbar-message">
             {#if loadError}
               <p class="font-mono text-sm text-sophia-dark-copper">{loadError}</p>
-            {:else if loading && runs.length === 0}
+            {:else if loading && runs.length === 0 && recentReports.length === 0}
               <p class="text-sm text-sophia-dark-muted">Loading…</p>
-            {:else if runs.length === 0}
+            {:else if runs.length === 0 && recentReports.length === 0}
               <p class="text-sm text-sophia-dark-muted">
-                No ingestion runs in memory yet. Start one from the wizard.
+                No in-memory runs and no Firestore reports returned. Start a run from Expand or check Firestore access.
               </p>
             {/if}
           </div>
@@ -135,7 +170,8 @@
           </button>
         </div>
         {#if !loadError && runs.length > 0}
-          <div class="mt-4 overflow-auto rounded border border-sophia-dark-border">
+          <h2 class="mt-6 font-mono text-[0.65rem] uppercase tracking-[0.12em] text-sophia-dark-dim">This instance</h2>
+          <div class="mt-2 overflow-auto rounded border border-sophia-dark-border">
             <table class="min-w-full text-left font-mono text-xs text-sophia-dark-muted">
               <thead class="border-b border-sophia-dark-border bg-sophia-dark-bg/50 text-sophia-dark-dim">
                 <tr>
@@ -174,6 +210,70 @@
                         class="rounded border border-sophia-dark-border px-3 py-1.5 font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-sage hover:bg-sophia-dark-surface-raised"
                         onclick={() => openRun(run.id)}>Open</button
                       >
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+
+        {#if !loadError && recentReports.length > 0}
+          <h2 class="mt-8 font-mono text-[0.65rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
+            Recent Firestore reports
+          </h2>
+          <p class="mt-1 text-xs text-sophia-dark-muted">
+            “Open” only works if this instance still holds that run in memory; otherwise use the worker / same source URL
+            to resume from disk checkpoints (<code class="font-mono text-[0.65rem] text-sophia-dark-text">*-partial.json</code>).
+          </p>
+          <div class="mt-2 overflow-auto rounded border border-sophia-dark-border">
+            <table class="min-w-full text-left font-mono text-xs text-sophia-dark-muted">
+              <thead class="border-b border-sophia-dark-border bg-sophia-dark-bg/50 text-sophia-dark-dim">
+                <tr>
+                  <th class="px-3 py-2 font-medium uppercase tracking-[0.08em]">Status</th>
+                  <th class="px-3 py-2 font-medium uppercase tracking-[0.08em]">Completed</th>
+                  <th class="px-3 py-2 font-medium uppercase tracking-[0.08em]">Source</th>
+                  <th class="px-3 py-2 font-medium uppercase tracking-[0.08em]">Run ID</th>
+                  <th class="px-3 py-2 font-medium uppercase tracking-[0.08em]"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each recentReports as rep}
+                  <tr class="border-b border-sophia-dark-border/60 last:border-b-0">
+                    <td class="px-3 py-2 align-top text-sophia-dark-text">
+                      {reportStatusLabel(rep.status)}
+                      {#if rep.lastFailureStageKey}
+                        <span class="mt-1 block text-[0.65rem] text-sophia-dark-dim">Stage: {rep.lastFailureStageKey}</span>
+                      {/if}
+                      {#if rep.terminalError}
+                        <span class="mt-1 block max-w-xs text-[0.65rem] text-sophia-dark-copper" title={rep.terminalError}
+                          >{truncateUrl(rep.terminalError, 80)}</span
+                        >
+                      {/if}
+                    </td>
+                    <td class="px-3 py-2 align-top text-sophia-dark-text">{formatWhen(rep.completedAtMs)}</td>
+                    <td class="px-3 py-2 align-top">
+                      <span class="text-sophia-dark-text" title={rep.sourceUrl}>{truncateUrl(rep.sourceUrl)}</span>
+                      <span class="mt-0.5 block text-[0.65rem] text-sophia-dark-dim">{rep.sourceType}</span>
+                    </td>
+                    <td class="px-3 py-2 align-top font-mono text-[0.65rem] text-sophia-dark-dim">{rep.runId}</td>
+                    <td class="px-3 py-2 align-top text-right">
+                      <div class="flex flex-wrap justify-end gap-2">
+                        <button
+                          type="button"
+                          class="rounded border border-sophia-dark-border px-3 py-1.5 font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-muted hover:bg-sophia-dark-surface-raised"
+                          onclick={() => void copyRunId(rep.runId)}>Copy ID</button
+                        >
+                        <button
+                          type="button"
+                          class="rounded border border-sophia-dark-border px-3 py-1.5 font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-sage hover:bg-sophia-dark-surface-raised disabled:opacity-40"
+                          disabled={!runs.some((r) => r.id === rep.runId)}
+                          title={runs.some((r) => r.id === rep.runId)
+                            ? 'Open monitor for this run'
+                            : 'Run is not on this instance — reopen from Expand with the same source if checkpoints exist'}
+                          onclick={() => openRun(rep.runId)}>Open</button
+                        >
+                      </div>
                     </td>
                   </tr>
                 {/each}
