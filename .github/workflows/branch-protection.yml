@@ -2,6 +2,7 @@
 #
 # Applies branch protection rules to main:
 #   - Required status checks: "security" and "codeql" (CI/CD jobs in deploy.yml).
+#   - Aikido: add the GitHub App’s check name from a PR’s Checks tab if merges should wait on it.
 #   - Aikido (GitHub App PR checks): add the check name shown on a PR after Aikido runs —
 #     not an Actions job. Do not use Aikido’s CI Action if the PR checks app is enabled.
 #   - Required status checks: "security", "codeql", and "aikido" (the job id in deploy.yml).
@@ -38,7 +39,7 @@ jobs:
               branch: 'main',
               required_status_checks: {
                 strict: true,
-                contexts: ['security', 'codeql', 'aikido']
+                contexts: ['security', 'codeql']
               },
               enforce_admins: false,
               required_pull_request_reviews: {
