@@ -21,6 +21,13 @@
 #     WIF_SERVICE_ACCOUNT github-deploy@sophia-488807.iam.gserviceaccount.com
 #     GCP_PROJECT_ID      sophia-488807
 #     PULUMI_ACCESS_TOKEN Pulumi Cloud access token (https://app.pulumi.com/account/tokens)
+#     AIKIDO_SECRET_KEY   Aikido CI integration key (pull requests only) — create at
+#                         https://app.aikido.dev/settings/integrations/continuous-integration
+#
+# AIKIDO / PR CHECKS (mutually exclusive with the Aikido GitHub Action):
+#   If the repo uses Aikido’s GitHub App for PR checks, do NOT add
+#   AikidoSec/github-actions-workflow — Aikido returns 422. PR scans and status on PRs
+#   come from the installed GitHub App (see user-facing locations below), not from this file.
 #
 # AIKIDO / PR CHECKS (mutually exclusive with the Aikido GitHub Action):
 #   If the repo uses Aikido’s GitHub App for PR checks, do NOT add
@@ -45,6 +52,10 @@
 #   Integrations → GitHub Apps (org or user) → Aikido, or repo Settings → GitHub Apps /
 #   Installed GitHub Apps. The app posts PR checks; add that check name under branch
 #   protection if merges should wait on Aikido.
+# AIKIDO: Dashboard (https://app.aikido.dev/) handles PR gating and AutoFix. Either:
+#   (A) GitHub App — Settings → GitHub Apps → Aikido; the app posts its own PR check name.
+#   (B) Action — the `aikido` job below (needs AIKIDO_SECRET_KEY); add job id `aikido` to
+#       branch protection. Do not enable both the App scan and this Action (422 risk).
 
 name: CI/CD
 
@@ -209,10 +220,31 @@ jobs:
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
 
+  # ── 2c. Aikido (PRs only — triggers scan + GitHub check; needs AIKIDO_SECRET_KEY) ──
+  aikido:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Aikido Security scan
+        uses: AikidoSec/github-actions-workflow@v1.0.13
+        with:
+          secret-key: ${{ secrets.AIKIDO_SECRET_KEY }}
+          fail-on-timeout: true
+          fail-on-dependency-scan: true
+          fail-on-sast-scan: false
+          fail-on-iac-scan: false
+          minimum-severity: CRITICAL
+          timeout-seconds: 180
+          post-scan-status-comment: only_if_new_findings
+          post-sast-review-comments: off
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
   # ── 3. Pulumi preview (PRs) ────────────────────────────────────────────────
   infra-preview:
     if: github.event_name == 'pull_request' && needs.changes.outputs.infra == 'true'
-    needs: [changes, security, codeql]
+    needs: [changes, security, codeql, aikido]
     runs-on: ubuntu-latest
     defaults:
       run:
