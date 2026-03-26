@@ -14,7 +14,7 @@
 # PREREQUISITES:
 # ─ GCP secrets in Secret Manager: anthropic-api-key, voyage-api-key,
 #   google-ai-api-key, surreal-db-pass, firebase-api-key,
-#   firebase-auth-domain, admin-uids
+#   firebase-auth-domain, admin-uids, owner-uids (maps to env OWNER_UIDS)
 # ─ Workload Identity Federation configured for this GitHub repo
 # ─ GitHub repository secrets:
 #     WIF_PROVIDER        projects/{N}/locations/global/workloadIdentityPools/{P}/providers/{ID}
@@ -49,6 +49,16 @@ on:
         description: "Cloud Run revision to roll back to (e.g. sophia-00042-abc)"
         required: false
         type: string
+      force_app_deploy:
+        description: "Run Docker build + gcloud run deploy (e.g. after empty commit or secret-only GCP changes)"
+        required: false
+        default: false
+        type: boolean
+      force_infra_deploy:
+        description: "Run Pulumi up on production stack even if infra/** did not change"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -223,10 +233,12 @@ jobs:
   app-deploy:
     if: >
       always() &&
-      github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
-      needs.changes.outputs.app == 'true' &&
-      (needs.infra-apply.result == 'success' || needs.infra-apply.result == 'skipped')
+      (needs.infra-apply.result == 'success' || needs.infra-apply.result == 'skipped') &&
+      (
+        (github.event_name == 'push' && needs.changes.outputs.app == 'true') ||
+        (github.event_name == 'workflow_dispatch' && inputs.force_app_deploy == true)
+      )
     needs: [changes, security, codeql, infra-apply]
     # Run after infra when present; still run for app-only changes where infra is skipped.
     runs-on: ubuntu-latest
