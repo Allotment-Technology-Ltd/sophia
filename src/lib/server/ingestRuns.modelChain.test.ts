@@ -29,4 +29,19 @@ describe('modelChainLabelsToEnv', () => {
     expect(env.INGEST_PIN_PROVIDER_GROUPING).toBeUndefined();
     expect(env.INGEST_PIN_PROVIDER_VALIDATION).toBe('anthropic');
   });
+
+  it('maps admin stable ids (provider__modelId) like the ingest wizard sends in JSON', () => {
+    const env = modelChainLabelsToEnv({
+      extract: 'anthropic__claude-3-5-sonnet-20241022',
+      relate: 'anthropic__claude-3-5-sonnet-20241022',
+      group: 'anthropic__claude-sonnet-4',
+      validate: 'mistral__mistral-large-latest'
+    });
+    expect(env.INGEST_PIN_PROVIDER_EXTRACTION).toBe('anthropic');
+    expect(env.INGEST_PIN_MODEL_EXTRACTION).toBe('claude-3-5-sonnet-20241022');
+    expect(env.INGEST_PIN_PROVIDER_RELATIONS).toBe('anthropic');
+    expect(env.INGEST_PIN_MODEL_GROUPING).toBe('claude-sonnet-4');
+    expect(env.INGEST_PIN_PROVIDER_VALIDATION).toBe('mistral');
+    expect(env.INGEST_PIN_MODEL_VALIDATION).toBe('mistral-large-latest');
+  });
 });
