@@ -12,6 +12,8 @@ export function serializeRestormelError(error: unknown): {
   endpoint?: string;
   userMessage?: string;
   publishErrors?: unknown[];
+  /** Present when Keys returns `error: route_step_provider_not_allowed` with `allowed` array. */
+  routeStepAllowedProviders?: string[];
 } {
   if (error instanceof RestormelResolveError) {
     return {
@@ -40,10 +42,16 @@ export function serializeRestormelError(error: unknown): {
         error.payload.error === 'publish_validation_failed' && Array.isArray(error.payload.errors)
           ? error.payload.errors
           : undefined;
+      const routeStepAllowed =
+        error.payload.error === 'route_step_provider_not_allowed' &&
+        Array.isArray(error.payload.allowed)
+          ? error.payload.allowed.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+          : undefined;
       return {
         ...base,
         ...(um ? { userMessage: um } : {}),
-        ...(publishErrors ? { publishErrors } : {})
+        ...(publishErrors ? { publishErrors } : {}),
+        ...(routeStepAllowed?.length ? { routeStepAllowedProviders: routeStepAllowed } : {})
       };
     }
     if (error.status === 409) {

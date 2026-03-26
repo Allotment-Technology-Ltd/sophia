@@ -3,7 +3,6 @@ import { BYOK_PROVIDERS, parseByokProvider } from './types';
 
 describe('BYOK provider registry', () => {
   it('includes phase 1c providers', () => {
-    expect(BYOK_PROVIDERS).toContain('xai');
     expect(BYOK_PROVIDERS).toContain('groq');
     expect(BYOK_PROVIDERS).toContain('mistral');
     expect(BYOK_PROVIDERS).toContain('deepseek');
@@ -15,7 +14,7 @@ describe('BYOK provider registry', () => {
   });
 
   it('parses additional providers case-insensitively', () => {
-    expect(parseByokProvider('XAI')).toBe('xai');
+    expect(parseByokProvider('XAI')).toBeNull();
     expect(parseByokProvider('openrouter')).toBe('openrouter');
     expect(parseByokProvider('voyage')).toBe('voyage');
     expect(parseByokProvider('unknown')).toBeNull();

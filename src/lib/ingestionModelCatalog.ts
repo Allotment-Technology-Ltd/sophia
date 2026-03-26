@@ -279,10 +279,6 @@ const INGESTION_MODEL_CATALOG_ROWS: CatalogRow[] = [
 		'128k',
 		'Code-leaning; useful for formal logic snippets in papers.'
 	],
-	// ─── xAI ─────────────────────────────────────────────────────────────
-	['xai', 'grok-3-beta', 'medium', 'strong', 'balanced', '131k', 'Grok 3 for general workloads.'],
-	['xai', 'grok-3-mini-beta', 'low', 'capable', 'fast', '131k', 'Faster, cheaper Grok 3.'],
-	['xai', 'grok-2-latest', 'medium', 'strong', 'balanced', '131k', 'Grok 2 generation.'],
 	// ─── Groq ────────────────────────────────────────────────────────────
 	[
 		'groq',
@@ -634,8 +630,10 @@ export const INGESTION_MODEL_CATALOG: IngestionModelCatalogEntry[] = INGESTION_M
 
 export type IngestionSourceTypeId =
 	| 'sep_entry'
+	| 'iep_entry'
 	| 'gutenberg_text'
 	| 'journal_article'
+	| 'philpapers_paper'
 	| 'web_article';
 
 export interface SourceTypeModelHints {
@@ -655,6 +653,12 @@ export const INGESTION_SOURCE_MODEL_HINTS: Record<IngestionSourceTypeId, SourceT
 		quality: 'anthropic · claude-sonnet-4-5-20250929',
 		note: 'SEP HTML is usually clean: Sonnet-class is often enough; step up for difficult entries.'
 	},
+	iep_entry: {
+		budget: 'anthropic · claude-3-5-haiku-20241022',
+		balanced: 'anthropic · claude-3-5-sonnet-20241022',
+		quality: 'anthropic · claude-sonnet-4-5-20250929',
+		note: 'IEP mirrors SEP-style structure; watch for noisier markup than SEP.'
+	},
 	gutenberg_text: {
 		budget: 'google · gemini-2.5-flash',
 		balanced: 'google · gemini-2.5-pro',
@@ -665,7 +669,13 @@ export const INGESTION_SOURCE_MODEL_HINTS: Record<IngestionSourceTypeId, SourceT
 		budget: 'deepseek · deepseek-chat',
 		balanced: 'openai · gpt-4o',
 		quality: 'deepseek · deepseek-reasoner',
-		note: 'PDFs and citations are error-prone: add a frontier pass when budget allows.'
+		note: 'Journal PDFs and heavy citations: frontier validation when budget allows.'
+	},
+	philpapers_paper: {
+		budget: 'openai · gpt-4o-mini',
+		balanced: 'openai · gpt-4o',
+		quality: 'anthropic · claude-sonnet-4-5-20250929',
+		note: 'PhilPapers-style listings (PDF/HTML): metadata noise; step up for dense analytic papers.'
 	},
 	web_article: {
 		budget: 'openai · gpt-4o-mini',

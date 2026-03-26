@@ -2,6 +2,8 @@
  * Preset × pipeline-stage minimum model quality floors for admin ingestion.
  * Budget / balanced / complexity tighten differently based on typical failure modes
  * (weak grouping, relation drift, shallow validation, brittle JSON repair).
+ * Wave 1 quality analysis: relation density failures → budget relations floor raised to strong;
+ * JSON repair stability → balanced json_repair floor raised to strong.
  */
 
 import type { IngestionCostTier, IngestionModelCatalogEntry, IngestionQualityTier } from './ingestionModelCatalog';
@@ -57,7 +59,7 @@ export function inferQualityTierFromModelIdentity(provider: string, modelId: str
 	if (/(flash|mini|haiku|lite|nano|8b|7b|3b|small|turbo|fast)/i.test(low) && !/sonnet|pro|gpt-4[^o]/i.test(low)) {
 		return 'capable';
 	}
-	if (/(sonnet|gpt-4|gemini.*pro|grok-[23]|command-r[^+]|medium)/i.test(low)) {
+	if (/(sonnet|gpt-4|gemini.*pro|command-r[^+]|medium)/i.test(low)) {
 		return 'strong';
 	}
 	return 'strong';
@@ -110,7 +112,7 @@ export function minimumQualityTierForStage(
 	const table: Record<IngestionPipelinePreset, Record<string, IngestionQualityTier>> = {
 		budget: {
 			ingestion_extraction: 'capable',
-			ingestion_relations: 'capable',
+			ingestion_relations: 'strong',
 			ingestion_grouping: 'strong',
 			ingestion_validation: 'strong',
 			ingestion_embedding: 'capable',
@@ -122,7 +124,7 @@ export function minimumQualityTierForStage(
 			ingestion_grouping: 'strong',
 			ingestion_validation: 'strong',
 			ingestion_embedding: 'capable',
-			ingestion_json_repair: 'capable'
+			ingestion_json_repair: 'strong'
 		},
 		complexity: {
 			ingestion_extraction: 'strong',

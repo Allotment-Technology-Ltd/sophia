@@ -227,8 +227,8 @@ export function buildUserQueryExplicitKeySet(explicit: ModelRef[]): Set<string> 
  * Keys requires the model id to exist in its catalog and to pass variant rules when variants exist.
  *
  * **`bindingKind: "registry"`** does not use this list: arbitrary `providerType` / `modelId` strings
- * (e.g. `mistral`, `deepseek`) are valid for index metadata / host merge and pickers; Keys does not
- * treat them as first-class execution providers (resolve, routes, cost) until the product extends there.
+ * for providers **outside** this set are valid for index metadata / host merge and pickers without
+ * implying Keys execution (resolve, routes) for that slug until the product extends there.
  *
  * Aliases like `google` → `vertex` use {@link normalizeUserQueryModelRef}.
  */
@@ -239,7 +239,10 @@ export const RESTORMEL_PROJECT_MODEL_PUT_PROVIDER_IDS = new Set([
 	'openrouter',
 	'vercel',
 	'portkey',
-	'voyage'
+	'voyage',
+	'mistral',
+	'deepseek',
+	'together'
 ]);
 
 export function isRestormelProjectModelPutProvider(providerTypeNormalized: string): boolean {
@@ -253,6 +256,52 @@ const PROJECT_MODEL_PUT_MODEL_ID_DENYLIST = new Set(['gpt-35-turbo']);
 
 export function isDeniedProjectModelPutModelId(modelId: string): boolean {
 	return PROJECT_MODEL_PUT_MODEL_ID_DENYLIST.has(modelId.trim().toLowerCase());
+}
+
+/**
+ * Mistral model ids Restormel Keys seeds with a Postgres catalog **variant** for the Mistral integration.
+ * `GET /models` can still surface legacy ids (e.g. from merged v5 docs); **`PUT …/models` execution** then
+ * fails with “no catalog variant for provider integration type mistral”. Treat only seeded ids as execution;
+ * everything else uses `bindingKind: registry` when registry bindings are enabled.
+ *
+ * Sync with upstream `model-catalog-seed.json` when Mistral lines change.
+ */
+const KEYS_SEEDED_MISTRAL_EXECUTION_MODEL_IDS = new Set(
+	[
+		'mistral-large-latest',
+		'mistral-medium-latest',
+		'mistral-small-latest',
+		'codestral-latest',
+		'open-mistral-nemo',
+		'pixtral-12b-2409',
+		'pixtral-large-latest',
+		'minstral-8b-2409'
+	].map((s) => s.toLowerCase())
+);
+
+/** Same idea as {@link KEYS_SEEDED_MISTRAL_EXECUTION_MODEL_IDS} for DeepSeek integration variants. */
+const KEYS_SEEDED_DEEPSEEK_EXECUTION_MODEL_IDS = new Set(
+	[
+		'deepseek-chat',
+		'deepseek-reasoner',
+		'deepseek-coder',
+		'deepseek-r1',
+		'deepseek-r1-distill-llama-70b'
+	].map((s) => s.toLowerCase())
+);
+
+/**
+ * True if this provider/model may be sent as **execution** on project PUT when also in the bindable set.
+ * Mistral / DeepSeek / Together require seeded integration rows; other PUT providers rely on bindable + Keys.
+ */
+function keysSeededExecutionModelForIntegration(providerType: string, modelId: string): boolean {
+	const pt = providerType.trim().toLowerCase();
+	const mid = modelId.trim().toLowerCase();
+	if (!mid) return false;
+	if (pt === 'mistral') return KEYS_SEEDED_MISTRAL_EXECUTION_MODEL_IDS.has(mid);
+	if (pt === 'deepseek') return KEYS_SEEDED_DEEPSEEK_EXECUTION_MODEL_IDS.has(mid);
+	if (pt === 'together') return mid.startsWith('together-');
+	return true;
 }
 
 /**
@@ -335,10 +384,12 @@ export function supplementBindableKeysWithCatalogVertexEmbeddings(
 /**
  * Builds the `models` array for `PUT …/projects/{id}/models` from catalog surface roles.
  *
- * **Registry mode** (env or option): rows that match Keys’ execution bindable set and pass the
- * denylist use execution (field omitted); everything else uses `bindingKind: "registry"` (extra
- * providers, off-catalog ids, embeddings not on GET /models, etc.) — valid index metadata without a
- * Keys catalog row for that id.
+ * **Registry mode** (env or option): chat models that match Keys’ execution bindable set, pass the
+ * denylist, and pass **integration seed checks** for Mistral / DeepSeek / Together use execution (field
+ * omitted). Legacy Mistral ids (e.g. `mixtral-8x7b-32768`) in GET /models but not in Keys’ seed still sync
+ * as **registry** to avoid “no catalog variant” PUT failures.
+ * **Embedding rows always use `bindingKind: "registry"`** even when they appear on GET /models.
+ * Everything else uses `bindingKind: "registry"` (extra providers, off-catalog ids, …).
  *
  * **Legacy mode**: non-embedding, canonical providers only, intersected with bindable keys (pre-021 behaviour).
  */
@@ -388,7 +439,11 @@ export function computeEffectiveOperationsBindings(
 		const key = catalogSurfaceStableKey(n.providerType, n.modelId);
 		const inBindable =
 			keysBindableModelKeys !== undefined && keysBindableModelKeys.has(key);
-		if (inBindable && !isDeniedProjectModelPutModelId(n.modelId)) {
+		if (
+			inBindable &&
+			!isDeniedProjectModelPutModelId(n.modelId) &&
+			keysSeededExecutionModelForIntegration(n.providerType, n.modelId)
+		) {
 			executionKeys.add(key);
 		}
 	}
@@ -403,7 +458,8 @@ export function computeEffectiveOperationsBindings(
 		if (seen.has(key)) continue;
 		seen.add(key);
 
-		if (executionKeys.has(key)) {
+		const useExecution = executionKeys.has(key) && !r.isEmbedding;
+		if (useExecution) {
 			out.push({ providerType: n.providerType, modelId: n.modelId, enabled: true });
 		} else {
 			out.push({

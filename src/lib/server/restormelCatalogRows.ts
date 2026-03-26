@@ -4,6 +4,7 @@
  */
 
 import { INGESTION_MODEL_CATALOG } from '../ingestionModelCatalog';
+import { isExcludedXaiGrokCatalogRef } from '../modelCatalogEthics';
 import { isEmbeddingModelByProviderAndId } from '../modelKind';
 import type { ReasoningProvider } from '@restormel/contracts/providers';
 import { isReasoningProvider } from '@restormel/contracts/providers';
@@ -152,7 +153,6 @@ function inferProviderFromModelId(modelId: string): string {
 	}
 	if (low.startsWith('voyage')) return 'voyage';
 	if (low.startsWith('deepseek')) return 'deepseek';
-	if (low.startsWith('grok')) return 'xai';
 	if (
 		low.startsWith('mistral') ||
 		low.startsWith('ministral') ||
@@ -411,6 +411,7 @@ export function listCatalogSurfaceCandidates(payload: unknown): CatalogSurfaceRo
 	for (const row of rows) {
 		const ids = catalogRowToKeysProviderModel(row);
 		if (!ids) continue;
+		if (isExcludedXaiGrokCatalogRef(ids.providerType, ids.modelId)) continue;
 		const catalogUsable = isCatalogRowCatalogUsable(row);
 		const detailsSufficient = isCatalogRowOperationallyViable(row, ids);
 		const eligibleForSurfaces = catalogUsable && detailsSufficient;
@@ -439,6 +440,7 @@ function buildIngestionEmbeddingCatalogSupplementRows(): CatalogSurfaceRow[] {
 	const out: CatalogSurfaceRow[] = [];
 	for (const e of INGESTION_MODEL_CATALOG) {
 		if (!isEmbeddingModelByProviderAndId(e.provider, e.modelId)) continue;
+		if (isExcludedXaiGrokCatalogRef(e.provider, e.modelId)) continue;
 		out.push({
 			providerType: e.provider,
 			modelId: e.modelId,

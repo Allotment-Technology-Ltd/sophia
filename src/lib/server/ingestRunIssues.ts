@@ -277,6 +277,7 @@ export interface IngestRunSnapshotForReport {
     source_type: string;
     validate?: boolean;
     stop_before_store?: boolean;
+    pipeline_preset?: 'budget' | 'balanced' | 'complexity';
     model_chain: { extract: string; relate: string; group: string; validate: string };
     embedding_model?: string;
     batch_overrides?: {
@@ -362,6 +363,7 @@ export async function persistIngestRunReport(state: IngestRunSnapshotForReport):
         status: state.status,
         sourceUrl: payload.source_url,
         sourceType: payload.source_type,
+        pipelinePreset: payload.pipeline_preset ?? null,
         validate: payload.validate === true,
         stopBeforeStore: payload.stop_before_store !== false,
         modelChain: payload.model_chain,

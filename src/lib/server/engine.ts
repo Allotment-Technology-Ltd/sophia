@@ -534,7 +534,6 @@ export async function runDialecticalEngine(
     vertex: { analysis: 95_000, critique: 130_000, synthesis: 105_000 },
     anthropic: { analysis: 150_000, critique: 180_000, synthesis: 200_000 },
     openai: { analysis: 140_000, critique: 165_000, synthesis: 185_000 },
-    xai: { analysis: 140_000, critique: 165_000, synthesis: 185_000 },
     groq: { analysis: 95_000, critique: 110_000, synthesis: 130_000 },
     mistral: { analysis: 140_000, critique: 165_000, synthesis: 185_000 },
     deepseek: { analysis: 140_000, critique: 165_000, synthesis: 185_000 },
