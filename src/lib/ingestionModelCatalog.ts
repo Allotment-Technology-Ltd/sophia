@@ -35,48 +35,30 @@ const INGESTION_MODEL_CATALOG_ROWS: CatalogRow[] = [
 	// ─── Anthropic ───────────────────────────────────────────────────────
 	[
 		'anthropic',
-		'claude-3-5-haiku-20241022',
-		'low',
-		'capable',
-		'fast',
-		'200k',
-		'Budget extraction; clean HTML; high volume.'
-	],
-	[
-		'anthropic',
-		'claude-3-5-sonnet-20241022',
-		'medium',
-		'strong',
-		'balanced',
-		'200k',
-		'Default balance for SEP-style and general web text.'
-	],
-	[
-		'anthropic',
-		'claude-3-7-sonnet-20250219',
-		'medium',
-		'strong',
-		'balanced',
-		'200k',
-		'Strong Sonnet-class successor for structured extraction.'
-	],
-	[
-		'anthropic',
 		'claude-haiku-4-5-20251001',
 		'low',
 		'capable',
 		'fast',
 		'200k',
-		'Fast Haiku 4.5 for grouping and lighter passes.'
+		'Budget extraction and lighter passes; clean HTML; high volume (replaces retired 3.5 Haiku).'
 	],
 	[
 		'anthropic',
-		'claude-sonnet-4-5-20250514',
+		'claude-sonnet-4-20250514',
+		'medium',
+		'strong',
+		'balanced',
+		'200k',
+		'Default balance for SEP-style and general web text (replaces retired 3.5 Sonnet).'
+	],
+	[
+		'anthropic',
+		'claude-sonnet-4-20250514',
 		'high',
 		'frontier',
 		'thorough',
 		'200k',
-		'Dense PDFs, messy HTML, high-stakes extraction.'
+		'Claude Sonnet 4 — dense PDFs, messy HTML, high-stakes extraction.'
 	],
 	[
 		'anthropic',
@@ -648,14 +630,14 @@ export interface SourceTypeModelHints {
 
 export const INGESTION_SOURCE_MODEL_HINTS: Record<IngestionSourceTypeId, SourceTypeModelHints> = {
 	sep_entry: {
-		budget: 'anthropic · claude-3-5-haiku-20241022',
-		balanced: 'anthropic · claude-3-5-sonnet-20241022',
+		budget: 'anthropic · claude-haiku-4-5-20251001',
+		balanced: 'anthropic · claude-sonnet-4-20250514',
 		quality: 'anthropic · claude-sonnet-4-5-20250929',
 		note: 'SEP HTML is usually clean: Sonnet-class is often enough; step up for difficult entries.'
 	},
 	iep_entry: {
-		budget: 'anthropic · claude-3-5-haiku-20241022',
-		balanced: 'anthropic · claude-3-5-sonnet-20241022',
+		budget: 'anthropic · claude-haiku-4-5-20251001',
+		balanced: 'anthropic · claude-sonnet-4-20250514',
 		quality: 'anthropic · claude-sonnet-4-5-20250929',
 		note: 'IEP mirrors SEP-style structure; watch for noisier markup than SEP.'
 	},

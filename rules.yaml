@@ -105,7 +105,7 @@ surrealdb:
     - Standard SQL aggregate syntax
 
 claude_api:
-  model: claude-sonnet-4-5-20250514
+  model: claude-sonnet-4-20250514
   always_stream: true
   always_track_tokens: true
   streaming_to_client: Server-Sent Events (SSE)

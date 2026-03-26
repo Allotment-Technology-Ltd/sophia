@@ -85,9 +85,9 @@ describe('entryMeetsPresetStageMinimum', () => {
 	it('requires strong grouping for budget preset', () => {
 		expect(
 			entryMeetsPresetStageMinimum('budget', 'ingestion_grouping', {
-				label: 'anthropic · claude-3-5-haiku-20241022',
+				label: 'anthropic · claude-haiku-4-5-20251001',
 				provider: 'anthropic',
-				modelId: 'claude-3-5-haiku-20241022',
+				modelId: 'claude-haiku-4-5-20251001',
 				qualityTier: 'capable',
 				costTier: 'low'
 			})
@@ -95,9 +95,9 @@ describe('entryMeetsPresetStageMinimum', () => {
 
 		expect(
 			entryMeetsPresetStageMinimum('budget', 'ingestion_grouping', {
-				label: 'anthropic · claude-3-5-sonnet-20241022',
+				label: 'anthropic · claude-sonnet-4-20250514',
 				provider: 'anthropic',
-				modelId: 'claude-3-5-sonnet-20241022',
+				modelId: 'claude-sonnet-4-20250514',
 				qualityTier: 'strong',
 				costTier: 'medium'
 			})
@@ -158,7 +158,7 @@ describe('computeIngestionPhaseSuitability', () => {
 	});
 
 	it('returns weak when only budget preset passes', () => {
-		const m = computeIngestionPhaseSuitability('anthropic', 'claude-3-5-haiku-20241022', false, {
+		const m = computeIngestionPhaseSuitability('anthropic', 'claude-haiku-4-5-20251001', false, {
 			label: 'Haiku',
 			qualityTier: 'capable',
 			costTier: 'low'

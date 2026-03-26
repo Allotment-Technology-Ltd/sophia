@@ -24,6 +24,11 @@
 #     AIKIDO_SECRET_KEY   Aikido CI integration key (pull requests only) — create at
 #                         https://app.aikido.dev/settings/integrations/continuous-integration
 #
+# AIKIDO / PR CHECKS (mutually exclusive with the Aikido GitHub Action):
+#   If the repo uses Aikido’s GitHub App for PR checks, do NOT add
+#   AikidoSec/github-actions-workflow — Aikido returns 422. PR scans and status on PRs
+#   come from the installed GitHub App (see user-facing locations below), not from this file.
+#
 # FIRST-TIME INFRA SETUP (run once from your local machine before CI manages it):
 #   pnpm install --filter sophia-infra   # from repo root (infra is a pnpm workspace)
 #   pulumi stack init production
@@ -38,9 +43,10 @@
 #   Trigger the "Rollback App" workflow_dispatch with a Cloud Run revision name.
 #   Infrastructure rollback: revert the infra/ commit and re-run the pipeline.
 #
-# AIKIDO: Dashboard PR gating + AutoFix remain in https://app.aikido.dev/ . The `aikido`
-#   job below triggers an in-PR scan via the official Action so checks appear on every PR
-#   (requires AIKIDO_SECRET_KEY). Add job `aikido` as a required check on main if desired.
+# AIKIDO: Dashboard (https://app.aikido.dev/) handles PR gating and AutoFix. Either:
+#   (A) GitHub App — Settings → GitHub Apps → Aikido; the app posts its own PR check name.
+#   (B) Action — the `aikido` job below (needs AIKIDO_SECRET_KEY); add job id `aikido` to
+#       branch protection. Do not enable both the App scan and this Action (422 risk).
 
 name: CI/CD
 

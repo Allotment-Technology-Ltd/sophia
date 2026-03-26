@@ -75,7 +75,7 @@ function buildDefaultSteps(): RestormelStepRecord[] {
     process.env.RESTORMEL_BOOTSTRAP_PRIMARY_MODEL?.trim() || 'gemini-2.5-flash';
   const fb1Provider = process.env.RESTORMEL_BOOTSTRAP_FALLBACK_PROVIDER?.trim() || 'anthropic';
   const fb1Model =
-    process.env.RESTORMEL_BOOTSTRAP_FALLBACK_MODEL?.trim() || 'claude-3-5-haiku-20241022';
+    process.env.RESTORMEL_BOOTSTRAP_FALLBACK_MODEL?.trim() || 'claude-haiku-4-5-20251001';
   const fb2Provider = process.env.RESTORMEL_BOOTSTRAP_FALLBACK2_PROVIDER?.trim() || 'vertex';
   const fb2Model =
     process.env.RESTORMEL_BOOTSTRAP_FALLBACK2_MODEL?.trim() || 'gemini-2.5-pro';
