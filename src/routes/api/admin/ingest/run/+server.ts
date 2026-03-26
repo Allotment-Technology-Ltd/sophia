@@ -39,6 +39,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     );
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unknown error';
-    return json({ error: msg }, { status: 500 });
+    const status = /Too many concurrent ingest/i.test(msg) ? 429 : 500;
+    return json({ error: msg }, { status });
   }
 };

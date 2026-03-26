@@ -219,7 +219,30 @@ class IngestRunManager extends EventEmitter {
   private runs: Map<string, IngestRunState> = new Map();
   private maxLogLines = 500;
 
+  /** Count child processes still attached (fetch or ingest worker). */
+  private activeChildProcessCount(): number {
+    let n = 0;
+    for (const s of this.runs.values()) {
+      const p = s.process;
+      if (p && typeof p.exitCode !== 'number' && !p.killed) {
+        n += 1;
+      }
+    }
+    return n;
+  }
+
   createRun(payload: IngestRunPayload, actorEmail: string): string {
+    if (ingestRunUsesRealChildProcess()) {
+      const raw = (process.env.ADMIN_INGEST_MAX_CONCURRENT ?? '').trim();
+      const parsed = parseInt(raw || '3', 10);
+      const maxConcurrent = Number.isFinite(parsed) ? Math.max(1, Math.min(20, parsed)) : 3;
+      if (this.activeChildProcessCount() >= maxConcurrent) {
+        throw new Error(
+          `Too many concurrent ingest workers (${maxConcurrent} max). Wait for a run to finish or raise ADMIN_INGEST_MAX_CONCURRENT.`
+        );
+      }
+    }
+
     const runId = randomBytes(8).toString('hex');
     const snapshot: IngestRunPayload = {
       ...payload,
@@ -243,8 +266,7 @@ class IngestRunManager extends EventEmitter {
       payload: snapshot,
       fetchRetryAttempts: 0,
       ingestRetryAttempts: 0,
-      syncRetryAttempts: 0
-      ,
+      syncRetryAttempts: 0,
       currentStageKey: 'fetch',
       currentAction: 'Queued',
       lastFailureStageKey: null,

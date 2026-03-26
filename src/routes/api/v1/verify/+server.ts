@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { verifyApiKey } from '$lib/server/apiAuth';
+import { mergeOwnerEnvFallbackIfEmpty } from '$lib/server/byok/effectiveKeys';
 import { loadByokProviderApiKeys } from '$lib/server/byok/store';
 import { resolveByokOwnerUid } from '$lib/server/byok/tenantIdentity';
 import type { ProviderApiKeys } from '$lib/server/byok/types';
@@ -144,6 +145,7 @@ export const POST: RequestHandler = async ({ request }) => {
       }
     }
   }
+  providerApiKeys = await mergeOwnerEnvFallbackIfEmpty(providerApiKeys, 'v1 verify');
 
   if (!acceptsStream) {
     try {

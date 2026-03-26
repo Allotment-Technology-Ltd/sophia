@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
 import { ingestRunManager } from '$lib/server/ingestRuns';
 
-export const GET: RequestHandler = async ({ locals, params }) => {
+export const GET: RequestHandler = async ({ locals, params, url }) => {
   assertAdminAccess(locals);
 
   const runId = params.id;
@@ -15,6 +15,12 @@ export const GET: RequestHandler = async ({ locals, params }) => {
   if (!state) {
     return json({ error: 'Run not found' }, { status: 404 });
   }
+
+  const sinceRaw = url.searchParams.get('since');
+  const since = sinceRaw != null ? parseInt(sinceRaw, 10) : NaN;
+  const useIncremental = Number.isFinite(since) && since >= 0;
+  const logLineTotal = state.logLines.length;
+  const logLinesPayload = useIncremental ? state.logLines.slice(since) : state.logLines;
 
   const now = Date.now();
   const processAlive = Boolean(
@@ -34,7 +40,9 @@ export const GET: RequestHandler = async ({ locals, params }) => {
     status: state.status,
     awaitingSync: state.status === 'awaiting_sync',
     stages: state.stages,
-    logLines: state.logLines,
+    logLines: logLinesPayload,
+    logLineTotal,
+    logIncremental: useIncremental,
     issues: state.issues,
     issueCount: state.issues.length,
     error: state.error,

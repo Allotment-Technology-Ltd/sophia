@@ -13,7 +13,8 @@ import { loadServerEnv } from './env';
 export const EMBEDDING_MODEL = 'text-embedding-005';
 export const EMBEDDING_DIMENSIONS = 768; // text-embedding-005 native dimension
 const EMBED_BATCH_SIZE = Number(process.env.VERTEX_EMBED_BATCH_SIZE || '250');
-const EMBED_BATCH_DELAY_MS = Number(process.env.VERTEX_EMBED_BATCH_DELAY_MS || '250');
+/** Lower default when quota allows; increase if you see 429 bursts from Vertex. */
+const EMBED_BATCH_DELAY_MS = Number(process.env.VERTEX_EMBED_BATCH_DELAY_MS || '80');
 const EMBED_MAX_RETRIES = Number(process.env.VERTEX_EMBED_MAX_RETRIES || '6');
 const EMBED_RETRY_BASE_MS = Number(process.env.VERTEX_EMBED_RETRY_BASE_MS || '1500');
 
@@ -89,7 +90,8 @@ function isRetryableEmbeddingError(error: unknown): boolean {
  */
 async function callVertexEmbedding(
 	texts: string[],
-	taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' = 'RETRIEVAL_DOCUMENT'
+	taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' = 'RETRIEVAL_DOCUMENT',
+	cachedAccessToken?: string | null
 ): Promise<number[][]> {
 	const PROJECT_ID = projectId();
 	if (!PROJECT_ID) {
@@ -99,11 +101,15 @@ async function callVertexEmbedding(
 
 	const url = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${EMBEDDING_MODEL}:predict`;
 
-	const auth = getAuthClient();
-	const client = await auth.getClient();
-	const accessToken = await client.getAccessToken();
+	let token = cachedAccessToken?.trim() || null;
+	if (!token) {
+		const auth = getAuthClient();
+		const client = await auth.getClient();
+		const accessToken = await client.getAccessToken();
+		token = accessToken.token ?? null;
+	}
 
-	if (!accessToken.token) {
+	if (!token) {
 		throw new Error('Failed to obtain access token for Vertex AI');
 	}
 
@@ -117,7 +123,7 @@ async function callVertexEmbedding(
 	const response = await fetch(url, {
 		method: 'POST',
 		headers: {
-			'Authorization': `Bearer ${accessToken.token}`,
+			'Authorization': `Bearer ${token}`,
 			'Content-Type': 'application/json'
 		},
 		body: JSON.stringify(requestBody)
@@ -191,6 +197,14 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
 	try {
 		console.log(`[EMBED] Embedding ${texts.length} texts in batches of ${BATCH_SIZE}...`);
 
+		const auth = getAuthClient();
+		const client = await auth.getClient();
+		const tokenResult = await client.getAccessToken();
+		const sessionToken = tokenResult.token ?? null;
+		if (!sessionToken) {
+			throw new Error('Failed to obtain access token for Vertex AI (embedTexts session)');
+		}
+
 		// Process in batches of up to 250
 		for (let i = 0; i < texts.length; i += BATCH_SIZE) {
 			const batch = texts.slice(i, i + BATCH_SIZE);
@@ -201,7 +215,7 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
 			let lastError: unknown = null;
 			for (let attempt = 1; attempt <= EMBED_MAX_RETRIES; attempt++) {
 				try {
-					batchEmbeddings = await callVertexEmbedding(batch, 'RETRIEVAL_DOCUMENT');
+					batchEmbeddings = await callVertexEmbedding(batch, 'RETRIEVAL_DOCUMENT', sessionToken);
 					break;
 				} catch (error) {
 					lastError = error;

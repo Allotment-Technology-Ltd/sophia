@@ -319,6 +319,11 @@
   let runError = $state('');
   let urlError = $state('');
   let runLog = $state<string[]>([]);
+  /** Server log line count for incremental `/status?since=` polling */
+  let runLogCursor = $state(0);
+  let pollRunKey = $state('');
+  /** Parsed from worker `[INGEST_TIMING]` line when present */
+  let ingestTimingSummary = $state<Record<string, unknown> | null>(null);
   let runCurrentStage = $state<string | null>(null);
   let runCurrentAction = $state<string | null>(null);
   let runLastFailureStage = $state<string | null>(null);
@@ -342,7 +347,7 @@
   };
   let runCapturedIssues = $state<RunCapturedIssue[]>([]);
   let stages = $state<Stage[]>(cloneStages());
-  let pollingInterval: ReturnType<typeof setInterval> | null = null;
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
   let routingBusy = $state(false);
   let routingMessage = $state('');
@@ -2219,6 +2224,9 @@
     sourceRunEndedDetail = null;
     runError = '';
     runLog = [];
+    runLogCursor = 0;
+    pollRunKey = '';
+    ingestTimingSummary = null;
     completionMessage = '';
     executionNotice = '';
     syncDurationLabel = '';
@@ -2381,6 +2389,9 @@
     runId = '';
     runError = '';
     runLog = [];
+    runLogCursor = 0;
+    pollRunKey = '';
+    ingestTimingSummary = null;
     runCurrentStage = null;
     runCurrentAction = null;
     runLastFailureStage = null;
@@ -2423,9 +2434,17 @@
           : undefined
       }));
     }
-    if (Array.isArray(body?.logLines)) {
+    if (body?.logIncremental === true && Array.isArray(body?.logLines)) {
+      runLog = [...runLog, ...(body.logLines as string[])];
+    } else if (Array.isArray(body?.logLines)) {
       runLog = body.logLines as string[];
     }
+    if (typeof body?.logLineTotal === 'number') {
+      runLogCursor = body.logLineTotal as number;
+    } else if (Array.isArray(body?.logLines) && body?.logIncremental !== true) {
+      runLogCursor = runLog.length;
+    }
+    tryParseIngestTimingFromLog(runLog);
     runCurrentStage = typeof body?.currentStageKey === 'string' ? body.currentStageKey : null;
     runCurrentAction = typeof body?.currentAction === 'string' ? body.currentAction : null;
     runLastFailureStage = typeof body?.lastFailureStageKey === 'string' ? body.lastFailureStageKey : null;
@@ -2484,6 +2503,9 @@
     runId = '';
     runError = '';
     runLog = [];
+    runLogCursor = 0;
+    pollRunKey = '';
+    ingestTimingSummary = null;
     runCurrentStage = null;
     runCurrentAction = null;
     runLastFailureStage = null;
@@ -2511,10 +2533,30 @@
         : 'This run is no longer on the server (in-memory runs are cleared when the app restarts). Your source and pipeline settings are unchanged—start a new run when ready.';
   }
 
+  function tryParseIngestTimingFromLog(lines: string[]): void {
+    const prefix = '[INGEST_TIMING]';
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = (lines[i] ?? '').trim();
+      if (!line.startsWith(prefix)) continue;
+      try {
+        const parsed = JSON.parse(line.slice(prefix.length).trim()) as Record<string, unknown>;
+        ingestTimingSummary = parsed;
+      } catch {
+        ingestTimingSummary = null;
+      }
+      return;
+    }
+  }
+
   async function fetchRunStatus(): Promise<void> {
     if (!runId) return;
+    if (runId !== pollRunKey) {
+      pollRunKey = runId;
+      runLogCursor = 0;
+    }
     try {
-      const response = await fetch(`/api/admin/ingest/run/${runId}/status`, {
+      const qs = runLogCursor > 0 ? `?since=${runLogCursor}` : '';
+      const response = await fetch(`/api/admin/ingest/run/${runId}/status${qs}`, {
         headers: await authHeaders()
       });
       if (!response.ok) {
@@ -2530,21 +2572,39 @@
     }
   }
 
+  function schedulePollTick(): void {
+    if (!runId) return;
+    if (pollTimer) clearTimeout(pollTimer);
+    const delay =
+      runProcessAlive &&
+      (lastAppliedRunStatus === 'running' || lastAppliedRunStatus === 'awaiting_sync')
+        ? 900
+        : 2600;
+    pollTimer = setTimeout(async () => {
+      pollTimer = null;
+      if (!runId) return;
+      await fetchRunStatus();
+      if (!runId) return;
+      if (flowState === 'done' || flowState === 'setup' || flowState === 'error') return;
+      schedulePollTick();
+    }, delay);
+  }
+
   function startPolling(): void {
     if (!runId) return;
-    if (pollingInterval) clearInterval(pollingInterval);
-
-    void fetchRunStatus();
-
-    pollingInterval = setInterval(() => {
-      void fetchRunStatus();
-    }, 1500);
+    if (pollTimer) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+    void fetchRunStatus().then(() => {
+      schedulePollTick();
+    });
   }
 
   function clearPolling(): void {
-    if (pollingInterval) {
-      clearInterval(pollingInterval);
-      pollingInterval = null;
+    if (pollTimer) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
     }
   }
 
@@ -2557,6 +2617,9 @@
     runId = '';
     runError = '';
     runLog = [];
+    runLogCursor = 0;
+    pollRunKey = '';
+    ingestTimingSummary = null;
     runCurrentStage = null;
     runCurrentAction = null;
     runLastFailureStage = null;
@@ -2617,6 +2680,9 @@
     const existingRunId = params.get('runId')?.trim();
     if (existingRunId) {
       runId = existingRunId;
+      runLogCursor = 0;
+      pollRunKey = '';
+      ingestTimingSummary = null;
       flowState = 'running';
       runLog = [`Monitoring run: ${runId}`];
       activeStep = 'review';
@@ -2648,6 +2714,7 @@
       <nav class="flex flex-wrap items-center gap-2" aria-label="Admin shortcuts">
         <a href="/admin" class="admin-hub-action">Admin home</a>
         <a href="/admin/ingest/runs" class="admin-hub-action">All runs</a>
+        <a href="/admin/operator-byok" class="admin-hub-action">Operator BYOK</a>
       </nav>
     </div>
   </header>
@@ -3731,6 +3798,18 @@
                   {/if}
                   {#if runError}<p class="mt-3 font-mono text-xs text-sophia-dark-copper">{runError}</p>{/if}
                   {#if flowState === 'done' && completionMessage}<p class="mt-3 font-mono text-sm text-sophia-dark-text">{completionMessage}</p>{/if}
+                {/if}
+                {#if ingestTimingSummary}
+                  <div class="mt-4 rounded border border-sophia-dark-border bg-sophia-dark-bg/35 p-3">
+                    <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Throughput telemetry</p>
+                    <p class="mt-1 text-xs text-sophia-dark-muted">
+                      Parsed from the worker’s latest <code class="text-sophia-dark-text">[INGEST_TIMING]</code> line. The same object is merged into Firestore{' '}
+                      <code class="text-sophia-dark-text">timingTelemetry</code> on the run report.
+                    </p>
+                    <pre
+                      class="mt-3 max-h-48 overflow-auto rounded border border-sophia-dark-border/80 bg-sophia-dark-bg/60 p-3 font-mono text-[0.65rem] leading-relaxed text-sophia-dark-text"
+                    >{JSON.stringify(ingestTimingSummary, null, 2)}</pre>
+                  </div>
                 {/if}
                 {#if runCapturedIssues.length > 0}
                   <div class="mt-4 rounded border border-sophia-dark-border bg-sophia-dark-bg/35 p-3">

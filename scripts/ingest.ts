@@ -124,7 +124,7 @@ const RELATIONS_BATCH_TARGET_TOKENS = (() => {
 	return Math.trunc(n);
 })();
 const RELATIONS_BATCH_OVERLAP_CLAIMS =
-	parsePositiveInt(process.env.RELATIONS_BATCH_OVERLAP_CLAIMS) ?? 6;
+	parsePositiveInt(process.env.RELATIONS_BATCH_OVERLAP_CLAIMS) ?? 4;
 const INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE =
 	(process.env.INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE || 'true').toLowerCase() !== 'false';
 const INGEST_SAVE_GROUPING_RAW =
@@ -205,6 +205,52 @@ function logStageCost(label: string, tracker: StageUsageTracker, plan: Ingestion
 
 function estimateTokens(text: string): number {
 	return Math.ceil(text.split(/\s+/).length * 1.3);
+}
+
+/** Per-run timing for [INGEST_TIMING] JSON line (parsed into Firestore reports). */
+interface IngestTimingPayload {
+	planning_initial_ms: number;
+	planning_post_extraction_ms: number;
+	planning_post_relations_ms: number;
+	stage_ms: Record<string, number>;
+	model_calls: Record<string, number>;
+	model_call_wall_ms: Record<string, number>;
+	model_retries: number;
+	retry_backoff_ms_total: number;
+	batch_splits: number;
+	json_repair_invocations: number;
+	embed_wall_ms: number;
+	store_wall_ms: number;
+}
+
+let activeIngestTiming: IngestTimingPayload | null = null;
+
+function createEmptyTiming(): IngestTimingPayload {
+	return {
+		planning_initial_ms: 0,
+		planning_post_extraction_ms: 0,
+		planning_post_relations_ms: 0,
+		stage_ms: {},
+		model_calls: {},
+		model_call_wall_ms: {},
+		model_retries: 0,
+		retry_backoff_ms_total: 0,
+		batch_splits: 0,
+		json_repair_invocations: 0,
+		embed_wall_ms: 0,
+		store_wall_ms: 0
+	};
+}
+
+function bumpStageMs(key: string, ms: number): void {
+	if (!activeIngestTiming) return;
+	activeIngestTiming.stage_ms[key] = (activeIngestTiming.stage_ms[key] ?? 0) + ms;
+}
+
+function logIngestTimingSummary(): void {
+	if (!activeIngestTiming) return;
+	console.log(`[INGEST_TIMING] ${JSON.stringify(activeIngestTiming)}`);
+	activeIngestTiming = null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1440,6 +1486,10 @@ async function callStageModel(params: {
 				}
 				tracker.retries += 1;
 				const delayMs = 1000 * Math.pow(2, attempt - 1);
+				if (activeIngestTiming) {
+					activeIngestTiming.model_retries += 1;
+					activeIngestTiming.retry_backoff_ms_total += delayMs;
+				}
 				console.log(
 					`  [RETRY] ${stage} ${plan.provider}:${plan.model} attempt ${attempt + 1}/${budget.maxRetries + 1} (${delayMs}ms backoff)`
 				);
@@ -1450,6 +1500,7 @@ async function callStageModel(params: {
 				throw new Error(`No executable route available for ${stage}`);
 			}
 
+			const callStarted = Date.now();
 			const result = await withTimeout(
 				generateText({
 					model: plan.route.model,
@@ -1461,6 +1512,12 @@ async function callStageModel(params: {
 				budget.timeoutMs,
 				`${stage} ${plan.provider}:${plan.model}`
 			);
+			if (activeIngestTiming) {
+				const wall = Date.now() - callStarted;
+				activeIngestTiming.model_calls[stage] = (activeIngestTiming.model_calls[stage] ?? 0) + 1;
+				activeIngestTiming.model_call_wall_ms[stage] =
+					(activeIngestTiming.model_call_wall_ms[stage] ?? 0) + wall;
+			}
 			const inputTokens = result.usage?.inputTokens ?? 0;
 			const outputTokens = result.usage?.outputTokens ?? 0;
 			const usageCostUsd = trackReasoningCost(plan.model, inputTokens, outputTokens);
@@ -1525,6 +1582,7 @@ async function fixJsonWithModel(
 	parseError: string,
 	schema: string
 ): Promise<string> {
+	if (activeIngestTiming) activeIngestTiming.json_repair_invocations += 1;
 	console.log(`  [FIX] Repair route: ${repairPlan.provider}:${repairPlan.model}`);
 
 	const fixPrompt = `The following JSON output was malformed. Please fix it so it is valid JSON matching this schema:
@@ -1972,12 +2030,30 @@ async function main() {
 		sourceLengthChars: sourceText.length,
 		preferredProvider: ingestProvider
 	} as const;
-	let extractionPlan = await planIngestionStage('extraction', basePlanningContext);
-	let relationPlan = await planIngestionStage('relations', basePlanningContext);
-	let groupingPlan = await planIngestionStage('grouping', basePlanningContext);
-	let validationPlan = await planIngestionStage('validation', basePlanningContext);
-	let embeddingPlan = await planIngestionStage('embedding', basePlanningContext);
-	let jsonRepairPlan = await planIngestionStage('json_repair', basePlanningContext);
+	activeIngestTiming = createEmptyTiming();
+	let extractionPlan: IngestionStagePlan;
+	let relationPlan: IngestionStagePlan;
+	let groupingPlan: IngestionStagePlan;
+	let validationPlan: IngestionStagePlan;
+	let embeddingPlan: IngestionStagePlan;
+	let jsonRepairPlan: IngestionStagePlan;
+	const planInitialStart = Date.now();
+	[
+		extractionPlan,
+		relationPlan,
+		groupingPlan,
+		validationPlan,
+		embeddingPlan,
+		jsonRepairPlan
+	] = await Promise.all([
+		planIngestionStage('extraction', basePlanningContext),
+		planIngestionStage('relations', basePlanningContext),
+		planIngestionStage('grouping', basePlanningContext),
+		planIngestionStage('validation', basePlanningContext),
+		planIngestionStage('embedding', basePlanningContext),
+		planIngestionStage('json_repair', basePlanningContext)
+	]);
+	if (activeIngestTiming) activeIngestTiming.planning_initial_ms = Date.now() - planInitialStart;
 
 	console.log('╔══════════════════════════════════════════════════════════════╗');
 	console.log('║              SOPHIA — INGESTION PIPELINE                    ║');
@@ -2019,6 +2095,7 @@ async function main() {
 			const repairTracker = startStageUsage('json_repair');
 
 			if (shouldRunStage('extracting', resumeFromStage)) {
+				const stageExtractStart = Date.now();
 				await updateIngestionLog(db, sourceMeta.url, { status: 'extracting' });
 
 				console.log('┌──────────────────────────────────────────────────────────┐');
@@ -2099,6 +2176,7 @@ async function main() {
 					} catch (apiError) {
 						const apiMsg = apiError instanceof Error ? apiError.message : String(apiError);
 						if (apiMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
+							if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
 							const mid = Math.ceil(batch.length / 2);
 							batchQueue.splice(i + 1, 0, batch.slice(0, mid), batch.slice(mid));
 							const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
@@ -2152,6 +2230,7 @@ async function main() {
 						} catch (fixError) {
 							const fixMsg = fixError instanceof Error ? fixError.message : String(fixError);
 							if (fixMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
+								if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
 								const mid = Math.ceil(batch.length / 2);
 								batchQueue.splice(i + 1, 0, batch.slice(0, mid), batch.slice(mid));
 								const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
@@ -2210,6 +2289,7 @@ async function main() {
 				claims_extracted: allClaims.length,
 				cost_usd: parseFloat(estimateCostUsd())
 			});
+				bumpStageMs('extracting', Date.now() - stageExtractStart);
 			} else {
 				console.log('  [SKIP] Stage 1: Extraction (already completed)\n');
 				if (!Array.isArray(partial.claims) || partial.claims.length === 0) {
@@ -2220,23 +2300,29 @@ async function main() {
 			}
 
 			assertClaimIntegrity(allClaims);
-			relationPlan = await planIngestionStage('relations', {
-				...basePlanningContext,
-				claimCount: allClaims.length
-			});
-			groupingPlan = await planIngestionStage('grouping', {
-				...basePlanningContext,
-				claimCount: allClaims.length
-			});
-			validationPlan = await planIngestionStage('validation', {
-				...basePlanningContext,
-				claimCount: allClaims.length
-			});
-			embeddingPlan = await planIngestionStage('embedding', {
-				...basePlanningContext,
-				claimCount: allClaims.length,
-				claimTextChars: allClaims.reduce((sum, claim) => sum + claim.text.length, 0)
-			});
+			const planPostExStart = Date.now();
+			[relationPlan, groupingPlan, validationPlan, embeddingPlan] = await Promise.all([
+				planIngestionStage('relations', {
+					...basePlanningContext,
+					claimCount: allClaims.length
+				}),
+				planIngestionStage('grouping', {
+					...basePlanningContext,
+					claimCount: allClaims.length
+				}),
+				planIngestionStage('validation', {
+					...basePlanningContext,
+					claimCount: allClaims.length
+				}),
+				planIngestionStage('embedding', {
+					...basePlanningContext,
+					claimCount: allClaims.length,
+					claimTextChars: allClaims.reduce((sum, claim) => sum + claim.text.length, 0)
+				})
+			]);
+			if (activeIngestTiming) {
+				activeIngestTiming.planning_post_extraction_ms = Date.now() - planPostExStart;
+			}
 
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 2: RELATION EXTRACTION
@@ -2245,6 +2331,7 @@ async function main() {
 		const relationsTracker = startStageUsage('relations');
 
 		if (shouldRunStage('relating', resumeFromStage)) {
+			const stageRelateStart = Date.now();
 			await updateIngestionLog(db, sourceMeta.url, { status: 'relating' });
 
 			console.log('\n┌──────────────────────────────────────────────────────────┐');
@@ -2353,6 +2440,7 @@ async function main() {
 				relations_extracted: relations.length,
 				cost_usd: parseFloat(estimateCostUsd())
 			});
+			bumpStageMs('relating', Date.now() - stageRelateStart);
 		} else {
 			console.log('  [SKIP] Stage 2: Relations (already completed)\n');
 			if (!Array.isArray(partial.relations)) {
@@ -2361,16 +2449,22 @@ async function main() {
 			relations = partial.relations;
 		}
 
-			groupingPlan = await planIngestionStage('grouping', {
-				...basePlanningContext,
-				claimCount: allClaims.length,
-				relationCount: relations.length
-			});
-			validationPlan = await planIngestionStage('validation', {
-				...basePlanningContext,
-				claimCount: allClaims.length,
-				relationCount: relations.length
-			});
+			const planPostRelStart = Date.now();
+			[groupingPlan, validationPlan] = await Promise.all([
+				planIngestionStage('grouping', {
+					...basePlanningContext,
+					claimCount: allClaims.length,
+					relationCount: relations.length
+				}),
+				planIngestionStage('validation', {
+					...basePlanningContext,
+					claimCount: allClaims.length,
+					relationCount: relations.length
+				})
+			]);
+			if (activeIngestTiming) {
+				activeIngestTiming.planning_post_relations_ms = Date.now() - planPostRelStart;
+			}
 
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 3: ARGUMENT GROUPING
@@ -2379,6 +2473,7 @@ async function main() {
 		const groupingTracker = startStageUsage('grouping');
 
 		if (shouldRunStage('grouping', resumeFromStage)) {
+			const stageGroupStart = Date.now();
 			await updateIngestionLog(db, sourceMeta.url, { status: 'grouping' });
 
 			console.log('\n┌──────────────────────────────────────────────────────────┐');
@@ -2491,6 +2586,7 @@ async function main() {
 				arguments_grouped: arguments_.length,
 				cost_usd: parseFloat(estimateCostUsd())
 			});
+			bumpStageMs('grouping', Date.now() - stageGroupStart);
 		} else {
 			console.log('  [SKIP] Stage 3: Grouping (already completed)\n');
 			if (!Array.isArray(partial.arguments)) {
@@ -2512,6 +2608,7 @@ async function main() {
 		const embeddingTracker = startStageUsage('embedding');
 
 		if (shouldRunStage('embedding', resumeFromStage)) {
+			const stageEmbedStart = Date.now();
 			await updateIngestionLog(db, sourceMeta.url, { status: 'embedding' });
 
 			console.log('\n┌──────────────────────────────────────────────────────────┐');
@@ -2531,6 +2628,11 @@ async function main() {
 				embeddingBudget.timeoutMs,
 				`embedding ${embeddingPlan.model}`
 			);
+			const embedMs = Date.now() - stageEmbedStart;
+			if (activeIngestTiming) {
+				activeIngestTiming.embed_wall_ms += embedMs;
+				bumpStageMs('embedding', embedMs);
+			}
 
 			const totalChars = claimTexts.reduce((sum, t) => sum + t.length, 0);
 			trackEmbeddingCost(totalChars);
@@ -2565,6 +2667,7 @@ async function main() {
 				cost_usd: parseFloat(estimateCostUsd())
 			});
 			await db.close();
+			logIngestTimingSummary();
 			process.exit(0);
 		}
 
@@ -2574,6 +2677,7 @@ async function main() {
 		let validationResult: ValidationOutput | null = null;
 
 		if (shouldRunStage('validating', resumeFromStage)) {
+			const stageValStart = Date.now();
 			if (shouldValidate) {
 				await updateIngestionLog(db, sourceMeta.url, { status: 'validating' });
 
@@ -2722,6 +2826,7 @@ async function main() {
 				validation_score: valScore,
 				cost_usd: parseFloat(estimateCostUsd())
 			});
+			bumpStageMs('validating', Date.now() - stageValStart);
 		} else {
 			console.log('  [SKIP] Stage 5: Validation (already completed)\n');
 			validationResult = partial.validation ?? null;
@@ -2738,6 +2843,7 @@ async function main() {
 				cost_usd: parseFloat(estimateCostUsd())
 			});
 			await db.close();
+			logIngestTimingSummary();
 			process.exit(0);
 		}
 
@@ -2745,6 +2851,7 @@ async function main() {
 		// STAGE 6: STORE IN SURREALDB
 		// ═══════════════════════════════════════════════════════════════
 		if (shouldRunStage('storing', resumeFromStage)) {
+			const stageStoreStart = Date.now();
 			// ── Pre-stage 6 health check ──────────────────────────────
 			// Stages 1–5 can take 20+ minutes; verify the DB session is still
 			// alive before beginning the critical write phase.
@@ -2842,58 +2949,65 @@ async function main() {
 				}
 				console.log(`  [OK] Source record: ${sourceId}`);
 
-				// 6c. Create passage records
+				// 6c. Create passage records (limited parallelism to reduce round-trip latency)
 				console.log(`  Creating ${passages.length} passage records...`);
 				const passageRecordIdMap: Map<string, string> = new Map();
+				const PASSAGE_INSERT_CONCURRENCY = Math.max(
+					1,
+					Math.min(12, parseInt(process.env.INGEST_PASSAGE_INSERT_CONCURRENCY || '8', 10) || 8)
+				);
 
-				for (let i = 0; i < passages.length; i++) {
-					if (i > 0 && i % 50 === 0) {
+				for (let i = 0; i < passages.length; i += PASSAGE_INSERT_CONCURRENCY) {
+					if (i > 0 && i % 48 === 0) {
 						await ensureDbConnected(db);
 					}
-
-					const passage = passages[i];
-					const result = await db.query<[{ id: string }[]]>(
-						`CREATE passage CONTENT {
-							source: $source,
-							text: $text,
-							summary: $summary,
-							section_title: $section_title,
-							order_in_source: $order_in_source,
-							span_start: $span_start,
-							span_end: $span_end,
-							role: $role,
-							role_confidence: $role_confidence,
-							review_state: $review_state,
-							verification_state: $verification_state,
-							extractor_version: $extractor_version
-						}`,
-						{
-							source: sourceId,
-							text: passage.text,
-							summary: passage.summary,
-							section_title: passage.section_title ?? undefined,
-							order_in_source: passage.order_in_source,
-							span_start: passage.span.start,
-							span_end: passage.span.end,
-							role: passage.role,
-							role_confidence: passage.role_confidence,
-							review_state:
-								passage.role_confidence < LOW_CONFIDENCE_REVIEW_THRESHOLD
-									? 'needs_review'
-									: 'candidate',
-							verification_state: 'unverified',
-							extractor_version: INGEST_EXTRACTOR_VERSION
-						}
+					const chunk = passages.slice(i, i + PASSAGE_INSERT_CONCURRENCY);
+					await Promise.all(
+						chunk.map(async (passage) => {
+							const result = await db.query<[{ id: string }[]]>(
+								`CREATE passage CONTENT {
+									source: $source,
+									text: $text,
+									summary: $summary,
+									section_title: $section_title,
+									order_in_source: $order_in_source,
+									span_start: $span_start,
+									span_end: $span_end,
+									role: $role,
+									role_confidence: $role_confidence,
+									review_state: $review_state,
+									verification_state: $verification_state,
+									extractor_version: $extractor_version
+								}`,
+								{
+									source: sourceId,
+									text: passage.text,
+									summary: passage.summary,
+									section_title: passage.section_title ?? undefined,
+									order_in_source: passage.order_in_source,
+									span_start: passage.span.start,
+									span_end: passage.span.end,
+									role: passage.role,
+									role_confidence: passage.role_confidence,
+									review_state:
+										passage.role_confidence < LOW_CONFIDENCE_REVIEW_THRESHOLD
+											? 'needs_review'
+											: 'candidate',
+									verification_state: 'unverified',
+									extractor_version: INGEST_EXTRACTOR_VERSION
+								}
+							);
+							const passageRecordId =
+								Array.isArray(result) && result.length > 0
+									? Array.isArray(result[0])
+										? result[0][0]?.id
+										: (result[0] as any)?.id
+									: null;
+							if (passageRecordId) {
+								passageRecordIdMap.set(passage.id, passageRecordId);
+							}
+						})
 					);
-					const passageRecordId =
-						Array.isArray(result) && result.length > 0
-							? Array.isArray(result[0])
-								? result[0][0]?.id
-								: (result[0] as any)?.id
-							: null;
-					if (passageRecordId) {
-						passageRecordIdMap.set(passage.id, passageRecordId);
-					}
 				}
 				console.log(`  [OK] Created ${passageRecordIdMap.size} passage records`);
 
@@ -3220,6 +3334,11 @@ async function main() {
 
 			partial.stage_completed = 'stored';
 			savePartialResults(slug, partial);
+			if (activeIngestTiming) {
+				const storeMs = Date.now() - stageStoreStart;
+				activeIngestTiming.store_wall_ms += storeMs;
+				bumpStageMs('storing', storeMs);
+			}
 		} else {
 			console.log('  [SKIP] Stage 6: Storage (already completed)\n');
 		}
@@ -3275,8 +3394,10 @@ async function main() {
 		console.log('╚══════════════════════════════════════════════════════════════╝');
 		console.log('');
 
+		logIngestTimingSummary();
 		process.exit(0);
 	} catch (error) {
+		logIngestTimingSummary();
 		console.error('\n[FATAL ERROR]', error instanceof Error ? error.message : String(error));
 		if (error instanceof Error && error.stack) {
 			console.error(error.stack);

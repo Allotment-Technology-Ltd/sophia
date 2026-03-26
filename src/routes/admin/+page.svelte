@@ -13,6 +13,13 @@
       description:
         'List runs on this server, reopen a run to resume monitoring, logs, sync, and resume actions. Runs are in-memory until the process restarts.',
       emphasis: false
+    },
+    {
+      href: '/admin/operator-byok',
+      title: 'Operator BYOK',
+      description:
+        'Govern operational provider keys on the OWNER_UIDS target: status, save, validate, and revoke. Used as fallback when tenant keys are empty (see effective-key resolver).',
+      emphasis: false
     }
   ] as const;
 </script>
@@ -26,7 +33,7 @@
     <p class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-dim">Admin</p>
     <h1 class="mt-2 font-serif text-3xl text-sophia-dark-text sm:text-[2.1rem]">Operator hub</h1>
     <p class="mt-2 max-w-3xl text-sm leading-6 text-sophia-dark-muted">
-      Entry points for administration and ingestion control. Use Expand for the full workflow; use Ingestion runs when you need to return to an active or recent job.
+      Entry points for administration and ingestion control. Use Expand for the full workflow; use Ingestion runs when you need to return to an active or recent job; use Operator BYOK to manage fallback keys on the owner UID bucket.
     </p>
   </header>
 
@@ -80,6 +87,11 @@
   @media (min-width: 768px) {
     .hub-card-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (min-width: 1100px) {
+    .hub-card-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
   }
   .hub-card {

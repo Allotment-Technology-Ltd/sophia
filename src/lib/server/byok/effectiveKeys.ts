@@ -71,3 +71,39 @@ export async function loadInquiryEffectiveProviderApiKeys(
 
   return userKeys;
 }
+
+/**
+ * When a server-side context has no BYOK keys for a tenant (e.g. API-key auth on /api/v1/*),
+ * merge keys from OWNER_UIDS so operational keys still apply.
+ */
+export async function mergeOwnerEnvFallbackIfEmpty(
+  keys: ProviderApiKeys,
+  logContext: string
+): Promise<ProviderApiKeys> {
+  if (Object.keys(keys).length > 0) return keys;
+
+  const configured =
+    process.env.OWNER_UIDS?.split(',').map((value) => value.trim()).filter(Boolean) ?? [];
+  for (const ownerUid of configured) {
+    try {
+      const ownerKeys = await loadByokProviderApiKeys(ownerUid);
+      if (Object.keys(ownerKeys).length > 0) {
+        if (process.env.NODE_ENV !== 'test') {
+          console.info(
+            `[BYOK] Using OWNER_UIDS fallback provider keys for ${logContext} (owner=${ownerUid})`
+          );
+        }
+        return ownerKeys;
+      }
+    } catch (err) {
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn(
+          `[BYOK] Failed loading OWNER_UIDS fallback for ${logContext} (owner=${ownerUid}):`,
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+  }
+
+  return keys;
+}

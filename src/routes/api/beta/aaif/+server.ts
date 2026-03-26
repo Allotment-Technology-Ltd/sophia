@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { AAIFRequestSchema } from '@restormel/aaif';
 import { verifyApiKey } from '$lib/server/apiAuth';
 import { logServerAnalytics } from '$lib/server/analytics';
+import { mergeOwnerEnvFallbackIfEmpty } from '$lib/server/byok/effectiveKeys';
 import { loadByokProviderApiKeys } from '$lib/server/byok/store';
 import type { ProviderApiKeys } from '$lib/server/byok/types';
 import { resolveByokOwnerUid } from '$lib/server/byok/tenantIdentity';
@@ -73,6 +74,7 @@ export const POST: RequestHandler = async ({ request }) => {
       }
     }
   }
+  providerApiKeys = await mergeOwnerEnvFallbackIfEmpty(providerApiKeys, 'beta aaif');
 
   try {
     const response = await executeAAIFRequest(parsed.data, {

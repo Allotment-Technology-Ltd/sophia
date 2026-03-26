@@ -299,6 +299,25 @@ export interface IngestRunSnapshotForReport {
   cancelledByUser?: boolean;
 }
 
+/** Parse last `[INGEST_TIMING] {json}` line from worker stdout (scripts/ingest.ts). */
+export function parseIngestTimingFromLogLines(logLines: string[]): Record<string, unknown> | null {
+  const prefix = '[INGEST_TIMING]';
+  for (let i = logLines.length - 1; i >= 0; i--) {
+    const line = (logLines[i] ?? '').trim();
+    if (!line.startsWith(prefix)) continue;
+    const jsonPart = line.slice(prefix.length).trim();
+    try {
+      const parsed = JSON.parse(jsonPart) as unknown;
+      return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function summarizeRoutingFromLogLines(logLines: string[]): {
   routeCalls: number;
   routingSources: Record<string, number>;
@@ -335,6 +354,7 @@ export async function persistIngestRunReport(state: IngestRunSnapshotForReport):
     const ref = adminDb.collection(FIRESTORE_COLLECTION).doc(state.id);
     const payload = state.payload;
     const routingStats = summarizeRoutingFromLogLines(state.logLines);
+    const timingTelemetry = parseIngestTimingFromLogLines(state.logLines);
     await ref.set(
       {
         runId: state.id,
@@ -348,6 +368,7 @@ export async function persistIngestRunReport(state: IngestRunSnapshotForReport):
         embeddingModel: payload.embedding_model ?? null,
         batchOverrides: payload.batch_overrides ?? null,
         routingStats,
+        timingTelemetry,
         createdAt: Timestamp.fromMillis(state.createdAt),
         completedAt: Timestamp.fromMillis(state.completedAt ?? Date.now()),
         terminalError: state.error ?? null,
