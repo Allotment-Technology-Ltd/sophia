@@ -400,3 +400,51 @@ export async function persistIngestRunReport(state: IngestRunSnapshotForReport):
     );
   }
 }
+
+/** Row for admin “recent reports” list (Firestore). No TTL in app — retained until you delete docs or set Firestore lifecycle rules. */
+export interface IngestRunReportListRow {
+  runId: string;
+  status: string;
+  sourceUrl: string;
+  sourceType: string;
+  createdAtMs: number;
+  completedAtMs: number;
+  terminalError: string | null;
+  lastFailureStageKey: string | null;
+}
+
+export async function listRecentIngestRunReportSummaries(
+  limit = 50
+): Promise<IngestRunReportListRow[]> {
+  const cap = Math.max(1, Math.min(100, limit));
+  try {
+    const snap = await adminDb
+      .collection(FIRESTORE_COLLECTION)
+      .orderBy('completedAt', 'desc')
+      .limit(cap)
+      .get();
+
+    return snap.docs.map((d) => {
+      const data = d.data();
+      const createdAt = data.createdAt as Timestamp | undefined;
+      const completedAt = data.completedAt as Timestamp | undefined;
+      return {
+        runId: typeof data.runId === 'string' ? data.runId : d.id,
+        status: typeof data.status === 'string' ? data.status : 'unknown',
+        sourceUrl: typeof data.sourceUrl === 'string' ? data.sourceUrl : '',
+        sourceType: typeof data.sourceType === 'string' ? data.sourceType : '',
+        createdAtMs: createdAt?.toMillis?.() ?? 0,
+        completedAtMs: completedAt?.toMillis?.() ?? 0,
+        terminalError: typeof data.terminalError === 'string' ? data.terminalError : null,
+        lastFailureStageKey:
+          typeof data.lastFailureStageKey === 'string' ? data.lastFailureStageKey : null
+      };
+    });
+  } catch (e) {
+    console.warn(
+      '[ingestRunIssues] listRecentIngestRunReportSummaries failed:',
+      e instanceof Error ? e.message : String(e)
+    );
+    return [];
+  }
+}

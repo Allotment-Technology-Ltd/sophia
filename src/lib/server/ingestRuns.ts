@@ -139,6 +139,8 @@ export interface IngestRunState {
   actorEmail: string;
   /** Structured signals parsed from worker logs (warnings, repairs, retries, …). */
   issues: IngestIssueRecord[];
+  /** Throttle for merging live run state into Firestore `ingestion_run_reports` while still running. */
+  lastReportPersistAt?: number;
 }
 
 /** Admin wizard / ingest UI types → `scripts/fetch-source.ts` types. */
@@ -272,7 +274,8 @@ class IngestRunManager extends EventEmitter {
       lastFailureStageKey: null,
       resumable: false,
       actorEmail,
-      issues: []
+      issues: [],
+      lastReportPersistAt: undefined
     };
 
     this.runs.set(runId, state);
@@ -357,6 +360,16 @@ class IngestRunManager extends EventEmitter {
       this.ingestProgressFromLogLine(runId, line);
       if (state.logLines.length > this.maxLogLines) {
         state.logLines.shift();
+      }
+      // Periodic Firestore merge so overnight failures still leave a durable row (not only in-memory UI).
+      if (state.status === 'running' || state.status === 'awaiting_sync') {
+        const now = Date.now();
+        const raw = (process.env.ADMIN_INGEST_REPORT_PERSIST_INTERVAL_MS ?? '120000').trim();
+        const interval = Math.max(30_000, Math.min(60 * 60_000, parseInt(raw, 10) || 120_000));
+        if (!state.lastReportPersistAt || now - state.lastReportPersistAt >= interval) {
+          state.lastReportPersistAt = now;
+          this.schedulePersistReport(runId);
+        }
       }
     }
   }
