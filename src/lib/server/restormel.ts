@@ -859,14 +859,20 @@ export async function restormelListGlobalDashboardModels(): Promise<unknown> {
   return requestRestormel<unknown>('/models', { requireProjectId: false });
 }
 
-/** Per OpenAPI `ProjectModelBindingKind`: execution (catalog-backed) vs registry (opaque host merge). */
+/**
+ * Per OpenAPI `ProjectModelBindingKind`: **execution** — canonical provider + catalog model + variants;
+ * **registry** — host merge metadata / pickers only; arbitrary provider/model strings; does not extend Keys resolve or routes.
+ */
 export type RestormelProjectModelBindingKind = 'execution' | 'registry';
 
 export type RestormelProjectModelBindingInput = {
   providerType: string;
   modelId: string;
   enabled?: boolean;
-  /** Omit or `execution` for catalog-backed rows; `registry` for off-catalog pairs (Keys 021+). */
+  /**
+   * Omit or `execution` when the pair is Keys catalog-backed. `registry` for extra providers (e.g. mistral, deepseek)
+   * or ids without a catalog row — index accepts them; execution stack unchanged until Keys adds product support.
+   */
   bindingKind?: RestormelProjectModelBindingKind;
 };
 

@@ -103,13 +103,15 @@ export const GET: RequestHandler = async ({ locals }) => {
 	} catch (e) {
 		keysBindableModelsError = e instanceof Error ? e.message : String(e);
 	}
+	const registryBindings = isRestormelProjectModelRegistryBindingsEnabled();
+	/** Registry mode: show full v5 catalog (Mistral, DeepSeek, …); they sync as bindingKind registry. Legacy: ∩ Keys bindable + execution providers only. */
 	catalogRows = catalogRows.filter((r) => {
 		const n = normalizeUserQueryModelRef({ providerType: r.providerType, modelId: r.modelId });
+		if (registryBindings) return true;
 		if (!isRestormelProjectModelPutProvider(n.providerType)) return false;
 		if (keysForCatalogDisplay === undefined) return true;
 		return keysForCatalogDisplay.has(catalogSurfaceStableKey(n.providerType, n.modelId));
 	});
-	const registryBindings = isRestormelProjectModelRegistryBindingsEnabled();
 	const effectiveOperations = catalogPayload
 		? computeEffectiveOperationsBindings(catalogPayload, stored, bindableKeysForPut, {
 				registryBindings

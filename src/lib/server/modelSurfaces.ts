@@ -223,9 +223,14 @@ export function buildUserQueryExplicitKeySet(explicit: ModelRef[]): Set<string> 
 }
 
 /**
- * `PUT …/projects/{id}/models` only accepts these provider ids (Keys dashboard validation).
- * Global `GET /models` can list additional providers; intersect with this set before sync.
- * Aliases like `google` → `vertex` are handled via {@link normalizeUserQueryModelRef} before checking.
+ * Canonical provider slugs for **`bindingKind: "execution"`** (or omitted) on the project model index.
+ * Keys requires the model id to exist in its catalog and to pass variant rules when variants exist.
+ *
+ * **`bindingKind: "registry"`** does not use this list: arbitrary `providerType` / `modelId` strings
+ * (e.g. `mistral`, `deepseek`) are valid for index metadata / host merge and pickers; Keys does not
+ * treat them as first-class execution providers (resolve, routes, cost) until the product extends there.
+ *
+ * Aliases like `google` → `vertex` use {@link normalizeUserQueryModelRef}.
  */
 export const RESTORMEL_PROJECT_MODEL_PUT_PROVIDER_IDS = new Set([
 	'openai',
@@ -251,8 +256,10 @@ export function isDeniedProjectModelPutModelId(modelId: string): boolean {
 }
 
 /**
- * When true, Model availability sync may send `bindingKind: "registry"` for off-catalog / embedding rows
- * (Restormel Keys OpenAPI 1.3.2+, migration 021). Default off for older hosts.
+ * When true, Model availability sync may send `bindingKind: "registry"` for rows that are not
+ * execution-catalog-backed (Restormel Keys OpenAPI 1.3.2+, migration 021). Registry rows are
+ * metadata for merge/pickers; they do not imply Keys resolve or routing understands those providers.
+ * Default off for older hosts.
  */
 export function isRestormelProjectModelRegistryBindingsEnabled(): boolean {
 	const v = process.env.RESTORMEL_PROJECT_MODEL_REGISTRY_BINDINGS?.trim().toLowerCase();
@@ -272,9 +279,10 @@ function addKeysBindableKeyFromRow(row: Record<string, unknown>, set: Set<string
 }
 
 /**
- * Union of provider/model pairs Keys accepts for project model bindings: global `GET /models` plus
- * `GET …/projects/{id}/models` (including nested `model` on bindings). Used to filter Sophia’s PUT
- * so we only send bindable rows — not to “fix” invalid ids client-side.
+ * Union of **execution** provider/model pairs from global `GET /models` and `GET …/projects/{id}/models`
+ * (nested `model` included). Only rows whose provider is in {@link RESTORMEL_PROJECT_MODEL_PUT_PROVIDER_IDS}
+ * appear here. Used to decide which surface assignments sync as **execution** vs **registry**; not a
+ * guarantee that arbitrary providers exist in Keys.
  */
 export function buildKeysBindableModelKeySet(
 	globalDashboardPayload: unknown,
@@ -324,6 +332,16 @@ export function supplementBindableKeysWithCatalogVertexEmbeddings(
 	return out;
 }
 
+/**
+ * Builds the `models` array for `PUT …/projects/{id}/models` from catalog surface roles.
+ *
+ * **Registry mode** (env or option): rows that match Keys’ execution bindable set and pass the
+ * denylist use execution (field omitted); everything else uses `bindingKind: "registry"` (extra
+ * providers, off-catalog ids, embeddings not on GET /models, etc.) — valid index metadata without a
+ * Keys catalog row for that id.
+ *
+ * **Legacy mode**: non-embedding, canonical providers only, intersected with bindable keys (pre-021 behaviour).
+ */
 export function computeEffectiveOperationsBindings(
 	catalogPayload: unknown,
 	config: ModelSurfacesStored,

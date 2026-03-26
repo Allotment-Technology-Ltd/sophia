@@ -591,7 +591,10 @@
       {/if}
 
       <p class="font-mono text-xs text-sophia-dark-dim">
-        Contract: {catalogContract ?? '—'} · Catalog rows (Keys bindable): {catalogRows.length}{#if catalogTotalRowCount != null && catalogTotalRowCount > catalogRows.length}
+        Contract: {catalogContract ?? '—'} · {#if registryProjectModelBindings}
+          Catalog rows (full v5 list):{:else}
+          Catalog rows (Keys bindable){/if}
+        {catalogRows.length}{#if catalogTotalRowCount != null && catalogTotalRowCount > catalogRows.length}
           <span class="text-sophia-dark-muted">
             · {catalogTotalRowCount} in full catalog</span
           >{/if}{#if ineligibleSurfacesCount > 0}
