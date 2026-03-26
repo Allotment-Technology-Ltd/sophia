@@ -1104,9 +1104,18 @@
   }
 
   function isSupportedRouteProvider(provider: string): boolean {
-    return ['openai', 'anthropic', 'google', 'openrouter', 'vercel', 'portkey', 'voyage'].includes(
-      normalizeProviderPreference(provider)
-    );
+    return [
+      'openai',
+      'anthropic',
+      'google',
+      'openrouter',
+      'vercel',
+      'portkey',
+      'voyage',
+      'mistral',
+      'deepseek',
+      'xai'
+    ].includes(normalizeProviderPreference(provider));
   }
 
   async function fetchRouteStepsOrdered(routeId: string): Promise<Record<string, unknown>[]> {
@@ -1434,7 +1443,7 @@
           return;
         }
         if (!isSupportedRouteProvider(primaryOpt.provider)) {
-          routingError = `“${row.label}” uses provider “${primaryOpt.provider}”, but Restormel route steps currently accept: openai, anthropic, google (alias: vertex), openrouter, vercel, portkey, voyage. Choose a supported model for this stage.`;
+          routingError = `“${row.label}” uses provider “${primaryOpt.provider}”, but Restormel route steps currently accept: openai, anthropic, google (alias: vertex), openrouter, vercel, portkey, voyage, mistral, deepseek, xai. Choose a supported model for this stage.`;
           return;
         }
 
@@ -3637,7 +3646,12 @@
                   Restormel project model bindings
                 </p>
                 <p class="mt-2 text-xs leading-relaxed text-sophia-dark-muted">
-                  Pickers below only list models registered for this Restormel project. Add embeddings or other models here; changes call the Keys Dashboard API with your server
+                  Pickers follow the <a
+                    href="/admin/model-availability"
+                    class="text-sophia-dark-text underline decoration-sophia-dark-border underline-offset-2 hover:decoration-sophia-dark-text"
+                    >Model availability</a
+                  >
+                  policy (live catalog + sync to this project). Quick-add embeddings below still calls the Keys Dashboard API with your server
                   <span class="font-mono text-sophia-dark-text">RESTORMEL_GATEWAY_KEY</span>.
                 </p>
                 {#if projectBindingsError}

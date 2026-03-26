@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	computeIngestionPhaseSuitability,
 	entryMeetsPresetStageMinimum,
 	inferQualityTierFromModelIdentity,
 	minimumQualityTierForStage,
@@ -106,5 +107,36 @@ describe('resolveCatalogQualityCost', () => {
 describe('inferQualityTierFromModelIdentity', () => {
 	it('classifies flash as capable', () => {
 		expect(inferQualityTierFromModelIdentity('vertex', 'gemini-2.5-flash')).toBe('capable');
+	});
+});
+
+describe('computeIngestionPhaseSuitability', () => {
+	it('marks fetch as na and chat models as na for embedding stage', () => {
+		const m = computeIngestionPhaseSuitability('openai', 'gpt-4o', false, {
+			label: 'GPT-4o',
+			qualityTier: 'strong',
+			costTier: 'medium'
+		});
+		expect(m.ingestion_fetch).toBe('na');
+		expect(m.ingestion_embedding).toBe('na');
+		expect(m.ingestion_extraction).toBe('yes');
+	});
+
+	it('marks embedding models as na for extraction and yes for embedding when capable', () => {
+		const m = computeIngestionPhaseSuitability('voyage', 'voyage-3-lite', true, {
+			label: 'Voyage 3 Lite'
+		});
+		expect(m.ingestion_extraction).toBe('na');
+		expect(m.ingestion_embedding).toBe('yes');
+	});
+
+	it('returns weak when only budget preset passes', () => {
+		const m = computeIngestionPhaseSuitability('anthropic', 'claude-3-5-haiku-20241022', false, {
+			label: 'Haiku',
+			qualityTier: 'capable',
+			costTier: 'low'
+		});
+		expect(m.ingestion_extraction).toBe('weak');
+		expect(m.ingestion_grouping).toBe('no');
 	});
 });

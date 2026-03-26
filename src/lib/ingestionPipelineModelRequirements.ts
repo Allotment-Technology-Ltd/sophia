@@ -221,3 +221,110 @@ export function entryMeetsPresetStageMinimum(
 
 	return false;
 }
+
+/** UI indicator per pipeline stage (balanced vs budget floors; na = wrong modality or no LLM). */
+export type IngestionPhaseSuitabilityLevel = 'yes' | 'weak' | 'no' | 'na';
+
+/** Column order aligned with admin ingest Restormel stages. */
+export const INGESTION_PHASE_COLUMN_ORDER: readonly IngestionPipelineStageKey[] = [
+	'ingestion_fetch',
+	'ingestion_extraction',
+	'ingestion_relations',
+	'ingestion_grouping',
+	'ingestion_validation',
+	'ingestion_embedding',
+	'ingestion_json_repair'
+] as const;
+
+export const INGESTION_PHASE_TABLE_HEADING: Record<IngestionPipelineStageKey, string> = {
+	ingestion_fetch: 'Fetch',
+	ingestion_extraction: 'Extract',
+	ingestion_relations: 'Relate',
+	ingestion_grouping: 'Group',
+	ingestion_validation: 'Validate',
+	ingestion_embedding: 'Embed',
+	ingestion_json_repair: 'JSON'
+};
+
+function catalogLikeFromCatalogRaw(
+	providerType: string,
+	modelId: string,
+	raw: Record<string, unknown>
+): CatalogLikeEntry {
+	const label =
+		typeof raw.label === 'string' && raw.label.trim()
+			? raw.label.trim()
+			: `${providerType} · ${modelId}`;
+	const q = raw.qualityTier ?? raw.quality_tier;
+	const c = raw.costTier ?? raw.cost_tier;
+	const qualityTier =
+		q === 'capable' || q === 'strong' || q === 'frontier' ? q : undefined;
+	const costTier =
+		c === 'low' || c === 'medium' || c === 'high' ? c : undefined;
+	return { provider: providerType, modelId, label, qualityTier, costTier };
+}
+
+function suitabilityLevelForStage(
+	stageKey: IngestionPipelineStageKey,
+	entry: CatalogLikeEntry,
+	isEmbeddingRow: boolean
+): IngestionPhaseSuitabilityLevel {
+	if (stageKey === 'ingestion_fetch') {
+		return 'na';
+	}
+	if (stageKey === 'ingestion_embedding') {
+		if (!isEmbeddingRow) return 'na';
+	} else if (isEmbeddingRow) {
+		return 'na';
+	}
+
+	const embed = stageKey === 'ingestion_embedding';
+	if (entryMeetsPresetStageMinimum('balanced', stageKey, entry, { embed })) {
+		return 'yes';
+	}
+	if (entryMeetsPresetStageMinimum('budget', stageKey, entry, { embed })) {
+		return 'weak';
+	}
+	return 'no';
+}
+
+/**
+ * Per-stage suitability for the model availability / operations picker.
+ * **yes** = meets **balanced** preset floor; **weak** = meets **budget** only; **no** = below budget or structural block; **na** = not applicable (fetch has no LLM; modality mismatch for embed vs chat).
+ */
+export function computeIngestionPhaseSuitability(
+	providerType: string,
+	modelId: string,
+	isEmbedding: boolean,
+	raw: Record<string, unknown>
+): Record<IngestionPipelineStageKey, IngestionPhaseSuitabilityLevel> {
+	const entry = catalogLikeFromCatalogRaw(providerType, modelId, raw);
+	const out = {} as Record<IngestionPipelineStageKey, IngestionPhaseSuitabilityLevel>;
+	for (const key of INGESTION_PHASE_COLUMN_ORDER) {
+		out[key] = suitabilityLevelForStage(key, entry, isEmbedding);
+	}
+	return out;
+}
+
+export function ingestionPhaseSuitabilityTitle(
+	stageKey: IngestionPipelineStageKey,
+	level: IngestionPhaseSuitabilityLevel
+): string {
+	const stage = INGESTION_PHASE_TABLE_HEADING[stageKey];
+	if (level === 'na') {
+		if (stageKey === 'ingestion_fetch') {
+			return `${stage}: not LLM-backed (fetch/parse only)`;
+		}
+		if (stageKey === 'ingestion_embedding') {
+			return `${stage}: not an embedding model`;
+		}
+		return `${stage}: embedding models are not used in this stage`;
+	}
+	if (level === 'yes') {
+		return `${stage}: meets balanced preset quality floor (and structural checks)`;
+	}
+	if (level === 'weak') {
+		return `${stage}: meets budget preset only — below balanced floor`;
+	}
+	return `${stage}: below budget preset floor or failed structural gate (e.g. size/modality)`;
+}

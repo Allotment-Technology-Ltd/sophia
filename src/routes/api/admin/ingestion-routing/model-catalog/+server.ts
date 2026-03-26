@@ -1,8 +1,22 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
-import { buildRestormelProjectModelEntriesOnly } from '$lib/ingestionModelCatalogMerge';
-import { restormelListProjectModels } from '$lib/server/restormel';
+import {
+	buildRestormelProjectModelEntriesOnly,
+	inferIngestionEntryFromProviderModel,
+	type CatalogSyncMeta
+} from '$lib/ingestionModelCatalogMerge';
+import {
+	computeEffectiveOperationsBindings,
+	fetchKeysBindableModelKeySet,
+	isRestormelProjectModelRegistryBindingsEnabled,
+	loadModelSurfacesConfig
+} from '$lib/server/modelSurfaces';
+import {
+	parseCatalogContractVersionFromPayload,
+	parseCatalogFreshnessFromPayload
+} from '$lib/server/restormelCatalogRows';
+import { restormelFetchCatalogPayloadUncached, restormelListProjectModels } from '$lib/server/restormel';
 import { defaultProviders, estimateCost } from '@restormel/keys';
 
 type FallbackPricedEntry = {
@@ -30,27 +44,27 @@ function fallbackPricingPerMillion(entry: FallbackPricedEntry): {
 	return { inputPerMillion: 4.0, outputPerMillion: 16.0 };
 }
 
-export const GET: RequestHandler = async ({ locals }) => {
-	assertAdminAccess(locals);
-
-	let remote: unknown | null = null;
-	let fetchError: string | null = null;
-	try {
-		remote = await restormelListProjectModels();
-	} catch (e) {
-		fetchError = e instanceof Error ? e.message : String(e);
-	}
-
-	const { entries, sync } = buildRestormelProjectModelEntriesOnly(remote, fetchError);
-	// Project embeddings and other models are configured via Restormel Keys project
-	// model bindings (POST …/projects/{id}/models). No static embedding supplement.
-
-	const compactEntries = entries.map((entry) => {
+function compactFromEntries(
+	entries: Array<{
+		label: string;
+		provider: string;
+		modelId: string;
+		contextWindow: string;
+		costTier: FallbackPricedEntry['costTier'] | string;
+		qualityTier: string;
+		speed: string;
+	}>
+) {
+	return entries.map((entry) => {
 		const estimate =
 			estimateCost(entry.modelId, defaultProviders) ??
 			estimateCost(`${entry.provider}/${entry.modelId}`, defaultProviders) ??
 			estimateCost(`${entry.provider}:${entry.modelId}`, defaultProviders);
-		const fallback = fallbackPricingPerMillion(entry);
+		const tier =
+			entry.costTier === 'low' || entry.costTier === 'medium' || entry.costTier === 'high'
+				? entry.costTier
+				: 'medium';
+		const fallback = fallbackPricingPerMillion({ costTier: tier, modelId: entry.modelId });
 		return {
 			label: entry.label,
 			provider: entry.provider,
@@ -65,6 +79,62 @@ export const GET: RequestHandler = async ({ locals }) => {
 			}
 		};
 	});
+}
+
+export const GET: RequestHandler = async ({ locals }) => {
+	assertAdminAccess(locals);
+
+	try {
+		const [catalogPayload, surfacesConfig, bindableKeys] = await Promise.all([
+			restormelFetchCatalogPayloadUncached(),
+			loadModelSurfacesConfig(),
+			fetchKeysBindableModelKeySet().catch(() => undefined as Set<string> | undefined)
+		]);
+		const contractVersion = parseCatalogContractVersionFromPayload(catalogPayload);
+		const fr = parseCatalogFreshnessFromPayload(catalogPayload);
+		const bindings = computeEffectiveOperationsBindings(catalogPayload, surfacesConfig, bindableKeys, {
+			registryBindings: isRestormelProjectModelRegistryBindingsEnabled()
+		});
+		if (bindings.length > 0) {
+			const inferred = bindings.map((b) =>
+				inferIngestionEntryFromProviderModel(b.providerType, b.modelId)
+			);
+			const compactEntries = compactFromEntries(inferred);
+			const surfaceSync: CatalogSyncMeta = {
+				status: 'restormel',
+				remoteRowCount: bindings.length,
+				annotatedCount: 0,
+				inferredRemoteCount: bindings.length,
+				staticSupplementCount: 0
+			};
+			return json({
+				entries: compactEntries,
+				catalogSync: surfaceSync,
+				supplementation: { staticEmbeddingCount: 0 },
+				catalogSource: 'catalog_surfaces' as const,
+				catalogContractVersion: contractVersion || null,
+				catalogFresh: fr.allFresh,
+				catalogFreshnessSignalsPresent: fr.signalsPresent
+			});
+		}
+	} catch (e) {
+		if (process.env.NODE_ENV !== 'test') {
+			console.warn('[ingestion-model-catalog] catalog surfaces path failed, falling back', {
+				message: e instanceof Error ? e.message : String(e)
+			});
+		}
+	}
+
+	let remote: unknown | null = null;
+	let fetchError: string | null = null;
+	try {
+		remote = await restormelListProjectModels();
+	} catch (e) {
+		fetchError = e instanceof Error ? e.message : String(e);
+	}
+
+	const { entries, sync } = buildRestormelProjectModelEntriesOnly(remote, fetchError);
+	const compactEntries = compactFromEntries(entries);
 
 	if (sync.status === 'unavailable') {
 		console.warn('[ingestion-model-catalog] unavailable', {
@@ -78,6 +148,8 @@ export const GET: RequestHandler = async ({ locals }) => {
 		catalogSync: sync,
 		supplementation: {
 			staticEmbeddingCount: 0
-		}
+		},
+		catalogSource: 'project_index' as const,
+		catalogFresh: null
 	});
 };

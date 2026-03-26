@@ -11,6 +11,7 @@ import {
 	catalogEntryForLabel,
 	INGESTION_MODEL_CATALOG
 } from './ingestionModelCatalog';
+import { isEmbeddingModelByProviderAndId } from './modelKind';
 
 export type CatalogEntrySource = 'annotated' | 'remote' | 'static_supplement';
 
@@ -20,10 +21,7 @@ export type IngestionModelCatalogEntryMerged = IngestionModelCatalogEntry & {
 
 /** True when a catalog row should use embedding-style pickers (Restormel project models). */
 export function isEmbeddingModelEntry(e: Pick<IngestionModelCatalogEntry, 'provider' | 'modelId'>): boolean {
-	const p = e.provider.toLowerCase();
-	if (p === 'voyage') return true;
-	if (/embedding|embed|vector|textembedding|gecko|e5-|bge-/i.test(e.modelId)) return true;
-	return false;
+	return isEmbeddingModelByProviderAndId(e.provider, e.modelId);
 }
 
 export interface CatalogSyncMeta {
@@ -85,7 +83,10 @@ export function isRestormelBindingRowEnabled(row: Record<string, unknown>): bool
 	return row.enabled !== false;
 }
 
-function inferEntry(providerRaw: string, modelIdRaw: string): IngestionModelCatalogEntry {
+export function inferIngestionEntryFromProviderModel(
+	providerRaw: string,
+	modelIdRaw: string
+): IngestionModelCatalogEntry {
 	const provider = providerRaw.trim() || 'unknown';
 	const modelId = modelIdRaw.trim();
 	const label = `${provider} · ${modelId}`;
@@ -142,7 +143,11 @@ function inferEntry(providerRaw: string, modelIdRaw: string): IngestionModelCata
 	};
 }
 
-function rowToProviderModel(row: Record<string, unknown>): { provider: string; modelId: string } | null {
+function inferEntry(providerRaw: string, modelIdRaw: string): IngestionModelCatalogEntry {
+	return inferIngestionEntryFromProviderModel(providerRaw, modelIdRaw);
+}
+
+export function rowToProviderModel(row: Record<string, unknown>): { provider: string; modelId: string } | null {
 	const providerNested =
 		isRecord(row.provider) ? (row.provider as Record<string, unknown>) : null;
 	const modelNested =
@@ -178,6 +183,7 @@ function rowToProviderModel(row: Record<string, unknown>): { provider: string; m
 			return 'vertex';
 		}
 		if (provider === 'openai_compatible') return 'openai';
+		if (provider === 'mistralai' || provider === 'mistral_ai') return 'mistral';
 		return provider;
 	}
 
@@ -213,6 +219,14 @@ function rowToProviderModel(row: Record<string, unknown>): { provider: string; m
 		if (low.startsWith('voyage')) return 'voyage';
 		if (low.startsWith('deepseek')) return 'deepseek';
 		if (low.startsWith('grok')) return 'xai';
+		if (
+			low.startsWith('mistral') ||
+			low.startsWith('ministral') ||
+			low.startsWith('codestral') ||
+			low.startsWith('mixtral')
+		) {
+			return 'mistral';
+		}
 		return '';
 	}
 

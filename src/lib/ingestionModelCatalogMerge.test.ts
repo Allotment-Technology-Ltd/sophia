@@ -3,7 +3,8 @@ import {
 	buildRestormelProjectModelEntriesOnly,
 	extractModelRowsFromRestormelPayload,
 	isEmbeddingModelEntry,
-	mergeCatalogWithRestormelModels
+	mergeCatalogWithRestormelModels,
+	rowToProviderModel
 } from './ingestionModelCatalogMerge';
 
 describe('extractModelRowsFromRestormelPayload', () => {
@@ -37,6 +38,37 @@ describe('extractModelRowsFromRestormelPayload', () => {
 		});
 		expect(rows).toHaveLength(1);
 		expect(rows[0].modelId).toBe('voyage-3');
+	});
+
+	it('extracts registry bindingKind rows from data array', () => {
+		const rows = extractModelRowsFromRestormelPayload({
+			data: [
+				{
+					id: 'b_reg',
+					bindingKind: 'registry',
+					providerType: 'vertex',
+					modelId: 'text-embedding-005',
+					enabled: true,
+					model: null
+				}
+			]
+		});
+		expect(rows).toHaveLength(1);
+		expect(rows[0].bindingKind).toBe('registry');
+	});
+});
+
+describe('rowToProviderModel (registry / null nested model)', () => {
+	it('reads top-level providerType and modelId when model is null', () => {
+		const ids = rowToProviderModel({
+			id: 'b1',
+			bindingKind: 'registry',
+			providerType: 'vertex',
+			modelId: 'multimodalembedding@001',
+			enabled: true,
+			model: null
+		});
+		expect(ids).toEqual({ provider: 'vertex', modelId: 'multimodalembedding@001' });
 	});
 });
 
