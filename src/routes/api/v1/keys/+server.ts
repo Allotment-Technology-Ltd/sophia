@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types';
 import { Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from '$lib/server/firebase-admin';
 import { createApiKey } from '$lib/server/apiAuth';
-import { hasAdministratorRole } from '$lib/server/authRoles';
+import { hasOwnerRole } from '$lib/server/authRoles';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
 import { logServerAnalytics } from '$lib/server/analytics';
 
@@ -16,7 +16,7 @@ function getAuthContext(user: App.Locals['user']): { uid: string; isAdmin: boole
     });
   }
 
-  return { uid: user.uid, isAdmin: hasAdministratorRole(user) };
+  return { uid: user.uid, isAdmin: hasOwnerRole(user) };
 }
 
 function requestHeaders(requestId: string): HeadersInit {

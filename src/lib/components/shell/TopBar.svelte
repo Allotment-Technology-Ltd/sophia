@@ -22,7 +22,7 @@
   let currentUser = $state(browser ? auth?.currentUser ?? null : null);
   let billingTier = $state<'free' | 'pro' | 'premium' | null>(null);
   let founderActive = $state(false);
-  let administrator = $state(false);
+  let showAdminNav = $state(false);
   let userMenuOpen = $state(false);
   const learnEnabled = (publicEnv.PUBLIC_ENABLE_LEARN_MODULE ?? 'false').toLowerCase() === 'true';
 
@@ -50,9 +50,10 @@
       }
       const body = (await response.json()) as {
         profile?: { tier?: 'free' | 'pro' | 'premium' };
+        effective_tier?: 'free' | 'pro' | 'premium';
         founder_offer?: { active?: boolean } | null;
       };
-      const tier = body?.profile?.tier;
+      const tier = body.effective_tier ?? body?.profile?.tier;
       billingTier = tier === 'pro' || tier === 'premium' || tier === 'free' ? tier : 'free';
       founderActive = body?.founder_offer?.active === true;
     } catch {
@@ -61,28 +62,28 @@
     }
   }
 
-  async function refreshAdministratorState(): Promise<void> {
+  async function refreshOwnerAdminNav(): Promise<void> {
     if (!browser || !currentUser) {
-      administrator = false;
+      showAdminNav = false;
       return;
     }
     try {
       const token = await getIdToken();
       if (!token) {
-        administrator = false;
+        showAdminNav = false;
         return;
       }
       const response = await fetch('/api/admin/me', {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (!response.ok) {
-        administrator = false;
+        showAdminNav = false;
         return;
       }
-      const body = await response.json();
-      administrator = body.is_admin === true;
+      const body = (await response.json()) as { is_owner?: boolean };
+      showAdminNav = body.is_owner === true;
     } catch {
-      administrator = false;
+      showAdminNav = false;
     }
   }
 
@@ -90,10 +91,10 @@
     onAuthChange((user) => {
       currentUser = user;
       void refreshBillingTier();
-      void refreshAdministratorState();
+      void refreshOwnerAdminNav();
     });
     void refreshBillingTier();
-    void refreshAdministratorState();
+    void refreshOwnerAdminNav();
   }
 
   onMount(() => {
@@ -134,7 +135,7 @@
     {#if learnEnabled}
       <a href="/learn" class="mode-link" aria-current={$page.url.pathname.startsWith('/learn') ? 'page' : undefined}>Learn</a>
     {/if}
-    {#if administrator}
+    {#if showAdminNav}
       <a href="/admin" class="mode-link" aria-current={$page.url.pathname.startsWith('/admin') ? 'page' : undefined}>Admin</a>
     {/if}
   </div>
@@ -189,7 +190,7 @@
               <div class="user-name">{currentUser.displayName}</div>
               <div class="user-email">{currentUser.email}</div>
             </div>
-            {#if administrator}
+            {#if showAdminNav}
               <a class="dropdown-item" href="/admin" role="menuitem">
                 Admin
               </a>

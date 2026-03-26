@@ -28,7 +28,7 @@ describe('/api/admin/review/claim', () => {
 
 		const { POST } = await import('./+server');
 		const response = await POST({
-			locals: { user: { uid: 'admin-1', email: 'admin@example.com', role: 'administrator' } },
+			locals: { user: { uid: 'admin-1', email: 'admin@example.com', role: 'owner' } },
 			request: new Request('http://localhost/api/admin/review/claim', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },

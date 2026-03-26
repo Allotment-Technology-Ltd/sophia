@@ -17,16 +17,18 @@ import {
   unauthorizedResponse
 } from '$lib/server/learn/http';
 import { getLearnEntitlementSummary } from '$lib/server/learn/entitlements';
+import { hasOwnerRole } from '$lib/server/authRoles';
 
 export const GET: RequestHandler = async ({ locals }) => {
   if (!isLearnModuleEnabled()) return learnModuleDisabledResponse();
   const uid = requireUid(locals);
   if (!uid) return unauthorizedResponse();
 
+  const ownerBypass = hasOwnerRole(locals.user);
   const [completedUnits, essays, learnEntitlements] = await Promise.all([
     listCompletedLessonIds(uid),
     listProgressEssays(uid),
-    getLearnEntitlementSummary(uid)
+    getLearnEntitlementSummary(uid, { ownerBypass })
   ]);
 
   const dimensionRows = essays

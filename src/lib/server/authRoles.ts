@@ -1,8 +1,8 @@
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { adminDb } from '$lib/server/firebase-admin';
 
-export const APP_USER_ROLE_VALUES = ['user', 'administrator', 'owner'] as const;
-export type AppUserRole = typeof APP_USER_ROLE_VALUES[number];
+export const APP_USER_ROLE_VALUES = ['user', 'owner'] as const;
+export type AppUserRole = (typeof APP_USER_ROLE_VALUES)[number];
 
 export interface AuthenticatedUserProfile {
   uid: string;
@@ -21,16 +21,6 @@ function normalizeEmail(email: string | null | undefined): string | null {
   return normalized ? normalized : null;
 }
 
-function getSeedAdministratorEmails(): Set<string> {
-  const configured = process.env.ADMINISTRATOR_EMAILS?.trim();
-  const emails = configured
-    ? configured.split(',').map((value) => value.trim().toLowerCase()).filter(Boolean)
-    : ['adam.boon1984@googlemail.com'];
-  return new Set(emails);
-}
-
-const SEEDED_ADMINISTRATOR_EMAILS = getSeedAdministratorEmails();
-
 function getSeedOwnerEmails(): Set<string> {
   const configured = process.env.OWNER_EMAILS?.trim();
   const emails = configured
@@ -41,23 +31,24 @@ function getSeedOwnerEmails(): Set<string> {
 
 const SEEDED_OWNER_EMAILS = getSeedOwnerEmails();
 
-export function isSeedAdministratorEmail(email: string | null | undefined): boolean {
-  const normalized = normalizeEmail(email);
-  if (!normalized) return false;
-  return SEEDED_ADMINISTRATOR_EMAILS.has(normalized);
-}
-
 export function isSeedOwnerEmail(email: string | null | undefined): boolean {
   const normalized = normalizeEmail(email);
   if (!normalized) return false;
   return SEEDED_OWNER_EMAILS.has(normalized);
 }
 
+/** Legacy Firestore / JWT fallback may still contain `administrator`; treat as owner. */
+export function migrateLegacyRoleToken(role: unknown): AppUserRole | null {
+  if (role === 'owner' || role === 'administrator') return 'owner';
+  if (role === 'user') return 'user';
+  return null;
+}
+
 function normalizeRoles(input: unknown, fallback: AppUserRole): AppUserRole[] {
   if (!Array.isArray(input)) return [fallback];
-  const roles = input.filter(
-    (value): value is AppUserRole => value === 'user' || value === 'administrator' || value === 'owner'
-  );
+  const roles = input
+    .map((value) => migrateLegacyRoleToken(value))
+    .filter((value): value is AppUserRole => value === 'user' || value === 'owner');
   return roles.length > 0 ? roles : [fallback];
 }
 
@@ -65,28 +56,16 @@ function resolvePrimaryRole(data: Record<string, unknown> | undefined, email: st
   if (email && SEEDED_OWNER_EMAILS.has(email)) {
     return 'owner';
   }
-  const storedRole = data?.role;
-  if (storedRole === 'owner' || storedRole === 'administrator' || storedRole === 'user') {
-    return storedRole;
-  }
-  if (email && SEEDED_ADMINISTRATOR_EMAILS.has(email)) {
-    return 'administrator';
-  }
+  const migrated = migrateLegacyRoleToken(data?.role);
+  if (migrated) return migrated;
   return 'user';
 }
 
 export function hasOwnerRole(user: { role?: string | null; roles?: string[] | null } | null | undefined): boolean {
   if (!user) return false;
-  if (user.role === 'owner') return true;
-  return Array.isArray(user.roles) && user.roles.includes('owner');
-}
-
-export function hasAdministratorRole(user: { role?: string | null; roles?: string[] | null } | null | undefined): boolean {
-  if (!user) return false;
-  if (user.role === 'administrator' || user.role === 'owner') return true;
+  if (migrateLegacyRoleToken(user.role) === 'owner') return true;
   return (
-    Array.isArray(user.roles) &&
-    (user.roles.includes('administrator') || user.roles.includes('owner'))
+    Array.isArray(user.roles) && user.roles.some((r) => migrateLegacyRoleToken(r) === 'owner')
   );
 }
 
@@ -104,15 +83,10 @@ export async function syncAuthenticatedUserRole(
     new Set<AppUserRole>([
       ...existingRoles,
       primaryRole,
-      ...(email && SEEDED_OWNER_EMAILS.has(email) ? (['owner'] as AppUserRole[]) : []),
-      ...(email && SEEDED_ADMINISTRATOR_EMAILS.has(email) ? (['administrator'] as AppUserRole[]) : [])
+      ...(email && SEEDED_OWNER_EMAILS.has(email) ? (['owner'] as AppUserRole[]) : [])
     ])
   );
-  const role: AppUserRole = roles.includes('owner')
-    ? 'owner'
-    : roles.includes('administrator')
-      ? 'administrator'
-      : primaryRole;
+  const role: AppUserRole = roles.includes('owner') ? 'owner' : 'user';
 
   await ref.set(
     {
@@ -135,10 +109,38 @@ export async function syncAuthenticatedUserRole(
   return { role, roles };
 }
 
-export async function assignAdministratorRoleByEmail(email: string): Promise<{ uid: string | null; role: AppUserRole; roles: AppUserRole[] }> {
+/** True if this Firestore user document represents an owner (includes legacy `administrator`). */
+export function isOwnerUserDoc(data: Record<string, unknown> | undefined): boolean {
+  if (!data) return false;
+  if (migrateLegacyRoleToken(data.role) === 'owner') return true;
+  const arr = data.roles;
+  if (!Array.isArray(arr)) return false;
+  return arr.some((r) => migrateLegacyRoleToken(r) === 'owner');
+}
+
+/** True when changing this target to `user` would remove the last owner account. */
+export function isLastOwnerDemotion(params: {
+  newRole: AppUserRole;
+  targetWasOwner: boolean;
+  ownerCount: number;
+}): boolean {
+  if (params.newRole !== 'user' || !params.targetWasOwner) return false;
+  return params.ownerCount <= 1;
+}
+
+export async function countOwnerUsersInFirestore(): Promise<number> {
+  const snap = await adminDb.collection('users').get();
+  let n = 0;
+  for (const doc of snap.docs) {
+    if (isOwnerUserDoc(doc.data() as Record<string, unknown>)) n += 1;
+  }
+  return n;
+}
+
+export async function assignOwnerRoleByEmail(email: string): Promise<{ uid: string | null; role: AppUserRole; roles: AppUserRole[] }> {
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail) {
-    throw new Error('A valid email is required to assign administrator role.');
+    throw new Error('A valid email is required to assign owner role.');
   }
 
   const snapshot = await adminDb
@@ -148,24 +150,21 @@ export async function assignAdministratorRoleByEmail(email: string): Promise<{ u
     .get();
 
   if (snapshot.empty) {
-    return { uid: null, role: 'administrator', roles: ['administrator'] };
+    return { uid: null, role: 'owner', roles: ['owner'] };
   }
 
   const doc = snapshot.docs[0];
   const data = doc.data() as Record<string, unknown>;
-  const roles = Array.from(new Set<AppUserRole>([
-    ...normalizeRoles(data.roles, 'administrator'),
-    'administrator'
-  ]));
+  const roles = Array.from(new Set<AppUserRole>([...normalizeRoles(data.roles, 'owner'), 'owner']));
 
   await doc.ref.set(
     {
-      role: 'administrator',
+      role: 'owner',
       roles,
       updated_at: Timestamp.now()
     },
     { merge: true }
   );
 
-  return { uid: doc.id, role: 'administrator', roles };
+  return { uid: doc.id, role: 'owner', roles };
 }

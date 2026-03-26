@@ -33,7 +33,7 @@ describe('/api/admin/review', () => {
 
 		const { GET } = await import('./+server');
 		const response = await GET({
-			locals: { user: { uid: 'admin-1', email: 'admin@example.com', role: 'administrator' } },
+			locals: { user: { uid: 'admin-1', email: 'admin@example.com', role: 'owner' } },
 			url: new URL('http://localhost/api/admin/review?limit=12')
 		} as any);
 

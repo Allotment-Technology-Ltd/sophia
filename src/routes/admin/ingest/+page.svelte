@@ -1255,11 +1255,30 @@
       const body = await authorizedJson('/api/admin/ingestion-routing/model-catalog');
       catalogEntries = Array.isArray(body.entries) ? (body.entries as CatalogEntry[]) : [];
       const sync = body.catalogSync as { status?: string; reason?: string } | undefined;
+      const gate = body.operatorByokGate as
+        | {
+            applied?: boolean;
+            reason?: string;
+            activeProviders?: string[];
+            entryCountBefore?: number;
+            entryCountAfter?: number;
+          }
+        | undefined;
+
       if (sync?.status === 'unavailable') {
         catalogError =
           'Restormel model list is currently unavailable. Check your project model index and provider configuration, then refresh.';
+      } else if (gate?.applied && (gate.entryCountAfter ?? catalogEntries.length) === 0) {
+        catalogError =
+          'No models match providers with Active Operator BYOK. Activate keys under Admin → Operator BYOK, then refresh.';
       } else if (catalogEntries.length > 0) {
-        catalogNotice = `${catalogEntries.length} models in picker list (Restormel project index merged with catalog).`;
+        if (gate?.applied && Array.isArray(gate.activeProviders)) {
+          catalogNotice = `${catalogEntries.length} models (Active Operator BYOK only: ${gate.activeProviders.join(', ')}).`;
+        } else if (gate?.applied === false && gate?.reason === 'no_owner_uids') {
+          catalogNotice = `${catalogEntries.length} models in picker list. Set OWNER_UIDS to restrict pickers to Active Operator BYOK providers.`;
+        } else {
+          catalogNotice = `${catalogEntries.length} models in picker list (Restormel project index merged with catalog).`;
+        }
       }
       applyDefaultStageSelections();
       for (const row of RESTORMEL_STAGES) ensureStageProviderSelection(row);

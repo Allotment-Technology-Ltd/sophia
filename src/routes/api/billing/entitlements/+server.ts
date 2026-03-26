@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
+import { hasOwnerRole } from '$lib/server/authRoles';
 import { getEntitlementSummary } from '$lib/server/billing/entitlements';
 import { ensureBillingState } from '$lib/server/billing/store';
 import { getCheckoutPresentation } from '$lib/server/billing/checkout-settings';
@@ -12,15 +13,18 @@ export const GET: RequestHandler = async ({ locals }) => {
     return json({ error: 'Authentication required' }, { status: 401 });
   }
 
+  const ownerDisplay = hasOwnerRole(locals.user);
+
   const [summary, state, learnSummary] = await Promise.all([
-    getEntitlementSummary(uid),
+    getEntitlementSummary(uid, { ownerDisplay }),
     ensureBillingState(uid),
-    getLearnEntitlementSummary(uid)
+    getLearnEntitlementSummary(uid, { ownerBypass: ownerDisplay })
   ]);
 
   return json({
     profile: state.profile,
-    effective_tier: state.effectiveTier,
+    effective_tier: ownerDisplay ? 'premium' : state.effectiveTier,
+    is_owner: ownerDisplay,
     founder_offer: founderOfferSummaryFromProfile(state.profile),
     entitlements: summary,
     learn_entitlements: learnSummary,

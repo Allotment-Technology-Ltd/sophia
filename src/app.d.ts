@@ -6,8 +6,8 @@ declare global {
         email: string | null;
         displayName: string | null;
         photoURL: string | null;
-        role: 'user' | 'administrator' | 'owner';
-        roles: Array<'user' | 'administrator' | 'owner'>;
+        role: 'user' | 'owner';
+        roles: Array<'user' | 'owner'>;
       } | null;
       rateLimitRemaining?: number;
     }

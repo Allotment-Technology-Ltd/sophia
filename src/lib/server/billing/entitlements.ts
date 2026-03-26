@@ -50,8 +50,19 @@ function evaluateIngestionConsume(
   return { allowed: true };
 }
 
-export async function getEntitlementSummary(uid: string): Promise<EntitlementSummary> {
+export async function getEntitlementSummary(
+  uid: string,
+  options?: { ownerDisplay?: boolean }
+): Promise<EntitlementSummary> {
   const snapshot = await ensureBillingState(uid);
+  if (options?.ownerDisplay) {
+    return summarizeEntitlements(
+      'premium',
+      'active',
+      snapshot.profile.currency,
+      snapshot.entitlements
+    );
+  }
   return summarizeEntitlements(
     snapshot.effectiveTier,
     snapshot.profile.status,

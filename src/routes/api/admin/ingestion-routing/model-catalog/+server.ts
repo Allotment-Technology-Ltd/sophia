@@ -17,6 +17,7 @@ import {
 	parseCatalogFreshnessFromPayload
 } from '$lib/server/restormelCatalogRows';
 import { restormelFetchCatalogPayloadUncached, restormelListProjectModels } from '$lib/server/restormel';
+import { filterCatalogEntriesByOperatorByokActive } from '$lib/server/byok/filterCatalogEntriesByOperatorByok';
 import { defaultProviders, estimateCost } from '@restormel/keys';
 
 type FallbackPricedEntry = {
@@ -100,6 +101,8 @@ export const GET: RequestHandler = async ({ locals }) => {
 				inferIngestionEntryFromProviderModel(b.providerType, b.modelId)
 			);
 			const compactEntries = compactFromEntries(inferred);
+			const { entries: gatedEntries, gate: operatorByokGate } =
+				await filterCatalogEntriesByOperatorByokActive(compactEntries);
 			const surfaceSync: CatalogSyncMeta = {
 				status: 'restormel',
 				remoteRowCount: bindings.length,
@@ -108,7 +111,8 @@ export const GET: RequestHandler = async ({ locals }) => {
 				staticSupplementCount: 0
 			};
 			return json({
-				entries: compactEntries,
+				entries: gatedEntries,
+				operatorByokGate,
 				catalogSync: surfaceSync,
 				supplementation: { staticEmbeddingCount: 0 },
 				catalogSource: 'catalog_surfaces' as const,
@@ -135,6 +139,8 @@ export const GET: RequestHandler = async ({ locals }) => {
 
 	const { entries, sync } = buildRestormelProjectModelEntriesOnly(remote, fetchError);
 	const compactEntries = compactFromEntries(entries);
+	const { entries: gatedEntries, gate: operatorByokGate } =
+		await filterCatalogEntriesByOperatorByokActive(compactEntries);
 
 	if (sync.status === 'unavailable') {
 		console.warn('[ingestion-model-catalog] unavailable', {
@@ -144,7 +150,8 @@ export const GET: RequestHandler = async ({ locals }) => {
 	}
 
 	return json({
-		entries: compactEntries,
+		entries: gatedEntries,
+		operatorByokGate,
 		catalogSync: sync,
 		supplementation: {
 			staticEmbeddingCount: 0
