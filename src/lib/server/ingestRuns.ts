@@ -3,6 +3,7 @@
  * Manages background processes and state updates via polling.
  */
 
+import { REASONING_PROVIDER_ORDER } from '@restormel/contracts/providers';
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'child_process';
 import { randomBytes } from 'crypto';
 import { EventEmitter } from 'events';
@@ -88,6 +89,38 @@ function batchOverridesToEnv(
     out.INGEST_PROVIDER = ingestProvider;
   }
 
+  return out;
+}
+
+function normalizePinProvider(slug: string): string | null {
+  const s = slug.toLowerCase().trim();
+  if (s === 'google') return 'vertex';
+  const allowed = REASONING_PROVIDER_ORDER as readonly string[];
+  if (allowed.includes(s)) return s;
+  return null;
+}
+
+/**
+ * Maps Expand UI model labels (`provider · modelId`) into worker env vars consumed by
+ * `planIngestionStage` so `scripts/ingest.ts` honors operator picks instead of only Restormel auto-routing.
+ */
+export function modelChainLabelsToEnv(chain: IngestRunPayload['model_chain']): Record<string, string> {
+  const out: Record<string, string> = {};
+  const apply = (label: string, suffix: string) => {
+    const parts = label.split('·').map((p) => p.trim());
+    if (parts.length < 2) return;
+    const providerRaw = parts[0] ?? '';
+    const modelId = parts.slice(1).join('·').trim();
+    if (!modelId) return;
+    const provider = normalizePinProvider(providerRaw);
+    if (!provider) return;
+    out[`INGEST_PIN_PROVIDER_${suffix}`] = provider;
+    out[`INGEST_PIN_MODEL_${suffix}`] = modelId;
+  };
+  apply(chain.extract, 'EXTRACTION');
+  apply(chain.relate, 'RELATIONS');
+  apply(chain.group, 'GROUPING');
+  apply(chain.validate, 'VALIDATION');
   return out;
 }
 
@@ -621,7 +654,10 @@ class IngestRunManager extends EventEmitter {
     sourceFile: string,
     options: { forSyncOnly: boolean; resumeFromFailure?: boolean }
   ): void {
-    const batchEnvOverrides = batchOverridesToEnv(payload.batch_overrides);
+    const batchEnvOverrides = {
+      ...batchOverridesToEnv(payload.batch_overrides),
+      ...modelChainLabelsToEnv(payload.model_chain)
+    };
     const forSync = options.forSyncOnly;
     const stopBeforeStore = forSync ? false : payload.stop_before_store !== false;
 

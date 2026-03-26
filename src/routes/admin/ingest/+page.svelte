@@ -312,6 +312,25 @@
   let cancelling = $state(false);
   /** Shown after a monitored run disappears server-side (e.g. restart) so the operator can continue. */
   let monitorRunNotice = $state('');
+  /** Firestore `ingestion_run_reports` snapshot loaded via `?reportRunId=` (read-only; no in-memory run). */
+  type FirestoreReportDetail = {
+    runId: string;
+    status: string | null;
+    sourceUrl: string;
+    sourceType: string;
+    modelChain: Record<string, string> | null;
+    pipelinePreset: string | null;
+    embeddingModel: string | null;
+    validate: boolean;
+    issueCount: number;
+    issueSummary: Record<string, number>;
+    terminalError: string | null;
+    lastFailureStageKey: string | null;
+    completedAtMs: number | null;
+    createdAtMs: number | null;
+  };
+  let firestoreReportDetail = $state<FirestoreReportDetail | null>(null);
+  let firestoreReportLoadError = $state('');
   /** Server-reported error line after a run ends in error/cancel; Source step shows next steps. */
   let sourceRunEndedDetail = $state<string | null>(null);
   let syncing = $state(false);
@@ -2415,6 +2434,15 @@
     window.history.replaceState({}, '', query ? `/admin/ingest?${query}` : '/admin/ingest');
   }
 
+  function dismissFirestoreReportPanel(): void {
+    firestoreReportDetail = null;
+    firestoreReportLoadError = '';
+    const params = new URLSearchParams(window.location.search);
+    params.delete('reportRunId');
+    const query = params.toString();
+    window.history.replaceState({}, '', query ? `/admin/ingest?${query}` : '/admin/ingest');
+  }
+
   /** After a failed or cancelled run: free Source for a new URL, clear pre-scan lock, return to setup. */
   function unlockSourceAfterFailedRun(errorMessage: string): void {
     clearPolling();
@@ -2717,6 +2745,26 @@
     })();
 
     const params = new URLSearchParams(window.location.search);
+    const reportRunId = params.get('reportRunId')?.trim();
+    if (reportRunId) {
+      void (async () => {
+        try {
+          const res = await fetch(`/api/admin/ingest/reports/${encodeURIComponent(reportRunId)}`, {
+            headers: await authHeaders()
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            firestoreReportLoadError =
+              typeof body?.error === 'string' ? body.error : `Failed to load report (${res.status})`;
+            return;
+          }
+          firestoreReportDetail = body as FirestoreReportDetail;
+        } catch {
+          firestoreReportLoadError = 'Failed to load report';
+        }
+      })();
+    }
+
     const existingRunId = params.get('runId')?.trim();
     if (existingRunId) {
       runId = existingRunId;
@@ -2775,6 +2823,87 @@
     </div>
   {/if}
 
+  {#if firestoreReportLoadError}
+    <div
+      class="mt-6 flex flex-col gap-4 rounded border border-sophia-dark-border bg-sophia-dark-bg/45 px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
+      role="alert"
+    >
+      <p class="font-mono text-sm text-sophia-dark-copper">{firestoreReportLoadError}</p>
+      <button
+        type="button"
+        class="shrink-0 rounded border border-sophia-dark-border/80 bg-sophia-dark-bg px-4 py-2.5 font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-muted hover:border-sophia-dark-border hover:bg-sophia-dark-surface-raised hover:text-sophia-dark-text"
+        onclick={() => dismissFirestoreReportPanel()}>Dismiss</button
+      >
+    </div>
+  {/if}
+
+  {#if firestoreReportDetail}
+    <div
+      class="mt-6 rounded border border-sophia-dark-border bg-sophia-dark-bg/45 px-4 py-4"
+      role="region"
+      aria-label="Saved ingestion report"
+    >
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-dim">Saved report (Firestore)</p>
+          <p class="mt-1 font-mono text-sm text-sophia-dark-text">
+            Run <span class="text-sophia-dark-sage">{firestoreReportDetail.runId}</span>
+            <span class="text-sophia-dark-muted"> — </span>
+            {firestoreReportDetail.status ?? 'unknown'}
+          </p>
+          <p class="mt-2 max-w-3xl text-sm text-sophia-dark-muted">
+            This is a read-only snapshot. Live log polling only works for runs still held in memory on the server (see
+            <a href="/admin/ingest/runs" class="text-sophia-dark-text underline underline-offset-2">All runs</a>). To
+            continue the pipeline, use the same source URL below so checkpoints can resume.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="rounded border border-sophia-dark-border/80 bg-sophia-dark-bg px-4 py-2.5 font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-muted hover:border-sophia-dark-border hover:bg-sophia-dark-surface-raised hover:text-sophia-dark-text"
+          onclick={() => dismissFirestoreReportPanel()}>Close</button
+        >
+      </div>
+      <dl class="mt-4 grid gap-2 font-mono text-xs text-sophia-dark-muted sm:grid-cols-2">
+        <div>
+          <dt class="text-sophia-dark-dim">Source</dt>
+          <dd class="mt-0.5 break-all text-sophia-dark-text">{firestoreReportDetail.sourceUrl}</dd>
+        </div>
+        <div>
+          <dt class="text-sophia-dark-dim">Type</dt>
+          <dd class="mt-0.5 text-sophia-dark-text">{firestoreReportDetail.sourceType}</dd>
+        </div>
+        <div>
+          <dt class="text-sophia-dark-dim">Preset / validation</dt>
+          <dd class="mt-0.5 text-sophia-dark-text">
+            {firestoreReportDetail.pipelinePreset ?? '—'} · validate {firestoreReportDetail.validate ? 'on' : 'off'}
+          </dd>
+        </div>
+        <div>
+          <dt class="text-sophia-dark-dim">Embedding</dt>
+          <dd class="mt-0.5 break-all text-sophia-dark-text">{firestoreReportDetail.embeddingModel ?? '—'}</dd>
+        </div>
+      </dl>
+      {#if firestoreReportDetail.modelChain && typeof firestoreReportDetail.modelChain === 'object'}
+        <div class="mt-4">
+          <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Model chain (UI selection)</p>
+          <ul class="mt-2 space-y-1 font-mono text-xs text-sophia-dark-text">
+            {#each Object.entries(firestoreReportDetail.modelChain) as [k, v] (k)}
+              <li><span class="text-sophia-dark-dim">{k}:</span> {v}</li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+      {#if firestoreReportDetail.terminalError}
+        <p class="mt-4 font-mono text-xs text-sophia-dark-copper">{firestoreReportDetail.terminalError}</p>
+      {/if}
+      {#if firestoreReportDetail.issueCount > 0}
+        <p class="mt-2 font-mono text-xs text-sophia-dark-muted">
+          Issues logged: {firestoreReportDetail.issueCount}
+        </p>
+      {/if}
+    </div>
+  {/if}
+
   <section class="wizard-layout">
     <div class="expand-card">
       <div class="expand-card-inner expand-wizard">
@@ -2808,11 +2937,11 @@
                       You can enter a new URL and source type, then run pre-scan to start a completely new ingestion. Cost review will ask for acknowledgement again after pre-scan.
                     </p>
                     <p class="max-w-2xl text-sm leading-relaxed text-sophia-dark-muted">
-                      To reconnect to the same run (for example to monitor logs or run SurrealDB sync), open
-                      <a href="/admin/ingest/runs" class="text-sophia-dark-text underline decoration-sophia-dark-border underline-offset-2 hover:decoration-sophia-dark-text"
-                        >All runs</a
-                      >
-                      and select it if it still appears. Runs are kept in memory on this server only until it restarts—then the list is empty.
+                      To reopen a finished or orphaned run after a deploy, open
+                      <a href="/admin/ingest/runs" class="text-sophia-dark-text underline decoration-sophia-dark-border underline-offset-2 hover:decoration-sophia-dark-text">All runs</a>
+                      and use <strong class="text-sophia-dark-text">View report</strong> for the Firestore snapshot, or
+                      <strong class="text-sophia-dark-text">Open live</strong> only if this instance still holds the run in
+                      memory.
                     </p>
                   </div>
                   <button

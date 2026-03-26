@@ -136,6 +136,24 @@ function latencyToDepth(latency: AAIFLatency): 'quick' | 'standard' | 'deep' {
   return 'standard';
 }
 
+const PIN_ENV_SUFFIX: Record<Exclude<IngestionStage, 'embedding'>, string> = {
+  extraction: 'EXTRACTION',
+  relations: 'RELATIONS',
+  grouping: 'GROUPING',
+  validation: 'VALIDATION',
+  json_repair: 'JSON_REPAIR'
+};
+
+/** Admin-spawned workers set `INGEST_PIN_PROVIDER_*` + `INGEST_PIN_MODEL_*` (see `modelChainLabelsToEnv`). */
+function readPinnedModel(stage: IngestionStage): { provider?: ModelProvider; modelId?: string } {
+  if (stage === 'embedding') return {};
+  const suffix = PIN_ENV_SUFFIX[stage];
+  const modelId = process.env[`INGEST_PIN_MODEL_${suffix}`]?.trim();
+  const provider = process.env[`INGEST_PIN_PROVIDER_${suffix}`]?.trim().toLowerCase() as ModelProvider | undefined;
+  if (!modelId || !provider) return {};
+  return { provider, modelId };
+}
+
 /**
  * Optional env pins: when set, POST /resolve includes routeId (only that route is considered).
  * When unset, resolve omits routeId; Restormel picks a published route by workload + stage
@@ -350,11 +368,14 @@ export async function planIngestionStage(
 
   const routeIdForResolve = stageRouteBindingFromEnv(stage).routeId?.trim() || undefined;
 
-  const requestedProvider = (context.preferredProvider ?? 'auto') as ModelProvider;
+  const pin = readPinnedModel(stage);
+  const requestedProvider = (pin.provider ?? context.preferredProvider ?? 'auto') as ModelProvider;
+  const requestedModelId = pin.modelId;
   const route =
     stage === 'extraction'
       ? await resolveExtractionModelRoute({
           requestedProvider,
+          requestedModelId,
           routeId: routeIdForResolve,
           failureMode: 'degraded_default',
           restormelContext: buildStageRestormelContext({
@@ -372,6 +393,7 @@ export async function planIngestionStage(
           depthMode: latencyToDepth(stageLatency(stage, context)),
           routeId: routeIdForResolve,
           requestedProvider,
+          requestedModelId,
           failureMode: 'degraded_default',
           restormelContext: buildStageRestormelContext({
             stage,
