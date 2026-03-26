@@ -45,7 +45,7 @@ It exists to prove the platform in a real product: graph-grounded reasoning, ver
 | Domain Expansion | 2026-03-13 | [Domain Expansion](domain-expansion.md) |
 | Unified GCP exit and Neon migration review | 2026-03-26 | [Unified GCP exit and Neon migration review](gcp-exit-unified-migration-review.md) |
 | Product Role | 2026-03-13 | [Product Role](product-role.md) |
-| Roadmap | 2026-03-13 | [Roadmap](roadmap.md) |
+| Roadmap | 2026-03-26 | [Roadmap](roadmap.md) |
 <!-- GENERATED:active-sophia-docs:end -->
 
 ## Current focus
