@@ -1,0 +1,50 @@
+name: Restormel dogfood — close source issue with completion comment
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Sophia issue number (the restormel-feedback / relay source issue)
+        required: true
+        type: number
+      completion_body:
+        description: Markdown completion comment (no secrets)
+        required: true
+        type: string
+
+jobs:
+  comment-and-close:
+    if: github.repository == 'Allotment-Technology-Ltd/sophia'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const issue_number = ${{ inputs.issue_number }};
+            const body = ${{ toJSON(inputs.completion_body) }};
+            const { owner, repo } = context.repo;
+            const { data: issue } = await github.rest.issues.get({
+              owner,
+              repo,
+              issue_number,
+            });
+            if (issue.state === 'closed') {
+              core.setFailed(`Issue #${issue_number} is already closed.`);
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body,
+            });
+            await github.rest.issues.update({
+              owner,
+              repo,
+              issue_number,
+              state: 'closed',
+              state_reason: 'completed',
+            });
+            core.info(`Commented and closed #${issue_number}.`);
