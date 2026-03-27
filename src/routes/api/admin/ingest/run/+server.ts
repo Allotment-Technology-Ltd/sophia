@@ -31,7 +31,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   };
 
   try {
-    const runId = ingestRunManager.createRun(normalized, actor.email || 'unknown');
+    const runId = await ingestRunManager.createRun(normalized, actor.email || 'unknown');
     const execution = getIngestExecutionInfo();
     return json(
       { run_id: runId, status: 'running', execution },
