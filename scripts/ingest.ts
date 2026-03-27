@@ -31,6 +31,10 @@ import {
 	loadIngestPartialFromNeon,
 	saveIngestPartialToNeon
 } from '../src/lib/server/db/ingestStaging.js';
+import {
+	capIngestBatchTargetForPlan,
+	isContextLengthExceededError
+} from '../src/lib/server/ingestion/modelBatchCaps.js';
 import { startSpinner } from './progress.js';
 
 // ─── Prompt imports (relative paths for standalone script) ─────────────────
@@ -1688,6 +1692,122 @@ Respond ONLY with the corrected JSON array. No explanation, no markdown backtick
 	});
 }
 
+const MAX_VALIDATION_CONTEXT_SPLIT_DEPTH = 8;
+
+type ValidationBatchExecContext = {
+	validationPlan: IngestionStagePlan;
+	validationBudget: StageBudget;
+	validationTracker: StageUsageTracker;
+	jsonRepairPlan: IngestionStagePlan;
+	jsonRepairBudget: StageBudget;
+	repairTracker: StageUsageTracker;
+	relations: PhaseOneRelation[];
+	arguments_: GroupingOutput;
+	sourceText: string;
+	sourceTitle: string;
+};
+
+async function executeValidationBatchModelCall(
+	batch: ValidationBatch,
+	ctx: ValidationBatchExecContext
+): Promise<string> {
+	const claimsJson = JSON.stringify(batch.claims, null, 2);
+	const relationsJson = JSON.stringify(batch.relations, null, 2);
+	const argumentsJson = JSON.stringify(batch.arguments, null, 2);
+	const validationPrompt =
+		VALIDATION_SYSTEM +
+		'\n\n' +
+		VALIDATION_USER({
+			sourceTitle: ctx.sourceTitle,
+			sourceText: batch.sourceText,
+			claimsJson,
+			relationsJson,
+			argumentsJson
+		});
+	return callStageModel({
+		stage: 'validation',
+		plan: ctx.validationPlan,
+		budget: ctx.validationBudget,
+		tracker: ctx.validationTracker,
+		systemPrompt: 'You are a strict validation assistant. Return JSON only.',
+		userMessage: validationPrompt
+	});
+}
+
+async function parseValidationResponseWithRepair(
+	responseText: string,
+	batchLabel: string,
+	ctx: ValidationBatchExecContext
+): Promise<ValidationOutput> {
+	try {
+		const parsed = parseJsonResponse(responseText);
+		return normalizeValidationOutput(parsed);
+	} catch (parseError) {
+		console.warn(`  [WARN] JSON parse/validation failed for ${batchLabel}. Attempting fix...`);
+		const fixedResponse = await fixJsonWithModel(
+			ctx.jsonRepairPlan,
+			ctx.jsonRepairBudget,
+			ctx.repairTracker,
+			responseText,
+			parseError instanceof Error ? parseError.message : String(parseError),
+			'Object with { claims?, relations?, arguments?, quarantine_items?, summary }'
+		);
+		const fixedParsed = parseJsonResponse(fixedResponse);
+		return normalizeValidationOutput(fixedParsed);
+	}
+}
+
+async function runValidationBatchWithContextSplitting(
+	batch: ValidationBatch,
+	ctx: ValidationBatchExecContext,
+	depth: number,
+	batchLabel: string
+): Promise<ValidationOutput | null> {
+	try {
+		const responseText = await executeValidationBatchModelCall(batch, ctx);
+		const validated = await parseValidationResponseWithRepair(responseText, batchLabel, ctx);
+		console.log(
+			`  [OK] ${batchLabel} complete (${validated.claims?.length || 0} claim checks)`
+		);
+		return validated;
+	} catch (err) {
+		const e = err instanceof Error ? err : new Error(String(err));
+		const canSplit =
+			isContextLengthExceededError(e) &&
+			batch.claims.length > 1 &&
+			depth < MAX_VALIDATION_CONTEXT_SPLIT_DEPTH;
+		if (!canSplit) {
+			console.warn(`  [WARN] ${batchLabel} failed after model fallbacks. Continuing.`);
+			console.warn(`  Error: ${e.message}`);
+			return null;
+		}
+		console.warn(
+			`  [WARN] Validation context window exceeded — splitting ${batch.claims.length} claim(s) (${batchLabel}, split depth ${depth + 1}/${MAX_VALIDATION_CONTEXT_SPLIT_DEPTH})`
+		);
+		const mid = Math.ceil(batch.claims.length / 2);
+		const b1 = buildValidationBatch(
+			batch.claims.slice(0, mid),
+			ctx.relations,
+			ctx.arguments_,
+			ctx.sourceText,
+			ctx.sourceTitle
+		);
+		const b2 = buildValidationBatch(
+			batch.claims.slice(mid),
+			ctx.relations,
+			ctx.arguments_,
+			ctx.sourceText,
+			ctx.sourceTitle
+		);
+		const left = await runValidationBatchWithContextSplitting(b1, ctx, depth + 1, `${batchLabel} (left)`);
+		const right = await runValidationBatchWithContextSplitting(b2, ctx, depth + 1, `${batchLabel} (right)`);
+		if (!left && !right) return null;
+		if (!left) return right;
+		if (!right) return left;
+		return mergeValidationOutputs([left, right]);
+	}
+}
+
 // ─── Source Metadata ───────────────────────────────────────────────────────
 interface SourceMeta {
 	title: string;
@@ -2581,14 +2701,30 @@ async function main() {
 			console.log('│ STAGE 2: RELATION EXTRACTION                            │');
 			console.log('└──────────────────────────────────────────────────────────┘');
 
+			let relationsBatchTarget = RELATIONS_BATCH_TARGET_TOKENS;
+			if (RELATIONS_BATCH_TARGET_TOKENS > 0) {
+				const relationsCap = capIngestBatchTargetForPlan({
+					stage: 'relations',
+					requested: RELATIONS_BATCH_TARGET_TOKENS,
+					provider: relationPlan.provider,
+					model: relationPlan.model
+				});
+				relationsBatchTarget = relationsCap.value;
+				if (relationsCap.capped) {
+					console.log(
+						`  [INFO] Relations batch target capped for ${relationPlan.provider}/${relationPlan.model}: ${relationsCap.requested.toLocaleString()} → ${relationsCap.value.toLocaleString()} (model ceiling ${relationsCap.modelCeiling.toLocaleString()})`
+					);
+				}
+			}
+
 			const relationsBatches = buildRelationsBatches(
 				allClaims,
-				RELATIONS_BATCH_TARGET_TOKENS,
+				relationsBatchTarget,
 				RELATIONS_BATCH_OVERLAP_CLAIMS
 			);
 
 			console.log(
-				`  [INFO] Relations in ${relationsBatches.length} batch(es), target ~${RELATIONS_BATCH_TARGET_TOKENS.toLocaleString()} tokens (overlap ${RELATIONS_BATCH_OVERLAP_CLAIMS} claim(s))`
+				`  [INFO] Relations in ${relationsBatches.length} batch(es), target ~${relationsBatchTarget.toLocaleString()} tokens (overlap ${RELATIONS_BATCH_OVERLAP_CLAIMS} claim(s))`
 			);
 
 			let startBatchIndex = 0;
@@ -2723,13 +2859,22 @@ async function main() {
 			console.log('│ STAGE 3: ARGUMENT GROUPING                              │');
 			console.log('└──────────────────────────────────────────────────────────┘');
 
-				const groupingBatches = buildGroupingBatches(
-					allClaims,
-					relations,
-					GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS
-				);
+				const groupingCap = capIngestBatchTargetForPlan({
+					stage: 'grouping',
+					requested: GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS,
+					provider: groupingPlan.provider,
+					model: groupingPlan.model
+				});
+				const groupingBatchTarget = groupingCap.value;
+				if (groupingCap.capped) {
+					console.log(
+						`  [INFO] Grouping batch target capped for ${groupingPlan.provider}/${groupingPlan.model}: ${groupingCap.requested.toLocaleString()} → ${groupingCap.value.toLocaleString()} (model ceiling ${groupingCap.modelCeiling.toLocaleString()})`
+					);
+				}
+
+				const groupingBatches = buildGroupingBatches(allClaims, relations, groupingBatchTarget);
 				console.log(
-					`  [INFO] Grouping in ${groupingBatches.length} batch(es), target ~${GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS.toLocaleString()} tokens`
+					`  [INFO] Grouping in ${groupingBatches.length} batch(es), target ~${groupingBatchTarget.toLocaleString()} tokens`
 				);
 				let groupedOutputs: GroupingOutput[] = [];
 				let startGroupingBatchIndex = 0;
@@ -2976,16 +3121,29 @@ async function main() {
 				console.log('└──────────────────────────────────────────────────────────┘');
 				const validationTracker = startStageUsage('validation');
 
+				const validationCap = capIngestBatchTargetForPlan({
+					stage: 'validation',
+					requested: VALIDATION_BATCH_TARGET_TOKENS,
+					provider: validationPlan.provider,
+					model: validationPlan.model
+				});
+				const validationBatchTarget = validationCap.value;
+				if (validationCap.capped) {
+					console.log(
+						`  [INFO] Validation batch target capped for ${validationPlan.provider}/${validationPlan.model}: ${validationCap.requested.toLocaleString()} → ${validationCap.value.toLocaleString()} (model ceiling ${validationCap.modelCeiling.toLocaleString()})`
+					);
+				}
+
 				const validationBatches = buildValidationBatches(
 					allClaims,
 					relations,
 					arguments_,
 					sourceText,
 					sourceMeta.title,
-					VALIDATION_BATCH_TARGET_TOKENS
+					validationBatchTarget
 				);
 				console.log(
-					`  [INFO] Validation in ${validationBatches.length} batch(es), target ~${VALIDATION_BATCH_TARGET_TOKENS.toLocaleString()} tokens`
+					`  [INFO] Validation in ${validationBatches.length} batch(es), target ~${validationBatchTarget.toLocaleString()} tokens`
 				);
 				let batchOutputs: ValidationOutput[] = [];
 				let startValidationBatchIndex = 0;
@@ -3002,66 +3160,33 @@ async function main() {
 					);
 				}
 
+				const validationExecCtx: ValidationBatchExecContext = {
+					validationPlan,
+					validationBudget,
+					validationTracker,
+					jsonRepairPlan,
+					jsonRepairBudget,
+					repairTracker,
+					relations,
+					arguments_,
+					sourceText,
+					sourceTitle: sourceMeta.title
+				};
+
 				for (let batchIndex = startValidationBatchIndex; batchIndex < validationBatches.length; batchIndex++) {
 					const batch = validationBatches[batchIndex];
-					const claimsJson = JSON.stringify(batch.claims, null, 2);
-					const relationsJson = JSON.stringify(batch.relations, null, 2);
-					const argumentsJson = JSON.stringify(batch.arguments, null, 2);
 					console.log(
 						`  [BATCH ${batchIndex + 1}/${validationBatches.length}] ${batch.claims.length} claims, ${batch.relations.length} relations, ${batch.arguments.length} arguments (~${batch.estimatedPromptTokens.toLocaleString()} est tokens)`
 					);
-					const validationPrompt =
-						VALIDATION_SYSTEM +
-						'\n\n' +
-						VALIDATION_USER({
-							sourceTitle: sourceMeta.title,
-							sourceText: batch.sourceText,
-							claimsJson,
-							relationsJson,
-							argumentsJson
-						});
-
-					try {
-						const responseText = await callStageModel({
-							stage: 'validation',
-							plan: validationPlan,
-							budget: validationBudget,
-							tracker: validationTracker,
-							systemPrompt: 'You are a strict validation assistant. Return JSON only.',
-							userMessage: validationPrompt
-						});
-						try {
-							const parsed = parseJsonResponse(responseText);
-							const validated = normalizeValidationOutput(parsed);
-							batchOutputs.push(validated);
-							console.log(
-								`  [OK] Validation batch ${batchIndex + 1} complete (${validated.claims?.length || 0} claim checks)`
-							);
-						} catch (parseError) {
-							console.warn(
-								`  [WARN] JSON parse/validation failed for validation batch ${batchIndex + 1}. Attempting fix...`
-							);
-							const fixedResponse = await fixJsonWithModel(
-								jsonRepairPlan,
-								jsonRepairBudget,
-								repairTracker,
-								responseText,
-								parseError instanceof Error ? parseError.message : String(parseError),
-								'Object with { claims?, relations?, arguments?, quarantine_items?, summary }'
-							);
-							const fixedParsed = parseJsonResponse(fixedResponse);
-							const fixedValidated = normalizeValidationOutput(fixedParsed);
-							batchOutputs.push(fixedValidated);
-							console.log(
-								`  [OK] Repaired and validated batch ${batchIndex + 1} (${fixedValidated.claims?.length || 0} claim checks)`
-							);
-						}
-					} catch (batchError) {
-						const err = batchError instanceof Error ? batchError : new Error(String(batchError));
-						console.warn(
-							`  [WARN] Validation batch ${batchIndex + 1} failed after model fallbacks. Continuing.`
-						);
-						console.warn(`  Error: ${err.message}`);
+					const batchLabel = `Validation batch ${batchIndex + 1}`;
+					const merged = await runValidationBatchWithContextSplitting(
+						batch,
+						validationExecCtx,
+						0,
+						batchLabel
+					);
+					if (merged) {
+						batchOutputs.push(merged);
 					}
 					partial.validation_progress = {
 						batch_outputs_so_far: batchOutputs,
