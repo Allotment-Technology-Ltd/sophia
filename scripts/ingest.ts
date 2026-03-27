@@ -27,6 +27,10 @@ import {
 	type IngestProviderPreference
 } from '../src/lib/server/aaif/ingestion-plan.js';
 import { summarizeIngestPinsForLog } from '../src/lib/server/ingestRuns.js';
+import {
+	loadIngestPartialFromNeon,
+	saveIngestPartialToNeon
+} from '../src/lib/server/db/ingestStaging.js';
 import { startSpinner } from './progress.js';
 
 // ─── Prompt imports (relative paths for standalone script) ─────────────────
@@ -1747,7 +1751,28 @@ interface PartialResults {
 	};
 }
 
-function savePartialResults(slug: string, results: PartialResults) {
+async function savePartialResults(slug: string, results: PartialResults) {
+	const runId = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim();
+	if (runId && process.env.DATABASE_URL?.trim()) {
+		try {
+			const snapshot = parseFloat(estimateCostUsd());
+			const withSnapshot: PartialResults = {
+				...results,
+				cost_usd_snapshot: Number.isFinite(snapshot) && snapshot >= 0 ? snapshot : results.cost_usd_snapshot
+			};
+			await saveIngestPartialToNeon({
+				runId,
+				slug,
+				partial: withSnapshot as unknown as Record<string, unknown>
+			});
+			console.log(`  [SAVE] Partial results saved to Neon (orchestration run ${runId})`);
+			return;
+		} catch (e) {
+			console.warn(
+				`  [WARN] Neon staging save failed; falling back to disk: ${e instanceof Error ? e.message : String(e)}`
+			);
+		}
+	}
 	if (!fs.existsSync(INGESTED_DIR)) {
 		fs.mkdirSync(INGESTED_DIR, { recursive: true });
 	}
@@ -1775,7 +1800,18 @@ function saveGroupingDebugRaw(slug: string, batchIndex: number, rawResponse: str
 	console.log(`  [DEBUG] Saved grouping raw batch ${batchIndex + 1} to ${filePath}`);
 }
 
-function loadPartialResults(slug: string): PartialResults | null {
+async function loadPartialResults(slug: string): Promise<PartialResults | null> {
+	const runId = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim();
+	if (runId && process.env.DATABASE_URL?.trim()) {
+		try {
+			const fromNeon = await loadIngestPartialFromNeon(runId, slug);
+			if (fromNeon) {
+				return fromNeon as PartialResults;
+			}
+		} catch (e) {
+			console.warn(`  [WARN] Failed to load Neon partial results: ${e}`);
+		}
+	}
 	const partialPath = path.join(INGESTED_DIR, `${slug}-partial.json`);
 	if (!fs.existsSync(partialPath)) {
 		return null;
@@ -1831,7 +1867,8 @@ function buildSourceUrlCandidates(sourceUrl: string): string[] {
 	return [...candidates];
 }
 
-async function getIngestionLog(db: Surreal, sourceUrl: string): Promise<IngestionLogRecord | null> {
+async function getIngestionLog(db: Surreal | null, sourceUrl: string): Promise<IngestionLogRecord | null> {
+	if (!db) return null;
 	const identity = canonicalizeAndHashSourceUrl(sourceUrl);
 	const result = await db.query<IngestionLogRecord[][]>(
 		`SELECT * FROM ingestion_log
@@ -1847,7 +1884,8 @@ async function getIngestionLog(db: Surreal, sourceUrl: string): Promise<Ingestio
 	return rows.length > 0 ? rows[0] : null;
 }
 
-async function createIngestionLog(db: Surreal, sourceUrl: string, sourceTitle: string): Promise<void> {
+async function createIngestionLog(db: Surreal | null, sourceUrl: string, sourceTitle: string): Promise<void> {
+	if (!db) return;
 	const identity = canonicalizeAndHashSourceUrl(sourceUrl);
 	if (!identity) {
 		throw new Error(`[INTEGRITY] Cannot create ingestion log for invalid source URL: ${sourceUrl}`);
@@ -1871,11 +1909,11 @@ async function createIngestionLog(db: Surreal, sourceUrl: string, sourceTitle: s
 }
 
 async function updateIngestionLog(
-	db: Surreal,
+	db: Surreal | null,
 	sourceUrl: string,
 	updates: Record<string, unknown>
 ): Promise<void> {
-	if (Object.keys(updates).length === 0) return;
+	if (!db || Object.keys(updates).length === 0) return;
 
 	const identity = canonicalizeAndHashSourceUrl(sourceUrl);
 	if (!identity) {
@@ -1916,6 +1954,15 @@ async function ensureDbConnected(db: Surreal): Promise<void> {
 		} else {
 			throw new Error(`DB connection check failed: ${msg}`);
 		}
+	}
+}
+
+async function closeSurrealIfOpen(db: Surreal | null): Promise<void> {
+	if (!db) return;
+	try {
+		await db.close();
+	} catch {
+		// ignore double-close / connection errors
 	}
 }
 
@@ -2116,14 +2163,30 @@ async function main() {
 	});
 	const extractionBatches = buildPassageBatches(passages, sectionTokenLimit);
 
-	// ─── Connect to SurrealDB (used for ingestion log + Stage 6 storage) ───
-	const db = new Surreal();
-	try {
-		await reconnectDbWithRetry(db, 'initial startup');
-	} catch (error) {
-		console.error(`[ERROR] Failed to connect to SurrealDB: ${error instanceof Error ? error.message : String(error)}`);
-		console.error('The ingestion pipeline requires SurrealDB for progress tracking.');
-		process.exit(1);
+	// Admin orchestration + Neon: stages 1–5 use `--stop-before-store`; checkpoints live in Neon.
+	// Skip Surreal until Sync (Stage 6), so local runs do not need a live SurrealDB for pipeline tests.
+	const skipSurrealForOrchestratedPhases =
+		Boolean(
+			process.env.INGEST_ORCHESTRATION_RUN_ID?.trim() && process.env.DATABASE_URL?.trim()
+		) && stopBeforeStore;
+
+	// ─── Connect to SurrealDB (ingestion_log + Stage 6) ───
+	let db: Surreal | null = null;
+	if (!skipSurrealForOrchestratedPhases) {
+		db = new Surreal();
+		try {
+			await reconnectDbWithRetry(db, 'initial startup');
+		} catch (error) {
+			console.error(`[ERROR] Failed to connect to SurrealDB: ${error instanceof Error ? error.message : String(error)}`);
+			console.error(
+				'The pipeline needs SurrealDB for ingestion_log and Stage 6. For admin runs that stop before store, use DATABASE_URL + INGEST_ORCHESTRATION_RUN_ID (Neon checkpoints), or start Surreal (e.g. docker compose up -d surrealdb).'
+			);
+			process.exit(1);
+		}
+	} else {
+		console.log(
+			'  [INFO] Neon orchestration + --stop-before-store: skipping SurrealDB for stages 1–5 (checkpoints in Neon). Stage 6 still requires Surreal when you Sync.'
+		);
 	}
 
 	// ─── Check ingestion log for resume status ─────────────────────────────
@@ -2133,7 +2196,7 @@ async function main() {
 	if (existingLog) {
 		if (existingLog.status === 'complete' && !forceStage) {
 			console.log(`[SKIP] "${sourceMeta.title}" already ingested (status: complete)`);
-			await db.close();
+			await closeSurrealIfOpen(db);
 			process.exit(0);
 		}
 
@@ -2160,6 +2223,14 @@ async function main() {
 		await createIngestionLog(db, sourceMeta.url, sourceMeta.title);
 	}
 
+	if (!existingLog && skipSurrealForOrchestratedPhases) {
+		const early = await loadPartialResults(slug);
+		if (early?.stage_completed && early.stage_completed !== 'none') {
+			resumeFromStage = early.stage_completed;
+			console.log(`[RESUME] Checkpoint (Neon/disk) — last completed stage: ${resumeFromStage}`);
+		}
+	}
+
 	// --force-stage overrides the resume point regardless of what's in the DB log.
 	// e.g. --force-stage embedding re-runs Stage 4 (embedding) and everything after.
 	if (forceStage) {
@@ -2171,7 +2242,7 @@ async function main() {
 	// Load partial results from disk if resuming
 	let partial: PartialResults;
 	if (resumeFromStage) {
-		const loaded = loadPartialResults(slug);
+		const loaded = await loadPartialResults(slug);
 		if (loaded) {
 			partial = loaded;
 			const normalized = normalizeResumeStage(resumeFromStage, partial);
@@ -2383,7 +2454,7 @@ async function main() {
 							claims_so_far: [...allClaims],
 							remaining_batches: batchQueue.slice(i + 1)
 						};
-						savePartialResults(slug, partial);
+						await savePartialResults(slug, partial);
 					} catch (parseError) {
 						console.warn(
 							`  [WARN] JSON parse/validation failed for batch ${batchLabel}. Attempting fix...`
@@ -2434,7 +2505,7 @@ async function main() {
 							claims_so_far: [...allClaims],
 							remaining_batches: batchQueue.slice(i + 1)
 						};
-						savePartialResults(slug, partial);
+						await savePartialResults(slug, partial);
 					}
 				}
 
@@ -2455,7 +2526,7 @@ async function main() {
 				partial.claims = allClaims;
 				partial.stage_completed = 'extracting';
 			partial.extraction_progress = undefined; // Clear mid-stage progress — extraction is now complete
-			savePartialResults(slug, partial);
+			await savePartialResults(slug, partial);
 			await updateIngestionLog(db, sourceMeta.url, {
 				stage_completed: 'extracting',
 				claims_extracted: allClaims.length,
@@ -2586,7 +2657,7 @@ async function main() {
 					total_batches: relationsBatches.length
 				};
 				partial.stage_completed = 'relating';
-				savePartialResults(slug, partial);
+				await savePartialResults(slug, partial);
 			}
 
 			// Print breakdown
@@ -2605,7 +2676,7 @@ async function main() {
 			partial.relations = relations;
 			partial.relations_progress = undefined;
 			partial.stage_completed = 'relating';
-			savePartialResults(slug, partial);
+			await savePartialResults(slug, partial);
 
 			await updateIngestionLog(db, sourceMeta.url, {
 				stage_completed: 'relating',
@@ -2725,7 +2796,7 @@ async function main() {
 						next_batch_index: batchIndex + 1,
 						total_batches: groupingBatches.length
 					};
-					savePartialResults(slug, partial);
+					await savePartialResults(slug, partial);
 				}
 
 				arguments_ = mergeGroupingOutputs(groupedOutputs);
@@ -2752,7 +2823,7 @@ async function main() {
 			partial.arguments = arguments_;
 			partial.grouping_progress = undefined;
 			partial.stage_completed = 'grouping';
-			savePartialResults(slug, partial);
+			await savePartialResults(slug, partial);
 			await updateIngestionLog(db, sourceMeta.url, {
 				stage_completed: 'grouping',
 				arguments_grouped: arguments_.length,
@@ -2797,7 +2868,7 @@ async function main() {
 				(Array.isArray(partial.embeddings) ? partial.embeddings : []);
 			if (priorEmbeddings.length > claimTexts.length) {
 				throw new Error(
-					'[INTEGRITY] Partial embedding vectors exceed claim count — remove *-partial.json or use --force-stage embedding'
+					'[INTEGRITY] Partial embedding vectors exceed claim count — clear Neon staging / remove *-partial.json or use --force-stage embedding'
 				);
 			}
 			if (priorEmbeddings.length === claimTexts.length && priorEmbeddings.length > 0) {
@@ -2827,7 +2898,7 @@ async function main() {
 							next_index: partial.embeddings.length
 						};
 						// Keep stage_completed at 'grouping' until every claim has a vector (Surreal log uses stage_completed for resume).
-						savePartialResults(slug, partial);
+						await savePartialResults(slug, partial);
 						console.log(
 							`  [SAVE] Embedding checkpoint: ${partial.embeddings.length}/${claimTexts.length} vectors`
 						);
@@ -2862,7 +2933,7 @@ async function main() {
 			partial.embeddings = allEmbeddings;
 			partial.embedding_progress = undefined;
 			partial.stage_completed = 'embedding';
-			savePartialResults(slug, partial);
+			await savePartialResults(slug, partial);
 			await updateIngestionLog(db, sourceMeta.url, {
 				stage_completed: 'embedding',
 				cost_usd: parseFloat(estimateCostUsd())
@@ -2885,7 +2956,7 @@ async function main() {
 				stage_completed: 'embedding',
 				cost_usd: parseFloat(estimateCostUsd())
 			});
-			await db.close();
+			await closeSurrealIfOpen(db);
 			logIngestTimingSummary();
 			process.exit(0);
 		}
@@ -2998,7 +3069,7 @@ async function main() {
 						total_batches: validationBatches.length,
 						should_validate: true
 					};
-					savePartialResults(slug, partial);
+					await savePartialResults(slug, partial);
 				}
 
 				logStageCost('Validation', validationTracker, validationPlan);
@@ -3034,7 +3105,7 @@ async function main() {
 			partial.validation = validationResult;
 			partial.validation_progress = undefined;
 			partial.stage_completed = 'validating';
-			savePartialResults(slug, partial);
+			await savePartialResults(slug, partial);
 
 			const valScore = validationResult?.claims?.length
 				? validationResult.claims.reduce((a, b) => a + b.faithfulness_score, 0) / validationResult.claims.length
@@ -3055,13 +3126,13 @@ async function main() {
 			console.log(
 				'\n  [PHASE] Stages 1–5 complete. Resume this source without --stop-before-store (or use admin Sync) to run Stage 6 (SurrealDB).'
 			);
-			savePartialResults(slug, partial);
+			await savePartialResults(slug, partial);
 			await updateIngestionLog(db, sourceMeta.url, {
 				status: 'validating',
 				stage_completed: 'validating',
 				cost_usd: parseFloat(estimateCostUsd())
 			});
-			await db.close();
+			await closeSurrealIfOpen(db);
 			logIngestTimingSummary();
 			process.exit(0);
 		}
@@ -3071,6 +3142,11 @@ async function main() {
 		// ═══════════════════════════════════════════════════════════════
 		if (shouldRunStage('storing', resumeFromStage)) {
 			const stageStoreStart = Date.now();
+			if (!db) {
+				throw new Error(
+					'[INTEGRITY] Stage 6 requires SurrealDB but no connection is open. Re-run without --stop-before-store only after Surreal is reachable, or use admin “Sync to SurrealDB”.'
+				);
+			}
 			// ── Pre-stage 6 health check ──────────────────────────────
 			// Stages 1–5 can take 20+ minutes; verify the DB session is still
 			// alive before beginning the critical write phase.
@@ -3552,7 +3628,7 @@ async function main() {
 			}
 
 			partial.stage_completed = 'stored';
-			savePartialResults(slug, partial);
+			await savePartialResults(slug, partial);
 			if (activeIngestTiming) {
 				const storeMs = Date.now() - stageStoreStart;
 				activeIngestTiming.store_wall_ms += storeMs;
@@ -3583,7 +3659,7 @@ async function main() {
 			completed_at: new Date()
 		});
 
-		await db.close();
+		await closeSurrealIfOpen(db);
 		console.log('  [OK] Database connection closed');
 
 		// ═══════════════════════════════════════════════════════════════
@@ -3633,13 +3709,9 @@ async function main() {
 			// If we can't update the log, we still want to save partial results
 		}
 
-		savePartialResults(slug, partial);
+		await savePartialResults(slug, partial);
 
-		try {
-			await db.close();
-		} catch {
-			// ignore
-		}
+		await closeSurrealIfOpen(db);
 
 		process.exit(1);
 	}

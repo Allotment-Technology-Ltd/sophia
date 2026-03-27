@@ -7,10 +7,19 @@ import { REASONING_PROVIDER_ORDER } from '@restormel/contracts/providers';
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'child_process';
 import { randomBytes } from 'crypto';
 import { EventEmitter } from 'events';
-import { buildEnvFileArgs, findFetchedSourceFile } from '$lib/server/adminOperations';
+import { buildLocalTsxSpawnArgs, findFetchedSourceFile } from '$lib/server/adminOperations';
 import type { IngestionPipelinePreset } from '$lib/ingestionPipelineModelRequirements';
+import {
+  neonAppendLogLine,
+  neonBumpRunActivity,
+  neonCreateIngestRun,
+  neonLoadIngestRun,
+  neonMergePayloadAndVersion,
+  neonPersistIngestRunSnapshot
+} from '$lib/server/db/ingestRunRepository';
 import { appendIssueFromLogLine, persistIngestRunReport, type IngestIssueRecord } from '$lib/server/ingestRunIssues';
 import { buildOperatorByokProcessEnv } from '$lib/server/byok/buildOperatorIngestEnv';
+import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 
 export interface IngestRunPayload {
   source_url: string;
@@ -282,6 +291,8 @@ export interface IngestRunState {
   issues: IngestIssueRecord[];
   /** Throttle for merging live run state into Firestore `ingestion_run_reports` while still running. */
   lastReportPersistAt?: number;
+  /** Durable payload revision (Neon); incremented when resume merges model_chain / batch_overrides. */
+  payloadVersion?: number;
 }
 
 /** Admin wizard / ingest UI types → `scripts/fetch-source.ts` types. */
@@ -303,6 +314,8 @@ export interface IngestExecutionInfo {
   mode: 'simulated' | 'real';
   surrealTarget: string;
   firestoreProject: string | null;
+  /** When set, durable ingest orchestration + staging use Neon Postgres (DATABASE_URL). */
+  neonIngestPersistence?: boolean;
 }
 
 function redactSurrealTarget(rawUrl: string): string {
@@ -324,7 +337,12 @@ export function getIngestExecutionInfo(): IngestExecutionInfo {
       process.env.GOOGLE_CLOUD_PROJECT ??
       process.env.GCLOUD_PROJECT ??
       '').trim() || null;
-  return { mode, surrealTarget, firestoreProject };
+  return {
+    mode,
+    surrealTarget,
+    firestoreProject,
+    neonIngestPersistence: isNeonIngestPersistenceEnabled()
+  };
 }
 
 function appendProcessOutput(runId: string, chunk: Buffer, manager: IngestRunManager): void {
@@ -377,6 +395,27 @@ function stageAliasToKey(value: string | null | undefined): string | null {
 class IngestRunManager extends EventEmitter {
   private runs: Map<string, IngestRunState> = new Map();
   private maxLogLines = 500;
+  private snapshotPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  private scheduleNeonSnapshotPersist(runId: string): void {
+    if (!isNeonIngestPersistenceEnabled()) return;
+    const prev = this.snapshotPersistTimers.get(runId);
+    if (prev) clearTimeout(prev);
+    const t = setTimeout(() => {
+      this.snapshotPersistTimers.delete(runId);
+      const s = this.runs.get(runId);
+      if (s) void neonPersistIngestRunSnapshot(s);
+    }, 400);
+    this.snapshotPersistTimers.set(runId, t);
+  }
+
+  private flushNeonSnapshotPersist(runId: string): void {
+    const prev = this.snapshotPersistTimers.get(runId);
+    if (prev) clearTimeout(prev);
+    this.snapshotPersistTimers.delete(runId);
+    const s = this.runs.get(runId);
+    if (s && isNeonIngestPersistenceEnabled()) void neonPersistIngestRunSnapshot(s);
+  }
 
   /** Count child processes still attached (fetch or ingest worker). */
   private activeChildProcessCount(): number {
@@ -432,16 +471,28 @@ class IngestRunManager extends EventEmitter {
       resumable: false,
       actorEmail,
       issues: [],
-      lastReportPersistAt: undefined
+      lastReportPersistAt: undefined,
+      payloadVersion: 1
     };
 
     this.runs.set(runId, state);
+    void neonCreateIngestRun(state);
     this.spawnIngestionProcess(runId, snapshot, actorEmail);
     return runId;
   }
 
   getState(runId: string): IngestRunState | undefined {
     return this.runs.get(runId);
+  }
+
+  /** Loads from Neon when the run is not in this process (e.g. after deploy or cold start). */
+  async getStateAsync(runId: string): Promise<IngestRunState | undefined> {
+    const mem = this.runs.get(runId);
+    if (mem) return mem;
+    if (!isNeonIngestPersistenceEnabled()) return undefined;
+    const loaded = await neonLoadIngestRun(runId);
+    if (loaded) this.runs.set(runId, loaded);
+    return loaded ?? undefined;
   }
 
   /** Newest first. Only runs still held in memory (lost on server restart). */
@@ -481,6 +532,7 @@ class IngestRunManager extends EventEmitter {
       state.status = 'running';
       state.syncStartedAt = Date.now();
       state.syncCompletedAt = undefined;
+      this.flushNeonSnapshotPersist(runId);
       this.addLog(runId, 'Starting SurrealDB sync (Stage 6)…');
       void this.execStartIngestChild(runId, state.payload, state.sourceFilePath, { forSyncOnly: true });
     } else {
@@ -518,6 +570,11 @@ class IngestRunManager extends EventEmitter {
       if (state.logLines.length > this.maxLogLines) {
         state.logLines.shift();
       }
+      if (isNeonIngestPersistenceEnabled()) {
+        void neonAppendLogLine(runId, line);
+        void neonBumpRunActivity(runId, state.lastOutputAt);
+        this.scheduleNeonSnapshotPersist(runId);
+      }
       // Periodic Firestore merge so overnight failures still leave a durable row (not only in-memory UI).
       if (state.status === 'running' || state.status === 'awaiting_sync') {
         const now = Date.now();
@@ -540,6 +597,7 @@ class IngestRunManager extends EventEmitter {
     const state = this.runs.get(runId);
     if (state) {
       state.stages[stage] = { status, summary };
+      this.scheduleNeonSnapshotPersist(runId);
     }
   }
 
@@ -549,6 +607,7 @@ class IngestRunManager extends EventEmitter {
       state.status = 'done';
       state.completedAt = Date.now();
       state.resumable = false;
+      this.flushNeonSnapshotPersist(runId);
       this.schedulePersistReport(runId);
     }
   }
@@ -562,6 +621,7 @@ class IngestRunManager extends EventEmitter {
       state.lastFailureStageKey = state.currentStageKey ?? state.lastFailureStageKey ?? null;
       state.currentAction = `Failed: ${error}`;
       state.resumable = Boolean(state.sourceFilePath);
+      this.flushNeonSnapshotPersist(runId);
       this.schedulePersistReport(runId);
     }
   }
@@ -586,6 +646,7 @@ class IngestRunManager extends EventEmitter {
     }
 
     this.addLog(runId, '[CANCEL] Ingestion cancelled by operator.');
+    this.flushNeonSnapshotPersist(runId);
     this.schedulePersistReport(runId);
   }
 
@@ -635,19 +696,60 @@ class IngestRunManager extends EventEmitter {
     return { ok: false, error: 'Unable to cancel run.' };
   }
 
-  resumeFromFailure(runId: string): { ok: true } | { ok: false; error: string } {
-    const state = this.runs.get(runId);
+  async resumeFromFailure(
+    runId: string,
+    options?: {
+      model_chain?: Partial<IngestRunPayload['model_chain']>;
+      batch_overrides?: Partial<NonNullable<IngestRunPayload['batch_overrides']>>;
+    }
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    let state = this.runs.get(runId);
+    if (!state && isNeonIngestPersistenceEnabled()) {
+      const loaded = await neonLoadIngestRun(runId);
+      if (loaded) {
+        this.runs.set(runId, loaded);
+        state = loaded;
+      }
+    }
     if (!state) return { ok: false, error: 'Run not found.' };
     if (state.status !== 'error') return { ok: false, error: 'Run is not in a failed state.' };
     if (!state.sourceFilePath) {
       return { ok: false, error: 'No source file checkpoint was found for this run.' };
     }
+
+    if (options?.model_chain || options?.batch_overrides) {
+      let payload: IngestRunPayload = { ...state.payload };
+      if (options.model_chain) {
+        const mc = options.model_chain;
+        payload = {
+          ...payload,
+          model_chain: {
+            extract: mc.extract ?? payload.model_chain.extract,
+            relate: mc.relate ?? payload.model_chain.relate,
+            group: mc.group ?? payload.model_chain.group,
+            validate: mc.validate ?? payload.model_chain.validate
+          }
+        };
+      }
+      if (options.batch_overrides) {
+        payload = {
+          ...payload,
+          batch_overrides: { ...(payload.batch_overrides ?? {}), ...options.batch_overrides }
+        };
+      }
+      const nextVersion = (state.payloadVersion ?? 1) + 1;
+      state.payload = payload;
+      state.payloadVersion = nextVersion;
+      void neonMergePayloadAndVersion(runId, payload, nextVersion);
+    }
+
     state.status = 'running';
     state.error = undefined;
     state.completedAt = undefined;
     state.cancelledByUser = false;
     state.currentAction = 'Resuming from previous checkpoint…';
     state.resumable = false;
+    this.flushNeonSnapshotPersist(runId);
     this.addLog(
       runId,
       '[RESUME] Restarting ingest.ts from checkpoint. The pipeline will continue from the last completed stage.'
@@ -680,7 +782,7 @@ class IngestRunManager extends EventEmitter {
     if (ingestRunUsesRealChildProcess()) {
       this.addLog(
         runId,
-        `Running fetch-source + ingest via npx tsx (fetch type: ${normalizeSourceTypeForFetch(payload.source_type)}).`
+        `Running fetch-source + ingest via local tsx (fetch type: ${normalizeSourceTypeForFetch(payload.source_type)}).`
       );
       this.spawnFetchChild(runId, payload);
     } else {
@@ -694,16 +796,14 @@ class IngestRunManager extends EventEmitter {
 
   private spawnFetchChild(runId: string, payload: IngestRunPayload): void {
     const fetchType = normalizeSourceTypeForFetch(payload.source_type);
-    const fetchArgs = [
-      'tsx',
-      ...buildEnvFileArgs(),
+    const { command: fetchCmd, args: fetchArgs } = buildLocalTsxSpawnArgs([
       'scripts/fetch-source.ts',
       payload.source_url,
       fetchType
-    ];
+    ]);
 
     this.updateStageStatus(runId, 'fetch', 'running');
-    const fetchChild = spawn('npx', fetchArgs, {
+    const fetchChild = spawn(fetchCmd, fetchArgs, {
       cwd: process.cwd(),
       env: process.env,
       stdio: 'pipe'
@@ -714,6 +814,8 @@ class IngestRunManager extends EventEmitter {
       runState.process = fetchChild;
       runState.processStartedAt = Date.now();
       runState.processExitedAt = undefined;
+      runState.currentAction = 'Starting fetch worker (tsx fetch-source)…';
+      this.scheduleNeonSnapshotPersist(runId);
     }
 
     fetchChild.stdout.on('data', (chunk: Buffer) => appendProcessOutput(runId, chunk, this));
@@ -838,20 +940,26 @@ class IngestRunManager extends EventEmitter {
       this.updateStageStatus(runId, 'store', 'running');
     }
 
-    const ingestArgs = ['tsx', ...buildEnvFileArgs(), 'scripts/ingest.ts', sourceFile];
+    const ingestTail: string[] = ['scripts/ingest.ts', sourceFile];
     if (ingestPinsJsonCli) {
-      ingestArgs.push(`--ingest-pins-json=${ingestPinsJsonCli}`);
+      ingestTail.push(`--ingest-pins-json=${ingestPinsJsonCli}`);
     }
     this.addLog(
       runId,
       `[INGEST_PINS] spawn: model_chain=${summarizeIngestPinsForLog(pinEnvFlat)} flat_env_keys=${Object.keys(pinEnvFlat).length} cli_json=${ingestPinsJsonCli ? `yes(len=${ingestPinsJsonCli.length})` : 'no'}`
     );
-    if (payload.validate) ingestArgs.push('--validate');
-    if (stopBeforeStore) ingestArgs.push('--stop-before-store');
+    if (payload.validate) ingestTail.push('--validate');
+    if (stopBeforeStore) ingestTail.push('--stop-before-store');
 
-    const ingestChild = spawn('npx', ingestArgs, {
+    const { command: ingestCmd, args: ingestArgs } = buildLocalTsxSpawnArgs(ingestTail);
+
+    const orchestrationEnv = isNeonIngestPersistenceEnabled()
+      ? { INGEST_ORCHESTRATION_RUN_ID: runId }
+      : {};
+
+    const ingestChild = spawn(ingestCmd, ingestArgs, {
       cwd: process.cwd(),
-      env: { ...process.env, ...batchEnvOverrides, ...operatorByokEnv },
+      env: { ...process.env, ...batchEnvOverrides, ...operatorByokEnv, ...orchestrationEnv },
       stdio: 'pipe'
     }) as ChildProcessWithoutNullStreams;
 
@@ -1028,6 +1136,16 @@ class IngestRunManager extends EventEmitter {
     const line = rawLine.trim();
     if (!line) return;
 
+    // fetch-source.ts logs `[FETCH] …` (not `STAGE 1: …`); without this the UI stays on "Queued".
+    if (/^\[FETCH\]/i.test(line)) {
+      state.currentStageKey = 'fetch';
+      state.currentAction = line;
+      if (state.stages.fetch?.status !== 'done') {
+        this.updateStageStatus(runId, 'fetch', 'running', line);
+      }
+      return;
+    }
+
     const stageHeader = line.match(/STAGE\s+\d+:\s*([A-Z ]+)/i);
     const routeStage = line.match(/\[ROUTE\]\s+([a-z_]+)/i);
     const retryStage = line.match(/\[RETRY\]\s+([a-z_]+)/i);
@@ -1049,7 +1167,9 @@ class IngestRunManager extends EventEmitter {
       /\[RESUME\]/i.test(line) ||
       /\[PHASE\]/i.test(line) ||
       /\[WARN\]/i.test(line) ||
-      /\[BUDGET\]/i.test(line)
+      /\[BUDGET\]/i.test(line) ||
+      /\[SAVE\]/i.test(line) ||
+      /\[COST\]/i.test(line)
     ) {
       state.currentAction = line;
     }

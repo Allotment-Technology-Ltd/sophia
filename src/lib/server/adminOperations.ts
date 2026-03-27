@@ -238,12 +238,31 @@ function defaultRestormelTool(kind: AdminOperationKind): string | null {
   }
 }
 
-/** Shared with `ingestRuns` for `npx tsx` invocations. */
+/** Shared with `ingestRuns` for `tsx --env-file=…` CLI args (see `buildLocalTsxSpawnArgs`). */
 export function buildEnvFileArgs(): string[] {
   const args: string[] = [];
   if (fs.existsSync(path.resolve(process.cwd(), '.env'))) args.push('--env-file=.env');
   if (fs.existsSync(path.resolve(process.cwd(), '.env.local'))) args.push('--env-file=.env.local');
   return args;
+}
+
+/**
+ * Spawn tsx via `node_modules/.bin/tsx` (or `tsx.cmd` on Windows) so admin ingest does not run
+ * `npx tsx` (slow / silent while npx resolves). Falls back to `pnpm exec tsx` if the bin is missing.
+ */
+export function buildLocalTsxSpawnArgs(scriptAndRest: string[]): { command: string; args: string[] } {
+  const cwd = process.cwd();
+  const envArgs = buildEnvFileArgs();
+  const args = [...envArgs, ...scriptAndRest];
+  const winCmd = path.join(cwd, 'node_modules', '.bin', 'tsx.cmd');
+  const unixBin = path.join(cwd, 'node_modules', '.bin', 'tsx');
+  if (process.platform === 'win32' && fs.existsSync(winCmd)) {
+    return { command: winCmd, args };
+  }
+  if (fs.existsSync(unixBin)) {
+    return { command: unixBin, args };
+  }
+  return { command: 'pnpm', args: ['exec', 'tsx', ...args] };
 }
 
 function normalizeTextFilePath(sourceFile: string): string {
@@ -515,7 +534,6 @@ async function executeIngestImportOperation(
   payload: z.infer<typeof IngestImportPayloadSchema>,
   logText: string
 ): Promise<{ logText: string; status: AdminOperationStatus; summary: string; validationStatus: AdminOperationRecord['validation_status']; syncStatus: AdminOperationRecord['sync_status'] }> {
-  const tsxArgs = ['tsx', ...buildEnvFileArgs()];
   const env: NodeJS.ProcessEnv = {};
   let nextLog = logText;
   let sourceFile = payload.source_file ? normalizeTextFilePath(payload.source_file) : null;
@@ -529,10 +547,15 @@ async function executeIngestImportOperation(
     nextLog = `${nextLog}[INGEST] Fetching ${payload.source_url}\n`;
     await updateOperationDoc(id, { log_text: nextLog });
     if (!payload.dry_run) {
+      const fetchSpawn = buildLocalTsxSpawnArgs([
+        'scripts/fetch-source.ts',
+        payload.source_url,
+        payload.source_type!
+      ]);
       const fetchResult = await runCommandWithLogs({
         id,
-        command: 'npx',
-        args: [...tsxArgs, 'scripts/fetch-source.ts', payload.source_url, payload.source_type!],
+        command: fetchSpawn.command,
+        args: fetchSpawn.args,
         logText: nextLog
       });
       nextLog = fetchResult.logText;
@@ -579,15 +602,16 @@ async function executeIngestImportOperation(
   await updateOperationDoc(id, { log_text: nextLog });
 
   if (!payload.dry_run) {
-    const args = [...tsxArgs, 'scripts/ingest.ts', sourceFile];
-    if (payload.validate) args.push('--validate');
-    if (payload.ingest_provider) args.push('--ingest-provider', payload.ingest_provider);
-    if (payload.domain) args.push('--domain', payload.domain);
+    const ingestTail = ['scripts/ingest.ts', sourceFile];
+    if (payload.validate) ingestTail.push('--validate');
+    if (payload.ingest_provider) ingestTail.push('--ingest-provider', payload.ingest_provider);
+    if (payload.domain) ingestTail.push('--domain', payload.domain);
 
+    const ingestSpawn = buildLocalTsxSpawnArgs(ingestTail);
     const ingestResult = await runCommandWithLogs({
       id,
-      command: 'npx',
-      args,
+      command: ingestSpawn.command,
+      args: ingestSpawn.args,
       logText: nextLog,
       env
     });
@@ -626,21 +650,22 @@ async function executeReplayOperation(
   payload: z.infer<typeof ReplayReingestPayloadSchema>,
   logText: string
 ): Promise<{ logText: string; status: AdminOperationStatus; summary: string; validationStatus: AdminOperationRecord['validation_status']; syncStatus: AdminOperationRecord['sync_status'] }> {
-  const args = ['tsx', ...buildEnvFileArgs(), 'scripts/replay-ingest.ts', '--canonical-url-hash', payload.canonical_url_hash];
-  if (payload.force_stage) args.push('--force-stage', payload.force_stage);
-  if (payload.ingest_provider) args.push('--ingest-provider', payload.ingest_provider);
-  if (payload.domain) args.push('--domain', payload.domain);
-  if (payload.validate) args.push('--validate');
-  if (payload.dry_run) args.push('--dry-run');
+  const replayTail = ['scripts/replay-ingest.ts', '--canonical-url-hash', payload.canonical_url_hash];
+  if (payload.force_stage) replayTail.push('--force-stage', payload.force_stage);
+  if (payload.ingest_provider) replayTail.push('--ingest-provider', payload.ingest_provider);
+  if (payload.domain) replayTail.push('--domain', payload.domain);
+  if (payload.validate) replayTail.push('--validate');
+  if (payload.dry_run) replayTail.push('--dry-run');
 
   let nextLog = `${logText}[REPLAY] Replaying ${payload.canonical_url_hash}\n`;
   await updateOperationDoc(id, { log_text: nextLog });
 
   if (!payload.dry_run) {
+    const replaySpawn = buildLocalTsxSpawnArgs(replayTail);
     const replayResult = await runCommandWithLogs({
       id,
-      command: 'npx',
-      args,
+      command: replaySpawn.command,
+      args: replaySpawn.args,
       logText: nextLog
     });
     nextLog = replayResult.logText;
@@ -675,21 +700,28 @@ async function executeRepairOperation(
   payload: z.infer<typeof RepairFinalizePayloadSchema>,
   logText: string
 ): Promise<{ logText: string; status: AdminOperationStatus; summary: string; validationStatus: AdminOperationRecord['validation_status']; syncStatus: AdminOperationRecord['sync_status'] }> {
-  const args = ['tsx', ...buildEnvFileArgs(), 'scripts/run-ingestion-safe.ts', '--source-file', normalizeTextFilePath(payload.source_file), '--mode', payload.mode];
-  if (payload.force_migrate) args.push('--force-migrate');
-  if (payload.allow_local_reingest) args.push('--allow-local-reingest');
-  if (payload.confirm_direct_prod) args.push('--confirm-direct-prod');
-  if (payload.skip_backup) args.push('--skip-backup');
-  if (payload.dry_run) args.push('--dry-run');
+  const repairTail = [
+    'scripts/run-ingestion-safe.ts',
+    '--source-file',
+    normalizeTextFilePath(payload.source_file),
+    '--mode',
+    payload.mode
+  ];
+  if (payload.force_migrate) repairTail.push('--force-migrate');
+  if (payload.allow_local_reingest) repairTail.push('--allow-local-reingest');
+  if (payload.confirm_direct_prod) repairTail.push('--confirm-direct-prod');
+  if (payload.skip_backup) repairTail.push('--skip-backup');
+  if (payload.dry_run) repairTail.push('--dry-run');
 
   let nextLog = `${logText}[REPAIR] Running safe ingestion repair for ${payload.source_file}\n`;
   await updateOperationDoc(id, { log_text: nextLog });
 
   if (!payload.dry_run) {
+    const repairSpawn = buildLocalTsxSpawnArgs(repairTail);
     const result = await runCommandWithLogs({
       id,
-      command: 'npx',
-      args,
+      command: repairSpawn.command,
+      args: repairSpawn.args,
       logText: nextLog
     });
     nextLog = result.logText;

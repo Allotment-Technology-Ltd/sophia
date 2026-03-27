@@ -2553,9 +2553,31 @@
     syncing = true;
     runError = '';
     try {
+      const batchBuild = buildBatchOverridesFromUi();
+      batchOverridesError = batchBuild.error ?? '';
+      if (batchBuild.error) {
+        runError = batchBuild.error;
+        return;
+      }
+      const batchOverrides = batchBuild.overrides ?? {};
+      const workerTuning = buildWorkerTuningOverrides();
+      const mergedBatchOverrides = { ...batchOverrides, ...workerTuning };
+
       const response = await fetch(`/api/admin/ingest/run/${runId}/resume`, {
         method: 'POST',
-        headers: await authHeaders()
+        headers: {
+          'Content-Type': 'application/json',
+          ...(await authHeaders())
+        },
+        body: JSON.stringify({
+          model_chain: {
+            extract: stageModelIds.ingestion_extraction,
+            relate: stageModelIds.ingestion_relations,
+            group: stageModelIds.ingestion_grouping,
+            validate: stageModelIds.ingestion_validation
+          },
+          batch_overrides: mergedBatchOverrides
+        })
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
