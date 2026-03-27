@@ -4,7 +4,14 @@
  */
 
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import {
+  neonAppendIssue,
+  neonListRecentReportRows,
+  neonMirrorIngestReportDocument,
+  neonSetReportEnvelope
+} from '$lib/server/db/ingestRunRepository';
 import { adminDb } from '$lib/server/firebase-admin';
+import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 
 export type IngestIssueKind =
   | 'warning'
@@ -248,7 +255,10 @@ export function classifyIngestLogLine(line: string, seq: number): IngestIssueRec
   return null;
 }
 
-export function appendIssueFromLogLine(state: { issues: IngestIssueRecord[] }, line: string): void {
+export function appendIssueFromLogLine(
+  state: { id: string; issues: IngestIssueRecord[] },
+  line: string
+): void {
   const nextSeq = state.issues.length;
   const issue = classifyIngestLogLine(line, nextSeq);
   if (!issue) return;
@@ -257,6 +267,7 @@ export function appendIssueFromLogLine(state: { issues: IngestIssueRecord[] }, l
   }
   issue.seq = state.issues.length;
   state.issues.push(issue);
+  if (isNeonIngestPersistenceEnabled()) void neonAppendIssue(state.id, issue);
 }
 
 function summarizeIssues(issues: IngestIssueRecord[]): Record<string, number> {
@@ -358,8 +369,57 @@ function summarizeRoutingFromLogLines(logLines: string[]): {
   return { routeCalls, routingSources, orderCounts, degradedRouteCount, fallbackUsedCount };
 }
 
+function buildIngestRunReportEnvelope(state: IngestRunSnapshotForReport): Record<string, unknown> {
+  const payload = state.payload;
+  const routingStats = summarizeRoutingFromLogLines(state.logLines);
+  const timingTelemetry = parseIngestTimingFromLogLines(state.logLines);
+  return {
+    runId: state.id,
+    actorEmail: state.actorEmail ?? null,
+    status: state.status,
+    sourceUrl: payload.source_url,
+    sourceType: payload.source_type,
+    pipelinePreset: payload.pipeline_preset ?? null,
+    validate: payload.validate === true,
+    stopBeforeStore: payload.stop_before_store !== false,
+    modelChain: payload.model_chain,
+    embeddingModel: payload.embedding_model ?? null,
+    batchOverrides: payload.batch_overrides ?? null,
+    routingStats,
+    timingTelemetry,
+    createdAtMs: state.createdAt,
+    completedAtMs: state.completedAt ?? Date.now(),
+    terminalError: state.error ?? null,
+    logLineCount: state.logLines.length,
+    issues: state.issues.map((i) => ({
+      seq: i.seq,
+      ts: i.ts,
+      kind: i.kind,
+      severity: i.severity,
+      stageHint: i.stageHint,
+      message: i.message,
+      rawLine: i.rawLine
+    })),
+    issueCount: state.issues.length,
+    issueSummary: summarizeIssues(state.issues),
+    lastFailureStageKey: state.lastFailureStageKey ?? null,
+    fetchRetryAttempts: state.fetchRetryAttempts,
+    ingestRetryAttempts: state.ingestRetryAttempts,
+    syncRetryAttempts: state.syncRetryAttempts,
+    cancelledByUser: state.cancelledByUser === true,
+    updatedAtMs: Date.now()
+  };
+}
+
 export async function persistIngestRunReport(state: IngestRunSnapshotForReport): Promise<void> {
   try {
+    const envelope = buildIngestRunReportEnvelope(state);
+    if (isNeonIngestPersistenceEnabled()) {
+      await neonSetReportEnvelope(state.id, envelope);
+      await neonMirrorIngestReportDocument(state.id, envelope);
+      return;
+    }
+
     const ref = adminDb.collection(FIRESTORE_COLLECTION).doc(state.id);
     const payload = state.payload;
     const routingStats = summarizeRoutingFromLogLines(state.logLines);
@@ -428,6 +488,10 @@ export async function listRecentIngestRunReportSummaries(
 ): Promise<IngestRunReportListRow[]> {
   const cap = Math.max(1, Math.min(100, limit));
   try {
+    if (isNeonIngestPersistenceEnabled()) {
+      return neonListRecentReportRows(cap);
+    }
+
     const snap = await adminDb
       .collection(FIRESTORE_COLLECTION)
       .orderBy('completedAt', 'desc')

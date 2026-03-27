@@ -5,22 +5,60 @@ import {
 import { getOperatorByokTargetUid } from './operatorByokTarget';
 import { loadByokProviderApiKeys } from './store';
 
+function byokProviderToIngestEnvName(provider: string): string | undefined {
+  if (provider === 'voyage') return 'VOYAGE_API_KEY';
+  return REASONING_PROVIDER_PLATFORM_API_KEY_ENV[provider as ReasoningProvider];
+}
+
+function knownIngestPlatformApiKeyEnvNames(): string[] {
+  const names = new Set<string>(
+    Object.values(REASONING_PROVIDER_PLATFORM_API_KEY_ENV).filter(
+      (n): n is string => typeof n === 'string' && n.length > 0
+    )
+  );
+  names.add('VOYAGE_API_KEY');
+  return [...names];
+}
+
+/**
+ * After Firestore operator BYOK is applied, fill missing provider keys from `process.env`
+ * (e.g. `.env.local` for dev). Set `INGEST_PREFER_LOCAL_PROVIDER_KEYS=1` to use local env
+ * whenever set, even when Firestore already has a value (prod keys not copied locally).
+ */
+function applyIngestProviderKeyResolution(out: Record<string, string>): void {
+  const preferLocal = ['1', 'true', 'yes'].includes(
+    (process.env.INGEST_PREFER_LOCAL_PROVIDER_KEYS ?? '').trim().toLowerCase()
+  );
+  for (const envName of knownIngestPlatformApiKeyEnvNames()) {
+    const fromEnv = process.env[envName]?.trim();
+    if (!fromEnv) continue;
+    if (preferLocal || !out[envName]?.trim()) {
+      out[envName] = fromEnv;
+    }
+  }
+}
+
 /**
  * Maps operator BYOK (Firestore `users/{OWNER_UIDS[0]}/byokProviders`) into process.env
  * keys (`MISTRAL_API_KEY`, `OPENAI_API_KEY`, …) for the admin `scripts/ingest.ts` worker.
  *
  * This lets ingestion use the same keys as **Admin → Operator BYOK** without duplicating
  * them in Cloud Run Secret Manager.
+ *
+ * Local dev: keys in `.env` / `.env.local` are merged when Firestore has no value for that
+ * provider, or always when `INGEST_PREFER_LOCAL_PROVIDER_KEYS=1`.
  */
 export async function buildOperatorByokProcessEnv(): Promise<Record<string, string>> {
-  const uid = getOperatorByokTargetUid();
-  if (!uid) return {};
-  const keys = await loadByokProviderApiKeys(uid);
   const out: Record<string, string> = {};
-  for (const [provider, key] of Object.entries(keys)) {
-    if (!key?.trim()) continue;
-    const envName = REASONING_PROVIDER_PLATFORM_API_KEY_ENV[provider as ReasoningProvider];
-    if (envName) out[envName] = key.trim();
+  const uid = getOperatorByokTargetUid();
+  if (uid) {
+    const keys = await loadByokProviderApiKeys(uid);
+    for (const [provider, key] of Object.entries(keys)) {
+      if (!key?.trim()) continue;
+      const envName = byokProviderToIngestEnvName(provider);
+      if (envName) out[envName] = key.trim();
+    }
   }
+  applyIngestProviderKeyResolution(out);
   return out;
 }

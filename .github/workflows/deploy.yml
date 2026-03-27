@@ -1,11 +1,12 @@
 # SOPHIA — Unified CI/CD Pipeline
 #
-# Handles both application deployments and infrastructure changes in a single
-# workflow. Path-based filters route to the correct job(s) automatically:
+# Handles application deployments; optional Pulumi (off by default during migration).
 #
-#   src/**, scripts/**, Dockerfile, package.json, etc.  →  build + Cloud Run deploy
-#   infra/**                                 →  pulumi preview (PR) / up (main)
-#   both changed                             →  infra first, then app
+#   src/**, scripts/**, Dockerfile, package.json, etc.  →  build + gcloud run deploy
+#   Production DB / Neon: DATABASE_URL + SOPHIA_DATA_BACKEND come from the deploy step
+#   (--set-secrets / --set-env-vars), not Pulumi, while IAC is paused.
+#
+#   infra/**  →  Pulumi preview / up only if repo variable ENABLE_PULUMI_IAC == true
 #
 # TARGET REGION: europe-west2 (London) — all resources are in this region.
 # Region drift was resolved in March 2026: the live us-central1 service was
@@ -14,13 +15,15 @@
 # PREREQUISITES:
 # ─ GCP secrets in Secret Manager: anthropic-api-key, voyage-api-key,
 #   google-ai-api-key, surreal-db-pass, firebase-api-key,
-#   firebase-auth-domain, admin-uids, owner-uids (maps to env OWNER_UIDS)
+#   firebase-auth-domain, admin-uids, owner-uids (maps to env OWNER_UIDS),
+#   neon-database-url (Neon pooled DATABASE_URL for ingest + optional adminDb mirror)
 # ─ Workload Identity Federation configured for this GitHub repo
 # ─ GitHub repository secrets:
 #     WIF_PROVIDER        projects/{N}/locations/global/workloadIdentityPools/{P}/providers/{ID}
 #     WIF_SERVICE_ACCOUNT github-deploy@sophia-488807.iam.gserviceaccount.com
 #     GCP_PROJECT_ID      sophia-488807
-#     PULUMI_ACCESS_TOKEN Pulumi Cloud access token (https://app.pulumi.com/account/tokens)
+#     PULUMI_ACCESS_TOKEN (optional) — only if ENABLE_PULUMI_IAC=true
+#     PULUMI_STACK_NAME (optional) — overrides default stack ref for pulumi/actions
 #
 # AIKIDO: This repo uses the GitHub App for PR checks. Do NOT add AikidoSec/github-actions-workflow
 #   here — Aikido returns 422 if both are enabled. PR scans appear as a separate check from the app.
@@ -35,11 +38,8 @@
 #   AikidoSec/github-actions-workflow — Aikido returns 422. PR scans and status on PRs
 #   come from the installed GitHub App (see user-facing locations below), not from this file.
 #
-# FIRST-TIME INFRA SETUP (run once from your local machine before CI manages it):
-#   pnpm install --filter sophia-infra   # from repo root (infra is a pnpm workspace)
-#   pulumi stack init production
-#   pulumi stack select production
-#   pulumi up   # provisions VPC connector, Cloud Run service, etc. in europe-west2
+# Pulumi (optional): see docs/reference/operations/runbooks.md — paused in CI unless
+#   GitHub repo variable ENABLE_PULUMI_IAC is set to the literal string `true`.
 #
 # VPC CONNECTOR STATUS:
 #   The sophia-connector is now in europe-west2 (was europe-west1).
@@ -78,7 +78,7 @@ on:
         default: false
         type: boolean
       force_infra_deploy:
-        description: "Run Pulumi up on production stack even if infra/** did not change"
+        description: "Run Pulumi up (no-op unless ENABLE_PULUMI_IAC repo var is true)"
         required: false
         default: false
         type: boolean
@@ -222,9 +222,9 @@ jobs:
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
 
-  # ── 3. Pulumi preview (PRs) ────────────────────────────────────────────────
+  # ── 3. Pulumi preview (PRs) — opt-in: repo variable ENABLE_PULUMI_IAC == true ─
   infra-preview:
-    if: github.event_name == 'pull_request' && needs.changes.outputs.infra == 'true'
+    if: vars.ENABLE_PULUMI_IAC == 'true' && github.event_name == 'pull_request' && needs.changes.outputs.infra == 'true'
     needs: [changes, security, codeql]
     runs-on: ubuntu-latest
     defaults:
@@ -256,7 +256,7 @@ jobs:
         id: preview
         with:
           command: preview
-          stack-name: production
+          stack-name: ${{ vars.PULUMI_STACK_NAME || 'adamboon1984-arch-org/production' }}
           work-dir: infra
           comment-on-pr: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -264,9 +264,15 @@ jobs:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
           GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.auth.outputs.credentials_file_path }}
 
-  # ── 4. Pulumi up (push to main) ────────────────────────────────────────────
+  # ── 4. Pulumi up (push to main) — opt-in: ENABLE_PULUMI_IAC == true ──────────
   infra-apply:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.infra == 'true'
+    if: >
+      vars.ENABLE_PULUMI_IAC == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      (
+        (github.event_name == 'push' && needs.changes.outputs.infra == 'true') ||
+        (github.event_name == 'workflow_dispatch' && inputs.force_infra_deploy)
+      )
     needs: [changes, security, codeql]
     runs-on: ubuntu-latest
     defaults:
@@ -299,7 +305,7 @@ jobs:
       - uses: pulumi/actions@v6
         with:
           command: up
-          stack-name: production
+          stack-name: ${{ vars.PULUMI_STACK_NAME || 'adamboon1984-arch-org/production' }}
           work-dir: infra
         env:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
@@ -375,8 +381,8 @@ jobs:
             --max-instances=3 \
             --vpc-connector=sophia-connector \
             --vpc-egress=private-ranges-only \
-            --set-env-vars="^|^SURREAL_URL=http://10.154.0.2:8000|SURREAL_USER=root|SURREAL_NAMESPACE=sophia|SURREAL_DATABASE=sophia|ADMIN_INGEST_RUN_REAL=1|GCP_PROJECT_ID=${{ env.PROJECT_ID }}|GCP_LOCATION=${{ env.REGION }}|GOOGLE_VERTEX_LOCATION=us-central1|VITE_FIREBASE_PROJECT_ID=${{ env.PROJECT_ID }}|ALLOWED_EMAILS=adam.boon1984@gmail.com,adam.boon1984@googlemail.com,admin@usesophia.app|PADDLE_RUNTIME=production|RESTORMEL_GATEWAY_KEY=${{ env.RESTORMEL_GATEWAY_KEY }}|RESTORMEL_PROJECT_ID=${{ env.RESTORMEL_PROJECT_ID }}|RESTORMEL_ENVIRONMENT_ID=${{ env.RESTORMEL_ENVIRONMENT_ID }}|RESTORMEL_KEYS_BASE=${{ env.RESTORMEL_KEYS_BASE }}|RESTORMEL_BASE_URL=${{ env.RESTORMEL_BASE_URL }}|RESTORMEL_ANALYSE_ROUTE_ID=${{ env.RESTORMEL_ANALYSE_ROUTE_ID }}|RESTORMEL_VERIFY_ROUTE_ID=${{ env.RESTORMEL_VERIFY_ROUTE_ID }}|RESTORMEL_PROJECT_MODEL_REGISTRY_BINDINGS=1" \
-            --set-secrets="ANTHROPIC_API_KEY=anthropic-api-key:latest,SURREAL_PASS=surreal-db-pass:latest,VOYAGE_API_KEY=voyage-api-key:latest,GOOGLE_AI_API_KEY=google-ai-api-key:latest,VITE_FIREBASE_API_KEY=firebase-api-key:latest,VITE_FIREBASE_AUTH_DOMAIN=firebase-auth-domain:latest,ADMIN_UIDS=admin-uids:latest,OWNER_UIDS=owner-uids:latest,PADDLE_API_KEY_PRODUCTION=PADDLE_API_KEY_PRODUCTION:latest,PADDLE_WEBHOOK_SECRET_PRODUCTION=PADDLE_WEBHOOK_SECRET_PRODUCTION:latest,PADDLE_PRICE_PRO_GBP_PRODUCTION=PADDLE_PRICE_PRO_GBP_PRODUCTION:latest,PADDLE_PRICE_PRO_USD_PRODUCTION=PADDLE_PRICE_PRO_USD_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_GBP_PRODUCTION=PADDLE_PRICE_PREMIUM_GBP_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_USD_PRODUCTION=PADDLE_PRICE_PREMIUM_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION:latest,PUBLIC_PADDLE_CLIENT_TOKEN_PRODUCTION=PADDLE_CLIENT_TOKEN:latest"
+            --set-env-vars="^|^SURREAL_URL=http://10.154.0.2:8000|SURREAL_USER=root|SURREAL_NAMESPACE=sophia|SURREAL_DATABASE=sophia|ADMIN_INGEST_RUN_REAL=1|SOPHIA_DATA_BACKEND=neon|GCP_PROJECT_ID=${{ env.PROJECT_ID }}|GCP_LOCATION=${{ env.REGION }}|GOOGLE_VERTEX_LOCATION=us-central1|VITE_FIREBASE_PROJECT_ID=${{ env.PROJECT_ID }}|ALLOWED_EMAILS=adam.boon1984@gmail.com,adam.boon1984@googlemail.com,admin@usesophia.app|PADDLE_RUNTIME=production|RESTORMEL_GATEWAY_KEY=${{ env.RESTORMEL_GATEWAY_KEY }}|RESTORMEL_PROJECT_ID=${{ env.RESTORMEL_PROJECT_ID }}|RESTORMEL_ENVIRONMENT_ID=${{ env.RESTORMEL_ENVIRONMENT_ID }}|RESTORMEL_KEYS_BASE=${{ env.RESTORMEL_KEYS_BASE }}|RESTORMEL_BASE_URL=${{ env.RESTORMEL_BASE_URL }}|RESTORMEL_ANALYSE_ROUTE_ID=${{ env.RESTORMEL_ANALYSE_ROUTE_ID }}|RESTORMEL_VERIFY_ROUTE_ID=${{ env.RESTORMEL_VERIFY_ROUTE_ID }}|RESTORMEL_PROJECT_MODEL_REGISTRY_BINDINGS=1" \
+            --set-secrets="ANTHROPIC_API_KEY=anthropic-api-key:latest,SURREAL_PASS=surreal-db-pass:latest,VOYAGE_API_KEY=voyage-api-key:latest,GOOGLE_AI_API_KEY=google-ai-api-key:latest,DATABASE_URL=neon-database-url:latest,VITE_FIREBASE_API_KEY=firebase-api-key:latest,VITE_FIREBASE_AUTH_DOMAIN=firebase-auth-domain:latest,ADMIN_UIDS=admin-uids:latest,OWNER_UIDS=owner-uids:latest,PADDLE_API_KEY_PRODUCTION=PADDLE_API_KEY_PRODUCTION:latest,PADDLE_WEBHOOK_SECRET_PRODUCTION=PADDLE_WEBHOOK_SECRET_PRODUCTION:latest,PADDLE_PRICE_PRO_GBP_PRODUCTION=PADDLE_PRICE_PRO_GBP_PRODUCTION:latest,PADDLE_PRICE_PRO_USD_PRODUCTION=PADDLE_PRICE_PRO_USD_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_GBP_PRODUCTION=PADDLE_PRICE_PREMIUM_GBP_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_USD_PRODUCTION=PADDLE_PRICE_PREMIUM_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION:latest,PUBLIC_PADDLE_CLIENT_TOKEN_PRODUCTION=PADDLE_CLIENT_TOKEN:latest"
 
       - name: Route 100% traffic to latest revision
         run: |

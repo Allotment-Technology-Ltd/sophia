@@ -184,6 +184,11 @@ const appService = new gcp.cloudrunv2.Service("sophia-app", {
         { name: "GCP_LOCATION",           value: region },
         { name: "GOOGLE_VERTEX_LOCATION", value: "us-central1" },
         { name: "VITE_FIREBASE_PROJECT_ID", value: projectId },
+        { name: "SOPHIA_DATA_BACKEND", value: "neon" },
+        {
+          name: "DATABASE_URL",
+          valueSource: { secretKeyRef: { secret: "neon-database-url", version: "latest" } },
+        },
         {
           name: "ANTHROPIC_API_KEY",
           valueSource: { secretKeyRef: { secret: "anthropic-api-key", version: "latest" } },

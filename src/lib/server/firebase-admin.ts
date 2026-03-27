@@ -2,6 +2,8 @@ import { initializeApp, getApps } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { loadServerEnv } from './env';
+import { createNeonFirestoreCompat } from './neon/neonFirestoreCompat';
+import { useNeonDatastore } from './neon/datastore';
 
 // On Cloud Run, Application Default Credentials work automatically.
 // Local: `pnpm dev` runs scripts/dev.mjs, which resolves GOOGLE_APPLICATION_CREDENTIALS from .env
@@ -36,4 +38,4 @@ if (!getApps().length) {
 }
 
 export const adminAuth = getAuth();
-export const adminDb = getFirestore();
+export const adminDb = useNeonDatastore() ? createNeonFirestoreCompat() : getFirestore();
