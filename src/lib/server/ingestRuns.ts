@@ -429,7 +429,7 @@ class IngestRunManager extends EventEmitter {
     return n;
   }
 
-  createRun(payload: IngestRunPayload, actorEmail: string): string {
+  async createRun(payload: IngestRunPayload, actorEmail: string): Promise<string> {
     if (ingestRunUsesRealChildProcess()) {
       const raw = (process.env.ADMIN_INGEST_MAX_CONCURRENT ?? '').trim();
       const parsed = parseInt(raw || '3', 10);
@@ -476,7 +476,14 @@ class IngestRunManager extends EventEmitter {
     };
 
     this.runs.set(runId, state);
-    void neonCreateIngestRun(state);
+    if (isNeonIngestPersistenceEnabled()) {
+      try {
+        await neonCreateIngestRun(state);
+      } catch (e) {
+        this.runs.delete(runId);
+        throw e;
+      }
+    }
     this.spawnIngestionProcess(runId, snapshot, actorEmail);
     return runId;
   }
