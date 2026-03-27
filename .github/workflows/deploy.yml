@@ -1,11 +1,12 @@
 # SOPHIA — Unified CI/CD Pipeline
 #
-# Handles both application deployments and infrastructure changes in a single
-# workflow. Path-based filters route to the correct job(s) automatically:
+# Handles application deployments; optional Pulumi (off by default during migration).
 #
-#   src/**, scripts/**, Dockerfile, package.json, etc.  →  build + Cloud Run deploy
-#   infra/**                                 →  pulumi preview (PR) / up (main)
-#   both changed                             →  infra first, then app
+#   src/**, scripts/**, Dockerfile, package.json, etc.  →  build + gcloud run deploy
+#   Production DB / Neon: DATABASE_URL + SOPHIA_DATA_BACKEND come from the deploy step
+#   (--set-secrets / --set-env-vars), not Pulumi, while IAC is paused.
+#
+#   infra/**  →  Pulumi preview / up only if repo variable ENABLE_PULUMI_IAC == true
 #
 # TARGET REGION: europe-west2 (London) — all resources are in this region.
 # Region drift was resolved in March 2026: the live us-central1 service was
@@ -21,7 +22,8 @@
 #     WIF_PROVIDER        projects/{N}/locations/global/workloadIdentityPools/{P}/providers/{ID}
 #     WIF_SERVICE_ACCOUNT github-deploy@sophia-488807.iam.gserviceaccount.com
 #     GCP_PROJECT_ID      sophia-488807
-#     PULUMI_ACCESS_TOKEN Pulumi Cloud access token (https://app.pulumi.com/account/tokens)
+#     PULUMI_ACCESS_TOKEN (optional) — only if ENABLE_PULUMI_IAC=true
+#     PULUMI_STACK_NAME (optional) — overrides default stack ref for pulumi/actions
 #
 # AIKIDO: This repo uses the GitHub App for PR checks. Do NOT add AikidoSec/github-actions-workflow
 #   here — Aikido returns 422 if both are enabled. PR scans appear as a separate check from the app.
@@ -36,11 +38,8 @@
 #   AikidoSec/github-actions-workflow — Aikido returns 422. PR scans and status on PRs
 #   come from the installed GitHub App (see user-facing locations below), not from this file.
 #
-# FIRST-TIME INFRA SETUP (run once from your local machine before CI manages it):
-#   pnpm install --filter sophia-infra   # from repo root (infra is a pnpm workspace)
-#   pulumi stack init production
-#   pulumi stack select production
-#   pulumi up   # provisions VPC connector, Cloud Run service, etc. in europe-west2
+# Pulumi (optional): see docs/reference/operations/runbooks.md — paused in CI unless
+#   GitHub repo variable ENABLE_PULUMI_IAC is set to the literal string `true`.
 #
 # VPC CONNECTOR STATUS:
 #   The sophia-connector is now in europe-west2 (was europe-west1).
@@ -79,7 +78,7 @@ on:
         default: false
         type: boolean
       force_infra_deploy:
-        description: "Run Pulumi up on production stack even if infra/** did not change"
+        description: "Run Pulumi up (no-op unless ENABLE_PULUMI_IAC repo var is true)"
         required: false
         default: false
         type: boolean
@@ -223,9 +222,9 @@ jobs:
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
 
-  # ── 3. Pulumi preview (PRs) ────────────────────────────────────────────────
+  # ── 3. Pulumi preview (PRs) — opt-in: repo variable ENABLE_PULUMI_IAC == true ─
   infra-preview:
-    if: github.event_name == 'pull_request' && needs.changes.outputs.infra == 'true'
+    if: vars.ENABLE_PULUMI_IAC == 'true' && github.event_name == 'pull_request' && needs.changes.outputs.infra == 'true'
     needs: [changes, security, codeql]
     runs-on: ubuntu-latest
     defaults:
@@ -257,7 +256,7 @@ jobs:
         id: preview
         with:
           command: preview
-          stack-name: production
+          stack-name: ${{ vars.PULUMI_STACK_NAME || 'adamboon1984-arch-org/production' }}
           work-dir: infra
           comment-on-pr: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -265,9 +264,15 @@ jobs:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
           GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.auth.outputs.credentials_file_path }}
 
-  # ── 4. Pulumi up (push to main) ────────────────────────────────────────────
+  # ── 4. Pulumi up (push to main) — opt-in: ENABLE_PULUMI_IAC == true ──────────
   infra-apply:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.infra == 'true'
+    if: >
+      vars.ENABLE_PULUMI_IAC == 'true' &&
+      github.ref == 'refs/heads/main' &&
+      (
+        (github.event_name == 'push' && needs.changes.outputs.infra == 'true') ||
+        (github.event_name == 'workflow_dispatch' && inputs.force_infra_deploy)
+      )
     needs: [changes, security, codeql]
     runs-on: ubuntu-latest
     defaults:
@@ -300,7 +305,7 @@ jobs:
       - uses: pulumi/actions@v6
         with:
           command: up
-          stack-name: production
+          stack-name: ${{ vars.PULUMI_STACK_NAME || 'adamboon1984-arch-org/production' }}
           work-dir: infra
         env:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}

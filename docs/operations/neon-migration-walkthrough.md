@@ -310,7 +310,9 @@ Sophia’s **GitHub Actions** deploy (`.github/workflows/deploy.yml`) expects:
 | `DATABASE_URL` | GCP Secret Manager secret **`neon-database-url`** (latest) → Cloud Run env `DATABASE_URL` |
 | `SOPHIA_DATA_BACKEND=neon` | Plain env on the **`sophia`** Cloud Run service (set in the same `gcloud run deploy` step) |
 
-Pulumi (`infra/index.ts`) mirrors the same for the **`sophia-app`** template so `pulumi up` stays aligned with CI.
+**Migration mode:** GitHub Actions **does not run Pulumi** unless the repo variable **`ENABLE_PULUMI_IAC`** is set to `true`. Treat the **`gcloud run deploy`** step in `.github/workflows/deploy.yml` as the source of truth for Cloud Run env (including `DATABASE_URL` and `SOPHIA_DATA_BACKEND`). Re-enable Pulumi later when you settle the next IAC / cloud plan.
+
+The `infra/` program still documents intent; optional local `pulumi` is described in [runbooks — Infra (Pulumi)](../reference/operations/runbooks.md).
 
 ### One-time (GCP console or gcloud)
 
