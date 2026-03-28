@@ -301,6 +301,34 @@ Trace the resume flow: admin UI → POST /api/admin/ingest/run/[id]/resume → i
 
 ---
 
+## Verify Neon stored orchestration + staging for one run
+
+Admin worker logs show `orchestration run <16-char-hex>` — that value is the **`ingest_runs.id`** in Neon.
+
+**CLI (recommended):** from repo root with `DATABASE_URL` in `.env` / `.env.local`:
+
+```bash
+pnpm verify:neon-ingest-run -- 7af94186543e7461
+```
+
+Prints row counts for `ingest_runs`, `ingest_run_logs`, `ingest_run_issues`, `ingest_staging_*`, and checks embedding coverage (`meta.embeddings_json` and/or pgvector on claims).
+
+**Neon SQL editor** (same checks manually):
+
+```sql
+-- replace run id
+select id, status, source_url, completed_at from ingest_runs where id = '7af94186543e7461';
+select count(*) as log_lines, max(seq) as max_seq from ingest_run_logs where run_id = '7af94186543e7461';
+select count(*) from ingest_staging_claims where run_id = '7af94186543e7461';
+select count(*) from ingest_staging_relations where run_id = '7af94186543e7461';
+select count(*) from ingest_staging_arguments where run_id = '7af94186543e7461';
+select count(*) from ingest_staging_validation where run_id = '7af94186543e7461';
+```
+
+Compare staging counts to the **final** pipeline summary (e.g. 38 claims after Stage 6). Validation skipped → `ingest_staging_validation` usually **0** rows. **SurrealDB** truth for live graph data lives in Surreal after Sync; Neon holds **durable orchestration, logs, and checkpoints**.
+
+---
+
 ## Phase 8 — Production secrets (Cloud Run / CI)
 
 Sophia’s **GitHub Actions** deploy (`.github/workflows/deploy.yml`) expects:
