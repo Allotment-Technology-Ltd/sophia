@@ -193,6 +193,80 @@ function classifyPassageRole(text: string, sectionTitle?: string | null): {
 	return { role: 'interpretive_commentary', confidence: 0.55 };
 }
 
+/**
+ * Detects non-argumentative boilerplate that produces zero extractable claims.
+ * Used as a pre-filter before LLM extraction to cut token costs.
+ */
+export function shouldSkipPassage(text: string, sectionTitle?: string | null): boolean {
+	const lower = text.toLowerCase();
+	const trimmed = text.trim();
+
+	// Bibliography / references sections
+	if (sectionTitle) {
+		const st = sectionTitle.toLowerCase();
+		if (/^(?:references|bibliography|works cited|further reading|selected bibliography|notes|endnotes|footnotes)$/i.test(st.trim())) {
+			return true;
+		}
+	}
+
+	// Citation-heavy blocks: >=3 lines matching Author (Year) or Author, Year patterns
+	const citationPattern = /(?:^|\n)\s*[A-Z][a-z]+(?:,?\s+[A-Z]\.?\s*)+[\s,]*(?:\(\d{4}\)|\d{4})/g;
+	const citationMatches = trimmed.match(citationPattern);
+	if (citationMatches && citationMatches.length >= 3) return true;
+
+	// DOI / URL-heavy blocks (>=2 DOIs or URLs in a short block)
+	const doiOrUrlCount = (trimmed.match(/\b(?:doi:|https?:\/\/|www\.)\S+/gi) || []).length;
+	if (doiOrUrlCount >= 2 && estimateTokens(trimmed) < 200) return true;
+
+	// Table of contents: numbered section list patterns
+	const tocLinePattern = /^\s*(?:\d+\.)+\s+[A-Z].*(?:\.\s*\d+\s*)?$/gm;
+	const tocMatches = trimmed.match(tocLinePattern);
+	if (tocMatches && tocMatches.length >= 4) return true;
+
+	// Navigation / metadata boilerplate
+	if (/^(?:copyright|©|\(c\)|all rights reserved|reprinted with permission|this (?:article|entry|essay) (?:was )?(?:originally|first) (?:published|appeared))/i.test(trimmed)) {
+		return true;
+	}
+
+	// Acknowledgments
+	if (/^(?:acknowledg(?:e)?ments?|the author (?:thanks|wishes to thank|is grateful|acknowledges))/i.test(trimmed)) {
+		return true;
+	}
+
+	// SEP/IEP standard navigation boilerplate
+	if (/^(?:related entries|other internet resources|academic tools)\s*$/im.test(trimmed)) {
+		return true;
+	}
+
+	// Very short blocks that are purely structural (< 15 words, no argumentative markers)
+	const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+	if (wordCount < 8 && !/\b(?:therefore|because|thus|hence|argues?|claim|objection|reply|thesis)\b/i.test(lower)) {
+		return true;
+	}
+
+	return false;
+}
+
+/**
+ * Filters out boilerplate passages that are unlikely to contain extractable claims.
+ * Returns the filtered array plus a count of how many were removed.
+ */
+export function filterBoilerplatePassages(
+	passages: PassageRecord[]
+): { filtered: PassageRecord[]; removedCount: number; removedTokens: number } {
+	let removedCount = 0;
+	let removedTokens = 0;
+	const filtered = passages.filter((p) => {
+		if (shouldSkipPassage(p.text, p.section_title)) {
+			removedCount++;
+			removedTokens += estimateTokens(p.text);
+			return false;
+		}
+		return true;
+	});
+	return { filtered, removedCount, removedTokens };
+}
+
 export function segmentArgumentativePassages(
 	text: string,
 	options: PassageSegmentationOptions = {}

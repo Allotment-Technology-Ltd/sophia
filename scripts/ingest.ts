@@ -71,7 +71,8 @@ import {
 import {
 	buildPassageBatches,
 	renderPassageBatch,
-	segmentArgumentativePassages
+	segmentArgumentativePassages,
+	filterBoilerplatePassages
 } from '../src/lib/server/ingestion/passageSegmentation.js';
 import { deriveClaimTypingMetadata } from '../src/lib/server/ingestion/claimTyping.js';
 import type {
@@ -97,6 +98,10 @@ const INGEST_MODEL_TIMEOUT_MS = Number(process.env.INGEST_MODEL_TIMEOUT_MS || '1
 const VALIDATION_MODEL_TIMEOUT_MS = Number(process.env.VALIDATION_MODEL_TIMEOUT_MS || '180000');
 
 const INGESTED_DIR = './data/ingested';
+const INGEST_PREFILTER_ENABLED = process.env.INGEST_PREFILTER_ENABLED !== 'false';
+const INGEST_VALIDATION_SAMPLE_RATE = Math.max(0, Math.min(1,
+	Number(process.env.INGEST_VALIDATION_SAMPLE_RATE || '1.0')
+));
 const INGEST_EXTRACTOR_VERSION =
 	process.env.INGEST_EXTRACTOR_VERSION || 'phase1-passage-grounding-v1';
 const LOW_CONFIDENCE_REVIEW_THRESHOLD = Number(
@@ -2278,9 +2283,21 @@ async function main() {
 	const slug = path.basename(txtPath, '.txt');
 	assertValidSourceMetadata(sourceMeta);
 	const sectionTokenLimit = getSectionTokenLimit(sourceMeta.source_type);
-	const passages = segmentArgumentativePassages(sourceText, {
+	const rawPassages = segmentArgumentativePassages(sourceText, {
 		maxTokensPerPassage: Math.min(sectionTokenLimit, 900)
 	});
+
+	let passages = rawPassages;
+	if (INGEST_PREFILTER_ENABLED) {
+		const { filtered, removedCount, removedTokens } = filterBoilerplatePassages(rawPassages);
+		if (removedCount > 0) {
+			console.log(
+				`  [PREFILTER] Removed ${removedCount}/${rawPassages.length} boilerplate passages (~${removedTokens.toLocaleString()} tokens saved)`
+			);
+		}
+		passages = filtered;
+	}
+
 	const extractionBatches = buildPassageBatches(passages, sectionTokenLimit);
 
 	// Admin orchestration + Neon: stages 1–5 use `--stop-before-store`; checkpoints live in Neon.
@@ -3134,17 +3151,28 @@ async function main() {
 					);
 				}
 
-				const validationBatches = buildValidationBatches(
-					allClaims,
-					relations,
-					arguments_,
-					sourceText,
-					sourceMeta.title,
-					validationBatchTarget
-				);
+			let validationBatches = buildValidationBatches(
+				allClaims,
+				relations,
+				arguments_,
+				sourceText,
+				sourceMeta.title,
+				validationBatchTarget
+			);
+
+			if (INGEST_VALIDATION_SAMPLE_RATE < 1.0 && validationBatches.length > 1) {
+				const totalBatches = validationBatches.length;
+				const sampleCount = Math.max(1, Math.round(totalBatches * INGEST_VALIDATION_SAMPLE_RATE));
+				const shuffled = [...validationBatches].sort(() => Math.random() - 0.5);
+				validationBatches = shuffled.slice(0, sampleCount);
 				console.log(
-					`  [INFO] Validation in ${validationBatches.length} batch(es), target ~${validationBatchTarget.toLocaleString()} tokens`
+					`  [SAMPLE] Spot-check validation: ${sampleCount}/${totalBatches} batches selected (${(INGEST_VALIDATION_SAMPLE_RATE * 100).toFixed(0)}% sample rate)`
 				);
+			}
+
+			console.log(
+				`  [INFO] Validation in ${validationBatches.length} batch(es), target ~${validationBatchTarget.toLocaleString()} tokens`
+			);
 				let batchOutputs: ValidationOutput[] = [];
 				let startValidationBatchIndex = 0;
 				if (
