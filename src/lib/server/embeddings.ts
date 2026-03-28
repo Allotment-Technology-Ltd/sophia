@@ -1,70 +1,35 @@
 /**
- * SOPHIA — Embeddings (Vertex AI)
- * 
- * Uses Google Vertex AI text-embedding-005 (768 dimensions)
- * Replaces Voyage AI for zero external vendor dependencies.
- * 
- * Authentication: Application Default Credentials (works automatically on Cloud Run)
+ * SOPHIA — Embeddings (Provider-Abstracted)
+ *
+ * Supports multiple embedding providers behind a unified interface.
+ * Provider selection: EMBEDDING_PROVIDER env var (default: 'vertex')
+ *
+ * Providers:
+ * - vertex: Google Vertex AI text-embedding-005 (768-dim, GCP ADC auth)
+ * - voyage: Voyage AI voyage-4 family (1024-dim, API key auth)
+ *           Supports asymmetric retrieval: voyage-4-lite for documents,
+ *           voyage-4-large for queries (shared embedding space)
  */
 
-import { GoogleAuth } from 'google-auth-library';
 import { loadServerEnv } from './env';
 
-export const EMBEDDING_MODEL = 'text-embedding-005';
-export const EMBEDDING_DIMENSIONS = 768; // text-embedding-005 native dimension
-const EMBED_BATCH_SIZE = Number(process.env.VERTEX_EMBED_BATCH_SIZE || '250');
-/** Lower default when quota allows; increase if you see 429 bursts from Vertex. */
-const EMBED_BATCH_DELAY_MS = Number(process.env.VERTEX_EMBED_BATCH_DELAY_MS || '80');
-const EMBED_MAX_RETRIES = Number(process.env.VERTEX_EMBED_MAX_RETRIES || '6');
-const EMBED_RETRY_BASE_MS = Number(process.env.VERTEX_EMBED_RETRY_BASE_MS || '1500');
+type EmbeddingTaskType = 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY';
 
-function projectId(): string | undefined {
-	loadServerEnv();
-	return (
-		process.env.GOOGLE_VERTEX_PROJECT ||
-		process.env.GCP_PROJECT_ID ||
-		process.env.GOOGLE_CLOUD_PROJECT ||
-		process.env.GCLOUD_PROJECT ||
-		process.env.VITE_FIREBASE_PROJECT_ID
-	);
+interface EmbeddingProvider {
+	readonly name: string;
+	readonly dimensions: number;
+	readonly documentModel: string;
+	readonly queryModel: string;
+	embed(texts: string[], taskType: EmbeddingTaskType, cachedToken?: string | null): Promise<number[][]>;
+	acquireSessionToken?(): Promise<string | null>;
 }
 
-function location(): string {
-	loadServerEnv();
-	return process.env.GOOGLE_VERTEX_LOCATION || process.env.GCP_LOCATION || 'us-central1';
-}
+// ─── Configuration ──────────────────────────────────────────────────────────
 
-// Lazy auth client initialization
-let authClient: GoogleAuth | null = null;
-
-function getAuthClient(): GoogleAuth {
-	if (!authClient) {
-		authClient = new GoogleAuth({
-			scopes: ['https://www.googleapis.com/auth/cloud-platform']
-		});
-	}
-	return authClient;
-}
-
-let totalTokensUsed = 0;
-
-interface VertexEmbeddingRequest {
-	instances: Array<{
-		content: string;
-		taskType?: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY';
-	}>;
-}
-
-interface VertexEmbeddingResponse {
-	predictions: Array<{
-		embeddings: {
-			values: number[];
-		};
-		statistics?: {
-			token_count?: number;
-		};
-	}>;
-}
+const EMBED_BATCH_SIZE = Number(process.env.VERTEX_EMBED_BATCH_SIZE || process.env.EMBED_BATCH_SIZE || '250');
+const EMBED_BATCH_DELAY_MS = Number(process.env.VERTEX_EMBED_BATCH_DELAY_MS || process.env.EMBED_BATCH_DELAY_MS || '80');
+const EMBED_MAX_RETRIES = Number(process.env.VERTEX_EMBED_MAX_RETRIES || process.env.EMBED_MAX_RETRIES || '6');
+const EMBED_RETRY_BASE_MS = Number(process.env.VERTEX_EMBED_RETRY_BASE_MS || process.env.EMBED_RETRY_BASE_MS || '1500');
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -84,93 +49,232 @@ function isRetryableEmbeddingError(error: unknown): boolean {
 	);
 }
 
-/**
- * Call Vertex AI text-embedding-005 via REST API
- * Uses Application Default Credentials (automatic on Cloud Run)
- */
-async function callVertexEmbedding(
-	texts: string[],
-	taskType: 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY' = 'RETRIEVAL_DOCUMENT',
-	cachedAccessToken?: string | null
-): Promise<number[][]> {
-	const PROJECT_ID = projectId();
-	if (!PROJECT_ID) {
-		throw new Error('Vertex AI project ID is required. Set GOOGLE_VERTEX_PROJECT or GCP_PROJECT_ID environment variable.');
-	}
-	const LOCATION = location();
+// ─── Vertex AI Provider ─────────────────────────────────────────────────────
 
-	const url = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${EMBEDDING_MODEL}:predict`;
+function createVertexProvider(): EmbeddingProvider {
+	const { GoogleAuth } = require('google-auth-library') as typeof import('google-auth-library');
 
-	let token = cachedAccessToken?.trim() || null;
-	if (!token) {
-		const auth = getAuthClient();
-		const client = await auth.getClient();
-		const accessToken = await client.getAccessToken();
-		token = accessToken.token ?? null;
+	function projectId(): string | undefined {
+		loadServerEnv();
+		return (
+			process.env.GOOGLE_VERTEX_PROJECT ||
+			process.env.GCP_PROJECT_ID ||
+			process.env.GOOGLE_CLOUD_PROJECT ||
+			process.env.GCLOUD_PROJECT ||
+			process.env.VITE_FIREBASE_PROJECT_ID
+		);
 	}
 
-	if (!token) {
-		throw new Error('Failed to obtain access token for Vertex AI');
+	function location(): string {
+		loadServerEnv();
+		return process.env.GOOGLE_VERTEX_LOCATION || process.env.GCP_LOCATION || 'us-central1';
 	}
 
-	const requestBody: VertexEmbeddingRequest = {
-		instances: texts.map(text => ({
-			content: text,
-			taskType
-		}))
-	};
+	let authClient: InstanceType<typeof GoogleAuth> | null = null;
 
-	const response = await fetch(url, {
-		method: 'POST',
-		headers: {
-			'Authorization': `Bearer ${token}`,
-			'Content-Type': 'application/json'
+	function getAuthClient(): InstanceType<typeof GoogleAuth> {
+		if (!authClient) {
+			authClient = new GoogleAuth({
+				scopes: ['https://www.googleapis.com/auth/cloud-platform']
+			});
+		}
+		return authClient;
+	}
+
+	const model = 'text-embedding-005';
+
+	return {
+		name: 'vertex',
+		dimensions: 768,
+		documentModel: model,
+		queryModel: model,
+
+		async acquireSessionToken(): Promise<string | null> {
+			const auth = getAuthClient();
+			const client = await auth.getClient();
+			const tokenResult = await client.getAccessToken();
+			return tokenResult.token ?? null;
 		},
-		body: JSON.stringify(requestBody)
-	});
 
-	if (!response.ok) {
-		const errorText = await response.text();
-		throw new Error(`Vertex AI embedding failed: ${response.status} ${response.statusText} - ${errorText}`);
-	}
+		async embed(texts, taskType, cachedAccessToken): Promise<number[][]> {
+			const PROJECT_ID = projectId();
+			if (!PROJECT_ID) {
+				throw new Error('Vertex AI project ID is required. Set GOOGLE_VERTEX_PROJECT or GCP_PROJECT_ID.');
+			}
+			const LOCATION = location();
+			const url = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${model}:predict`;
 
-	const data = await response.json() as VertexEmbeddingResponse;
+			let token = cachedAccessToken?.trim() || null;
+			if (!token) {
+				token = await this.acquireSessionToken!();
+			}
+			if (!token) {
+				throw new Error('Failed to obtain access token for Vertex AI');
+			}
 
-	if (!data.predictions || data.predictions.length === 0) {
-		throw new Error('No embeddings returned from Vertex AI');
-	}
+			const response = await fetch(url, {
+				method: 'POST',
+				headers: {
+					'Authorization': `Bearer ${token}`,
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify({
+					instances: texts.map(text => ({ content: text, taskType }))
+				})
+			});
 
-	// Extract embeddings and track tokens
-	const embeddings: number[][] = [];
-	let batchTokens = 0;
+			if (!response.ok) {
+				const errorText = await response.text();
+				throw new Error(`Vertex AI embedding failed: ${response.status} ${response.statusText} - ${errorText}`);
+			}
 
-	for (const prediction of data.predictions) {
-		if (!prediction.embeddings?.values) {
-			throw new Error('Invalid embedding format from Vertex AI');
+			const data = await response.json() as {
+				predictions: Array<{
+					embeddings: { values: number[] };
+					statistics?: { token_count?: number };
+				}>;
+			};
+
+			if (!data.predictions?.length) {
+				throw new Error('No embeddings returned from Vertex AI');
+			}
+
+			const embeddings: number[][] = [];
+			let batchTokens = 0;
+
+			for (const prediction of data.predictions) {
+				if (!prediction.embeddings?.values) {
+					throw new Error('Invalid embedding format from Vertex AI');
+				}
+				embeddings.push(prediction.embeddings.values);
+				if (prediction.statistics?.token_count) {
+					batchTokens += prediction.statistics.token_count;
+				}
+			}
+
+			if (batchTokens > 0) totalTokensUsed += batchTokens;
+			return embeddings;
 		}
-		embeddings.push(prediction.embeddings.values);
-		
-		if (prediction.statistics?.token_count) {
-			batchTokens += prediction.statistics.token_count;
-		}
-	}
-
-	if (batchTokens > 0) {
-		totalTokensUsed += batchTokens;
-	}
-
-	return embeddings;
+	};
 }
 
+// ─── Voyage AI Provider ─────────────────────────────────────────────────────
+
+function createVoyageProvider(): EmbeddingProvider {
+	const docModel = process.env.VOYAGE_DOCUMENT_MODEL || 'voyage-4-lite';
+	const qryModel = process.env.VOYAGE_QUERY_MODEL || 'voyage-4-large';
+
+	function getApiKey(): string {
+		loadServerEnv();
+		const key = process.env.VOYAGE_API_KEY?.trim();
+		if (!key) {
+			throw new Error('VOYAGE_API_KEY is required for the Voyage embedding provider.');
+		}
+		return key;
+	}
+
+	return {
+		name: 'voyage',
+		dimensions: 1024,
+		documentModel: docModel,
+		queryModel: qryModel,
+
+		async embed(texts, taskType): Promise<number[][]> {
+			const apiKey = getApiKey();
+			const model = taskType === 'RETRIEVAL_QUERY' ? qryModel : docModel;
+			const inputType = taskType === 'RETRIEVAL_QUERY' ? 'query' : 'document';
+
+			const response = await fetch('https://api.voyageai.com/v1/embeddings', {
+				method: 'POST',
+				headers: {
+					'Authorization': `Bearer ${apiKey}`,
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify({
+					model,
+					input: texts,
+					input_type: inputType
+				})
+			});
+
+			if (!response.ok) {
+				const errorText = await response.text();
+				throw new Error(`Voyage AI embedding failed: ${response.status} ${response.statusText} - ${errorText}`);
+			}
+
+			const data = await response.json() as {
+				data: Array<{ embedding: number[]; index: number }>;
+				usage?: { total_tokens?: number };
+			};
+
+			if (!data.data?.length) {
+				throw new Error('No embeddings returned from Voyage AI');
+			}
+
+			const sorted = [...data.data].sort((a, b) => a.index - b.index);
+			const embeddings = sorted.map(d => d.embedding);
+
+			if (data.usage?.total_tokens) {
+				totalTokensUsed += data.usage.total_tokens;
+			}
+
+			return embeddings;
+		}
+	};
+}
+
+// ─── Provider Resolution ────────────────────────────────────────────────────
+
+let activeProvider: EmbeddingProvider | null = null;
+
+function resolveProvider(): EmbeddingProvider {
+	if (activeProvider) return activeProvider;
+
+	loadServerEnv();
+	const providerName = (process.env.EMBEDDING_PROVIDER || 'vertex').toLowerCase().trim();
+
+	switch (providerName) {
+		case 'voyage':
+			activeProvider = createVoyageProvider();
+			break;
+		case 'vertex':
+		default:
+			activeProvider = createVertexProvider();
+			break;
+	}
+
+	console.log(`[EMBED] Provider: ${activeProvider.name} (${activeProvider.dimensions}-dim, doc=${activeProvider.documentModel}, query=${activeProvider.queryModel})`);
+	return activeProvider;
+}
+
+export function getEmbeddingProvider(): EmbeddingProvider {
+	return resolveProvider();
+}
+
+export function getEmbeddingModel(): string {
+	return resolveProvider().documentModel;
+}
+
+export const EMBEDDING_MODEL = 'text-embedding-005';
+
+export function getEmbeddingDimensions(): number {
+	return resolveProvider().dimensions;
+}
+
+export const EMBEDDING_DIMENSIONS = 768;
+
+let totalTokensUsed = 0;
+
 /**
- * Embed a single text for document storage/indexing
- * Uses RETRIEVAL_DOCUMENT task type for better representation of semantic content
+ * Embed a single text for document storage/indexing.
+ * Uses RETRIEVAL_DOCUMENT task type for better representation of semantic content.
  */
 export async function embedText(text: string): Promise<number[]> {
 	try {
-		console.log('[EMBED] Embedding document text...');
+		const provider = resolveProvider();
+		console.log(`[EMBED] Embedding document text via ${provider.name}...`);
 
-		const embeddings = await callVertexEmbedding([text], 'RETRIEVAL_DOCUMENT');
+		const embeddings = await provider.embed([text], 'RETRIEVAL_DOCUMENT');
 
 		console.log(
 			`[EMBED] Embedded 1 text (session total: ${totalTokensUsed} tokens)`
@@ -194,32 +298,31 @@ export type EmbedTextsBatchProgress = {
 };
 
 /**
- * Embed multiple texts in batches
- * Vertex AI supports up to 250 instances per request
- * Automatically chunks larger arrays
+ * Embed multiple texts in batches.
+ * Automatically chunks larger arrays and retries transient errors.
  */
 export async function embedTexts(
 	texts: string[],
 	options?: {
-		/** Called after each successful Vertex batch (for disk checkpoints). */
+		/** Called after each successful batch (for disk/Neon checkpoints). */
 		onBatchComplete?: (progress: EmbedTextsBatchProgress) => void | Promise<void>;
 	}
 ): Promise<number[][]> {
 	const BATCH_SIZE = Math.max(1, EMBED_BATCH_SIZE);
 	const embeddings: number[][] = [];
+	const provider = resolveProvider();
 
 	try {
-		console.log(`[EMBED] Embedding ${texts.length} texts in batches of ${BATCH_SIZE}...`);
+		console.log(`[EMBED] Embedding ${texts.length} texts via ${provider.name} in batches of ${BATCH_SIZE}...`);
 
-		const auth = getAuthClient();
-		const client = await auth.getClient();
-		const tokenResult = await client.getAccessToken();
-		const sessionToken = tokenResult.token ?? null;
-		if (!sessionToken) {
-			throw new Error('Failed to obtain access token for Vertex AI (embedTexts session)');
+		let sessionToken: string | null = null;
+		if (provider.acquireSessionToken) {
+			sessionToken = await provider.acquireSessionToken();
+			if (!sessionToken) {
+				throw new Error(`Failed to obtain session token for ${provider.name}`);
+			}
 		}
 
-		// Process in batches of up to 250
 		for (let i = 0; i < texts.length; i += BATCH_SIZE) {
 			const batch = texts.slice(i, i + BATCH_SIZE);
 			const batchNum = Math.floor(i / BATCH_SIZE) + 1;
@@ -229,7 +332,7 @@ export async function embedTexts(
 			let lastError: unknown = null;
 			for (let attempt = 1; attempt <= EMBED_MAX_RETRIES; attempt++) {
 				try {
-					batchEmbeddings = await callVertexEmbedding(batch, 'RETRIEVAL_DOCUMENT', sessionToken);
+					batchEmbeddings = await provider.embed(batch, 'RETRIEVAL_DOCUMENT', sessionToken);
 					break;
 				} catch (error) {
 					lastError = error;
@@ -286,14 +389,16 @@ export async function embedTexts(
 }
 
 /**
- * Embed a query for semantic search/retrieval
- * Uses RETRIEVAL_QUERY task type, optimised for finding relevant documents
+ * Embed a query for semantic search/retrieval.
+ * Uses RETRIEVAL_QUERY task type, optimised for finding relevant documents.
+ * With the Voyage provider, this uses voyage-4-large for SOTA retrieval quality.
  */
 export async function embedQuery(text: string): Promise<number[]> {
 	try {
-		console.log('[EMBED] Embedding query...');
+		const provider = resolveProvider();
+		console.log(`[EMBED] Embedding query via ${provider.name} (${provider.queryModel})...`);
 
-		const embeddings = await callVertexEmbedding([text], 'RETRIEVAL_QUERY');
+		const embeddings = await provider.embed([text], 'RETRIEVAL_QUERY');
 
 		console.log(
 			`[EMBED] Query embedded (session total: ${totalTokensUsed} tokens)`
@@ -344,10 +449,13 @@ export function resetTokenCounter(): void {
  * Log session statistics
  */
 export function logStats(): void {
+	const provider = resolveProvider();
 	console.log('\n[EMBED] === SESSION STATISTICS ===');
+	console.log(`Provider: ${provider.name}`);
 	console.log(`Total tokens embedded: ${totalTokensUsed.toLocaleString()}`);
-	console.log(`Estimated cost (Vertex AI): $${getEstimatedCost()}`);
-	console.log(`Model: ${EMBEDDING_MODEL}`);
-	console.log(`Dimensions: ${EMBEDDING_DIMENSIONS}`);
+	console.log(`Estimated cost: $${getEstimatedCost()}`);
+	console.log(`Document model: ${provider.documentModel}`);
+	console.log(`Query model: ${provider.queryModel}`);
+	console.log(`Dimensions: ${provider.dimensions}`);
 	console.log('');
 }
