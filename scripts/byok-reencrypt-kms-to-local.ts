@@ -17,15 +17,45 @@
 
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
+import { GoogleAuth } from 'google-auth-library';
 import { BYOK_PROVIDER_ORDER } from '../packages/contracts/src/providers.ts';
 import { loadServerEnv } from '../src/lib/server/env.ts';
 import {
-  decryptByokSecret,
   encryptByokSecret,
   type EncryptedSecret
 } from '../src/lib/server/byok/crypto.ts';
 
 loadServerEnv();
+const auth = new GoogleAuth({
+  scopes: ['https://www.googleapis.com/auth/cloud-platform']
+});
+
+function fromBase64(value: string): Buffer {
+  return Buffer.from(value, 'base64');
+}
+
+async function callKmsDecrypt(keyName: string, ciphertext: Buffer): Promise<Buffer> {
+  const url = `https://cloudkms.googleapis.com/v1/${keyName}:decrypt`;
+  const client = await auth.getClient();
+  const headers = await client.getRequestHeaders(url);
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      ...headers,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      ciphertext: ciphertext.toString('base64')
+    })
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`KMS decrypt failed (${response.status}): ${text}`);
+  }
+  const body = (await response.json()) as { plaintext?: string };
+  if (!body.plaintext) throw new Error('KMS decrypt response missing plaintext');
+  return fromBase64(body.plaintext);
+}
 
 function resolveFirebaseProjectId(): string | undefined {
   const direct =
@@ -117,7 +147,11 @@ async function main(): Promise<void> {
         continue;
       }
 
-      const plaintext = await decryptByokSecret(data);
+      const keyName = data.kms_key_name?.trim() || process.env.BYOK_KMS_KEY_NAME?.trim();
+      if (!keyName) {
+        throw new Error(`KMS row ${label} has no kms_key_name and BYOK_KMS_KEY_NAME is unset`);
+      }
+      const plaintext = (await callKmsDecrypt(keyName, fromBase64(data.ciphertext_b64))).toString('utf8');
       const prevForce = process.env.BYOK_FORCE_LOCAL_ENCRYPTION;
       process.env.BYOK_FORCE_LOCAL_ENCRYPTION = 'true';
       try {

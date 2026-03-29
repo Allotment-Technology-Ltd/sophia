@@ -52,7 +52,7 @@ export const POST: RequestHandler = async ({ locals, request, params }) => {
     return problemJson({
       status: 503,
       title: 'Unable to read stored BYOK credential',
-      detail: `${detail} — If this key was encrypted with Cloud KMS, set BYOK_USE_KMS_IN_DEV=true or decrypt in an environment with KMS access.`,
+      detail: `${detail} — If this is a legacy Cloud KMS payload, run scripts/byok-reencrypt-kms-to-local.ts and retry.`,
       requestId
     });
   }
