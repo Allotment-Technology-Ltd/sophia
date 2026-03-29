@@ -1,27 +1,76 @@
 /**
- * Optional Neon Auth (Stack/JWT) verification — wire into `hooks.server.ts` when cutting over from Firebase.
+ * Neon Auth (Better Auth) JWT verification for protected API routes.
  *
- * Env (set all when enabling):
- * - USE_NEON_AUTH=1
- * - NEON_AUTH_ISSUER
- * - NEON_AUTH_JWKS_URL
- * - NEON_AUTH_AUDIENCE (if your tokens include aud)
+ * Configure one of:
+ * - **Simple:** `USE_NEON_AUTH=1` and `NEON_AUTH_BASE_URL` (value from Neon Console / API `base_url`, e.g. `https://….neonauth….neon.tech/neondb/auth`).
+ *   JWKS URL and issuer/audience are derived per [Neon JWT docs](https://neon.com/docs/auth/guides/plugins/jwt).
+ * - **Explicit:** `NEON_AUTH_ISSUER` (JWT `iss` — the **origin** of the auth host, e.g. `https://ep-….aws.neon.tech`) +
+ *   `NEON_AUTH_JWKS_URL` + optional `NEON_AUTH_AUDIENCE`.
+ *
+ * Print `base_url` / `jwks_url` for your branch: `pnpm neon:auth-env` (needs `NEON_API_KEY` + project/branch ids).
  */
 
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 
-let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+const jwksByUrl = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
-function getJwks(): ReturnType<typeof createRemoteJWKSet> {
-  const url = process.env.NEON_AUTH_JWKS_URL?.trim();
-  if (!url) throw new Error('NEON_AUTH_JWKS_URL is not set');
-  if (!jwks) jwks = createRemoteJWKSet(new URL(url));
+function getJwksForUrl(url: string): ReturnType<typeof createRemoteJWKSet> {
+  let jwks = jwksByUrl.get(url);
+  if (!jwks) {
+    jwks = createRemoteJWKSet(new URL(url));
+    jwksByUrl.set(url, jwks);
+  }
   return jwks;
 }
 
 export function isNeonAuthEnabled(): boolean {
   const v = (process.env.USE_NEON_AUTH ?? '').trim().toLowerCase();
   return v === '1' || v === 'true' || v === 'yes';
+}
+
+/** Resolved verification parameters (for tests and debugging). */
+export interface NeonAuthVerificationConfig {
+  jwksUrl: string;
+  issuer: string;
+  audience: string | undefined;
+}
+
+/**
+ * Resolves JWKS URL, issuer, and optional audience from env.
+ * @throws If Neon auth is enabled but configuration is incomplete.
+ */
+export function resolveNeonAuthVerificationConfig(): NeonAuthVerificationConfig {
+  const base = process.env.NEON_AUTH_BASE_URL?.trim();
+  const explicitIssuer = process.env.NEON_AUTH_ISSUER?.trim();
+  const explicitJwks = process.env.NEON_AUTH_JWKS_URL?.trim();
+  const explicitAudience = process.env.NEON_AUTH_AUDIENCE?.trim();
+
+  if (base) {
+    const trimmed = base.replace(/\/$/, '');
+    let origin: string;
+    try {
+      origin = new URL(trimmed).origin;
+    } catch {
+      throw new Error('NEON_AUTH_BASE_URL is not a valid URL');
+    }
+    const jwksUrl = explicitJwks || `${trimmed}/.well-known/jwks.json`;
+    const issuer = explicitIssuer || origin;
+    // Neon Auth JWTs use aud = origin (same as iss host); default when using base URL.
+    const audience = explicitAudience || origin;
+    return { jwksUrl, issuer, audience };
+  }
+
+  if (explicitIssuer && explicitJwks) {
+    return {
+      jwksUrl: explicitJwks,
+      issuer: explicitIssuer,
+      audience: explicitAudience || undefined
+    };
+  }
+
+  throw new Error(
+    'USE_NEON_AUTH is set but auth is not configured: set NEON_AUTH_BASE_URL (from Neon API `base_url`) or both NEON_AUTH_ISSUER and NEON_AUTH_JWKS_URL'
+  );
 }
 
 export interface NeonAuthUserClaims {
@@ -31,16 +80,12 @@ export interface NeonAuthUserClaims {
 }
 
 /**
- * Verifies a Bearer JWT against Neon Auth JWKS. Returns null if Neon auth is disabled or issuer unset.
+ * Verifies a Bearer JWT against Neon Auth JWKS. Returns null if Neon auth is disabled.
  */
 export async function verifyNeonAuthJwt(token: string): Promise<NeonAuthUserClaims | null> {
   if (!isNeonAuthEnabled()) return null;
-  const issuer = process.env.NEON_AUTH_ISSUER?.trim();
-  if (!issuer) {
-    throw new Error('USE_NEON_AUTH is set but NEON_AUTH_ISSUER is missing');
-  }
-  const audience = process.env.NEON_AUTH_AUDIENCE?.trim();
-  const { payload } = await jwtVerify(token, getJwks(), {
+  const { jwksUrl, issuer, audience } = resolveNeonAuthVerificationConfig();
+  const { payload } = await jwtVerify(token, getJwksForUrl(jwksUrl), {
     issuer,
     ...(audience ? { audience } : {})
   });

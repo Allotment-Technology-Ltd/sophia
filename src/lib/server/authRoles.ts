@@ -9,6 +9,8 @@ export interface AuthenticatedUserProfile {
   email: string | null;
   displayName: string | null;
   photoURL: string | null;
+  /** Set when Bearer verification used Neon Auth after Firebase failed (dual migration). */
+  authProvider?: 'firebase' | 'neon';
 }
 
 export interface UserRoleRecord {
@@ -69,6 +71,37 @@ export function hasOwnerRole(user: { role?: string | null; roles?: string[] | nu
   );
 }
 
+/**
+ * When the same person signs in with Neon Auth, `sub` differs from the old Firebase `uid`.
+ * Merge app roles from other `users/*` docs that share the normalized email (Firebase-era rows).
+ */
+async function legacyAppRolesFromOtherUserDocsByEmail(
+  email: string | null,
+  currentUid: string
+): Promise<AppUserRole[]> {
+  if (!email) return [];
+  try {
+    const snap = await adminDb.collection('users').where('email', '==', email).limit(25).get();
+    const found: AppUserRole[] = [];
+    for (const doc of snap.docs) {
+      if (doc.id === currentUid) continue;
+      const d = doc.data() as Record<string, unknown>;
+      const single = migrateLegacyRoleToken(d.role);
+      if (single) found.push(single);
+      for (const r of normalizeRoles(d.roles, 'user')) {
+        found.push(r);
+      }
+    }
+    return found;
+  } catch (err) {
+    console.warn(
+      '[AUTH] legacy user role lookup by email failed:',
+      err instanceof Error ? err.message : String(err)
+    );
+    return [];
+  }
+}
+
 export async function syncAuthenticatedUserRole(
   profile: AuthenticatedUserProfile
 ): Promise<UserRoleRecord> {
@@ -79,10 +112,13 @@ export async function syncAuthenticatedUserRole(
 
   const primaryRole = resolvePrimaryRole(existing, email);
   const existingRoles = normalizeRoles(existing?.roles, primaryRole);
+  const legacyFromFirebaseUid =
+    profile.authProvider === 'neon' ? await legacyAppRolesFromOtherUserDocsByEmail(email, profile.uid) : [];
   const roles = Array.from(
     new Set<AppUserRole>([
       ...existingRoles,
       primaryRole,
+      ...legacyFromFirebaseUid,
       ...(email && SEEDED_OWNER_EMAILS.has(email) ? (['owner'] as AppUserRole[]) : [])
     ])
   );
@@ -96,7 +132,7 @@ export async function syncAuthenticatedUserRole(
       role,
       roles,
       auth: {
-        provider: 'google',
+        provider: profile.authProvider === 'neon' ? 'neon_auth' : 'google',
         last_authenticated_at: Timestamp.now()
       },
       updated_at: Timestamp.now(),

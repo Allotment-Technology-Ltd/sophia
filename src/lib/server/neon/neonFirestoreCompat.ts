@@ -1,5 +1,6 @@
 /**
- * Firestore-shaped API on `sophia_documents` when SOPHIA_DATA_BACKEND=neon.
+ * Firestore-shaped API on `sophia_documents` when `useNeonDatastore()` is true
+ * (DATABASE_URL set and SOPHIA_DATA_BACKEND not `firestore`).
  */
 
 import { Timestamp } from 'firebase-admin/firestore';

@@ -1,5 +1,5 @@
-import { adminAuth } from '$lib/server/firebase-admin';
 import { isSeedOwnerEmail, syncAuthenticatedUserRole, type UserRoleRecord } from '$lib/server/authRoles';
+import { verifyBearerTokenForApi } from '$lib/server/bearerAuthVerification';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
 import type { Handle } from '@sveltejs/kit';
 
@@ -20,15 +20,15 @@ export const handle: Handle = async ({ event, resolve }) => {
       return problemJson({
         status: 401,
         title: 'Authentication required',
-        detail: 'Provide a valid Firebase bearer token in Authorization header.',
+        detail: 'Provide a valid bearer token (Firebase ID token or Neon Auth JWT) in the Authorization header.',
         requestId
       });
     }
 
     try {
       const token = authHeader.slice(7);
-      const decoded = await adminAuth.verifyIdToken(token);
-      const fallbackRole = isSeedOwnerEmail(decoded.email) ? 'owner' : 'user';
+      const profile = await verifyBearerTokenForApi(token);
+      const fallbackRole = isSeedOwnerEmail(profile.email) ? 'owner' : 'user';
       let roleRecord: UserRoleRecord = {
         role: fallbackRole,
         roles: [fallbackRole]
@@ -36,10 +36,11 @@ export const handle: Handle = async ({ event, resolve }) => {
 
       try {
         roleRecord = await syncAuthenticatedUserRole({
-          uid: decoded.uid,
-          email: decoded.email ?? null,
-          displayName: decoded.name ?? null,
-          photoURL: decoded.picture ?? null
+          uid: profile.uid,
+          email: profile.email,
+          displayName: profile.displayName,
+          photoURL: profile.photoURL,
+          authProvider: profile.authProvider
         });
       } catch (roleSyncError) {
         console.warn(
@@ -49,22 +50,22 @@ export const handle: Handle = async ({ event, resolve }) => {
       }
 
       event.locals.user = {
-        uid: decoded.uid,
-        email: decoded.email ?? null,
-        displayName: decoded.name ?? null,
-        photoURL: decoded.picture ?? null,
+        uid: profile.uid,
+        email: profile.email,
+        displayName: profile.displayName,
+        photoURL: profile.photoURL,
         role: roleRecord.role,
         roles: roleRecord.roles
       };
     } catch (err) {
       console.warn(
-        '[AUTH] verifyIdToken failed:',
+        '[AUTH] bearer verification failed:',
         err instanceof Error ? err.message : String(err)
       );
       return problemJson({
         status: 401,
         title: 'Authentication failed',
-        detail: 'The provided Firebase bearer token is invalid.',
+        detail: 'The provided bearer token is invalid or expired.',
         requestId
       });
     }

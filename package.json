@@ -39,6 +39,7 @@
     "migrate": "bash scripts/migrate-to-europe-west2.sh",
     "migrate:firestore-to-neon": "tsx scripts/migrate-firestore-to-neon.ts",
     "db:ping": "tsx scripts/db-ping.ts",
+    "neon:auth-env": "tsx --env-file=.env scripts/neon-auth-print-env.ts",
     "verify:neon-ingest-run": "tsx scripts/verify-neon-ingest-run.ts",
     "verify:prod-ingest": "bash scripts/verify-prod-ingest-isolated.sh"
   },
@@ -51,6 +52,7 @@
     "@anthropic-ai/sdk": "^0.26.0",
     "@google-cloud/logging": "^11.1.0",
     "@google/generative-ai": "^0.24.1",
+    "@neondatabase/neon-js": "0.2.0-beta.1",
     "@neondatabase/serverless": "^0.10.4",
     "@restormel/aaif": "workspace:*",
     "@restormel/contracts": "workspace:*",

@@ -23,10 +23,10 @@ export function buildValidationSourceSnippet(
 
 	const starts = claims
 		.map((claim) => claim.source_span_start)
-		.filter((value): value is number => Number.isFinite(value) && value >= 0);
+		.filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0);
 	const ends = claims
 		.map((claim) => claim.source_span_end)
-		.filter((value): value is number => Number.isFinite(value) && value > 0);
+		.filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0);
 	if (starts.length === 0 || ends.length === 0) {
 		return sourceText.slice(0, maxChars);
 	}
