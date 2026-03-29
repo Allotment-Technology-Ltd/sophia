@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
-  mockCreateVertex,
   mockCreateAnthropic,
   mockCreateGoogleGenerativeAI,
   mockCreateMistral,
@@ -9,7 +8,6 @@ const {
   mockLoadServerEnv,
   mockResolveProviderDecision
 } = vi.hoisted(() => ({
-  mockCreateVertex: vi.fn(() => vi.fn((modelId: string) => `vertex:${modelId}`)),
   mockCreateAnthropic: vi.fn(() => vi.fn((modelId: string) => `anthropic:${modelId}`)),
   mockCreateGoogleGenerativeAI: vi.fn(() => vi.fn((modelId: string) => `google:${modelId}`)),
   mockCreateMistral: vi.fn(() => vi.fn((modelId: string) => `mistral:${modelId}`)),
@@ -20,10 +18,6 @@ const {
   }),
   mockLoadServerEnv: vi.fn(),
   mockResolveProviderDecision: vi.fn()
-}));
-
-vi.mock('@ai-sdk/google-vertex', () => ({
-  createVertex: mockCreateVertex
 }));
 
 vi.mock('@ai-sdk/anthropic', () => ({
@@ -54,7 +48,8 @@ describe('resolveReasoningModelRoute', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-    process.env.GOOGLE_VERTEX_PROJECT = 'test-project';
+    process.env.GOOGLE_AI_API_KEY = 'AIza-default-test';
+    delete process.env.GOOGLE_VERTEX_PROJECT;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.MISTRAL_API_KEY;
   });
@@ -87,12 +82,14 @@ describe('resolveReasoningModelRoute', () => {
   });
 
   it('throws when strict callers receive an unavailable provider selection', async () => {
+    delete process.env.GOOGLE_AI_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
     mockResolveProviderDecision.mockResolvedValue({
-      provider: 'anthropic',
-      model: 'claude-3-5-sonnet',
+      provider: 'mistral',
+      model: 'mistral-large-latest',
       source: 'restormel',
       routeId: 'interactive',
-      explanation: 'route=interactive step=0 provider=anthropic model=claude-3-5-sonnet'
+      explanation: 'route=interactive step=0 provider=mistral'
     });
 
     const { resolveReasoningModelRoute } = await import('./vertex');
@@ -102,7 +99,7 @@ describe('resolveReasoningModelRoute', () => {
         routeId: 'interactive',
         failureMode: 'error'
       })
-    ).rejects.toThrow('anthropic provider requested but no BYOK key or platform API key is configured');
+    ).rejects.toThrow('mistral provider requested but no BYOK key or platform API key is configured');
   });
 
   it('uses chat-completions path for non-openai compatible providers', async () => {
@@ -121,6 +118,42 @@ describe('resolveReasoningModelRoute', () => {
 
     expect(route.provider).toBe('openrouter');
     expect(route.model).toBe('openai-chat:openrouter/auto');
+  });
+
+  it('uses @ai-sdk/google for platform vertex when GOOGLE_AI_API_KEY is set', async () => {
+    process.env.GOOGLE_AI_API_KEY = 'AIza-test';
+    mockResolveProviderDecision.mockResolvedValue({
+      provider: 'vertex',
+      model: 'gemini-2.5-flash',
+      source: 'restormel',
+      routeId: 'interactive',
+      explanation: 'route=interactive step=0 provider=vertex model=gemini-2.5-flash'
+    });
+
+    const { resolveReasoningModelRoute } = await import('./vertex');
+    const route = await resolveReasoningModelRoute({ routeId: 'interactive' });
+
+    expect(route.provider).toBe('vertex');
+    expect(route.model).toBe('google:gemini-2.5-flash');
+    expect(mockCreateGoogleGenerativeAI).toHaveBeenCalled();
+  });
+
+  it('throws when platform vertex is selected but GOOGLE_AI_API_KEY is unset', async () => {
+    delete process.env.GOOGLE_AI_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+    mockResolveProviderDecision.mockResolvedValue({
+      provider: 'vertex',
+      model: 'gemini-2.5-flash',
+      source: 'restormel',
+      routeId: 'interactive',
+      explanation: 'route=interactive step=0 provider=vertex model=gemini-2.5-flash'
+    });
+
+    const { resolveReasoningModelRoute } = await import('./vertex');
+
+    await expect(resolveReasoningModelRoute({ routeId: 'interactive', failureMode: 'error' })).rejects.toThrow(
+      /vertex provider requested/
+    );
   });
 
   it('uses @ai-sdk/mistral for Mistral (not OpenAI-compatible client; avoids max_completion_tokens 422)', async () => {

@@ -122,10 +122,24 @@ function decryptLocal(secret: EncryptedSecret): string {
 }
 
 let loggedDevLocalEncryptHint = false;
+let loggedKmsEncryptDisabledHint = false;
 
 function shouldUseKmsForEncrypt(): string | undefined {
   const keyName = process.env.BYOK_KMS_KEY_NAME?.trim();
   if (!keyName) return undefined;
+
+  const kmsEncryptDisabled =
+    process.env.BYOK_DISABLE_CLOUD_KMS_ENCRYPT === '1' ||
+    process.env.BYOK_DISABLE_CLOUD_KMS_ENCRYPT === 'true';
+  if (kmsEncryptDisabled) {
+    if (!loggedKmsEncryptDisabledHint) {
+      loggedKmsEncryptDisabledHint = true;
+      console.info(
+        '[BYOK] Cloud KMS encrypt disabled (BYOK_DISABLE_CLOUD_KMS_ENCRYPT). New credentials use local AES-256-GCM.'
+      );
+    }
+    return undefined;
+  }
 
   const forceLocal =
     process.env.BYOK_FORCE_LOCAL_ENCRYPTION === '1' ||

@@ -1,4 +1,3 @@
-import { createVertex } from '@ai-sdk/google-vertex';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createMistral } from '@ai-sdk/mistral';
@@ -21,43 +20,6 @@ import {
   type RestormelStepChainEntry
 } from './restormel';
 import { resolveProviderDecision, type ResolveFailureKind } from './resolve-provider';
-
-// Lazy initialization - create vertex client only when first called
-let vertexInstance: ReturnType<typeof createVertex> | null = null;
-
-function initializeVertex() {
-  if (vertexInstance) return vertexInstance;
-  loadServerEnv();
-
-  const project =
-    process.env.GOOGLE_VERTEX_PROJECT ||
-    process.env.GCP_PROJECT_ID ||
-    process.env.GOOGLE_CLOUD_PROJECT ||
-    process.env.GCLOUD_PROJECT ||
-    process.env.VITE_FIREBASE_PROJECT_ID;
-  const location = process.env.GOOGLE_VERTEX_LOCATION || process.env.GCP_LOCATION || 'us-central1';
-
-  console.log(`[Vertex] Initializing — project=${project ?? '(missing)'} location=${location}`);
-
-  if (!project) {
-    console.error('[Vertex] FATAL: No project ID found. Checked: GOOGLE_VERTEX_PROJECT, GCP_PROJECT_ID, GOOGLE_CLOUD_PROJECT, GCLOUD_PROJECT, VITE_FIREBASE_PROJECT_ID');
-    throw new Error('Vertex AI project ID is required. Set GOOGLE_VERTEX_PROJECT or GCP_PROJECT_ID environment variable.');
-  }
-
-  try {
-    vertexInstance = createVertex({ project, location });
-    console.log(`[Vertex] Client created successfully — project=${project} location=${location}`);
-  } catch (err) {
-    console.error('[Vertex] createVertex() threw:', err instanceof Error ? err.stack : String(err));
-    throw err;
-  }
-
-  return vertexInstance;
-}
-
-function getVertex() {
-  return initializeVertex();
-}
 
 let anthropicInstance: ReturnType<typeof createAnthropic> | null = null;
 const anthropicByApiKey = new Map<string, ReturnType<typeof createAnthropic>>();
@@ -91,8 +53,6 @@ function getGoogleForApiKey(apiKey: string) {
 }
 
 function getPlatformApiKey(provider: ReasoningProvider): string | undefined {
-  if (provider === 'vertex') return undefined;
-  if (provider === 'anthropic') return process.env.ANTHROPIC_API_KEY?.trim() || undefined;
   const envName = REASONING_PROVIDER_PLATFORM_API_KEY_ENV[provider];
   if (!envName) return undefined;
   return process.env[envName]?.trim() || undefined;
@@ -151,6 +111,7 @@ export interface ReasoningModelRoute {
   model: any;
   provider: ReasoningProvider;
   modelId: string;
+  /** Reserved; Google Search grounding via Vertex ADC was removed with Phase 3c (GCP LLM exit). */
   supportsGrounding: boolean;
   credentialSource: 'byok' | 'platform';
   routingSource?: 'restormel' | 'requested' | 'degraded_default';
@@ -253,13 +214,20 @@ function buildVertexRoute(modelId: string, byokVertexKey?: string): ReasoningMod
     };
   }
 
-  return {
-    model: getVertex()(modelId),
-    provider: 'vertex',
-    modelId,
-    supportsGrounding: true,
-    credentialSource: 'platform'
-  };
+  const platformGoogleKey = getPlatformApiKey('vertex');
+  if (platformGoogleKey) {
+    return {
+      model: getGoogleForApiKey(platformGoogleKey)(modelId),
+      provider: 'vertex',
+      modelId,
+      supportsGrounding: false,
+      credentialSource: 'platform'
+    };
+  }
+
+  throw new Error(
+    'Gemini (catalog provider `vertex`) requires GOOGLE_AI_API_KEY or a stored Gemini/Google BYOK key. Vertex ADC is not supported.'
+  );
 }
 
 function buildAnthropicRoute(modelId: string, byokAnthropicKey?: string): ReasoningModelRoute {
@@ -341,26 +309,30 @@ function hasProviderAccess(
   providerApiKeys?: ProviderApiKeys
 ): boolean {
   if (providerApiKeys?.[provider]?.trim()) return true;
-  if (provider === 'vertex') return true;
   return Boolean(getPlatformApiKey(provider));
 }
 
 function buildSafeDefaultDecision(
   type: 'reasoning' | 'extraction',
   depthMode: 'quick' | 'standard' | 'deep',
-  pass: RoutingPass
+  pass: RoutingPass,
+  providerApiKeys?: ProviderApiKeys
 ): { provider: ReasoningProvider; model: string; explanation: string } {
-  const provider = DEFAULT_STANDARD_PROVIDER;
-  const model =
-    type === 'extraction'
-      ? getDefaultExtractionModelId(provider)
-      : getDefaultReasoningModelId(provider, depthMode, pass);
-
-  return {
-    provider,
-    model,
-    explanation: `Restormel resolve was unavailable, so Sophia used the ${provider}/${model} degraded default.`
-  };
+  for (const provider of REASONING_PROVIDER_ORDER) {
+    if (!hasProviderAccess(provider, providerApiKeys)) continue;
+    const model =
+      type === 'extraction'
+        ? getDefaultExtractionModelId(provider)
+        : getDefaultReasoningModelId(provider, depthMode, pass);
+    return {
+      provider,
+      model,
+      explanation: `Restormel resolve was unavailable, so Sophia used the ${provider}/${model} degraded default.`
+    };
+  }
+  throw new Error(
+    'No AI provider credentials are configured. Set at least one of: GOOGLE_AI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, … (see .env.example).'
+  );
 }
 
 async function resolveRoute(options: {
@@ -394,7 +366,12 @@ async function resolveRoute(options: {
 }): Promise<ReasoningModelRoute> {
   const depthMode = options.depthMode ?? 'standard';
   const pass = options.pass ?? 'generic';
-  const safeDefault = buildSafeDefaultDecision(options.type, depthMode, pass);
+  const safeDefault = buildSafeDefaultDecision(
+    options.type,
+    depthMode,
+    pass,
+    options.providerApiKeys
+  );
   const decision = await resolveProviderDecision({
     preferredProvider: options.requestedProvider,
     preferredModel: options.requestedModelId,
@@ -590,7 +567,7 @@ export function getAvailableReasoningModels(options?: {
     const byokKey = options?.providerApiKeys?.[provider]?.trim();
     const canUseByok = Boolean(byokKey);
     const canUsePlatform =
-      includePlatformProviders && (provider === 'vertex' ? true : Boolean(getPlatformApiKey(provider)));
+      includePlatformProviders && Boolean(getPlatformApiKey(provider));
 
     if (!canUseByok && !canUsePlatform) continue;
 
@@ -627,9 +604,3 @@ export function trackTokens(inputTokens: number, outputTokens: number): void {
   console.log(`[Session] Input: ${sessionTokens.input} | Output: ${sessionTokens.output}`);
 }
 
-/**
- * Get Google Search grounding tool from the Vertex AI provider.
- */
-export function getGroundingTool() {
-  return getVertex().tools.googleSearch({});
-}

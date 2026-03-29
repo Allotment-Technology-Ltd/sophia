@@ -216,6 +216,8 @@ export const VOYAGE_EMBEDDING_MODEL_CATALOG: string[] = [
 ];
 
 export const REASONING_PROVIDER_PLATFORM_API_KEY_ENV: Partial<Record<ReasoningProvider, string>> = {
+  /** Google AI Studio / Gemini API key — preferred platform path for `vertex` catalog models (no ADC). */
+  vertex: 'GOOGLE_AI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
   openai: 'OPENAI_API_KEY',
   groq: 'GROQ_API_KEY',

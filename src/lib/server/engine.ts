@@ -1,11 +1,6 @@
 import { generateObject, generateText, streamText } from 'ai';
 import { z } from 'zod';
-import {
-  resolveReasoningModelRoute,
-  type ReasoningModelRoute,
-  trackTokens,
-  getGroundingTool
-} from './vertex';
+import { resolveReasoningModelRoute, type ReasoningModelRoute, trackTokens } from './vertex';
 import type { ProviderApiKeys } from './byok/types';
 import { getAnalysisSystemPrompt, buildAnalysisUserPrompt } from './prompts/analysis';
 import { getCritiqueSystemPrompt, buildCritiqueUserPrompt } from './prompts/critique';
@@ -318,13 +313,6 @@ async function streamPassWithContinuation(
       maxOutputTokens: maxTokens,
       system: systemPrompt,
       messages,
-      ...(modelRoute.supportsGrounding
-        ? {
-            tools: {
-              googleSearch: getGroundingTool() as any
-            }
-          }
-        : {}),
       onError: ({ error }) => {
         if (!streamFailure) {
           streamFailure = error;
@@ -772,13 +760,6 @@ export async function runDialecticalEngine(
           maxOutputTokens: analysisMaxOutputTokens,
           system: analysisSystem,
           messages,
-          ...(analysisModelRoute.supportsGrounding
-            ? {
-                tools: {
-                  googleSearch: getGroundingTool() as any
-                }
-              }
-            : {}),
           onError: ({ error }) => {
             if (!streamFailure) {
               streamFailure = error;
