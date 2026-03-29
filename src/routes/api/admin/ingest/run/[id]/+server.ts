@@ -11,7 +11,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
     return json({ error: 'Missing run ID' }, { status: 400 });
   }
 
-  const state = ingestRunManager.getState(runId);
+  const state = await ingestRunManager.getStateAsync(runId);
   if (!state) {
     return json({ error: 'Run not found' }, { status: 404 });
   }

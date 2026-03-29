@@ -32,9 +32,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
   try {
     const runId = await ingestRunManager.createRun(normalized, actor.email || 'unknown');
+    const state = await ingestRunManager.getStateAsync(runId);
     const execution = getIngestExecutionInfo();
     return json(
-      { run_id: runId, status: 'running', execution },
+      { run_id: runId, status: state?.status ?? 'running', execution },
       { status: 201 }
     );
   } catch (error) {

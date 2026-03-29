@@ -1,4 +1,4 @@
-import { asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import type { IngestIssueRecord } from '$lib/server/ingestRunIssues';
 import type { IngestRunPayload, IngestRunState, StageStatus } from '$lib/server/ingestRuns';
 import { getDrizzleDb } from './neon';
@@ -252,6 +252,39 @@ export async function neonLoadIngestRun(runId: string): Promise<IngestRunState |
   };
 
   return state;
+}
+
+/**
+ * Claims the oldest queued ingest run with a compare-and-swap update.
+ * Safe for multiple pollers; losers simply receive null and retry later.
+ */
+export async function neonClaimNextQueuedRun(): Promise<IngestRunState | null> {
+  if (!isNeonIngestPersistenceEnabled()) return null;
+  const db = getDrizzleDb();
+
+  const candidate = await db
+    .select({ id: ingestRuns.id })
+    .from(ingestRuns)
+    .where(eq(ingestRuns.status, 'queued'))
+    .orderBy(asc(ingestRuns.createdAt))
+    .limit(1);
+
+  const runId = candidate[0]?.id;
+  if (!runId) return null;
+
+  const claimed = await db
+    .update(ingestRuns)
+    .set({
+      status: 'running',
+      currentAction: 'Dequeued by worker',
+      currentStageKey: 'fetch',
+      updatedAt: new Date()
+    })
+    .where(and(eq(ingestRuns.id, runId), eq(ingestRuns.status, 'queued')))
+    .returning({ id: ingestRuns.id });
+
+  if (claimed.length === 0) return null;
+  return await neonLoadIngestRun(runId);
 }
 
 export async function neonListRecentReportRows(limit: number): Promise<

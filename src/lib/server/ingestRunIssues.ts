@@ -282,7 +282,7 @@ function summarizeIssues(issues: IngestIssueRecord[]): Record<string, number> {
 export interface IngestRunSnapshotForReport {
   id: string;
   actorEmail?: string;
-  status: 'running' | 'awaiting_sync' | 'done' | 'error';
+  status: 'queued' | 'running' | 'awaiting_sync' | 'done' | 'error';
   payload: {
     source_url: string;
     source_type: string;

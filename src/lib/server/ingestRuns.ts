@@ -10,6 +10,7 @@ import { EventEmitter } from 'events';
 import { buildLocalTsxSpawnArgs, findFetchedSourceFile } from '$lib/server/adminOperations';
 import type { IngestionPipelinePreset } from '$lib/ingestionPipelineModelRequirements';
 import {
+  neonClaimNextQueuedRun,
   neonAppendLogLine,
   neonBumpRunActivity,
   neonCreateIngestRun,
@@ -20,6 +21,7 @@ import {
 import { appendIssueFromLogLine, persistIngestRunReport, type IngestIssueRecord } from '$lib/server/ingestRunIssues';
 import { buildOperatorByokProcessEnv } from '$lib/server/byok/buildOperatorIngestEnv';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
+import { query as dbQuery } from '$lib/server/db';
 
 export interface IngestRunPayload {
   source_url: string;
@@ -72,6 +74,10 @@ export interface IngestRunPayload {
   };
   /** Recorded in Firestore for analytics (budget / balanced / complexity). */
   pipeline_preset?: IngestionPipelinePreset;
+  /** Optional link queue record id for self-serve/nightly promotion flow. */
+  queue_record_id?: string;
+  /** Optional queue attempt counter carried from link_ingestion_queue. */
+  queue_attempt_count?: number;
 }
 
 function batchOverridesToEnv(
@@ -246,7 +252,7 @@ export interface StageStatus {
 /** Lightweight row for admin “all ingestions” list (in-memory only). */
 export interface IngestRunSummary {
   id: string;
-  status: 'running' | 'awaiting_sync' | 'done' | 'error';
+  status: 'queued' | 'running' | 'awaiting_sync' | 'done' | 'error';
   createdAt: number;
   completedAt?: number;
   sourceUrl: string;
@@ -257,7 +263,7 @@ export interface IngestRunSummary {
 
 export interface IngestRunState {
   id: string;
-  status: 'running' | 'awaiting_sync' | 'done' | 'error';
+  status: 'queued' | 'running' | 'awaiting_sync' | 'done' | 'error';
   stages: Record<string, StageStatus>;
   logLines: string[];
   error?: string;
@@ -308,6 +314,57 @@ function normalizeSourceTypeForFetch(sourceType: string): string {
 function ingestRunUsesRealChildProcess(): boolean {
   const v = (process.env.ADMIN_INGEST_RUN_REAL ?? '').trim().toLowerCase();
   return v === '1' || v === 'true' || v === 'yes';
+}
+
+function neonQueueEnabled(): boolean {
+  const raw = (process.env.INGEST_QUEUE_ENABLED ?? '').trim().toLowerCase();
+  if (raw === '0' || raw === 'false' || raw === 'no') return false;
+  return ingestRunUsesRealChildProcess() && isNeonIngestPersistenceEnabled();
+}
+
+function inferSourceTypeFromUrl(sourceUrl: string): string {
+  try {
+    const url = new URL(sourceUrl);
+    const host = url.hostname.toLowerCase();
+    const pathname = url.pathname.toLowerCase();
+    if (host === 'plato.stanford.edu' || host.endsWith('.plato.stanford.edu')) return 'sep_entry';
+    if (host === 'iep.utm.edu' || host.endsWith('.iep.utm.edu')) return 'iep_entry';
+    if (host === 'gutenberg.org' || host.endsWith('.gutenberg.org')) return 'book';
+    if (pathname.endsWith('.pdf') || host === 'arxiv.org' || host.endsWith('.arxiv.org')) return 'paper';
+  } catch {
+    // fall through
+  }
+  return 'institutional';
+}
+
+type LinkQueuePromotionRow = {
+  id: string;
+  canonical_url: string;
+  attempt_count?: number;
+};
+
+async function markLinkedQueueStatus(
+  queueRecordId: string,
+  status: 'queued' | 'approved' | 'ingesting' | 'ingested' | 'failed',
+  opts?: { lastError?: string | null; ingested?: boolean; attemptCount?: number }
+): Promise<void> {
+  await dbQuery(
+    `UPDATE type::thing($id) MERGE {
+       status: $status,
+       updated_at: time::now(),
+       attempt_count: $attempt_count,
+       last_error: $last_error,
+       ingested_at: if $mark_ingested then time::now() else ingested_at end
+     }
+     RETURN AFTER`,
+    {
+      id: queueRecordId,
+      status,
+      attempt_count: opts?.attemptCount ?? null,
+      last_error: opts?.lastError ?? null,
+      mark_ingested: opts?.ingested === true
+    }
+  );
 }
 
 export interface IngestExecutionInfo {
@@ -396,6 +453,107 @@ class IngestRunManager extends EventEmitter {
   private runs: Map<string, IngestRunState> = new Map();
   private maxLogLines = 500;
   private snapshotPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private queuePollTimer: ReturnType<typeof setInterval> | null = null;
+  private queuePollBusy = false;
+  private queueLinkPromotionBusy = false;
+
+  constructor() {
+    super();
+    this.startQueuePollingIfEnabled();
+  }
+
+  private startQueuePollingIfEnabled(): void {
+    if (!neonQueueEnabled()) return;
+    if (this.queuePollTimer) return;
+    this.queuePollTimer = setInterval(() => {
+      void this.pollQueueOnce();
+    }, 2000);
+    // Kick immediately so newly queued runs begin promptly.
+    void this.pollQueueOnce();
+  }
+
+  private async pollQueueOnce(): Promise<void> {
+    if (!neonQueueEnabled()) return;
+    if (this.queuePollBusy) return;
+    this.queuePollBusy = true;
+    try {
+      await this.promoteApprovedLinkQueueRows();
+      const raw = (process.env.ADMIN_INGEST_MAX_CONCURRENT ?? '').trim();
+      const parsed = parseInt(raw || '3', 10);
+      const maxConcurrent = Number.isFinite(parsed) ? Math.max(1, Math.min(20, parsed)) : 3;
+      if (this.activeChildProcessCount() >= maxConcurrent) return;
+
+      const claimed = await neonClaimNextQueuedRun();
+      if (!claimed) return;
+      this.runs.set(claimed.id, claimed);
+      this.addLog(claimed.id, '[QUEUE] Claimed queued run for worker execution.');
+      this.spawnIngestionProcess(claimed.id, claimed.payload, claimed.actorEmail || 'system');
+    } finally {
+      this.queuePollBusy = false;
+    }
+  }
+
+  private async promoteApprovedLinkQueueRows(): Promise<void> {
+    if (this.queueLinkPromotionBusy) return;
+    const enabled = (process.env.ENABLE_SELF_SERVE_INGESTION_QUEUE ?? 'true').trim().toLowerCase();
+    if (enabled === '0' || enabled === 'false' || enabled === 'no') return;
+    this.queueLinkPromotionBusy = true;
+    try {
+      const batchRaw = (process.env.LINK_QUEUE_PROMOTION_BATCH_SIZE ?? '5').trim();
+      const batch = Math.max(1, Math.min(20, parseInt(batchRaw, 10) || 5));
+      const rows = await dbQuery<LinkQueuePromotionRow[]>(
+        `SELECT id, canonical_url, attempt_count
+         FROM link_ingestion_queue
+         WHERE status = 'approved'
+           AND (deletion_state = NONE OR deletion_state = 'active')
+         ORDER BY last_submitted_at ASC
+         LIMIT $limit`,
+        { limit: batch }
+      );
+      if (!Array.isArray(rows) || rows.length === 0) return;
+
+      for (const row of rows) {
+        if (!row?.id || !row?.canonical_url) continue;
+        const reserve = await dbQuery<Array<{ id: string }>>(
+          `UPDATE type::thing($id) SET
+             status = 'queued',
+             updated_at = time::now(),
+             last_error = NONE
+           WHERE status = 'approved'
+           RETURN AFTER`,
+          { id: row.id }
+        );
+        if (!Array.isArray(reserve) || reserve.length === 0) continue;
+
+        try {
+          await this.createRun(
+            {
+              source_url: row.canonical_url,
+              source_type: inferSourceTypeFromUrl(row.canonical_url),
+              validate: false,
+              stop_before_store: true,
+              model_chain: {
+                extract: 'auto',
+                relate: 'auto',
+                group: 'auto',
+                validate: 'auto'
+              },
+              queue_record_id: row.id,
+              queue_attempt_count: (row.attempt_count ?? 0) + 1
+            },
+            'self-serve-queue@sophia.local'
+          );
+        } catch (e) {
+          await markLinkedQueueStatus(row.id, 'approved', {
+            lastError: e instanceof Error ? e.message : String(e),
+            attemptCount: row.attempt_count ?? 0
+          });
+        }
+      }
+    } finally {
+      this.queueLinkPromotionBusy = false;
+    }
+  }
 
   private scheduleNeonSnapshotPersist(runId: string): void {
     if (!isNeonIngestPersistenceEnabled()) return;
@@ -430,7 +588,7 @@ class IngestRunManager extends EventEmitter {
   }
 
   async createRun(payload: IngestRunPayload, actorEmail: string): Promise<string> {
-    if (ingestRunUsesRealChildProcess()) {
+    if (ingestRunUsesRealChildProcess() && !neonQueueEnabled()) {
       const raw = (process.env.ADMIN_INGEST_MAX_CONCURRENT ?? '').trim();
       const parsed = parseInt(raw || '3', 10);
       const maxConcurrent = Number.isFinite(parsed) ? Math.max(1, Math.min(20, parsed)) : 3;
@@ -442,6 +600,7 @@ class IngestRunManager extends EventEmitter {
     }
 
     const runId = randomBytes(8).toString('hex');
+    const initialStatus: IngestRunState['status'] = neonQueueEnabled() ? 'queued' : 'running';
     const snapshot: IngestRunPayload = {
       ...payload,
       stop_before_store: payload.stop_before_store !== false
@@ -449,7 +608,7 @@ class IngestRunManager extends EventEmitter {
 
     const state: IngestRunState = {
       id: runId,
-      status: 'running',
+      status: initialStatus,
       stages: {
         fetch: { status: 'idle' },
         extract: { status: 'idle' },
@@ -484,7 +643,11 @@ class IngestRunManager extends EventEmitter {
         throw e;
       }
     }
-    this.spawnIngestionProcess(runId, snapshot, actorEmail);
+    if (initialStatus === 'running') {
+      this.spawnIngestionProcess(runId, snapshot, actorEmail);
+    } else {
+      this.addLog(runId, '[QUEUE] Ingest run queued for worker execution.');
+    }
     return runId;
   }
 
@@ -564,6 +727,7 @@ class IngestRunManager extends EventEmitter {
   private schedulePersistReport(runId: string): void {
     const state = this.runs.get(runId);
     if (!state) return;
+    if (state.status === 'queued') return;
     void persistIngestRunReport(state);
   }
 
@@ -616,6 +780,9 @@ class IngestRunManager extends EventEmitter {
       state.resumable = false;
       this.flushNeonSnapshotPersist(runId);
       this.schedulePersistReport(runId);
+      if (state.payload.queue_record_id) {
+        void markLinkedQueueStatus(state.payload.queue_record_id, 'ingested', { ingested: true, lastError: null });
+      }
     }
   }
 
@@ -630,6 +797,9 @@ class IngestRunManager extends EventEmitter {
       state.resumable = Boolean(state.sourceFilePath);
       this.flushNeonSnapshotPersist(runId);
       this.schedulePersistReport(runId);
+      if (state.payload.queue_record_id) {
+        void markLinkedQueueStatus(state.payload.queue_record_id, 'failed', { lastError: error });
+      }
     }
   }
 
@@ -655,6 +825,11 @@ class IngestRunManager extends EventEmitter {
     this.addLog(runId, '[CANCEL] Ingestion cancelled by operator.');
     this.flushNeonSnapshotPersist(runId);
     this.schedulePersistReport(runId);
+    if (state.payload.queue_record_id) {
+      void markLinkedQueueStatus(state.payload.queue_record_id, 'failed', {
+        lastError: 'Ingestion cancelled by operator.'
+      });
+    }
   }
 
   /**
@@ -769,6 +944,18 @@ class IngestRunManager extends EventEmitter {
   }
 
   private spawnIngestionProcess(runId: string, payload: IngestRunPayload, actorEmail: string): void {
+    const state = this.runs.get(runId);
+    if (state && state.status === 'queued') {
+      state.status = 'running';
+      state.currentAction = 'Dequeued by worker';
+      this.flushNeonSnapshotPersist(runId);
+    }
+    if (payload.queue_record_id) {
+      void markLinkedQueueStatus(payload.queue_record_id, 'ingesting', {
+        attemptCount: payload.queue_attempt_count
+      });
+    }
+
     this.addLog(runId, `Ingestion started by ${actorEmail}`);
     this.addLog(runId, `Source: ${payload.source_url}`);
     this.addLog(runId, `Type: ${payload.source_type}`);
