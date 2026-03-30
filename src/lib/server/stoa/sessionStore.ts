@@ -102,10 +102,15 @@ export async function loadStoaSession(params: {
         await ensureStoaTables();
         return { sessionId, userId, summary: null, turns: [], updatedAt: null };
       } catch {
-        // Fall through to existing degraded return behavior if table creation fails.
+        // Fall through to degraded empty-session return below.
       }
     }
-    if (!isDatabaseUnavailable(error)) throw error;
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn(
+        '[STOA] Failed to load session; using empty session fallback:',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
     return { sessionId, userId, summary: null, turns: [], updatedAt: null };
   }
 }
@@ -133,37 +138,56 @@ export async function appendStoaTurns(params: {
   }
 
   for (const turn of turns) {
+    try {
+      await query(
+        `CREATE stoa_session_turn CONTENT {
+          session_id: $sessionId,
+          user_id: $userId,
+          role: $role,
+          content: $content,
+          timestamp: $timestamp,
+          stance: $stance,
+          frameworks_referenced: $frameworksReferenced
+        }`,
+        {
+          sessionId,
+          userId,
+          role: turn.role,
+          content: turn.content,
+          timestamp: turn.timestamp,
+          stance: turn.stance ?? null,
+          frameworksReferenced: turn.frameworksReferenced ?? []
+        }
+      );
+    } catch (error) {
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn(
+          '[STOA] Failed writing session turn; continuing without persistence:',
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+      return;
+    }
+  }
+
+  try {
     await query(
-      `CREATE stoa_session_turn CONTENT {
-        session_id: $sessionId,
-        user_id: $userId,
-        role: $role,
-        content: $content,
-        timestamp: $timestamp,
-        stance: $stance,
-        frameworks_referenced: $frameworksReferenced
-      }`,
+      `UPDATE stoa_session
+       SET updated_at = time::now(), summary = $summary
+       WHERE session_id = $sessionId AND user_id = $userId`,
       {
         sessionId,
         userId,
-        role: turn.role,
-        content: turn.content,
-        timestamp: turn.timestamp,
-        stance: turn.stance ?? null,
-        frameworksReferenced: turn.frameworksReferenced ?? []
+        summary: summary ?? ''
       }
     );
-  }
-
-  await query(
-    `UPDATE stoa_session
-     SET updated_at = time::now(), summary = $summary
-     WHERE session_id = $sessionId AND user_id = $userId`,
-    {
-      sessionId,
-      userId,
-      summary: summary ?? ''
+  } catch (error) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn(
+        '[STOA] Failed updating session summary; continuing without persistence:',
+        error instanceof Error ? error.message : String(error)
+      );
     }
-  );
+  }
 }
 

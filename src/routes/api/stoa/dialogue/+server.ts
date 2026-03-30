@@ -64,7 +64,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        const storedSession = await loadStoaSession({ sessionId, userId: uid });
+        let storedSession: Awaited<ReturnType<typeof loadStoaSession>>;
+        try {
+          storedSession = await loadStoaSession({ sessionId, userId: uid });
+        } catch (error) {
+          if (process.env.NODE_ENV !== 'test') {
+            console.warn(
+              '[STOA] Session load failed; continuing with request history only:',
+              error instanceof Error ? error.message : String(error)
+            );
+          }
+          storedSession = { sessionId, userId: uid, summary: null, turns: [], updatedAt: null };
+        }
         const requestHistory = normalizeHistory(body.history);
         const history = storedSession.turns.length > 0 ? storedSession.turns : requestHistory;
         const userTurn: ConversationTurn = {
@@ -93,7 +104,17 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
         const stanceDecision = detectStance({ message, history });
         const suppressionMisuse = detectSuppressionMisuse(message);
-        const sourceClaims = await retrieveStoaGrounding({ message, history: fullHistory, topK: 5 });
+        let sourceClaims: Awaited<ReturnType<typeof retrieveStoaGrounding>> = [];
+        try {
+          sourceClaims = await retrieveStoaGrounding({ message, history: fullHistory, topK: 5 });
+        } catch (error) {
+          if (process.env.NODE_ENV !== 'test') {
+            console.warn(
+              '[STOA] Grounding retrieval failed; continuing without source claims:',
+              error instanceof Error ? error.message : String(error)
+            );
+          }
+        }
         const systemPrompt = buildStoaSystemPrompt({
           stance: stanceDecision.stance,
           sources: sourceClaims,

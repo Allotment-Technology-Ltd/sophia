@@ -133,8 +133,15 @@ function isRetryableNetworkError(error: unknown): boolean {
 		msg.includes('timeout') ||
 		msg.includes('503') ||
 		msg.includes('502') ||
-		msg.includes('429')
+		msg.includes('429') ||
+		msg.includes('401')
 	);
+}
+
+function ensureTrailingSemicolon(sql: string): string {
+	const trimmed = sql.trim();
+	if (!trimmed) return sql;
+	return trimmed.endsWith(';') ? sql : `${trimmed};`;
 }
 
 function classifyDatabaseError(error: unknown): DatabaseError {
@@ -186,12 +193,12 @@ async function sqlFetch(sql: string, vars?: Record<string, unknown>): Promise<un
 	}
 
 	// Inline variables as SET statements so we can use $name params
-	let body = sql;
+	let body = ensureTrailingSemicolon(sql);
 	if (vars && Object.keys(vars).length > 0) {
 		const sets = Object.entries(vars)
 			.map(([k, v]) => `LET $${k} = ${JSON.stringify(v)};`)
 			.join(' ');
-		body = sets + ' ' + sql;
+		body = `${sets} ${body}`;
 	}
 
 	let lastError: unknown;
@@ -218,6 +225,10 @@ async function sqlFetch(sql: string, vars?: Record<string, unknown>): Promise<un
 				const text = await res.text().catch(() => '');
 				if (res.status === 401) {
 					cachedSigninToken = null;
+					if (attempt < DB_MAX_RETRIES) {
+						console.warn('[DB] SQL request returned 401; refreshing signin token and retrying');
+						continue;
+					}
 				}
 				throw new Error(`SurrealDB HTTP ${res.status}: ${text}`);
 			}
