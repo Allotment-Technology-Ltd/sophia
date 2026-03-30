@@ -148,7 +148,20 @@ function readThinkerGraphFile(): ThinkerGraphPayload {
 async function connect(): Promise<Surreal> {
 	const db = new Surreal();
 	await db.connect(SURREAL_URL);
-	await db.signin({ username: SURREAL_USER, password: SURREAL_PASS } as any);
+	try {
+		await db.signin({
+			namespace: SURREAL_NAMESPACE,
+			database: SURREAL_DATABASE,
+			username: SURREAL_USER,
+			password: SURREAL_PASS
+		} as any);
+	} catch (scopedError) {
+		try {
+			await db.signin({ username: SURREAL_USER, password: SURREAL_PASS } as any);
+		} catch {
+			throw scopedError;
+		}
+	}
 	await db.use({ namespace: SURREAL_NAMESPACE, database: SURREAL_DATABASE });
 	return db;
 }
@@ -311,9 +324,7 @@ async function main(): Promise<void> {
 		for (let i = 0; i < thinkers.length; i++) {
 			const thinker = thinkers[i];
 			const thinkerId = thinker.wikidata_id;
-			const recordId = `thinker:${thinkerId}`;
 			const thinkerData = {
-				id: recordId,
 				wikidata_id: thinkerId,
 				name: thinker.name,
 				birth_year: thinker.birth_year,
@@ -330,8 +341,8 @@ async function main(): Promise<void> {
 			try {
 				if (flags.force) {
 					await db.query(
-						`UPSERT $id CONTENT { 
-							id: $id,
+						`UPSERT type::thing('thinker', $wikidata_id) CONTENT {
+							id: type::thing('thinker', $wikidata_id),
 							wikidata_id: $wikidata_id,
 							name: $name,
 							birth_year: $birth_year,
@@ -340,7 +351,7 @@ async function main(): Promise<void> {
 							domains: $domains,
 							imported_at: time::now()
 						}`,
-						{ ...thinkerData, id: recordId }
+						{ ...thinkerData }
 					);
 					if (existingThinkers.has(thinkerId)) {
 						summary.thinkersUpdated += 1;
@@ -350,8 +361,8 @@ async function main(): Promise<void> {
 					}
 				} else {
 					await db.query(
-						`CREATE ONLY $id CONTENT {
-							id: $id,
+						`CREATE ONLY type::thing('thinker', $wikidata_id) CONTENT {
+							id: type::thing('thinker', $wikidata_id),
 							wikidata_id: $wikidata_id,
 							name: $name,
 							birth_year: $birth_year,
@@ -360,7 +371,7 @@ async function main(): Promise<void> {
 							domains: $domains,
 							imported_at: time::now()
 						}`,
-						{ ...thinkerData, id: recordId }
+						{ ...thinkerData }
 					);
 					summary.thinkersInserted += 1;
 					existingThinkers.add(thinkerId);

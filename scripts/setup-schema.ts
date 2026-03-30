@@ -8,6 +8,26 @@ const SURREAL_PASS = process.env.SURREAL_PASS || 'root';
 const SURREAL_NAMESPACE = process.env.SURREAL_NAMESPACE || 'sophia';
 const SURREAL_DATABASE = process.env.SURREAL_DATABASE || 'sophia';
 
+async function signInWithScopeFallback(db: Surreal): Promise<void> {
+	try {
+		await db.signin({
+			namespace: SURREAL_NAMESPACE,
+			database: SURREAL_DATABASE,
+			username: SURREAL_USER,
+			password: SURREAL_PASS
+		} as any);
+	} catch (scopedError) {
+		try {
+			await db.signin({
+				username: SURREAL_USER,
+				password: SURREAL_PASS
+			} as any);
+		} catch {
+			throw scopedError;
+		}
+	}
+}
+
 export async function setupSchema(existingDb?: Surreal) {
 	const db = existingDb ?? new Surreal();
 	const ownsConnection = !existingDb;
@@ -19,10 +39,7 @@ export async function setupSchema(existingDb?: Surreal) {
 			console.log(`[SETUP] Connected to ${SURREAL_URL}`);
 
 			// Sign in
-			await db.signin({
-				username: SURREAL_USER,
-				password: SURREAL_PASS
-			} as any);
+			await signInWithScopeFallback(db);
 			console.log('[SETUP] Authenticated successfully');
 
 			// Select namespace and database
@@ -144,15 +161,25 @@ export async function setupSchema(existingDb?: Surreal) {
 			`);
 			console.log('[SETUP] ✓ Table: claim');
 
-		// Create indexes for claim table
+		// Create indexes for claim table.
+		// Some SurrealDB Cloud versions reject MTREE syntax; continue schema setup if so.
+		await db.query(`
+			DEFINE INDEX IF NOT EXISTS claim_domain ON claim FIELDS domain;
+			DEFINE INDEX IF NOT EXISTS claim_source ON claim FIELDS source;
+			DEFINE INDEX IF NOT EXISTS claim_passage ON claim FIELDS passage;
+			DEFINE INDEX IF NOT EXISTS claim_source_position ON claim FIELDS source, position_in_source;
+		`);
+		try {
 			await db.query(`
 				DEFINE INDEX IF NOT EXISTS claim_embedding ON claim FIELDS embedding MTREE DIMENSION 768;
-				DEFINE INDEX IF NOT EXISTS claim_domain ON claim FIELDS domain;
-				DEFINE INDEX IF NOT EXISTS claim_source ON claim FIELDS source;
-				DEFINE INDEX IF NOT EXISTS claim_passage ON claim FIELDS passage;
-				DEFINE INDEX IF NOT EXISTS claim_source_position ON claim FIELDS source, position_in_source;
 			`);
 			console.log('[SETUP] ✓ Indexes: claim (embedding, domain, source, passage, source+position)');
+		} catch (embeddingIndexError) {
+			console.warn(
+				'[SETUP] ⚠ Skipping claim_embedding index (MTREE unsupported on this SurrealDB deployment).'
+			);
+			console.log('[SETUP] ✓ Indexes: claim (domain, source, passage, source+position)');
+		}
 
 			// 4. ARGUMENT TABLE
 		await db.query(`
