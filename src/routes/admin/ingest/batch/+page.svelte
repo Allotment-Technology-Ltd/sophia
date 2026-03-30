@@ -435,7 +435,7 @@
 				<p class="mt-4 text-sm text-sophia-dark-muted">
 					Step 3: preview policy, queue URLs, then use Queue review + Batch run cards below.
 				</p>
-				<textarea class="mt-3 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg p-3 font-mono text-xs text-sophia-dark-text" rows="8" bind:value={urlsInput} />
+				<textarea class="mt-3 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg p-3 font-mono text-xs text-sophia-dark-text" rows="8" bind:value={urlsInput}></textarea>
 				<div class="mt-3 flex flex-wrap gap-2">
 					<button type="button" class="admin-hub-action" onclick={() => void previewPolicies()}>Policy preview</button>
 					<button type="button" class="admin-hub-action" onclick={() => void queueUrls()}>Queue URLs</button>

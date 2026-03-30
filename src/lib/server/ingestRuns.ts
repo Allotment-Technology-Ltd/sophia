@@ -502,7 +502,7 @@ class IngestRunManager extends EventEmitter {
       const batchRaw = (process.env.LINK_QUEUE_PROMOTION_BATCH_SIZE ?? '5').trim();
       const batch = Math.max(1, Math.min(20, parseInt(batchRaw, 10) || 5));
       const rows = await dbQuery<LinkQueuePromotionRow[]>(
-        `SELECT id, canonical_url, attempt_count
+        `SELECT id, canonical_url, attempt_count, last_submitted_at
          FROM link_ingestion_queue
          WHERE status = 'approved'
            AND (deletion_state = NONE OR deletion_state = 'active')

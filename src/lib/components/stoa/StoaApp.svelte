@@ -4,7 +4,7 @@
   import { getAudioEngine } from '$lib/stoa-audio';
   import type { StanceType, StoaProgressState, StoaZone, ThinkerProfile } from '$lib/types/stoa';
   import { stoaSessionStore } from '$lib/stores/stoa-session.svelte';
-  import { THINKER_MAP } from '$lib/server/stoa/game/thinker-unlock.js';
+  import { STOA_THINKER_MAP } from '$lib/stoa/thinkers';
 
   import AudioControls from './AudioControls.svelte';
   import DialogueOverlay from './DialogueOverlay.svelte';
@@ -88,7 +88,7 @@
 
     // Add newly unlocked thinkers to the notification queue
     for (const thinkerId of newUnlocks) {
-      const thinker = THINKER_MAP.get(thinkerId);
+      const thinker = STOA_THINKER_MAP.get(thinkerId);
       if (thinker) {
         // Create a copy with isUnlocked set to true for the notification
         notificationQueue = [...notificationQueue, { ...thinker, isUnlocked: true }];
