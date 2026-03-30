@@ -127,13 +127,6 @@
     try {
       const response = await fetch('/api/stoa/profile');
       if (!response.ok) {
-        if (response.status === 401) {
-          setupError = 'Sign in to begin your Stoa arc.';
-          isNewStudent = false;
-          profile = null;
-          profileLoading = false;
-          return;
-        }
         throw new Error('Failed to load profile');
       }
       const payload = (await response.json()) as StoaProfile | null;

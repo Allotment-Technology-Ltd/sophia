@@ -40,6 +40,10 @@
         })
       });
       if (!response.ok) {
+        if (response.status === 401) {
+          errorText = 'Sign in to save your Stoa profile and continue.';
+          return;
+        }
         throw new Error('Profile setup request failed');
       }
       const payload = (await response.json()) as { profile?: StoaProfile };

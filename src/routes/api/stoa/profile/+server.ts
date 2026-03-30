@@ -27,8 +27,9 @@ function isStartingPath(value: unknown): value is StartingPath {
 
 export const GET: RequestHandler = async ({ locals }) => {
   const uid = locals.user?.uid;
+  // Anonymous visitors: treat as "no profile" so the client can show onboarding without a 401 loop.
   if (!uid) {
-    return json({ error: 'Authentication required' }, { status: 401 });
+    return json(null);
   }
   const profile = await getStoaProfile(uid);
   return json(profile);

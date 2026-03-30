@@ -23,19 +23,23 @@
 		window.dispatchEvent(event);
 	}
 
+	// Depend only on `thinker`, not `visible`, so flipping visible does not re-run and clear the dismiss timer.
 	$effect(() => {
-		if (thinker !== null && !visible) {
-			visible = true;
-			emitShrineIlluminateEvent(thinker.id);
-
-			const timer = setTimeout(() => {
-				visible = false;
-				dispatch('dismissed');
-				onComplete?.();
-			}, NOTIFICATION_DURATION);
-
-			return () => clearTimeout(timer);
+		if (thinker === null) {
+			visible = false;
+			return;
 		}
+
+		visible = true;
+		emitShrineIlluminateEvent(thinker.id);
+
+		const timer = setTimeout(() => {
+			visible = false;
+			dispatch('dismissed');
+			onComplete?.();
+		}, NOTIFICATION_DURATION);
+
+		return () => clearTimeout(timer);
 	});
 </script>
 

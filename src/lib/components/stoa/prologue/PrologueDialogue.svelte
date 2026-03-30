@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import type {
     ArrivalReason,
     PrologueState,
@@ -210,7 +211,6 @@
   let streamedResponse = $state('');
   let showChoices = $state(false);
   let reducedMotion = $state(false);
-  let completedFlow = $state(false);
 
   function delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -393,17 +393,14 @@
     }
   }
 
-  $effect(() => {
-    if (completedFlow) return;
-    completedFlow = true;
-    reducedMotion = typeof window !== 'undefined'
-      ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      : false;
+  onMount(() => {
+    reducedMotion =
+      typeof window !== 'undefined' ? window.matchMedia('(prefers-reduced-motion: reduce)').matches : false;
     if (isReturningStudent) {
       void runReturningFlow();
-      return;
+    } else {
+      void runNewStudentIntro();
     }
-    void runNewStudentIntro();
   });
 </script>
 
