@@ -1,5 +1,11 @@
 /**
  * Browser auth: Neon Auth only (Better Auth via @neondatabase/neon-js).
+ *
+ * If Google’s account chooser says “Continue to …firebaseapp.com”, the Firebase JS SDK is
+ * not involved — Neon is redirecting to Google using an OAuth client ID that still belongs
+ * to the Firebase project (or Neon Auth → Google is configured with that client). Fix it in
+ * Neon Console (Auth → Google) with a dedicated Web OAuth client and correct redirect URIs;
+ * see docs/operations/neon-auth-migration.md.
  */
 import { browser } from '$app/environment';
 
