@@ -29,10 +29,15 @@ memory/
 # Local design documents — do not commit work-in-progress design files
 docs/design/MASTER-IMPLEMENTATION-GUIDE.md
 
-# Repomix outputs (large; do not commit)
+# Repomix outputs (large generated packs — do not commit; keep *.config.json tracked)
 repomix-output.xml
-repomix-knowledge-base.xml
 repomix-output*.xml
+repomix-output*.md
+repomix-output*.txt
+repomix-output*.json
+repomix-knowledge-base.xml
+repomix-knowledge-base*.xml
+repomix-knowledge-base*.md
 
 # Local scratch (often contains SQL/passwords — never commit)
 history.txt

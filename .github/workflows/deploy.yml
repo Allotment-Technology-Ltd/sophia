@@ -2,7 +2,7 @@
 #
 # Handles application deployments; optional Pulumi (off by default during migration).
 #
-#   src/**, scripts/**, docs/**, Dockerfile, package.json, etc.  →  build + gcloud run deploy
+#   src/**, scripts/**, docs/**, Dockerfile, repomix*.config.json, .gitignore, etc.  →  app-deploy
 #   Production DB / Neon: DATABASE_URL + SOPHIA_DATA_BACKEND come from the deploy step
 #   (--set-secrets / --set-env-vars), not Pulumi, while IAC is paused.
 #
@@ -134,6 +134,11 @@ jobs:
               - 'postcss.config.js'
               - 'tailwind.config.js'
               - '.github/workflows/deploy.yml'
+              - '.gitignore'
+              - 'repomix.config.json'
+              - 'repomix.config.json5'
+              - 'repomix.config.jsonc'
+              - 'repomix.knowledge-base.config.json'
             infra:
               - 'infra/**'
               - 'scripts/deploy-db-gce.sh'
