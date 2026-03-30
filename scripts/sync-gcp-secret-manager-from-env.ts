@@ -26,7 +26,11 @@ import { parse as parseDotenv } from 'dotenv';
 /** Env var name → Secret Manager secret id (deploy.yml mapping). */
 const ENV_TO_SECRET: Record<string, string> = {
 	ANTHROPIC_API_KEY: 'anthropic-api-key',
+	SURREAL_URL: 'surreal-db-url',
+	SURREAL_USER: 'surreal-db-user',
 	SURREAL_PASS: 'surreal-db-pass',
+	SURREAL_NAMESPACE: 'surreal-db-namespace',
+	SURREAL_DATABASE: 'surreal-db-database',
 	VOYAGE_API_KEY: 'voyage-api-key',
 	GOOGLE_AI_API_KEY: 'google-ai-api-key',
 	DATABASE_URL: 'neon-database-url',
