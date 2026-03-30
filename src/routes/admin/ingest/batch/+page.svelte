@@ -54,6 +54,31 @@
 		};
 	};
 
+	type ChildStageStatus = 'idle' | 'running' | 'done' | 'error' | 'skipped';
+	type ChildRunStatusSnapshot = {
+		runId: string;
+		status: string;
+		currentStageKey: string | null;
+		currentAction: string | null;
+		lastFailureStageKey: string | null;
+		error: string | null;
+		issueCount: number;
+		processAlive: boolean;
+		idleForMs: number | null;
+		stages: Record<string, { status?: ChildStageStatus; summary?: string }>;
+	};
+
+	const PIPELINE_STAGE_ORDER = ['fetch', 'extract', 'relate', 'group', 'embed', 'validate', 'store'] as const;
+	const PIPELINE_STAGE_LABELS: Record<(typeof PIPELINE_STAGE_ORDER)[number], string> = {
+		fetch: 'Fetch',
+		extract: 'Extract',
+		relate: 'Relate',
+		group: 'Group',
+		embed: 'Embed',
+		validate: 'Validate',
+		store: 'Store'
+	};
+
 	let queueRows = $state<QueueRow[]>([]);
 	let queueStatusFilter = $state('all');
 	let queueError = $state('');
@@ -81,6 +106,7 @@
 	let activeRunId = $state('');
 	let activeRun = $state<BatchRun | null>(null);
 	let pollingTimer: ReturnType<typeof setInterval> | null = null;
+	let childRunSnapshots = $state<Record<string, ChildRunStatusSnapshot>>({});
 
 	async function authHeaders(): Promise<Record<string, string>> {
 		const token = await getIdToken();
@@ -225,6 +251,128 @@
 			.map(([id]) => id);
 	}
 
+	function stageGlyph(status: ChildStageStatus | undefined): string {
+		if (status === 'done') return '✓';
+		if (status === 'running') return '●';
+		if (status === 'error') return '!';
+		if (status === 'skipped') return '—';
+		return '○';
+	}
+
+	function stageStatusLabel(status: ChildStageStatus | undefined): string {
+		if (status === 'done') return 'done';
+		if (status === 'running') return 'running';
+		if (status === 'error') return 'error';
+		if (status === 'skipped') return 'skipped';
+		return 'idle';
+	}
+
+	function stageName(key: string | null): string {
+		if (!key) return '—';
+		if (key in PIPELINE_STAGE_LABELS) {
+			return PIPELINE_STAGE_LABELS[key as keyof typeof PIPELINE_STAGE_LABELS];
+		}
+		return key;
+	}
+
+	function formatDuration(ms: number | null): string {
+		if (ms == null || ms < 0) return '—';
+		if (ms < 1000) return `${ms}ms`;
+		const sec = Math.floor(ms / 1000);
+		if (sec < 60) return `${sec}s`;
+		const min = Math.floor(sec / 60);
+		const rem = sec % 60;
+		return `${min}m ${rem}s`;
+	}
+
+	function openChildRunInExpand(runId: string): void {
+		const params = new URLSearchParams();
+		params.set('runId', runId);
+		params.set('monitor', '1');
+		window.location.href = `/admin/ingest?${params.toString()}`;
+	}
+
+	async function refreshChildRunSnapshots(): Promise<void> {
+		try {
+			if (!activeRun) return;
+			const runIds = Array.from(
+				new Set(
+					activeRun.items
+						.map((item) => item.childRunId)
+						.filter((id): id is string => typeof id === 'string' && id.length > 0)
+				)
+			);
+			if (runIds.length === 0) {
+				childRunSnapshots = {};
+				return;
+			}
+			const headers = await authHeaders();
+			const results = await Promise.all(
+				runIds.map(async (id) => {
+					try {
+						const res = await fetch(`/api/admin/ingest/run/${id}/status`, { headers });
+						const body = await res.json().catch(() => ({}));
+						if (!res.ok) {
+							return [
+								id,
+								{
+									runId: id,
+									status: 'error',
+									currentStageKey: null,
+									currentAction: null,
+									lastFailureStageKey: null,
+									error: typeof body?.error === 'string' ? body.error : 'Failed to load child run status',
+									issueCount: 0,
+									processAlive: false,
+									idleForMs: null,
+									stages: {}
+								} satisfies ChildRunStatusSnapshot
+							] as const;
+						}
+						return [
+							id,
+							{
+								runId: id,
+								status: typeof body?.status === 'string' ? body.status : 'running',
+								currentStageKey: typeof body?.currentStageKey === 'string' ? body.currentStageKey : null,
+								currentAction: typeof body?.currentAction === 'string' ? body.currentAction : null,
+								lastFailureStageKey:
+									typeof body?.lastFailureStageKey === 'string' ? body.lastFailureStageKey : null,
+								error: typeof body?.error === 'string' ? body.error : null,
+								issueCount: typeof body?.issueCount === 'number' ? body.issueCount : 0,
+								processAlive: Boolean(body?.processAlive),
+								idleForMs: typeof body?.idleForMs === 'number' ? body.idleForMs : null,
+								stages:
+									body?.stages && typeof body.stages === 'object'
+										? (body.stages as ChildRunStatusSnapshot['stages'])
+										: {}
+							} satisfies ChildRunStatusSnapshot
+						] as const;
+					} catch (error) {
+						return [
+							id,
+							{
+								runId: id,
+								status: 'error',
+								currentStageKey: null,
+								currentAction: null,
+								lastFailureStageKey: null,
+								error: error instanceof Error ? error.message : 'Failed to load child run status',
+								issueCount: 0,
+								processAlive: false,
+								idleForMs: null,
+								stages: {}
+							} satisfies ChildRunStatusSnapshot
+						] as const;
+					}
+				})
+			);
+			childRunSnapshots = Object.fromEntries(results);
+		} catch (error) {
+			runError = error instanceof Error ? error.message : 'Failed to refresh child run status';
+		}
+	}
+
 	async function bulkAction(action: 'approve' | 'reject'): Promise<void> {
 		const ids = selectedIds();
 		if (ids.length === 0) return;
@@ -285,6 +433,7 @@
 			return;
 		}
 		activeRun = body.run as BatchRun;
+		await refreshChildRunSnapshots();
 		await loadRuns();
 		if (activeRun && ['done', 'error', 'cancelled'].includes(activeRun.status)) {
 			stopPolling();
@@ -331,6 +480,7 @@
 	function selectRun(run: BatchRun): void {
 		activeRunId = run.id;
 		activeRun = run;
+		void refreshChildRunSnapshots();
 		startPolling();
 	}
 
@@ -537,17 +687,64 @@
 					<div class="mt-3 max-h-[14rem] overflow-auto rounded border border-sophia-dark-border">
 						<table class="min-w-full text-left font-mono text-xs text-sophia-dark-muted">
 							<thead class="border-b border-sophia-dark-border bg-sophia-dark-bg/50 text-sophia-dark-dim">
-								<tr><th class="px-2 py-2">Status</th><th class="px-2 py-2">URL</th><th class="px-2 py-2">Run</th></tr>
+								<tr>
+									<th class="px-2 py-2">Status</th>
+									<th class="px-2 py-2">URL</th>
+									<th class="px-2 py-2">Run</th>
+									<th class="px-2 py-2">Pipeline</th>
+								</tr>
 							</thead>
 							<tbody>
 								{#each activeRun.items as item}
+									{@const childRunId = item.childRunId}
 									<tr class="border-b border-sophia-dark-border/60 last:border-b-0">
 										<td class="px-2 py-2">{item.status}</td>
 										<td class="px-2 py-2 break-all">{item.url}</td>
-										<td class="px-2 py-2">{item.childRunId ?? '—'}</td>
+										<td class="px-2 py-2">
+											{#if childRunId}
+												<div>{childRunId}</div>
+												<button type="button" class="mt-1 text-[0.65rem] text-sophia-dark-sage underline" onclick={() => openChildRunInExpand(childRunId)}>Open in Expand</button>
+											{:else}
+												—
+											{/if}
+										</td>
+										<td class="px-2 py-2">
+											{#if childRunId && childRunSnapshots[childRunId]}
+												{@const snap = childRunSnapshots[childRunId]}
+												<div class="text-sophia-dark-text">
+													{stageName(snap.currentStageKey)}
+													<span class="text-sophia-dark-dim"> · {snap.processAlive ? 'live' : snap.status}</span>
+												</div>
+												<div class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+													{snap.currentAction ?? 'Waiting for next event…'}
+												</div>
+												<div class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+													issues {snap.issueCount} · idle {formatDuration(snap.idleForMs)}
+												</div>
+												<div class="mt-1 flex flex-wrap gap-1">
+													{#each PIPELINE_STAGE_ORDER as stageKey}
+														{@const status = snap.stages?.[stageKey]?.status}
+														<span
+															class="inline-flex items-center gap-1 rounded border border-sophia-dark-border/70 px-1.5 py-0.5 text-[0.6rem] text-sophia-dark-dim"
+															title={`${PIPELINE_STAGE_LABELS[stageKey]}: ${stageStatusLabel(status)}`}
+														>
+															<span>{stageGlyph(status)}</span>
+															<span>{PIPELINE_STAGE_LABELS[stageKey]}</span>
+														</span>
+													{/each}
+												</div>
+												{#if snap.error}
+													<div class="mt-1 text-[0.65rem] text-sophia-dark-copper">{snap.error}</div>
+												{/if}
+											{:else if childRunId}
+												<span class="text-sophia-dark-dim">Loading run telemetry…</span>
+											{:else}
+												<span class="text-sophia-dark-dim">No child run yet.</span>
+											{/if}
+										</td>
 									</tr>
 									{#if item.error}
-										<tr class="border-b border-sophia-dark-border/30 last:border-b-0"><td class="px-2 py-1 text-sophia-dark-copper" colspan="3">{item.error}</td></tr>
+										<tr class="border-b border-sophia-dark-border/30 last:border-b-0"><td class="px-2 py-1 text-sophia-dark-copper" colspan="4">{item.error}</td></tr>
 									{/if}
 								{/each}
 							</tbody>
