@@ -363,11 +363,6 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGISTRY }}
 
-      - name: Load Neon Auth URL for client build
-        run: |
-          # Same as server NEON_AUTH_BASE_URL (Neon Console → Auth → base URL, ends with /…/auth).
-          echo "VITE_NEON_AUTH_URL=${{ secrets.NEON_AUTH_BASE_URL }}" >> "$GITHUB_ENV"
-
       - name: Resolve production SURREAL_URL
         id: surreal
         run: |
@@ -378,9 +373,16 @@ jobs:
           fi
 
       - name: Build Docker image
+        env:
+          # Same value as Cloud Run NEON_AUTH_BASE_URL; baked into client bundle as VITE_NEON_AUTH_URL.
+          VITE_NEON_AUTH_URL: ${{ secrets.NEON_AUTH_BASE_URL }}
         run: |
+          if [ -z "$VITE_NEON_AUTH_URL" ]; then
+            echo "::error::Repository secret NEON_AUTH_BASE_URL is not set. Add it under Settings → Secrets and variables → Actions (Neon Console → branch → Auth → base_url, ends with /…/auth). Without it, production shows 'Neon Auth is not configured'."
+            exit 1
+          fi
           docker build --no-cache --pull \
-            --build-arg VITE_NEON_AUTH_URL=${{ env.VITE_NEON_AUTH_URL }} \
+            --build-arg "VITE_NEON_AUTH_URL=${VITE_NEON_AUTH_URL}" \
             -t ${{ env.IMAGE_BASE }}:${{ github.sha }} \
             -t ${{ env.IMAGE_BASE }}:latest .
 

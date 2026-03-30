@@ -26,6 +26,21 @@ Needs `NEON_API_KEY` (Account → API keys) and project/branch ids.
 
 The app uses `@neondatabase/neon-js` with `VITE_NEON_AUTH_URL`. API calls send `Authorization: Bearer <access_token>` from `getSession()` (`src/lib/authClient.ts`).
 
+## Google still shows “Continue to …firebaseapp.com”
+
+That text comes from **Google’s OAuth consent / client configuration**, not from the old Firebase Web SDK in Sophia (the bundle does not call Firebase for sign-in).
+
+Typical cause: **Neon Auth → Google** is configured with the **Firebase project’s Web client ID** (from Firebase Console), so Google labels the flow with `your-project.firebaseapp.com`.
+
+**What to do**
+
+1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials) (same or new GCP project), create an **OAuth 2.0 Client ID** of type **Web application** intended for Neon — **not** the “Web client” auto-created under Firebase’s project settings if you want to drop the Firebase hostname from the prompt.
+2. In the client, set **Authorized redirect URIs** to the callback URL Neon expects for your branch (Neon Console → project → **Auth** / provider setup usually lists this; see [Neon: Set up OAuth](https://neon.com/docs/auth/guides/setup-oauth)).
+3. In **Neon Console** → your project → **Auth** → **Google**, set **Client ID** and **Client secret** to that new OAuth client (not the Firebase Web client).
+4. Optional: [OAuth consent screen](https://console.cloud.google.com/auth/branding) — set app name and **Authorized domains** (e.g. `usesophia.app`) so users see your product instead of a generic domain (Neon’s docs also cover [Google OAuth branding](https://neon.com/docs/auth/guides/setup-oauth#google-oauth-branding)).
+
+After that, redeploy the frontend only if you changed env; changing Neon/Google credentials does not require a new app build.
+
 ## Identity and `users/{uid}` documents
 
 - JWT **`sub`** is the canonical user id for new `users/{sub}` rows in `sophia_documents`.
@@ -41,7 +56,7 @@ The app uses `@neondatabase/neon-js` with `VITE_NEON_AUTH_URL`. API calls send `
 
 ## Production (GitHub Actions → Cloud Run)
 
-1. Repository secret **`NEON_AUTH_BASE_URL`** — used for the Docker **`VITE_NEON_AUTH_URL`** build arg and for Cloud Run **`NEON_AUTH_BASE_URL`** with **`USE_NEON_AUTH=1`** (see `.github/workflows/deploy.yml`).
+1. Repository secret **`NEON_AUTH_BASE_URL`** — **required.** Used for the Docker **`VITE_NEON_AUTH_URL`** build arg (client bundle) **and** must match what you set on Cloud Run as **`NEON_AUTH_BASE_URL`**. If this secret is missing or empty, the image still builds in older workflows; the **auth page breaks** with “Neon Auth is not configured. Set `VITE_NEON_AUTH_URL`.” The deploy workflow now **fails the Docker build** when the secret is unset. Add it under **GitHub → repo → Settings → Secrets and variables → Actions**.
 2. Secret Manager **`neon-database-url`** → **`DATABASE_URL`** on Cloud Run.
 3. Update secrets **`admin-uids`** / **`owner-uids`** to Neon **`sub`** values as above.
 
