@@ -1151,27 +1151,23 @@ export async function listStoaQueue(filters?: {
 }): Promise<QueueRow[]> {
 	const limit = Math.max(1, Math.min(500, filters?.limit ?? 120));
 	const status = filters?.status ?? 'all';
-	if (status === 'all') {
-		const rows = await dbQuery<QueueRow[]>(
-			`SELECT id, canonical_url, canonical_url_hash, hostname, status, source_kinds, pass_hints, last_error, title_hint, updated_at, last_submitted_at, visibility_scope
-			 FROM link_ingestion_queue
-			 WHERE array::contains(source_kinds, 'stoa') OR array::contains(source_kinds, 'stoa_batch')
-			 ORDER BY last_submitted_at DESC
-			 LIMIT $limit`,
-			{ limit }
-		);
-		return parseQueueRows(rows);
-	}
-	const rows = await dbQuery<QueueRow[]>(
+	// Query broadly, then filter in TS so prod rows with source_kinds = NONE
+	// do not trigger Surreal array::contains runtime/type errors.
+	const baseRows = await dbQuery<QueueRow[]>(
 		`SELECT id, canonical_url, canonical_url_hash, hostname, status, source_kinds, pass_hints, last_error, title_hint, updated_at, last_submitted_at, visibility_scope
 		 FROM link_ingestion_queue
-		 WHERE (array::contains(source_kinds, 'stoa') OR array::contains(source_kinds, 'stoa_batch'))
-		   AND status = $status
 		 ORDER BY last_submitted_at DESC
 		 LIMIT $limit`,
-		{ status, limit }
+		{ limit: Math.max(limit * 3, 200) }
 	);
-	return parseQueueRows(rows);
+	const rows = parseQueueRows(baseRows).filter((row) => {
+		const kinds = Array.isArray(row.source_kinds) ? row.source_kinds : [];
+		const isStoa = kinds.includes('stoa') || kinds.includes('stoa_batch');
+		if (!isStoa) return false;
+		if (status === 'all') return true;
+		return row.status === status;
+	});
+	return rows.slice(0, limit);
 }
 
 export async function bulkSetQueueStatus(args: {
