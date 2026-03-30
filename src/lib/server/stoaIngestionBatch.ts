@@ -85,6 +85,30 @@ export type StoaSourcePack = {
 	urls: string[];
 };
 
+export type StoaTraditionId =
+	| 'stoicism'
+	| 'platonism'
+	| 'aristotelianism'
+	| 'epicureanism'
+	| 'skepticism'
+	| 'neoplatonism';
+
+export type CanonicalRepositoryId =
+	| 'project_gutenberg'
+	| 'wikisource'
+	| 'perseus'
+	| 'wikidata'
+	| 'wikipedia'
+	| 'pleiades'
+	| 'internet_archive';
+
+type TraditionCatalogRow = {
+	tradition: StoaTraditionId;
+	repository: CanonicalRepositoryId;
+	title: string;
+	url: string;
+};
+
 const STOA_BATCH_COLLECTION = 'stoa_ingestion_batches';
 const STOA_SOURCE_PACK_COLLECTION = 'stoa_ingestion_source_packs';
 const inMemoryBatchLocks = new Set<string>();
@@ -178,6 +202,513 @@ const DEFAULT_SOURCE_PACKS: StoaSourcePack[] = [
 		]
 	}
 ];
+
+const TRADITION_OPTIONS: Array<{ id: StoaTraditionId; label: string }> = [
+	{ id: 'stoicism', label: 'Stoicism' },
+	{ id: 'platonism', label: 'Platonism' },
+	{ id: 'aristotelianism', label: 'Aristotelianism' },
+	{ id: 'epicureanism', label: 'Epicureanism' },
+	{ id: 'skepticism', label: 'Skepticism' },
+	{ id: 'neoplatonism', label: 'Neoplatonism' }
+];
+
+const CANONICAL_REPOSITORIES: Array<{ id: CanonicalRepositoryId; label: string }> = [
+	{ id: 'project_gutenberg', label: 'Project Gutenberg' },
+	{ id: 'wikisource', label: 'Wikisource' },
+	{ id: 'perseus', label: 'Perseus Digital Library' },
+	{ id: 'wikidata', label: 'Wikidata' },
+	{ id: 'wikipedia', label: 'Wikipedia (Wikimedia)' },
+	{ id: 'pleiades', label: 'Pleiades Gazetteer' },
+	{ id: 'internet_archive', label: 'Internet Archive' }
+];
+
+const TRADITION_SOURCE_CATALOG: TraditionCatalogRow[] = [
+	{
+		tradition: 'stoicism',
+		repository: 'project_gutenberg',
+		title: 'Marcus Aurelius — Meditations',
+		url: 'https://www.gutenberg.org/ebooks/2680'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'project_gutenberg',
+		title: 'Epictetus — Enchiridion',
+		url: 'https://www.gutenberg.org/ebooks/45109'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'project_gutenberg',
+		title: 'Seneca — L. Annaeus Seneca on Benefits',
+		url: 'https://www.gutenberg.org/ebooks/3794'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikisource',
+		title: 'Enchiridion (Wikisource)',
+		url: 'https://en.wikisource.org/wiki/Enchiridion'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikisource',
+		title: 'Discourses of Epictetus',
+		url: 'https://en.wikisource.org/wiki/Epictetus,_the_Discourses_as_reported_by_Arrian,_the_Manual,_and_Fragments'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikisource',
+		title: 'Meditations (George Long translation)',
+		url: 'https://en.wikisource.org/wiki/Meditations'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikisource',
+		title: 'Letters from a Stoic (Seneca)',
+		url: 'https://en.wikisource.org/wiki/Letters_from_a_Stoic'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Stoicism overview',
+		url: 'https://en.wikipedia.org/wiki/Stoicism'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Marcus Aurelius',
+		url: 'https://en.wikipedia.org/wiki/Marcus_Aurelius'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Epictetus',
+		url: 'https://en.wikipedia.org/wiki/Epictetus'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Seneca the Younger',
+		url: 'https://en.wikipedia.org/wiki/Seneca_the_Younger'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Cleanthes',
+		url: 'https://en.wikipedia.org/wiki/Cleanthes'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Chrysippus',
+		url: 'https://en.wikipedia.org/wiki/Chrysippus'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Zeno of Citium',
+		url: 'https://en.wikipedia.org/wiki/Zeno_of_Citium'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Musonius Rufus',
+		url: 'https://en.wikipedia.org/wiki/Gaius_Musonius_Rufus'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Dichotomy of control',
+		url: 'https://en.wikipedia.org/wiki/Dichotomy_of_control'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Apatheia',
+		url: 'https://en.wikipedia.org/wiki/Apatheia'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Oikeiosis',
+		url: 'https://en.wikipedia.org/wiki/Oikei%C5%8Dsis'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Logos (Stoicism)',
+		url: 'https://en.wikipedia.org/wiki/Logos'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Virtue ethics',
+		url: 'https://en.wikipedia.org/wiki/Virtue_ethics'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Memento mori',
+		url: 'https://en.wikipedia.org/wiki/Memento_mori'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Negative visualization',
+		url: 'https://en.wikipedia.org/wiki/Negative_visualization'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Stoic ethics',
+		url: 'https://en.wikipedia.org/wiki/Stoic_ethics'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Roman Stoicism',
+		url: 'https://en.wikipedia.org/wiki/Stoicism#Roman_Stoicism'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Stoicism (Q48235)',
+		url: 'https://www.wikidata.org/wiki/Q48235'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Marcus Aurelius',
+		url: 'https://www.wikidata.org/wiki/Q9682'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Epictetus',
+		url: 'https://www.wikidata.org/wiki/Q181137'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Seneca the Younger',
+		url: 'https://www.wikidata.org/wiki/Q1715'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Zeno of Citium',
+		url: 'https://www.wikidata.org/wiki/Q211142'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Chrysippus',
+		url: 'https://www.wikidata.org/wiki/Q312640'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Cleanthes',
+		url: 'https://www.wikidata.org/wiki/Q314981'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Musonius Rufus',
+		url: 'https://www.wikidata.org/wiki/Q1156157'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Apatheia',
+		url: 'https://www.wikidata.org/wiki/Q4780513'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Oikeiosis',
+		url: 'https://www.wikidata.org/wiki/Q7089727'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'perseus',
+		title: 'Perseus collection: Epictetus',
+		url: 'https://www.perseus.tufts.edu/hopper/collection?collection=Perseus:corpus:perseus,author,Epictetus'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'pleiades',
+		title: 'Pleiades Gazetteer',
+		url: 'https://pleiades.stoa.org/'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'internet_archive',
+		title: 'Internet Archive advanced text search',
+		url: 'https://archive.org/advancedsearch.php?output=json'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'project_gutenberg',
+		title: 'Plato — Republic (Jowett)',
+		url: 'https://www.gutenberg.org/ebooks/1497'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'project_gutenberg',
+		title: 'Plato — Apology, Crito, Phaedo',
+		url: 'https://www.gutenberg.org/ebooks/1656'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'wikipedia',
+		title: 'Platonism overview',
+		url: 'https://en.wikipedia.org/wiki/Platonism'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'wikipedia',
+		title: 'Plato',
+		url: 'https://en.wikipedia.org/wiki/Plato'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'wikipedia',
+		title: 'Theory of forms',
+		url: 'https://en.wikipedia.org/wiki/Theory_of_forms'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'wikipedia',
+		title: 'Allegory of the cave',
+		url: 'https://en.wikipedia.org/wiki/Allegory_of_the_cave'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'wikidata',
+		title: 'Wikidata: Platonism',
+		url: 'https://www.wikidata.org/wiki/Q172452'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'wikidata',
+		title: 'Wikidata: Plato',
+		url: 'https://www.wikidata.org/wiki/Q859'
+	},
+	{
+		tradition: 'aristotelianism',
+		repository: 'project_gutenberg',
+		title: 'Aristotle — Politics',
+		url: 'https://www.gutenberg.org/ebooks/6762'
+	},
+	{
+		tradition: 'aristotelianism',
+		repository: 'project_gutenberg',
+		title: 'Aristotle — Poetics',
+		url: 'https://www.gutenberg.org/ebooks/1974'
+	},
+	{
+		tradition: 'aristotelianism',
+		repository: 'wikipedia',
+		title: 'Aristotelianism overview',
+		url: 'https://en.wikipedia.org/wiki/Aristotelianism'
+	},
+	{
+		tradition: 'aristotelianism',
+		repository: 'wikipedia',
+		title: 'Aristotle',
+		url: 'https://en.wikipedia.org/wiki/Aristotle'
+	},
+	{
+		tradition: 'aristotelianism',
+		repository: 'wikipedia',
+		title: 'Nicomachean Ethics',
+		url: 'https://en.wikipedia.org/wiki/Nicomachean_Ethics'
+	},
+	{
+		tradition: 'aristotelianism',
+		repository: 'wikidata',
+		title: 'Wikidata: Aristotle',
+		url: 'https://www.wikidata.org/wiki/Q868'
+	},
+	{
+		tradition: 'epicureanism',
+		repository: 'project_gutenberg',
+		title: 'Lucretius — On the Nature of Things',
+		url: 'https://www.gutenberg.org/ebooks/785'
+	},
+	{
+		tradition: 'epicureanism',
+		repository: 'wikipedia',
+		title: 'Epicureanism overview',
+		url: 'https://en.wikipedia.org/wiki/Epicureanism'
+	},
+	{
+		tradition: 'epicureanism',
+		repository: 'wikipedia',
+		title: 'Epicurus',
+		url: 'https://en.wikipedia.org/wiki/Epicurus'
+	},
+	{
+		tradition: 'epicureanism',
+		repository: 'wikipedia',
+		title: 'Tetrapharmakos',
+		url: 'https://en.wikipedia.org/wiki/Tetrapharmakos'
+	},
+	{
+		tradition: 'epicureanism',
+		repository: 'wikidata',
+		title: 'Wikidata: Epicureanism',
+		url: 'https://www.wikidata.org/wiki/Q213452'
+	},
+	{
+		tradition: 'epicureanism',
+		repository: 'wikidata',
+		title: 'Wikidata: Epicurus',
+		url: 'https://www.wikidata.org/wiki/Q167726'
+	},
+	{
+		tradition: 'skepticism',
+		repository: 'wikipedia',
+		title: 'Philosophical skepticism overview',
+		url: 'https://en.wikipedia.org/wiki/Philosophical_skepticism'
+	},
+	{
+		tradition: 'skepticism',
+		repository: 'wikipedia',
+		title: 'Pyrrhonism',
+		url: 'https://en.wikipedia.org/wiki/Pyrrhonism'
+	},
+	{
+		tradition: 'skepticism',
+		repository: 'wikipedia',
+		title: 'Academic skepticism',
+		url: 'https://en.wikipedia.org/wiki/Academic_skepticism'
+	},
+	{
+		tradition: 'skepticism',
+		repository: 'wikidata',
+		title: 'Wikidata: Skepticism',
+		url: 'https://www.wikidata.org/wiki/Q192033'
+	},
+	{
+		tradition: 'skepticism',
+		repository: 'wikidata',
+		title: 'Wikidata: Pyrrhonism',
+		url: 'https://www.wikidata.org/wiki/Q183027'
+	},
+	{
+		tradition: 'neoplatonism',
+		repository: 'wikipedia',
+		title: 'Neoplatonism overview',
+		url: 'https://en.wikipedia.org/wiki/Neoplatonism'
+	},
+	{
+		tradition: 'neoplatonism',
+		repository: 'wikipedia',
+		title: 'Plotinus',
+		url: 'https://en.wikipedia.org/wiki/Plotinus'
+	},
+	{
+		tradition: 'neoplatonism',
+		repository: 'wikipedia',
+		title: 'Porphyry (philosopher)',
+		url: 'https://en.wikipedia.org/wiki/Porphyry_(philosopher)'
+	},
+	{
+		tradition: 'neoplatonism',
+		repository: 'wikidata',
+		title: 'Wikidata: Neoplatonism',
+		url: 'https://www.wikidata.org/wiki/Q191289'
+	},
+	{
+		tradition: 'neoplatonism',
+		repository: 'wikidata',
+		title: 'Wikidata: Plotinus',
+		url: 'https://www.wikidata.org/wiki/Q83358'
+	},
+	{
+		tradition: 'neoplatonism',
+		repository: 'project_gutenberg',
+		title: 'The Enneads by Plotinus',
+		url: 'https://www.gutenberg.org/ebooks/42930'
+	}
+];
+
+const TRADITION_FALLBACK_TERMS: Record<StoaTraditionId, string[]> = {
+	stoicism: [
+		'Stoicism',
+		'Marcus Aurelius',
+		'Epictetus',
+		'Seneca',
+		'Chrysippus',
+		'Zeno of Citium',
+		'Musonius Rufus',
+		'Apatheia',
+		'Oikeiosis',
+		'Dichotomy of control',
+		'Logos Stoicism',
+		'Stoic ethics'
+	],
+	platonism: [
+		'Platonism',
+		'Plato',
+		'Theory of forms',
+		'Allegory of the cave',
+		'Republic Plato',
+		'Timaeus',
+		'Phaedo',
+		'Neoplatonism',
+		'Middle Platonism',
+		'Plato Academy'
+	],
+	aristotelianism: [
+		'Aristotelianism',
+		'Aristotle',
+		'Nicomachean Ethics',
+		'Metaphysics Aristotle',
+		'Poetics',
+		'Politics Aristotle',
+		'Peripatetic school',
+		'Aristotelian logic',
+		'Virtue ethics Aristotle',
+		'Aristotelian causality'
+	],
+	epicureanism: [
+		'Epicureanism',
+		'Epicurus',
+		'Principal Doctrines',
+		'Letter to Menoeceus',
+		'Lucretius',
+		'Tetrapharmakos',
+		'Ataraxia',
+		'Pleasure Epicurus',
+		'Epicurean physics',
+		'Garden Epicurus'
+	],
+	skepticism: [
+		'Philosophical skepticism',
+		'Pyrrhonism',
+		'Academic skepticism',
+		'Sextus Empiricus',
+		'epoché',
+		'Aenesidemus',
+		'Carneades',
+		'Skeptical arguments',
+		'Problem of criterion',
+		'Suspension of judgment'
+	],
+	neoplatonism: [
+		'Neoplatonism',
+		'Plotinus',
+		'Porphyry philosopher',
+		'Iamblichus',
+		'Proclus',
+		'The Enneads',
+		'One (Neoplatonism)',
+		'Nous (philosophy)',
+		'Henosis',
+		'Late antique philosophy'
+	]
+};
 
 function nowMs(): number {
 	return Date.now();
@@ -803,6 +1334,113 @@ export async function saveSourcePack(pack: StoaSourcePack): Promise<void> {
 		updatedAt: Timestamp.now(),
 		updatedAtMs: nowMs()
 	});
+}
+
+export function getTraditionOptions(): Array<{ id: StoaTraditionId; label: string }> {
+	return [...TRADITION_OPTIONS];
+}
+
+export function getCanonicalRepositoryOptions(): Array<{ id: CanonicalRepositoryId; label: string }> {
+	return [...CANONICAL_REPOSITORIES];
+}
+
+export function suggestSourcesForTradition(args: {
+	tradition: StoaTraditionId;
+	count: number;
+	repositories?: CanonicalRepositoryId[];
+}): {
+	tradition: StoaTraditionId;
+	count: number;
+	repositories: CanonicalRepositoryId[];
+	urls: string[];
+	candidates: Array<{ title: string; url: string; repository: CanonicalRepositoryId; licenseType: LicenseType; reuseMode: ReuseMode }>;
+} {
+	const requestedCount = [5, 10, 15, 20, 25, 30].includes(args.count) ? args.count : 10;
+	const requestedRepos =
+		args.repositories && args.repositories.length > 0
+			? args.repositories.filter((repo) => CANONICAL_REPOSITORIES.some((r) => r.id === repo))
+			: CANONICAL_REPOSITORIES.map((r) => r.id);
+	const rows = TRADITION_SOURCE_CATALOG.filter(
+		(row) => row.tradition === args.tradition && requestedRepos.includes(row.repository)
+	);
+	const uniqueByUrl = new Map<string, TraditionCatalogRow>();
+	for (const row of rows) {
+		if (!uniqueByUrl.has(row.url)) uniqueByUrl.set(row.url, row);
+	}
+	const ranked = Array.from(uniqueByUrl.values()).sort((a, b) => {
+		const aDecision = evaluateStoaLicense(a.url);
+		const bDecision = evaluateStoaLicense(b.url);
+		const aScore = aDecision.reuseMode === 'full_text' ? 0 : 1;
+		const bScore = bDecision.reuseMode === 'full_text' ? 0 : 1;
+		if (aScore !== bScore) return aScore - bScore;
+		return a.title.localeCompare(b.title);
+	});
+
+	const selectedCandidates: Array<{
+		title: string;
+		url: string;
+		repository: CanonicalRepositoryId;
+		licenseType: LicenseType;
+		reuseMode: ReuseMode;
+	}> = [];
+	for (const row of ranked) {
+		const decision = evaluateStoaLicense(row.url);
+		if (!decision.allowed || !decision.canonicalUrl) continue;
+		selectedCandidates.push({
+			title: row.title,
+			url: decision.canonicalUrl,
+			repository: row.repository,
+			licenseType: decision.licenseType,
+			reuseMode: decision.reuseMode
+		});
+		if (selectedCandidates.length >= requestedCount) break;
+	}
+
+	if (selectedCandidates.length < requestedCount) {
+		const existing = new Set(selectedCandidates.map((c) => c.url));
+		const terms = TRADITION_FALLBACK_TERMS[args.tradition] ?? [];
+		for (const term of terms) {
+			for (const repo of requestedRepos) {
+				let fallbackUrl = '';
+				if (repo === 'wikipedia') {
+					fallbackUrl = `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(term)}`;
+				} else if (repo === 'wikidata') {
+					fallbackUrl = `https://www.wikidata.org/w/index.php?search=${encodeURIComponent(term)}`;
+				} else if (repo === 'project_gutenberg') {
+					fallbackUrl = `https://www.gutenberg.org/ebooks/search/?query=${encodeURIComponent(term)}`;
+				} else if (repo === 'wikisource') {
+					fallbackUrl = `https://en.wikisource.org/wiki/Special:Search?search=${encodeURIComponent(term)}`;
+				} else if (repo === 'perseus') {
+					fallbackUrl = `https://www.perseus.tufts.edu/hopper/searchresults?q=${encodeURIComponent(term)}`;
+				} else if (repo === 'internet_archive') {
+					fallbackUrl = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(term)}&output=json`;
+				} else if (repo === 'pleiades') {
+					fallbackUrl = `https://pleiades.stoa.org/search?SearchableText=${encodeURIComponent(term)}`;
+				}
+				if (!fallbackUrl || existing.has(fallbackUrl)) continue;
+				const decision = evaluateStoaLicense(fallbackUrl);
+				if (!decision.allowed || !decision.canonicalUrl) continue;
+				selectedCandidates.push({
+					title: `${term} (${repo} search)`,
+					url: decision.canonicalUrl,
+					repository: repo,
+					licenseType: decision.licenseType,
+					reuseMode: decision.reuseMode
+				});
+				existing.add(decision.canonicalUrl);
+				if (selectedCandidates.length >= requestedCount) break;
+			}
+			if (selectedCandidates.length >= requestedCount) break;
+		}
+	}
+
+	return {
+		tradition: args.tradition,
+		count: requestedCount,
+		repositories: requestedRepos,
+		urls: selectedCandidates.map((c) => c.url),
+		candidates: selectedCandidates
+	};
 }
 
 export function estimateCoverageForPack(urls: string[]): {
