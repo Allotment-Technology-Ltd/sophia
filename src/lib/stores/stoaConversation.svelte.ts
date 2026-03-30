@@ -1,5 +1,11 @@
 import { getIdToken } from '$lib/authClient';
-import type { ClaimReference, StanceType } from '$lib/server/stoa/types';
+import type {
+  CitationQuality,
+  ClaimReference,
+  GroundingConfidenceLevel,
+  GroundingMode,
+  StanceType
+} from '$lib/server/stoa/types';
 
 export interface StoaMessage {
   id: string;
@@ -9,6 +15,13 @@ export interface StoaMessage {
   stance?: StanceType;
 }
 
+export interface ActionLoopState {
+  today: string;
+  tonight: string;
+  thisWeek: string;
+  followUpPrompt: string;
+}
+
 function createStoaConversationStore() {
   let messages = $state<StoaMessage[]>([]);
   let isLoading = $state(false);
@@ -16,7 +29,14 @@ function createStoaConversationStore() {
   let sessionId = $state(`stoa-${crypto.randomUUID()}`);
   let currentStance = $state<StanceType>('hold');
   let sourceClaims = $state<ClaimReference[]>([]);
+  let groundingMode = $state<GroundingMode>('degraded_none');
+  let groundingConfidence = $state<GroundingConfidenceLevel>('low');
+  let citationQuality = $state<CitationQuality[]>([]);
+  let groundingWarning = $state<string | null>(null);
   let escalated = $state(false);
+  let escalationReasons = $state<string[]>([]);
+  let actionLoop = $state<ActionLoopState | null>(null);
+  let profile = $state<{ goals: string[]; triggers: string[]; practices: string[] } | null>(null);
 
   function reset(): void {
     messages = [];
@@ -24,7 +44,14 @@ function createStoaConversationStore() {
     isLoading = false;
     currentStance = 'hold';
     sourceClaims = [];
+    groundingMode = 'degraded_none';
+    groundingConfidence = 'low';
+    citationQuality = [];
+    groundingWarning = null;
     escalated = false;
+    escalationReasons = [];
+    actionLoop = null;
+    profile = null;
     sessionId = `stoa-${crypto.randomUUID()}`;
   }
 
@@ -87,7 +114,21 @@ function createStoaConversationStore() {
             if (payload.type === 'metadata') {
               if (payload.stance) currentStance = payload.stance as StanceType;
               if (Array.isArray(payload.sourceClaims)) sourceClaims = payload.sourceClaims as ClaimReference[];
+              if (payload.groundingMode) groundingMode = payload.groundingMode as GroundingMode;
+              if (payload.groundingConfidence) {
+                groundingConfidence = payload.groundingConfidence as GroundingConfidenceLevel;
+              }
+              citationQuality = Array.isArray(payload.citationQuality)
+                ? (payload.citationQuality as CitationQuality[])
+                : citationQuality;
+              groundingWarning =
+                typeof payload.groundingWarning === 'string' && payload.groundingWarning.trim()
+                  ? payload.groundingWarning
+                  : null;
               escalated = Boolean(payload.escalated);
+              escalationReasons = Array.isArray(payload.escalationReasons)
+                ? payload.escalationReasons.filter((r: unknown): r is string => typeof r === 'string')
+                : [];
             } else if (payload.type === 'delta') {
               const text = typeof payload.text === 'string' ? payload.text : '';
               if (!agentMessage) {
@@ -107,6 +148,25 @@ function createStoaConversationStore() {
                 agentMessage.stance = (payload.stance as StanceType) ?? currentStance;
                 messages = [...messages.slice(0, -1), agentMessage];
               }
+              if (payload.groundingMode) groundingMode = payload.groundingMode as GroundingMode;
+              if (payload.groundingConfidence) {
+                groundingConfidence = payload.groundingConfidence as GroundingConfidenceLevel;
+              }
+              citationQuality = Array.isArray(payload.citationQuality)
+                ? (payload.citationQuality as CitationQuality[])
+                : citationQuality;
+              actionLoop =
+                payload.actionLoop && typeof payload.actionLoop === 'object'
+                  ? (payload.actionLoop as ActionLoopState)
+                  : actionLoop;
+              profile =
+                payload.profile && typeof payload.profile === 'object'
+                  ? (payload.profile as { goals: string[]; triggers: string[]; practices: string[] })
+                  : profile;
+              groundingWarning =
+                typeof payload.groundingWarning === 'string' && payload.groundingWarning.trim()
+                  ? payload.groundingWarning
+                  : null;
             } else if (payload.type === 'error') {
               error = typeof payload.message === 'string' ? payload.message : 'Unknown streaming error';
             }
@@ -136,11 +196,32 @@ function createStoaConversationStore() {
     get sourceClaims() {
       return sourceClaims;
     },
+    get groundingMode() {
+      return groundingMode;
+    },
+    get groundingWarning() {
+      return groundingWarning;
+    },
+    get groundingConfidence() {
+      return groundingConfidence;
+    },
+    get citationQuality() {
+      return citationQuality;
+    },
     get escalated() {
       return escalated;
     },
+    get escalationReasons() {
+      return escalationReasons;
+    },
     get sessionId() {
       return sessionId;
+    },
+    get actionLoop() {
+      return actionLoop;
+    },
+    get profile() {
+      return profile;
     },
     reset,
     send

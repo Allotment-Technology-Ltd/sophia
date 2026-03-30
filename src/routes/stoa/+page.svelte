@@ -25,7 +25,17 @@
     <span>Stance: {stoaConversationStore.currentStance}</span>
     <span>Escalation: {stoaConversationStore.escalated ? 'flagged' : 'none'}</span>
     <span>Sources: {stoaConversationStore.sourceClaims.length}</span>
+    <span>Grounding: {stoaConversationStore.groundingMode}</span>
+    <span>Grounding confidence: {stoaConversationStore.groundingConfidence}</span>
   </section>
+
+  {#if stoaConversationStore.escalated && stoaConversationStore.escalationReasons.length > 0}
+    <p class="grounding-warning">Escalation reasons: {stoaConversationStore.escalationReasons.join(', ')}</p>
+  {/if}
+
+  {#if stoaConversationStore.groundingWarning}
+    <p class="grounding-warning">{stoaConversationStore.groundingWarning}</p>
+  {/if}
 
   <section class="stoa-thread">
     {#if stoaConversationStore.messages.length === 0}
@@ -38,6 +48,63 @@
       </article>
     {/each}
   </section>
+
+  {#if stoaConversationStore.sourceClaims.length > 0}
+    <section class="sources-panel" aria-label="Grounding sources">
+      <h2>Grounding Sources</h2>
+      {#each stoaConversationStore.sourceClaims as source (source.claimId)}
+        <article class="source-card">
+          <p class="source-text">{source.sourceText}</p>
+          <p class="source-meta">
+            <span>{source.sourceAuthor}</span>
+            <span>{source.sourceWork}</span>
+            <span>score {source.relevanceScore.toFixed(2)}</span>
+          </p>
+        </article>
+      {/each}
+      {#if stoaConversationStore.citationQuality.length > 0}
+        <div class="citation-panel">
+          <h3>Citation Quality</h3>
+          {#each stoaConversationStore.citationQuality as quality (quality.claimId)}
+            <p class="citation-line">
+              <span>{quality.claimId}</span>
+              <span>quote overlap {quality.quoteOverlap.toFixed(2)}</span>
+              <span>provenance {quality.provenanceConfidence.toFixed(2)}</span>
+              <span>confidence {quality.confidence}</span>
+            </p>
+          {/each}
+        </div>
+      {/if}
+    </section>
+  {/if}
+
+  {#if stoaConversationStore.actionLoop}
+    <section class="action-loop" aria-label="Action loop check-ins">
+      <h2>Action Loop</h2>
+      <article class="loop-card">
+        <h3>Today</h3>
+        <p>{stoaConversationStore.actionLoop.today}</p>
+      </article>
+      <article class="loop-card">
+        <h3>Tonight</h3>
+        <p>{stoaConversationStore.actionLoop.tonight}</p>
+      </article>
+      <article class="loop-card">
+        <h3>This week</h3>
+        <p>{stoaConversationStore.actionLoop.thisWeek}</p>
+      </article>
+      <p class="follow-up">Follow-up: {stoaConversationStore.actionLoop.followUpPrompt}</p>
+    </section>
+  {/if}
+
+  {#if stoaConversationStore.profile}
+    <section class="action-loop" aria-label="Personal memory profile">
+      <h2>Personal Memory</h2>
+      <p class="follow-up"><strong>Goals:</strong> {stoaConversationStore.profile.goals.join(' | ') || '(none yet)'}</p>
+      <p class="follow-up"><strong>Triggers:</strong> {stoaConversationStore.profile.triggers.join(' | ') || '(none yet)'}</p>
+      <p class="follow-up"><strong>Practices:</strong> {stoaConversationStore.profile.practices.join(' | ') || '(none yet)'}</p>
+    </section>
+  {/if}
 
   <form class="composer" onsubmit={async (event) => { event.preventDefault(); await submit(); }}>
     <label for="stoa-message">Message</label>
@@ -87,6 +154,12 @@
     font-size: var(--text-meta);
     color: var(--color-dim);
     flex-wrap: wrap;
+  }
+
+  .grounding-warning {
+    margin: 0;
+    color: var(--color-copper);
+    font-size: var(--text-meta);
   }
 
   .stoa-thread {
@@ -142,6 +215,108 @@
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     background: var(--color-surface);
+  }
+
+  .action-loop {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    padding: var(--space-4);
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .action-loop h2 {
+    margin: 0;
+    font-size: var(--text-ui);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+  }
+
+  .loop-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-raised);
+    padding: var(--space-3);
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .loop-card h3,
+  .loop-card p {
+    margin: 0;
+  }
+
+  .follow-up {
+    margin: 0;
+    color: var(--color-dim);
+    font-size: var(--text-meta);
+  }
+
+  .sources-panel {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    padding: var(--space-3);
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .sources-panel h2 {
+    margin: 0;
+    font-size: var(--text-ui);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+  }
+
+  .source-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-raised);
+    padding: var(--space-3);
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .source-text {
+    margin: 0;
+    line-height: var(--leading-ui);
+    color: var(--color-text);
+  }
+
+  .source-meta {
+    margin: 0;
+    display: flex;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    color: var(--color-dim);
+    font-size: var(--text-meta);
+  }
+
+  .citation-panel {
+    border-top: 1px solid var(--color-border);
+    padding-top: var(--space-3);
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .citation-panel h3 {
+    margin: 0;
+    font-size: var(--text-meta);
+    color: var(--color-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .citation-line {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    font-size: var(--text-meta);
+    color: var(--color-dim);
   }
 
   .composer label {

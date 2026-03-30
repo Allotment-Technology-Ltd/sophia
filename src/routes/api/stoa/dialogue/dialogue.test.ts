@@ -4,18 +4,28 @@ const {
   mockStreamText,
   mockResolveReasoningModelRoute,
   mockLoadSession,
+  mockLoadProfile,
   mockAppendTurns,
+  mockUpdateProfile,
   mockRetrieveGrounding,
+  mockScoreCitationQuality,
+  mockClassifyStanceV2,
   mockShouldEscalate,
-  mockRunDeepEscalation
+  mockRunDeepEscalation,
+  mockRecordTelemetry
 } = vi.hoisted(() => ({
   mockStreamText: vi.fn(),
   mockResolveReasoningModelRoute: vi.fn(),
   mockLoadSession: vi.fn(),
+  mockLoadProfile: vi.fn(),
   mockAppendTurns: vi.fn(),
+  mockUpdateProfile: vi.fn(),
   mockRetrieveGrounding: vi.fn(),
+  mockScoreCitationQuality: vi.fn(),
+  mockClassifyStanceV2: vi.fn(),
   mockShouldEscalate: vi.fn(),
-  mockRunDeepEscalation: vi.fn()
+  mockRunDeepEscalation: vi.fn(),
+  mockRecordTelemetry: vi.fn()
 }));
 
 vi.mock('ai', () => ({
@@ -32,11 +42,14 @@ vi.mock('$lib/server/vertex', () => ({
 
 vi.mock('$lib/server/stoa/sessionStore', () => ({
   loadStoaSession: mockLoadSession,
-  appendStoaTurns: mockAppendTurns
+  loadStoaProfile: mockLoadProfile,
+  appendStoaTurns: mockAppendTurns,
+  updateStoaProfileFromTurns: mockUpdateProfile
 }));
 
 vi.mock('$lib/server/stoa/grounding', () => ({
-  retrieveStoaGrounding: mockRetrieveGrounding
+  retrieveStoaGroundingWithMode: mockRetrieveGrounding,
+  scoreCitationQuality: mockScoreCitationQuality
 }));
 
 vi.mock('$lib/server/stoa/safety', () => ({
@@ -45,13 +58,8 @@ vi.mock('$lib/server/stoa/safety', () => ({
   buildCrisisSupportMessage: vi.fn(() => 'crisis')
 }));
 
-vi.mock('$lib/server/stoa/stance', () => ({
-  detectStance: vi.fn(() => ({
-    stance: 'hold',
-    confidence: 'medium',
-    reason: 'test',
-    askClarifyingQuestion: false
-  }))
+vi.mock('$lib/server/stoa/stanceClassifier', () => ({
+  classifyStanceV2: mockClassifyStanceV2
 }));
 
 vi.mock('$lib/server/stoa/prompt', () => ({
@@ -60,9 +68,26 @@ vi.mock('$lib/server/stoa/prompt', () => ({
 }));
 
 vi.mock('$lib/server/stoa/escalation', () => ({
-  shouldEscalateToDeepAnalysis: mockShouldEscalate,
+  decideEscalation: vi.fn(() => ({ escalate: mockShouldEscalate(), reasons: [] })),
   runDeepEscalationAnalysis: mockRunDeepEscalation
 }));
+
+vi.mock('$lib/server/stoa/observability', () => ({
+  recordStoaTelemetry: mockRecordTelemetry
+}));
+
+const DEFAULT_STANCE = {
+  decision: {
+    stance: 'hold',
+    confidence: 'medium',
+    reason: 'test',
+    askClarifyingQuestion: false,
+    scores: { hold: 2, challenge: 0, guide: 0, teach: 0, sit_with: 0 },
+    recommendedFrameworks: ['dichotomy_of_control'],
+    frameworkRationale: 'test rationale'
+  },
+  source: 'heuristic'
+} as const;
 
 import { POST } from './+server';
 
@@ -93,15 +118,26 @@ describe('/api/stoa/dialogue SSE contract', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockLoadSession.mockResolvedValue({ turns: [] });
-    mockRetrieveGrounding.mockResolvedValue([
-      {
-        claimId: 'claim-1',
-        sourceText: 'What upsets people is not things but judgments.',
-        sourceAuthor: 'Epictetus',
-        sourceWork: 'Enchiridion',
-        relevanceScore: 0.9
-      }
-    ]);
+    mockLoadProfile.mockResolvedValue({ userId: 'u1', goals: [], triggers: [], practices: [], updatedAt: null });
+    mockClassifyStanceV2.mockResolvedValue(DEFAULT_STANCE);
+    mockRetrieveGrounding.mockResolvedValue({
+      claims: [
+        {
+          claimId: 'claim-1',
+          sourceText: 'What upsets people is not things but judgments.',
+          sourceAuthor: 'Epictetus',
+          sourceWork: 'Enchiridion',
+          relevanceScore: 0.9
+        }
+      ],
+      mode: 'graph_dense',
+      warning: undefined,
+      confidence: 'high'
+    });
+    mockScoreCitationQuality.mockReturnValue({
+      overall: 'high',
+      details: []
+    });
     mockResolveReasoningModelRoute.mockResolvedValue({
       model: { id: 'fake-model' },
       provider: 'vertex',
@@ -118,6 +154,8 @@ describe('/api/stoa/dialogue SSE contract', () => {
       finishReason: Promise.resolve('stop')
     });
     mockAppendTurns.mockResolvedValue(undefined);
+    mockUpdateProfile.mockResolvedValue(undefined);
+    mockRecordTelemetry.mockResolvedValue(undefined);
     mockRunDeepEscalation.mockResolvedValue({
       analysis: 'Deep synthesis text.',
       usage: { inputTokens: 9, outputTokens: 6, totalTokens: 15 },

@@ -1,5 +1,6 @@
-import { STOIC_FRAMEWORKS } from './frameworks';
+import { STOIC_FRAMEWORKS, STOIC_FRAMEWORK_NAME_MAP, type StoicFrameworkId } from './frameworks';
 import type { ClaimReference, ConversationTurn, StanceType } from './types';
+import type { StoaProfile } from './sessionStore';
 
 function formatHistory(history: ConversationTurn[]): string {
   if (history.length === 0) return '(no prior turns)';
@@ -25,6 +26,9 @@ export function buildStoaSystemPrompt(params: {
   sources: ClaimReference[];
   askClarifyingQuestion: boolean;
   suppressionMisuse: boolean;
+  recommendedFrameworks: StoicFrameworkId[];
+  frameworkRationale: string;
+  profile?: StoaProfile;
 }): string {
   const frameworkBlock = STOIC_FRAMEWORKS.map(
     (framework) => `- ${framework.label}: ${framework.shortDescription}`
@@ -49,6 +53,16 @@ export function buildStoaSystemPrompt(params: {
     ? 'Ask one clarifying question before giving firm advice if key context is missing.'
     : 'Do not ask more than one question; prioritize helpful forward motion.';
 
+  const recommendedFrameworkLabels = params.recommendedFrameworks
+    .map((framework) => STOIC_FRAMEWORK_NAME_MAP[framework] ?? framework)
+    .join(', ');
+  const profileBlock = params.profile
+    ? `User profile memory:
+- goals: ${params.profile.goals.join(' | ') || '(none yet)'}
+- triggers: ${params.profile.triggers.join(' | ') || '(none yet)'}
+- practices: ${params.profile.practices.join(' | ') || '(none yet)'}`
+    : 'User profile memory: (unavailable)';
+
   return `
 You are SOPHIA Stoa Mode 6, an adaptive Stoic dialogue guide.
 You are warm, direct, and grounded in Stoic primary-source ideas while speaking in plain modern English.
@@ -61,15 +75,24 @@ ${frameworkBlock}
 
 Response requirements:
 1) Keep response concise but substantive (roughly 120-240 words).
-2) Name at most 1-2 frameworks that best fit this turn.
-3) Use source grounding only when supported by provided source claims.
-4) Never claim certainty where evidence is thin.
-5) ${clarifyingQuestionRule}
+2) Use the recommended frameworks first unless there is a strong reason to switch.
+3) Name at most 1-2 frameworks that best fit this turn.
+4) Include one short sentence explaining why these frameworks fit this specific user context.
+5) Use source grounding only when supported by provided source claims.
+6) Never claim certainty where evidence is thin.
+7) ${clarifyingQuestionRule}
+
+Recommended frameworks: ${recommendedFrameworkLabels || '(none)'}
+Framework rationale: ${params.frameworkRationale}
+${profileBlock}
+
 ${suppressionGuard}
 Output style:
 - No bullet lists unless the user asks for a checklist.
 - End with one actionable next step.
+- Include explicit check-ins framed as "Today", "Tonight", and "This week" when practical.
 - If sources are used, cite claim IDs inline like [claim:abc123].
+- If grounding is unavailable, explicitly say you are giving provisional guidance.
 `.trim();
 }
 

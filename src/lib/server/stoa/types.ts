@@ -16,6 +16,24 @@ export interface ClaimReference {
   relevanceScore: number;
 }
 
+export type GroundingMode = 'graph_dense' | 'lexical_fallback' | 'degraded_none';
+export type GroundingConfidenceLevel = 'high' | 'medium' | 'low';
+
+export interface CitationQuality {
+  claimId: string;
+  quoteOverlap: number;
+  provenanceConfidence: number;
+  confidence: GroundingConfidenceLevel;
+}
+
+export interface GroundingResult {
+  claims: ClaimReference[];
+  mode: GroundingMode;
+  warning?: string;
+  confidence: GroundingConfidenceLevel;
+  citationQuality?: CitationQuality[];
+}
+
 export interface DialogueRequest {
   message: string;
   sessionId: string;

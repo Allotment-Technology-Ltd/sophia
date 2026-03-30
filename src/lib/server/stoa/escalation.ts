@@ -8,6 +8,13 @@ export function shouldEscalateToDeepAnalysis(params: {
   message: string;
   history: ConversationTurn[];
 }): boolean {
+  return decideEscalation(params).escalate;
+}
+
+export function decideEscalation(params: {
+  message: string;
+  history: ConversationTurn[];
+}): { escalate: boolean; reasons: string[] } {
   const { message, history } = params;
   const low = message.toLowerCase();
   const complexityMarkers = [
@@ -19,10 +26,16 @@ export function shouldEscalateToDeepAnalysis(params: {
     'both true',
     'long term vs short term'
   ];
-  const hasMarker = complexityMarkers.some((marker) => low.includes(marker));
+  const reasons: string[] = [];
+  const hasMarker = complexityMarkers.some((marker) => {
+    const matched = low.includes(marker);
+    if (matched) reasons.push(`marker:${marker}`);
+    return matched;
+  });
   const recentUserTurns = history.filter((turn) => turn.role === 'user').slice(-3);
   const repeatedQuestion = recentUserTurns.length >= 2 && recentUserTurns.every((turn) => turn.content.length > 140);
-  return hasMarker || repeatedQuestion;
+  if (repeatedQuestion) reasons.push('pattern:repeated_long_turns');
+  return { escalate: hasMarker || repeatedQuestion, reasons };
 }
 
 export interface DeepEscalationResult {

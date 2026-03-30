@@ -2,13 +2,25 @@ import type { RequestHandler } from './$types';
 import { streamText } from 'ai';
 import { loadInquiryEffectiveProviderApiKeys } from '$lib/server/byok/effectiveKeys';
 import { resolveReasoningModelRoute } from '$lib/server/vertex';
-import { appendStoaTurns, loadStoaSession } from '$lib/server/stoa/sessionStore';
-import { retrieveStoaGrounding } from '$lib/server/stoa/grounding';
+import {
+  appendStoaTurns,
+  loadStoaProfile,
+  loadStoaSession,
+  updateStoaProfileFromTurns
+} from '$lib/server/stoa/sessionStore';
+import { retrieveStoaGroundingWithMode, scoreCitationQuality } from '$lib/server/stoa/grounding';
 import { detectCrisisRisk, detectSuppressionMisuse, buildCrisisSupportMessage } from '$lib/server/stoa/safety';
-import { detectStance } from '$lib/server/stoa/stance';
 import { buildStoaSystemPrompt, buildStoaUserPrompt } from '$lib/server/stoa/prompt';
-import { runDeepEscalationAnalysis, shouldEscalateToDeepAnalysis } from '$lib/server/stoa/escalation';
-import type { ConversationTurn, DialogueRequest } from '$lib/server/stoa/types';
+import { decideEscalation, runDeepEscalationAnalysis } from '$lib/server/stoa/escalation';
+import type {
+  ConversationTurn,
+  DialogueRequest,
+  GroundingConfidenceLevel
+} from '$lib/server/stoa/types';
+import { STOIC_FRAMEWORKS } from '$lib/server/stoa/frameworks';
+import { classifyStanceV2 } from '$lib/server/stoa/stanceClassifier';
+import { buildActionLoop } from '$lib/server/stoa/actionLoop';
+import { recordStoaTelemetry } from '$lib/server/stoa/observability';
 
 function sendSse(controller: ReadableStreamDefaultController<Uint8Array>, payload: unknown): void {
   const encoder = new TextEncoder();
@@ -28,6 +40,21 @@ function normalizeHistory(history?: ConversationTurn[]): ConversationTurn[] {
         ? turn.frameworksReferenced
         : undefined
     }));
+}
+
+function extractFrameworkReferences(responseText: string): string[] {
+  const low = responseText.toLowerCase();
+  return STOIC_FRAMEWORKS
+    .filter((framework) => low.includes(framework.label.toLowerCase()))
+    .map((framework) => framework.id);
+}
+
+function buildSessionSummary(history: ConversationTurn[]): string {
+  const recent = history.slice(-6);
+  return recent
+    .map((turn) => `${turn.role === 'user' ? 'U' : 'A'}: ${turn.content.slice(0, 180)}`)
+    .join(' | ')
+    .slice(0, 1200);
 }
 
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -78,14 +105,16 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         }
         const requestHistory = normalizeHistory(body.history);
         const history = storedSession.turns.length > 0 ? storedSession.turns : requestHistory;
+        const profile = await loadStoaProfile(uid);
         const userTurn: ConversationTurn = {
           role: 'user',
           content: message,
           timestamp: new Date().toISOString()
         };
         const fullHistory = [...history, userTurn];
+        const crisisHardStop = (process.env.STOA_CRISIS_HARD_STOP ?? 'true').toLowerCase() !== 'false';
 
-        if (detectCrisisRisk(message)) {
+        if (detectCrisisRisk(message) && crisisHardStop) {
           const response = buildCrisisSupportMessage();
           const agentTurn: ConversationTurn = {
             role: 'agent',
@@ -94,19 +123,46 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             stance: 'hold'
           };
           sendSse(controller, { type: 'start' });
-          sendSse(controller, { type: 'metadata', stance: 'hold', escalated: false, sourceClaims: [] });
+          sendSse(controller, {
+            type: 'metadata',
+            stance: 'hold',
+            escalated: false,
+            sourceClaims: [],
+            groundingMode: 'degraded_none',
+            groundingWarning: 'Crisis protocol active: routed to immediate support guidance.'
+          });
           sendSse(controller, { type: 'delta', text: response });
           sendSse(controller, { type: 'complete', response, stance: 'hold', frameworksReferenced: [] });
           await appendStoaTurns({ sessionId, userId: uid, turns: [userTurn, agentTurn] });
+          await recordStoaTelemetry({
+            uid,
+            sessionId,
+            route: '/api/stoa/dialogue',
+            groundingMode: 'degraded_none',
+            escalated: false,
+            errorTaxonomy: 'crisis_hard_stop'
+          });
           controller.close();
           return;
         }
 
-        const stanceDecision = detectStance({ message, history });
+        const stanceClassification = await classifyStanceV2({
+          message,
+          history,
+          providerApiKeys
+        });
+        const stanceDecision = stanceClassification.decision;
         const suppressionMisuse = detectSuppressionMisuse(message);
-        let sourceClaims: Awaited<ReturnType<typeof retrieveStoaGrounding>> = [];
+        let sourceClaims: Awaited<ReturnType<typeof retrieveStoaGroundingWithMode>>['claims'] = [];
+        let groundingMode: Awaited<ReturnType<typeof retrieveStoaGroundingWithMode>>['mode'] = 'degraded_none';
+        let groundingConfidence: GroundingConfidenceLevel = 'low';
+        let groundingWarning: string | undefined;
         try {
-          sourceClaims = await retrieveStoaGrounding({ message, history: fullHistory, topK: 5 });
+          const grounding = await retrieveStoaGroundingWithMode({ message, history: fullHistory, topK: 5 });
+          sourceClaims = grounding.claims;
+          groundingMode = grounding.mode;
+          groundingConfidence = grounding.confidence;
+          groundingWarning = grounding.warning;
         } catch (error) {
           if (process.env.NODE_ENV !== 'test') {
             console.warn(
@@ -119,7 +175,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           stance: stanceDecision.stance,
           sources: sourceClaims,
           askClarifyingQuestion: stanceDecision.askClarifyingQuestion,
-          suppressionMisuse
+          suppressionMisuse,
+          recommendedFrameworks: stanceDecision.recommendedFrameworks,
+          frameworkRationale: stanceDecision.frameworkRationale,
+          profile
         });
         const userPrompt = buildStoaUserPrompt({
           message,
@@ -140,21 +199,30 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           }
         });
 
-        const escalated = shouldEscalateToDeepAnalysis({ message, history });
+        const escalationDecision = decideEscalation({ message, history });
+        const escalated = escalationDecision.escalate;
 
         sendSse(controller, {
           type: 'metadata',
           stance: stanceDecision.stance,
           stanceConfidence: stanceDecision.confidence,
           stanceReason: stanceDecision.reason,
+          stanceClassifierSource: stanceClassification.source,
+          frameworkRecommendation: stanceDecision.recommendedFrameworks,
+          frameworkRationale: stanceDecision.frameworkRationale,
           sourceClaims,
-          escalated
+          groundingMode,
+          groundingConfidence,
+          groundingWarning,
+          escalated,
+          escalationReasons: escalationDecision.reasons
         });
         if (escalated) {
           sendSse(controller, {
             type: 'escalation_started',
             mode: 'deep',
-            note: 'Running deep escalation pass.'
+            note: 'Running deep escalation pass.',
+            reasons: escalationDecision.reasons
           });
         }
         sendSse(controller, { type: 'start' });
@@ -179,15 +247,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
         const usage = await streamResult.totalUsage;
         const finishReason = await streamResult.finishReason;
-        const frameworksReferenced = Array.from(
-          new Set(
-            sourceClaims
-              .filter((claim) =>
-                responseText.toLowerCase().includes(claim.sourceText.slice(0, 24).toLowerCase())
-              )
-              .map((claim) => claim.claimId)
-          )
-        );
+        const frameworksReferenced = extractFrameworkReferences(responseText);
+        const citationQuality = scoreCitationQuality({
+          responseText,
+          sourceClaims
+        });
 
         let escalationResult: Awaited<ReturnType<typeof runDeepEscalationAnalysis>> | null = null;
         if (escalated) {
@@ -212,6 +276,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           escalationResult?.analysis?.trim().length
             ? `${responseText}\n\n---\n\nDeep analysis:\n${escalationResult.analysis}`
             : responseText;
+        const actionLoop = buildActionLoop({ responseText: finalResponse, stance: stanceDecision.stance });
 
         const agentTurn: ConversationTurn = {
           role: 'agent',
@@ -225,7 +290,19 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           sessionId,
           userId: uid,
           turns: [userTurn, agentTurn],
-          summary: null
+          summary: buildSessionSummary([...fullHistory, agentTurn])
+        });
+        await updateStoaProfileFromTurns({
+          userId: uid,
+          turns: [...fullHistory, agentTurn]
+        });
+        await recordStoaTelemetry({
+          uid,
+          sessionId,
+          route: '/api/stoa/dialogue',
+          groundingMode,
+          escalated,
+          errorTaxonomy: null
         });
 
         sendSse(controller, {
@@ -234,6 +311,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           stance: stanceDecision.stance,
           frameworksReferenced,
           sourceClaims,
+          groundingMode,
+          groundingWarning: groundingWarning ?? null,
+          groundingConfidence: citationQuality.overall,
+          citationQuality: citationQuality.details,
+          actionLoop,
+          profile,
           escalated,
           escalationResult: escalationResult
             ? {
@@ -250,6 +333,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           }
         });
       } catch (error) {
+        await recordStoaTelemetry({
+          uid,
+          sessionId,
+          route: '/api/stoa/dialogue',
+          groundingMode: 'degraded_none',
+          escalated: false,
+          errorTaxonomy: 'runtime_error'
+        });
         sendSse(controller, {
           type: 'error',
           message: error instanceof Error ? error.message : String(error)
