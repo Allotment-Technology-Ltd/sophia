@@ -19,6 +19,7 @@ type QueueRow = {
 	status?: QueueStatus;
 	source_kinds?: string[];
 	pass_hints?: string[];
+	submitted_by_uids?: string[];
 	last_error?: string | null;
 	title_hint?: string | null;
 	updated_at?: string;
@@ -879,7 +880,7 @@ async function upsertQueueRowForStoa(decision: StoaLicenseDecision, actorUid: st
 				 source_kinds: $source_kinds,
 				 pass_hints: $pass_hints,
 				 submitted_by_uid: $submitted_by_uid,
-				 submitted_by_uids: array::add(submitted_by_uids, $submitted_by_uid),
+				 submitted_by_uids: $submitted_by_uids,
 				 title_hint: if title_hint = NONE then $title_hint else title_hint end,
 				 last_error: if $status = 'rejected' then $last_error else NONE end,
 				 last_submitted_at: time::now(),
@@ -892,6 +893,7 @@ async function upsertQueueRowForStoa(decision: StoaLicenseDecision, actorUid: st
 				source_kinds: mergeUnique(existing.source_kinds, ['stoa', 'stoa_batch']),
 				pass_hints: mergeUnique(existing.pass_hints, passHints),
 				submitted_by_uid: actorUid,
+				submitted_by_uids: mergeUnique(existing.submitted_by_uids, [actorUid]),
 				title_hint: `STOA batch: ${decision.hostname}`,
 				last_error: decision.reuseMode === 'blocked' ? 'stoa_strict_open_blocked' : null
 			}
