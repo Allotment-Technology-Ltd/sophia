@@ -9,6 +9,7 @@
   let doneToday = $state(false);
   let doneTonight = $state(false);
   let doneWeek = $state(false);
+  let hasAgentResponse = $derived(stoaConversationStore.messages.some((message) => message.role === 'agent'));
 
   const CONFIDENCE_LABEL: Record<string, string> = {
     high: 'High',
@@ -51,14 +52,16 @@
 
   <section class="stoa-meta" aria-live="polite">
     <span>Stance: {stoaConversationStore.currentStance}</span>
-    <span>Sources: {stoaConversationStore.sourceClaims.length > 0 ? 'linked' : 'none'}</span>
-    <span
-      class="confidence-pill {stoaConversationStore.groundingConfidence}"
-      >Grounding confidence: {CONFIDENCE_LABEL[stoaConversationStore.groundingConfidence]}</span
-    >
+    {#if hasAgentResponse}
+      <span>Sources: {stoaConversationStore.sourceClaims.length > 0 ? 'linked' : 'none'}</span>
+      <span
+        class="confidence-pill {stoaConversationStore.groundingConfidence}"
+        >Grounding confidence: {CONFIDENCE_LABEL[stoaConversationStore.groundingConfidence]}</span
+      >
+    {/if}
   </section>
 
-  {#if stoaConversationStore.groundingMode !== 'graph_dense'}
+  {#if hasAgentResponse && stoaConversationStore.groundingMode !== 'graph_dense'}
     <p class="grounding-note {stoaConversationStore.groundingMode === 'degraded_none' ? 'warn' : 'info'}">
       {stoaConversationStore.groundingMode === 'lexical_fallback'
         ? 'Using backup source retrieval for this turn.'
