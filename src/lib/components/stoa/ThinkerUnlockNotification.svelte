@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { fade, fly } from 'svelte/transition';
+	import { createEventDispatcher } from 'svelte';
 	import type { ThinkerProfile } from '$lib/types/stoa.js';
 
 	interface Props {
@@ -9,6 +9,7 @@
 	}
 
 	let { thinker, onComplete }: Props = $props();
+	const dispatch = createEventDispatcher<{ dismissed: void }>();
 
 	const NOTIFICATION_DURATION = 4000; // 4 seconds
 
@@ -29,6 +30,7 @@
 
 			const timer = setTimeout(() => {
 				visible = false;
+				dispatch('dismissed');
 				onComplete?.();
 			}, NOTIFICATION_DURATION);
 

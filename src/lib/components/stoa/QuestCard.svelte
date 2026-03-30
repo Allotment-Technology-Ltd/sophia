@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { QuestDefinition } from '$lib/server/stoa/game/quest-definitions/types.js';
+	import type { QuestDefinition } from '$lib/server/stoa/game/types.js';
 
 	interface Props {
 		quest: QuestDefinition;
@@ -9,15 +9,6 @@
 	}
 
 	let { quest, status, completedAt, xpAwarded }: Props = $props();
-
-	const levelNames: Record<number, string> = {
-		1: 'The Questioner',
-		2: 'The Practitioner',
-		3: 'The Student',
-		4: 'The Adept',
-		5: 'The Philosopher',
-		6: 'The Sage'
-	};
 
 	function formatDate(dateStr: string): string {
 		if (!dateStr) return '';
@@ -49,15 +40,11 @@
 		<div class="quest-body">
 			{#if status === 'active'}
 				<p class="quest-description">{quest.description ?? 'No description available.'}</p>
-				{#if quest.framework}
+				{#if quest.frameworks && quest.frameworks.length > 0}
 					<div class="quest-frameworks">
-						{#if Array.isArray(quest.framework)}
-							{#each quest.framework as fw}
-								<span class="framework-tag">{fw.replace(/_/g, ' ')}</span>
-							{/each}
-						{:else}
-							<span class="framework-tag">{quest.framework.replace(/_/g, ' ')}</span>
-						{/if}
+						{#each quest.frameworks as fw}
+							<span class="framework-tag">{fw.replace(/_/g, ' ')}</span>
+						{/each}
 					</div>
 				{/if}
 			{:else if status === 'available'}
@@ -85,8 +72,8 @@
 				{#if quest.reward.unlockThinkerId}
 					<span class="unlock">Unlocks: {quest.reward.unlockThinkerId}</span>
 				{/if}
-				{#if quest.reward.unlockZone}
-					<span class="unlock">Unlocks zone: {quest.reward.unlockZone}</span>
+				{#if quest.reward.unlockZoneId}
+					<span class="unlock">Unlocks zone: {quest.reward.unlockZoneId}</span>
 				{/if}
 			</div>
 		{/if}

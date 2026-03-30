@@ -1,4 +1,4 @@
-import type { QuestDefinition } from './types.js';
+import type { QuestDefinition } from '../types';
 
 /**
  * Marcus Aurelius quest arc - intro to Stoic practice
@@ -9,16 +9,18 @@ export const viewFromAboveQuest: QuestDefinition = {
 	title: 'The View from Above',
 	description:
 		'Practice seeing your situation from a cosmic perspective. What remains significant when viewed from above?',
-	framework: ['negative_visualisation', 'cosmic_perspective'],
+	frameworks: ['negative_visualisation', 'cosmic_perspective'],
 	trigger: {
 		type: 'session_count',
 		minSessions: 2
 	},
-	completion: {
-		type: 'framework_used',
-		frameworkId: 'cosmic_perspective',
-		minCount: 1
-	},
+	completion: [
+		{
+			type: 'framework_used',
+			frameworkId: 'cosmic_perspective',
+			minCount: 1
+		}
+	],
 	reward: {
 		xp: 150
 	},
@@ -30,17 +32,19 @@ export const morningIntentionQuest: QuestDefinition = {
 	id: 'morning-intention',
 	title: 'The Morning Intention',
 	description: 'Begin each day with deliberate intention. Prepare for what lies ahead.',
-	framework: 'morning_preparation',
+	frameworks: ['morning_preparation'],
 	trigger: {
 		type: 'manual'
 	},
-	completion: {
-		type: 'journal_entries',
-		minCount: 3
-	},
+	completion: [
+		{
+			type: 'journal_entries',
+			minCount: 3
+		}
+	],
 	reward: {
 		xp: 100,
-		unlockZone: 'garden'
+		unlockZoneId: 'garden'
 	}
 };
 
@@ -48,7 +52,7 @@ export const examinedWeekQuest: QuestDefinition = {
 	id: 'examined-week',
 	title: 'The Examined Week',
 	description: 'Seven days of evening reflection. What patterns emerge when you look back?',
-	framework: 'evening_reflection',
+	frameworks: ['evening_reflection'],
 	trigger: {
 		type: 'thinker_unlocked',
 		thinkerId: 'marcus'
@@ -60,7 +64,8 @@ export const examinedWeekQuest: QuestDefinition = {
 		},
 		{
 			type: 'journal_entries',
-			minCount: 5
+			minCount: 5,
+			requiresDistinctFrameworks: false
 		}
 	],
 	reward: {

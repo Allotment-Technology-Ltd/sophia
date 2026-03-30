@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { fade } from 'svelte/transition';
-	import type { QuestDefinition } from '$lib/server/stoa/game/quest-definitions/types.js';
+	import type { QuestDefinition } from '$lib/server/stoa/game/types.js';
 	import type { StoaProgressState } from '$lib/types/stoa.js';
 	import QuestCard from './QuestCard.svelte';
 
@@ -11,7 +11,7 @@
 		onclose?: () => void;
 	}
 
-	let { open, userId, onclose }: Props = $props();
+	let { open = $bindable(false), userId, onclose }: Props = $props();
 
 	let progress = $state<StoaProgressState | null>(null);
 	let questDefinitions = $state<Map<string, QuestDefinition>>(new Map());
@@ -177,7 +177,7 @@
 		aria-label="Close quest journal"
 	>
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="quest-journal" onclick={(e) => e.stopPropagation()}>
+		<div class="quest-journal" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
 			<header class="journal-header">
 				<h2 class="journal-title">Quest Journal</h2>
 				<button class="close-button" onclick={handleClose} aria-label="Close journal">×</button>
