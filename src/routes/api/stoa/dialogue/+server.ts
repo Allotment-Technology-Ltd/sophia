@@ -4,6 +4,7 @@ import { loadInquiryEffectiveProviderApiKeys } from '$lib/server/byok/effectiveK
 import { resolveReasoningModelRoute } from '$lib/server/vertex';
 import {
   appendStoaTurns,
+  listJournalEntries,
   listIncompleteActionItems,
   listRelevantJournalEntries,
   loadStoaProfile,
@@ -28,9 +29,13 @@ import { STOIC_FRAMEWORKS } from '$lib/server/stoa/frameworks';
 import { classifyStanceV2 } from '$lib/server/stoa/stanceClassifier';
 import { buildActionLoop, detectActionSuggestions } from '$lib/server/stoa/actionLoop';
 import { recordStoaTelemetry } from '$lib/server/stoa/observability';
-import { questEngine } from '$lib/server/stoa/game/quest-engine.js';
-import type { QuestContext } from '$lib/server/stoa/game/quest-definitions/types.js';
-import { getProgress } from '$lib/server/stoa/game/progress-store.js';
+import { QuestEngine } from '$lib/server/stoa/game/quest-engine';
+import { getProgress } from '$lib/server/stoa/game/progress-store';
+import type { QuestContext } from '$lib/server/stoa/game/types';
+import { ReasoningEvaluator } from '$lib/server/stoa/game/reasoning-eval';
+import { getReasoningTrend } from '$lib/server/stoa/game/reasoning-progression';
+import { ALL_QUESTS } from '$lib/server/stoa/game/quest-definitions';
+import { logger } from '$lib/server/cloud-logger';
 
 function sendSse(controller: ReadableStreamDefaultController<Uint8Array>, payload: unknown): void {
   const encoder = new TextEncoder();
@@ -67,6 +72,54 @@ function buildSessionSummary(history: ConversationTurn[]): string {
     .slice(0, 1200);
 }
 
+function uniq(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function computeDaysElapsed(history: ConversationTurn[]): number {
+  const timestamps = history
+    .map((turn) => Date.parse(turn.timestamp))
+    .filter((value) => Number.isFinite(value));
+  if (timestamps.length === 0) return 0;
+  const first = Math.min(...timestamps);
+  const elapsedMs = Date.now() - first;
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return 0;
+  return Math.floor(elapsedMs / (1000 * 60 * 60 * 24));
+}
+
+function detectQuestSignals(userMessage: string, agentResponse: string): string[] {
+  const joined = `${userMessage}\n${agentResponse}`.toLowerCase();
+  const signals: string[] = [];
+  if (joined.includes('meditations') && (joined.includes('passage') || joined.includes('book '))) {
+    signals.push('meditations_passage_discussed');
+  }
+  return uniq(signals);
+}
+
+function getSessionStartHourLocal(history: ConversationTurn[]): number | null {
+  const timestamps = history
+    .map((turn) => Date.parse(turn.timestamp))
+    .filter((value) => Number.isFinite(value));
+  if (timestamps.length === 0) return null;
+  const first = new Date(Math.min(...timestamps));
+  const hour = first.getHours();
+  return Number.isFinite(hour) ? hour : null;
+}
+
+function confidenceLevelToReasoningScore(level: GroundingConfidenceLevel): number {
+  switch (level) {
+    case 'high':
+      return 0.8;
+    case 'medium':
+      return 0.65;
+    default:
+      return 0.45;
+  }
+}
+
+const questEngine = new QuestEngine();
+const reasoningEvaluator = new ReasoningEvaluator();
+
 export const POST: RequestHandler = async ({ request, locals }) => {
   const uid = locals.user?.uid;
   if (!uid) {
@@ -100,6 +153,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      let closeHandled = false;
       try {
         let storedSession: Awaited<ReturnType<typeof loadStoaSession>>;
         try {
@@ -115,6 +169,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         }
         const requestHistory = normalizeHistory(body.history);
         const history = storedSession.turns.length > 0 ? storedSession.turns : requestHistory;
+        const progressSnapshot = await getProgress(uid);
+        const activeQuestSeeds = ALL_QUESTS
+          .filter((quest) => progressSnapshot.activeQuestIds.includes(quest.id) && quest.dialogueSeed)
+          .map((quest) => `${quest.title}: ${quest.dialogueSeed}`);
         const profile = await loadStoaProfile(uid);
         const pendingActions = await listIncompleteActionItems({ userId: uid, lookbackDays: 14 });
         const relevantJournal = await listRelevantJournalEntries({
@@ -128,6 +186,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           timestamp: new Date().toISOString()
         };
         const fullHistory = [...history, userTurn];
+        const turnIndex = Math.max(0, fullHistory.length - 1);
         const crisisHardStop = (process.env.STOA_CRISIS_HARD_STOP ?? 'true').toLowerCase() !== 'false';
 
         if (detectCrisisRisk(message) && crisisHardStop) {
@@ -201,11 +260,15 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           frameworkRationale: stanceDecision.frameworkRationale,
           profile
         });
+        const questGuidance =
+          activeQuestSeeds.length > 0
+            ? `\n\nActive quest guidance (weave naturally, no announcement):\n${activeQuestSeeds.join('\n')}`
+            : '';
         const userPrompt = buildStoaUserPrompt({
           message,
           history,
           sources: sourceClaims
-        });
+        }) + questGuidance;
 
         const modelRoute = await resolveReasoningModelRoute({
           depthMode: 'standard',
@@ -385,75 +448,123 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           }
         });
 
-        // Async quest evaluation - fire and forget, do not block SSE stream
-        // Errors are logged but not surfaced to the client
-        (async () => {
+        const runQuestEvaluation = async (reasoningScore: number, frameworksUsed: string[]): Promise<void> => {
+          if (!uid) return;
+
           try {
-            const progress = await getProgress(uid);
+            const journalEntries = await listJournalEntries({ userId: uid, limit: 100 });
+            const progressBefore = await getProgress(uid);
+            const finalizedHistory = [...fullHistory, agentTurn];
             const questContext: QuestContext = {
               sessionId,
-              userId: uid,
-              frameworksUsed: frameworksReferenced,
-              unlockedThinkers: progress.unlockedThinkers,
-              activeQuestIds: progress.activeQuestIds,
-              completedQuestIds: progress.completedQuestIds
+              turnIndex,
+              frameworksUsed: uniq(frameworksUsed),
+              reasoningScore,
+              daysElapsed: computeDaysElapsed(finalizedHistory),
+              journalCount: journalEntries.length,
+              stance: stanceDecision.stance,
+              manualSignals: detectQuestSignals(message, finalResponse),
+              sessionStartHourLocal: getSessionStartHourLocal(finalizedHistory)
             };
 
-            // Evaluate completions (triggers are auto-started by the engine)
             const completedQuests = await questEngine.evaluateCompletions(uid, questContext);
-            const newlyAvailable = await questEngine.evaluateTriggers(uid, questContext);
-
-            // Award completions (idempotent - safe to call multiple times)
-            let xpGained = 0;
-            const questsCompleted: string[] = [];
-            const newUnlocks: string[] = [];
-
             for (const quest of completedQuests) {
-              await questEngine.awardCompletion(uid, quest, sessionId);
-              xpGained += quest.reward.xp;
-              questsCompleted.push(quest.id);
-              if (quest.reward.unlockThinkerId) {
-                newUnlocks.push(quest.reward.unlockThinkerId);
-              }
+              await questEngine.awardCompletion(uid, quest);
             }
 
-            // Emit progress_update event if anything changed
-            if (xpGained > 0 || newUnlocks.length > 0 || questsCompleted.length > 0) {
+            const newlyAvailableQuests = await questEngine.evaluateTriggers(uid, questContext);
+            const progressAfter = await getProgress(uid);
+            const xpGained = Math.max(0, progressAfter.xp - progressBefore.xp);
+            const newUnlocks = progressAfter.unlockedThinkers.filter(
+              (thinkerId) => !progressBefore.unlockedThinkers.includes(thinkerId)
+            );
+            const questsCompleted = completedQuests.map((quest) => quest.id);
+            const questsActivated = newlyAvailableQuests.map((quest) => quest.id);
+
+            if (xpGained > 0 || newUnlocks.length > 0 || questsCompleted.length > 0 || questsActivated.length > 0) {
               sendSse(controller, {
                 type: 'progress_update',
                 xpGained,
                 newUnlocks,
-                questsCompleted
+                questsCompleted,
+                questsActivated
               });
             }
 
-            // Log quest evaluation results
-            await recordStoaTelemetry({
-              uid,
+            await logger.info('[STOA] Quest evaluation completed after dialogue response', {
+              route: '/api/stoa/dialogue',
+              userId: uid,
               sessionId,
-              route: '/api/stoa/dialogue/quest-evaluation',
-              groundingMode,
-              escalated,
-              errorTaxonomy: null
+              turnIndex,
+              reasoningScore,
+              frameworksUsed: uniq(frameworksUsed),
+              questsCompleted,
+              newlyAvailableQuests: newlyAvailableQuests.map((quest) => quest.id),
+              xpGained,
+              newUnlocks
             });
-          } catch (questError) {
-            // Log errors but do not surface to SSE stream
-            if (process.env.NODE_ENV !== 'test') {
-              console.warn(
-                '[STOA] Quest evaluation error (non-blocking):',
-                questError instanceof Error ? questError.message : String(questError)
-              );
-            }
-            await recordStoaTelemetry({
-              uid,
+          } catch (error) {
+            await logger.error('[STOA] Quest evaluation failed after dialogue response', {
+              route: '/api/stoa/dialogue',
+              userId: uid,
               sessionId,
-              route: '/api/stoa/dialogue/quest-evaluation',
-              groundingMode: 'degraded_none',
-              escalated: false,
-              errorTaxonomy: 'quest_evaluation_error'
+              turnIndex,
+              error: error instanceof Error ? error.message : String(error)
             });
           }
-        })();
+        };
+
+        const runReasoningAssessment = async (): Promise<void> => {
+          try {
+            const assessment = await reasoningEvaluator.assess({
+              sessionId,
+              userId: uid,
+              turnIndex,
+              userMessage: userTurn.content,
+              agentResponse: finalResponse,
+              frameworksReferenced: uniq(frameworksReferenced),
+              conversationHistory: [...fullHistory, agentTurn]
+            });
+            if (!assessment) return;
+
+            const trend = await getReasoningTrend(uid, 10);
+            if (assessment.qualityScore > 0.6 && trend.isImproving) {
+              sendSse(controller, {
+                type: 'reasoning_assessed',
+                assessment: {
+                  ...assessment,
+                  improvementDetected: trend.isImproving
+                }
+              });
+            }
+
+            await runQuestEvaluation(
+              assessment.qualityScore,
+              assessment.frameworksApplied.length > 0
+                ? assessment.frameworksApplied
+                : uniq(frameworksReferenced)
+            );
+          } catch (error) {
+            await logger.error('[STOA] Reasoning assessment failed after dialogue response', {
+              route: '/api/stoa/dialogue',
+              userId: uid,
+              sessionId,
+              turnIndex,
+              error: error instanceof Error ? error.message : String(error)
+            });
+          }
+        };
+
+        const baselineQuestEvaluation = runQuestEvaluation(
+          confidenceLevelToReasoningScore(citationQuality.overall),
+          uniq(frameworksReferenced)
+        );
+        const reasoningAssessmentEvaluation = runReasoningAssessment();
+        void Promise.allSettled([baselineQuestEvaluation, reasoningAssessmentEvaluation]).finally(() => {
+          closeHandled = true;
+          controller.close();
+        });
+        return;
       } catch (error) {
         await recordStoaTelemetry({
           uid,
@@ -468,7 +579,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           message: error instanceof Error ? error.message : String(error)
         });
       } finally {
-        controller.close();
+        if (!closeHandled) {
+          controller.close();
+        }
       }
     }
   });

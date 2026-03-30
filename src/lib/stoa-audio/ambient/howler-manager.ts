@@ -1,6 +1,7 @@
 import { Howl } from 'howler';
 
 import type { StanceType, StoaZone } from '$lib/types/stoa';
+import { resolveAudioSrc } from '$lib/tauri/audio-resolver';
 
 import { SOUND_MANIFEST } from './sound-manifest';
 
@@ -13,7 +14,8 @@ const ZONE_POSITIONS: Record<StoaZone, { wavesX: number; torchX: number }> = {
   'sea-terrace': { wavesX: -1.2, torchX: 0.15 },
   shrines: { wavesX: -0.2, torchX: 0.6 },
   library: { wavesX: -0.1, torchX: 0.45 },
-  garden: { wavesX: -0.8, torchX: 0.25 }
+  garden: { wavesX: -0.8, torchX: 0.25 },
+  'world-map': { wavesX: -0.5, torchX: 0.1 }
 };
 
 export class HowlerManager {
@@ -106,8 +108,9 @@ export class HowlerManager {
 
   private async loadLoop(key: LoopSoundKey): Promise<void> {
     const config = SOUND_MANIFEST[key];
+    const resolvedSrc = await resolveAudioSrc(config.src);
     const howl = new Howl({
-      src: [config.src],
+      src: [resolvedSrc],
       loop: config.loop,
       volume: 0,
       preload: true,
@@ -125,8 +128,9 @@ export class HowlerManager {
   }
 
   private async loadBirdsong(src: string): Promise<void> {
+    const resolvedSrc = await resolveAudioSrc(src);
     const bird = new Howl({
-      src: [src],
+      src: [resolvedSrc],
       loop: false,
       volume: SOUND_MANIFEST.birdsong.volume,
       preload: true,

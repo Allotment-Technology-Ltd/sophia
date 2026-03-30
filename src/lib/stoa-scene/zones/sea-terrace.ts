@@ -1,6 +1,8 @@
 import * as THREE from 'three';
+import { waterFragmentShader, waterVertexShader } from '../shaders/water.glsl';
 
 type DisposeFn = () => void;
+type UpdateFn = (delta: number) => void;
 
 function disposeMaterial(material: THREE.Material): void {
   const textureKeys = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'alphaMap', 'emissiveMap'] as const;
@@ -52,16 +54,24 @@ export async function buildSeaTerrace(): Promise<THREE.Group> {
   deck.receiveShadow = true;
   group.add(deck);
 
-  // Phase 1.6 note: replace this placeholder plane with animated shader water.
+  const waterUniforms = {
+    uTime: { value: 0 },
+    uWaveHeight: { value: 0.05 },
+    uDeepColor: { value: new THREE.Color('#1E5F74') },
+    uShallowColor: { value: new THREE.Color('#4ECDC4') }
+  };
+
+  const waterMaterial = new THREE.ShaderMaterial({
+    uniforms: waterUniforms,
+    vertexShader: waterVertexShader,
+    fragmentShader: waterFragmentShader,
+    transparent: true,
+    side: THREE.DoubleSide
+  });
+
   const water = new THREE.Mesh(
-    new THREE.PlaneGeometry(40, 24, 1, 1),
-    new THREE.MeshStandardMaterial({
-      color: '#4f8cb3',
-      roughness: 0.1,
-      metalness: 0.2,
-      transparent: true,
-      opacity: 0.72
-    })
+    new THREE.PlaneGeometry(40, 24, 80, 56),
+    waterMaterial
   );
   water.rotation.x = -Math.PI / 2;
   water.position.set(0, 0.02, -18);
@@ -74,6 +84,13 @@ export async function buildSeaTerrace(): Promise<THREE.Group> {
   sun.position.set(7, 14, 4);
   sun.castShadow = true;
   group.add(sun);
+
+  let elapsed = 0;
+  const update: UpdateFn = (delta) => {
+    elapsed += delta;
+    waterUniforms.uTime.value = elapsed;
+  };
+  group.userData.update = update;
 
   const dispose: DisposeFn = () => {
     disposeObject3D(group);

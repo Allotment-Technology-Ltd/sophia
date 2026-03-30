@@ -49,7 +49,9 @@
     "verify:prod-ingest": "bash scripts/verify-prod-ingest-isolated.sh",
     "byok:reencrypt-kms-to-local": "tsx --env-file=.env scripts/byok-reencrypt-kms-to-local.ts",
     "secrets:sync-gcp": "tsx scripts/sync-gcp-secret-manager-from-env.ts",
-    "repomix:kb": "npx --yes repomix --config repomix.knowledge-base.config.json"
+    "repomix:kb": "npx --yes repomix --config repomix.knowledge-base.config.json",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.58",
@@ -65,6 +67,7 @@
     "@restormel/contracts": "workspace:*",
     "@restormel/keys": "0.2.14",
     "@restormel/keys-svelte": "0.1.7",
+    "@tauri-apps/api": "^2.10.1",
     "ai": "6.0.105",
     "dotenv": "^17.3.1",
     "drizzle-orm": "^0.40.1",
@@ -90,6 +93,7 @@
     "@sveltejs/vite-plugin-svelte": "^4.0.4",
     "@tailwindcss/postcss": "^4.2.1",
     "@tailwindcss/typography": "^0.5.19",
+    "@tauri-apps/cli": "^2.10.1",
     "@types/howler": "^2.2.12",
     "@types/node": "^20.19.37",
     "@types/three": "^0.183.1",

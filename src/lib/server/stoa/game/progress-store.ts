@@ -1,242 +1,241 @@
-/**
- * Student progress persistence layer
- * Server-side SurrealDB read/write for stoa game state
- */
+import { query } from '$lib/server/db';
+import type { StoaProgressState } from '$lib/types/stoa';
+import { getLevelFromXp } from './level-system';
+import type { StoaProgressRecord } from './types';
 
-import { query, create } from '../../db.js';
-import type { StoaProgressState } from '../../../types/stoa.js';
-import type {
-	StudentProgressRecord,
-	QuestCompletionRecord
-} from './quest-definitions/types.js';
+const DEFAULT_UNLOCKED_THINKER = 'marcus';
 
-const DEFAULT_PROGRESS: StoaProgressState = {
-	xp: 0,
-	level: 1,
-	unlockedThinkers: ['marcus'],
-	masteredFrameworks: [],
-	activeQuestIds: [],
-	completedQuestIds: []
-};
+let tablesEnsured = false;
 
-/**
- * Get or create student progress for a user
- */
+function userRecordId(userId: string): string {
+	return `user:${userId}`;
+}
+
+function uniq(values: string[]): string[] {
+	return Array.from(new Set(values.filter(Boolean)));
+}
+
+function toProgressState(row?: Partial<StoaProgressRecord>): StoaProgressState {
+	const xp = Math.max(0, typeof row?.xp === 'number' ? row.xp : 0);
+	const levelFromXp = getLevelFromXp(xp);
+	const unlocked = uniq(
+		Array.isArray(row?.unlockedThinkers)
+			? row.unlockedThinkers
+			: Array.isArray((row as Record<string, unknown>)?.unlocked_thinkers)
+				? (((row as Record<string, unknown>).unlocked_thinkers as string[]) ?? [])
+				: []
+	);
+	return {
+		xp,
+		level: levelFromXp.level,
+		levelTitle: levelFromXp.title,
+		xpToNextLevel: levelFromXp.xpToNext,
+		levelProgress: levelFromXp.levelProgress,
+		unlockedThinkers: unlocked.length > 0 ? unlocked : [DEFAULT_UNLOCKED_THINKER],
+		masteredFrameworks: uniq(
+			Array.isArray(row?.masteredFrameworks)
+				? row.masteredFrameworks
+				: (((row as Record<string, unknown>)?.mastered_frameworks as string[]) ?? [])
+		),
+		activeQuestIds: uniq(
+			Array.isArray(row?.activeQuestIds)
+				? row.activeQuestIds
+				: (((row as Record<string, unknown>)?.active_quest_ids as string[]) ?? [])
+		),
+		completedQuestIds: uniq(
+			Array.isArray(row?.completedQuestIds)
+				? row.completedQuestIds
+				: (((row as Record<string, unknown>)?.completed_quest_ids as string[]) ?? [])
+		)
+	};
+}
+
+async function ensureGameTables(): Promise<void> {
+	if (tablesEnsured) return;
+	await query(`
+    DEFINE TABLE IF NOT EXISTS stoa_student_progress SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS user_id ON stoa_student_progress TYPE record<user>;
+    DEFINE FIELD IF NOT EXISTS xp ON stoa_student_progress TYPE int DEFAULT 0;
+    DEFINE FIELD IF NOT EXISTS level ON stoa_student_progress TYPE int DEFAULT 1;
+    DEFINE FIELD IF NOT EXISTS unlocked_thinkers ON stoa_student_progress TYPE array<string> DEFAULT [];
+    DEFINE FIELD IF NOT EXISTS mastered_frameworks ON stoa_student_progress TYPE array<string> DEFAULT [];
+    DEFINE FIELD IF NOT EXISTS active_quest_ids ON stoa_student_progress TYPE array<string> DEFAULT [];
+    DEFINE FIELD IF NOT EXISTS completed_quest_ids ON stoa_student_progress TYPE array<string> DEFAULT [];
+    DEFINE FIELD IF NOT EXISTS created_at ON stoa_student_progress TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS updated_at ON stoa_student_progress TYPE datetime DEFAULT time::now();
+    DEFINE INDEX IF NOT EXISTS idx_stoa_progress_user ON stoa_student_progress COLUMNS user_id UNIQUE;
+
+    DEFINE TABLE IF NOT EXISTS stoa_quest_completion SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS user_id ON stoa_quest_completion TYPE record<user>;
+    DEFINE FIELD IF NOT EXISTS quest_id ON stoa_quest_completion TYPE string;
+    DEFINE FIELD IF NOT EXISTS completed_at ON stoa_quest_completion TYPE datetime DEFAULT time::now();
+    DEFINE FIELD IF NOT EXISTS xp_awarded ON stoa_quest_completion TYPE int;
+    DEFINE FIELD IF NOT EXISTS unlock_awarded ON stoa_quest_completion TYPE option<string>;
+    DEFINE FIELD IF NOT EXISTS session_evidence ON stoa_quest_completion TYPE array<string>;
+    DEFINE FIELD IF NOT EXISTS completion_count ON stoa_quest_completion TYPE int DEFAULT 1;
+    DEFINE INDEX IF NOT EXISTS idx_stoa_quest_completion_identity ON stoa_quest_completion COLUMNS user_id, quest_id UNIQUE;
+
+    DEFINE TABLE IF NOT EXISTS stoa_framework_exposure SCHEMAFULL;
+    DEFINE FIELD IF NOT EXISTS user_id ON stoa_framework_exposure TYPE record<user>;
+    DEFINE FIELD IF NOT EXISTS framework_id ON stoa_framework_exposure TYPE string;
+    DEFINE FIELD IF NOT EXISTS exposure_count ON stoa_framework_exposure TYPE int DEFAULT 0;
+    DEFINE FIELD IF NOT EXISTS correct_application_count ON stoa_framework_exposure TYPE int DEFAULT 0;
+    DEFINE FIELD IF NOT EXISTS last_used ON stoa_framework_exposure TYPE datetime;
+    DEFINE INDEX IF NOT EXISTS idx_framework_user ON stoa_framework_exposure COLUMNS user_id, framework_id UNIQUE;
+  `);
+	tablesEnsured = true;
+}
+
+async function selectProgressRow(userId: string): Promise<StoaProgressRecord | null> {
+	const rows = await query<StoaProgressRecord[]>(
+		`SELECT *
+     FROM stoa_student_progress
+     WHERE user_id = <record<user>>$userRecord
+     LIMIT 1`,
+		{ userRecord: userRecordId(userId) }
+	);
+	return rows[0] ?? null;
+}
+
+async function writeProgressRow(userId: string, state: StoaProgressState): Promise<void> {
+	await query(
+		`UPSERT stoa_student_progress
+     SET user_id = <record<user>>$userRecord,
+         xp = $xp,
+         level = $level,
+         unlocked_thinkers = $unlockedThinkers,
+         mastered_frameworks = $masteredFrameworks,
+         active_quest_ids = $activeQuestIds,
+         completed_quest_ids = $completedQuestIds,
+         created_at = IF created_at = NONE THEN time::now() ELSE created_at END,
+         updated_at = time::now()
+     WHERE user_id = <record<user>>$userRecord`,
+		{
+			userRecord: userRecordId(userId),
+			xp: state.xp,
+			level: state.level,
+			unlockedThinkers: state.unlockedThinkers,
+			masteredFrameworks: state.masteredFrameworks,
+			activeQuestIds: state.activeQuestIds,
+			completedQuestIds: state.completedQuestIds
+		}
+	);
+}
+
 export async function getProgress(userId: string): Promise<StoaProgressState> {
-	try {
-		const results = await query<StudentProgressRecord[]>(
-			`SELECT * FROM stoa_student_progress WHERE user_id = type::thing($userId)`,
-			{ userId: `user:${userId}` }
-		);
-
-		if (!results || results.length === 0) {
-			// Create default progress for new user
-			await create<StudentProgressRecord>('stoa_student_progress', {
-				user_id: `user:${userId}`,
-				xp: DEFAULT_PROGRESS.xp,
-				level: DEFAULT_PROGRESS.level,
-				unlocked_thinkers: DEFAULT_PROGRESS.unlockedThinkers,
-				mastered_frameworks: DEFAULT_PROGRESS.masteredFrameworks,
-				active_quest_ids: DEFAULT_PROGRESS.activeQuestIds,
-				completed_quest_ids: DEFAULT_PROGRESS.completedQuestIds,
-				created_at: new Date().toISOString(),
-				updated_at: new Date().toISOString()
-			});
-			return { ...DEFAULT_PROGRESS };
-		}
-
-		const record = results[0];
-		return {
-			xp: record.xp ?? DEFAULT_PROGRESS.xp,
-			level: record.level ?? DEFAULT_PROGRESS.level,
-			unlockedThinkers: record.unlocked_thinkers ?? DEFAULT_PROGRESS.unlockedThinkers,
-			masteredFrameworks: record.mastered_frameworks ?? DEFAULT_PROGRESS.masteredFrameworks,
-			activeQuestIds: record.active_quest_ids ?? DEFAULT_PROGRESS.activeQuestIds,
-			completedQuestIds: record.completed_quest_ids ?? DEFAULT_PROGRESS.completedQuestIds
-		};
-	} catch (error) {
-		console.error('[ProgressStore] getProgress error:', error);
-		return { ...DEFAULT_PROGRESS };
+	await ensureGameTables();
+	const row = await selectProgressRow(userId);
+	const state = toProgressState(row ?? undefined);
+	if (!row) {
+		await writeProgressRow(userId, state);
 	}
+	return state;
 }
 
-/**
- * Add XP to a user's progress
- */
 export async function addXp(userId: string, amount: number): Promise<StoaProgressState> {
-	try {
-		const current = await getProgress(userId);
-		const newXp = current.xp + amount;
-
-		// Simple level calculation: every 500 XP = level up
-		const newLevel = Math.floor(newXp / 500) + 1;
-
-		await query(
-			`UPDATE stoa_student_progress 
-			 SET xp = $newXp, 
-			     level = $newLevel,
-			     updated_at = time::now()
-			 WHERE user_id = type::thing($userId)`,
-			{
-				userId: `user:${userId}`,
-				newXp,
-				newLevel
-			}
-		);
-
-		return {
-			...current,
-			xp: newXp,
-			level: newLevel
-		};
-	} catch (error) {
-		console.error('[ProgressStore] addXp error:', error);
-		throw error;
-	}
+	const progress = await getProgress(userId);
+	const nextXp = Math.max(0, progress.xp + Math.max(0, Math.floor(amount)));
+	const levelFromXp = getLevelFromXp(nextXp);
+	const nextState: StoaProgressState = {
+		...progress,
+		xp: nextXp,
+		level: levelFromXp.level,
+		levelTitle: levelFromXp.title,
+		xpToNextLevel: levelFromXp.xpToNext,
+		levelProgress: levelFromXp.levelProgress
+	};
+	await writeProgressRow(userId, nextState);
+	return nextState;
 }
 
-/**
- * Unlock a thinker for a user
- */
 export async function unlockThinker(userId: string, thinkerId: string): Promise<void> {
-	try {
-		await query(
-			`UPDATE stoa_student_progress 
-			 SET unlocked_thinkers = array::distinct(array::append(unlocked_thinkers, $thinkerId)),
-			     updated_at = time::now()
-			 WHERE user_id = type::thing($userId)`,
-			{
-				userId: `user:${userId}`,
-				thinkerId
-			}
-		);
-	} catch (error) {
-		console.error('[ProgressStore] unlockThinker error:', error);
-		throw error;
-	}
+	const progress = await getProgress(userId);
+	if (progress.unlockedThinkers.includes(thinkerId)) return;
+	const nextState: StoaProgressState = {
+		...progress,
+		unlockedThinkers: uniq([...progress.unlockedThinkers, thinkerId])
+	};
+	await writeProgressRow(userId, nextState);
 }
 
-/**
- * Mark a framework as mastered for a user
- */
 export async function masterFramework(userId: string, frameworkId: string): Promise<void> {
-	try {
-		await query(
-			`UPDATE stoa_student_progress 
-			 SET mastered_frameworks = array::distinct(array::append(mastered_frameworks, $frameworkId)),
-			     updated_at = time::now()
-			 WHERE user_id = type::thing($userId)`,
-			{
-				userId: `user:${userId}`,
-				frameworkId
-			}
-		);
-	} catch (error) {
-		console.error('[ProgressStore] masterFramework error:', error);
-		throw error;
-	}
+	const progress = await getProgress(userId);
+	if (progress.masteredFrameworks.includes(frameworkId)) return;
+	const nextState: StoaProgressState = {
+		...progress,
+		masteredFrameworks: uniq([...progress.masteredFrameworks, frameworkId])
+	};
+	await writeProgressRow(userId, nextState);
 }
 
-/**
- * Start a quest (add to active quests)
- */
 export async function startQuest(userId: string, questId: string): Promise<void> {
-	try {
-		await query(
-			`UPDATE stoa_student_progress 
-			 SET active_quest_ids = array::distinct(array::append(active_quest_ids, $questId)),
-			     updated_at = time::now()
-			 WHERE user_id = type::thing($userId)`,
-			{
-				userId: `user:${userId}`,
-				questId
-			}
-		);
-	} catch (error) {
-		console.error('[ProgressStore] startQuest error:', error);
-		throw error;
-	}
+	const progress = await getProgress(userId);
+	if (progress.completedQuestIds.includes(questId) || progress.activeQuestIds.includes(questId)) return;
+	const nextState: StoaProgressState = {
+		...progress,
+		activeQuestIds: uniq([...progress.activeQuestIds, questId])
+	};
+	await writeProgressRow(userId, nextState);
 }
 
-/**
- * Complete a quest (move from active to completed, record completion)
- */
-export async function completeQuest(
-	userId: string,
-	questId: string,
-	sessionIds: string[],
-	xpAwarded: number,
-	unlockAwarded?: string
-): Promise<void> {
-	try {
-		// Remove from active and add to completed
-		await query(
-			`UPDATE stoa_student_progress 
-			 SET active_quest_ids = array::remove(active_quest_ids, $questId),
-			     completed_quest_ids = array::distinct(array::append(completed_quest_ids, $questId)),
-			     updated_at = time::now()
-			 WHERE user_id = type::thing($userId)`,
-			{
-				userId: `user:${userId}`,
-				questId
-			}
-		);
+export async function completeQuest(userId: string, questId: string, sessionIds: string[]): Promise<void> {
+	const progress = await getProgress(userId);
+	if (progress.completedQuestIds.includes(questId)) return;
 
-		// Create completion record
-		await create<QuestCompletionRecord>('stoa_quest_completion', {
-			user_id: `user:${userId}`,
-			quest_id: questId,
-			completed_at: new Date().toISOString(),
-			xp_awarded: xpAwarded,
-			unlock_awarded: unlockAwarded ?? null,
-			session_evidence: sessionIds
-		});
-	} catch (error) {
-		console.error('[ProgressStore] completeQuest error:', error);
-		throw error;
-	}
-}
+	const nextState: StoaProgressState = {
+		...progress,
+		activeQuestIds: progress.activeQuestIds.filter((id) => id !== questId),
+		completedQuestIds: uniq([...progress.completedQuestIds, questId])
+	};
+	await writeProgressRow(userId, nextState);
 
-/**
- * Check if a quest is already completed (idempotency check)
- */
-export async function isQuestCompleted(userId: string, questId: string): Promise<boolean> {
-	try {
-		const results = await query<{ completed_quest_ids: string[] }[]>(
-			`SELECT completed_quest_ids FROM stoa_student_progress WHERE user_id = type::thing($userId)`,
-			{ userId: `user:${userId}` }
-		);
-
-		if (!results || results.length === 0) {
-			return false;
+	await query(
+		`UPSERT stoa_quest_completion
+     SET user_id = <record<user>>$userRecord,
+         quest_id = $questId,
+         completed_at = IF completed_at = NONE THEN time::now() ELSE completed_at END,
+         xp_awarded = IF xp_awarded = NONE THEN 0 ELSE xp_awarded END,
+         unlock_awarded = IF unlock_awarded = NONE THEN NONE ELSE unlock_awarded END,
+         session_evidence = $sessionEvidence,
+         completion_count = IF completion_count = NONE THEN 1 ELSE completion_count
+     WHERE user_id = <record<user>>$userRecord AND quest_id = $questId`,
+		{
+			userRecord: userRecordId(userId),
+			questId,
+			sessionEvidence: uniq(sessionIds)
 		}
-
-		const completedIds = results[0]?.completed_quest_ids ?? [];
-		return completedIds.includes(questId);
-	} catch (error) {
-		console.error('[ProgressStore] isQuestCompleted error:', error);
-		return false;
-	}
+	);
 }
 
-/**
- * Check if a quest is already active
- */
-export async function isQuestActive(userId: string, questId: string): Promise<boolean> {
-	try {
-		const results = await query<{ active_quest_ids: string[] }[]>(
-			`SELECT active_quest_ids FROM stoa_student_progress WHERE user_id = type::thing($userId)`,
-			{ userId: `user:${userId}` }
-		);
+export async function deactivateQuest(userId: string, questId: string): Promise<void> {
+	const progress = await getProgress(userId);
+	if (!progress.activeQuestIds.includes(questId)) return;
+	const nextState: StoaProgressState = {
+		...progress,
+		activeQuestIds: progress.activeQuestIds.filter((id) => id !== questId)
+	};
+	await writeProgressRow(userId, nextState);
+}
 
-		if (!results || results.length === 0) {
-			return false;
-		}
+export interface QuestCompletionSummary {
+	questId: string;
+	completedAt: string | null;
+	xpAwarded: number;
+}
 
-		const activeIds = results[0]?.active_quest_ids ?? [];
-		return activeIds.includes(questId);
-	} catch (error) {
-		console.error('[ProgressStore] isQuestActive error:', error);
-		return false;
-	}
+export async function listQuestCompletions(userId: string): Promise<QuestCompletionSummary[]> {
+	await ensureGameTables();
+	const rows = await query<Array<{ quest_id?: string; completed_at?: string; xp_awarded?: number }>>(
+		`SELECT quest_id, completed_at, xp_awarded
+     FROM stoa_quest_completion
+     WHERE user_id = <record<user>>$userRecord`,
+		{ userRecord: userRecordId(userId) }
+	);
+	return rows
+		.filter((row) => typeof row.quest_id === 'string' && row.quest_id.length > 0)
+		.map((row) => ({
+			questId: row.quest_id as string,
+			completedAt: typeof row.completed_at === 'string' ? row.completed_at : null,
+			xpAwarded: Math.max(0, Number(row.xp_awarded ?? 0))
+		}));
 }

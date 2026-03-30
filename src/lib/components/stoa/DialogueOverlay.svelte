@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
 
-  import type { StanceType, StoaProgressState } from '$lib/types/stoa';
+  import type { ReasoningAssessment, StanceType } from '$lib/types/stoa';
   import { stoaSessionStore } from '$lib/stores/stoa-session.svelte';
+  import ReasoningAcknowledgement from './ReasoningAcknowledgement.svelte';
 
   interface Props {
     stance: StanceType;
@@ -39,13 +40,11 @@
     xpGained?: number;
     newUnlocks?: string[];
     questsCompleted?: string[];
+    questsActivated?: string[];
+    assessment?: ReasoningAssessment;
   }
 
-  const dispatch = createEventDispatcher<{
-    stanceChange: { stance: StanceType };
-    progressUpdate: StoaProgressState;
-    dialogueProgressUpdate: { xpGained: number; newUnlocks: string[]; questsCompleted: string[] };
-  }>();
+  const dispatch = createEventDispatcher<{ stanceChange: { stance: StanceType } }>();
 
   let { stance, sessionId }: Props = $props();
 
@@ -54,6 +53,8 @@
   let displayText = $state('');
   let citations = $state<Citation[]>([]);
   let history = $state<ConversationTurn[]>([]);
+  let latestAssessment = $state<ReasoningAssessment | null>(null);
+  let composerElement = $state<HTMLTextAreaElement | null>(null);
 
   function isStanceType(value: unknown): value is StanceType {
     return (
@@ -191,12 +192,23 @@
           }
 
           if (event.type === 'progress_update') {
-            // Emit progress update for thinker unlock notifications
-            dispatch('dialogueProgressUpdate', {
-              xpGained: event.xpGained ?? 0,
-              newUnlocks: event.newUnlocks ?? [],
-              questsCompleted: event.questsCompleted ?? []
-            });
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(
+                new CustomEvent('stoa:progress-update', {
+                  detail: {
+                    xpGained: typeof event.xpGained === 'number' ? event.xpGained : 0,
+                    newUnlocks: Array.isArray(event.newUnlocks) ? event.newUnlocks : [],
+                    questsCompleted: Array.isArray(event.questsCompleted) ? event.questsCompleted : [],
+                    questsActivated: Array.isArray(event.questsActivated) ? event.questsActivated : []
+                  }
+                })
+              );
+            }
+            continue;
+          }
+
+          if (event.type === 'reasoning_assessed') {
+            latestAssessment = event.assessment ?? null;
             continue;
           }
         }
@@ -230,6 +242,28 @@
       void send();
     }
   }
+
+  function handleSeedTopic(event: Event): void {
+    if (!(event instanceof CustomEvent)) return;
+    const topic = (event.detail as { topic?: string } | undefined)?.topic?.trim();
+    if (!topic) return;
+    draft = topic;
+    queueMicrotask(() => {
+      composerElement?.focus();
+      const end = composerElement?.value.length ?? 0;
+      composerElement?.setSelectionRange(end, end);
+    });
+  }
+
+  onMount(() => {
+    if (typeof window === 'undefined') return;
+    window.addEventListener('stoa:seed-dialogue-topic', handleSeedTopic);
+  });
+
+  onDestroy(() => {
+    if (typeof window === 'undefined') return;
+    window.removeEventListener('stoa:seed-dialogue-topic', handleSeedTopic);
+  });
 </script>
 
 <section class="dialogue-overlay" aria-live="polite">
@@ -250,6 +284,7 @@
 
   <div class="composer">
     <textarea
+      bind:this={composerElement}
       bind:value={draft}
       rows="2"
       placeholder="Describe what happened, then what you want to do next."
@@ -261,6 +296,7 @@
     </button>
   </div>
 </section>
+<ReasoningAcknowledgement assessment={latestAssessment} />
 
 <style>
   .dialogue-overlay {
