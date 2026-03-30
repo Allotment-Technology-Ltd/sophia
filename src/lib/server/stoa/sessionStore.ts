@@ -17,6 +17,24 @@ type TurnRow = {
   frameworks_referenced?: string[];
 };
 
+let stoaTablesEnsured = false;
+
+function isMissingTableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return message.includes('table') && (message.includes('not found') || message.includes('does not exist'));
+}
+
+async function ensureStoaTables(): Promise<void> {
+  if (stoaTablesEnsured) return;
+  await query(`
+    DEFINE TABLE IF NOT EXISTS stoa_session SCHEMALESS;
+    DEFINE TABLE IF NOT EXISTS stoa_session_turn SCHEMALESS;
+    DEFINE INDEX IF NOT EXISTS stoa_session_identity ON stoa_session FIELDS session_id, user_id;
+    DEFINE INDEX IF NOT EXISTS stoa_session_turn_identity ON stoa_session_turn FIELDS session_id, user_id, timestamp;
+  `);
+  stoaTablesEnsured = true;
+}
+
 async function ensureSessionRecord(sessionId: string, userId: string): Promise<void> {
   const rows = await query<SessionRow[]>(
     `SELECT * FROM stoa_session WHERE session_id = $sessionId AND user_id = $userId LIMIT 1`,
@@ -79,6 +97,14 @@ export async function loadStoaSession(params: {
       updatedAt: session?.updated_at ?? null
     };
   } catch (error) {
+    if (isMissingTableError(error)) {
+      try {
+        await ensureStoaTables();
+        return { sessionId, userId, summary: null, turns: [], updatedAt: null };
+      } catch {
+        // Fall through to existing degraded return behavior if table creation fails.
+      }
+    }
     if (!isDatabaseUnavailable(error)) throw error;
     return { sessionId, userId, summary: null, turns: [], updatedAt: null };
   }
@@ -92,7 +118,19 @@ export async function appendStoaTurns(params: {
 }): Promise<void> {
   const { sessionId, userId, turns, summary } = params;
   if (turns.length === 0) return;
-  await ensureSessionRecord(sessionId, userId);
+  try {
+    await ensureStoaTables();
+    await ensureSessionRecord(sessionId, userId);
+  } catch (error) {
+    // Session persistence is best-effort; avoid failing the full dialogue response path.
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn(
+        '[STOA] Session table ensure failed; skipping persistence:',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+    return;
+  }
 
   for (const turn of turns) {
     await query(
