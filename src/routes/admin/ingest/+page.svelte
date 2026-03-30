@@ -3018,6 +3018,7 @@
       <nav class="flex flex-wrap items-center gap-2" aria-label="Admin shortcuts">
         <a href="/admin" class="admin-hub-action">Admin home</a>
         <a href="/admin/ingest/runs" class="admin-hub-action">All runs</a>
+        <a href="/admin/ingest/batch" class="admin-hub-action">STOA batches</a>
         <a href="/admin/operator-byok" class="admin-hub-action">Operator BYOK</a>
       </nav>
     </div>

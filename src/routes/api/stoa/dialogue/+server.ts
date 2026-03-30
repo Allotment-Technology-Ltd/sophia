@@ -137,6 +137,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           };
           sendSse(controller, { type: 'start' });
           sendSse(controller, {
+            type: 'stance',
+            stance: 'hold',
+            frameworksReferenced: []
+          });
+          sendSse(controller, {
             type: 'metadata',
             stance: 'hold',
             escalated: false,
@@ -215,6 +220,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         const escalationDecision = decideEscalation({ message, history });
         const escalated = escalationDecision.escalate;
 
+        sendSse(controller, { type: 'start' });
+        sendSse(controller, {
+          type: 'stance',
+          stance: stanceDecision.stance,
+          frameworksReferenced: stanceDecision.recommendedFrameworks
+        });
         sendSse(controller, {
           type: 'metadata',
           stance: stanceDecision.stance,
@@ -240,7 +251,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             reasons: escalationDecision.reasons
           });
         }
-        sendSse(controller, { type: 'start' });
 
         const streamResult = streamText({
           model: modelRoute.model as any,
