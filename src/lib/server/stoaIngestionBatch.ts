@@ -768,6 +768,19 @@ function isDisallowedHost(hostname: string): boolean {
 	return false;
 }
 
+function normalizeStoaIngestUrl(parsed: URL): URL {
+	const hostname = parsed.hostname.toLowerCase();
+	const isGutenberg = hostname === 'gutenberg.org' || hostname.endsWith('.gutenberg.org');
+	if (!isGutenberg) return parsed;
+	const match = parsed.pathname.match(/^\/ebooks\/(\d+)\/?$/);
+	if (!match) return parsed;
+	const ebookId = match[1];
+	parsed.pathname = `/cache/epub/${ebookId}/pg${ebookId}.txt`;
+	parsed.search = '';
+	parsed.hash = '';
+	return parsed;
+}
+
 export function canonicalizeQueueUrl(raw: string): string | null {
 	const trimmed = raw.trim();
 	if (!trimmed) return null;
@@ -779,6 +792,7 @@ export function canonicalizeQueueUrl(raw: string): string | null {
 	}
 	if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
 	if (isDisallowedHost(parsed.hostname)) return null;
+	parsed = normalizeStoaIngestUrl(parsed);
 	parsed.hash = '';
 	if (parsed.pathname.length > 1) parsed.pathname = parsed.pathname.replace(/\/+$/, '');
 	return parsed.toString();
@@ -1213,11 +1227,13 @@ export async function createStoaBatchRun(args: {
 	const statusFilter = args.statusFilter ?? 'approved';
 	const queueRows = await listStoaQueue({ status: statusFilter, limit });
 	const items: BatchItem[] = queueRows.map((row) => {
-		const hostname = typeof row.hostname === 'string' && row.hostname ? row.hostname : new URL(row.canonical_url).hostname;
-		const decision = evaluateStoaLicense(row.canonical_url);
+		const normalizedUrl = canonicalizeQueueUrl(row.canonical_url) ?? row.canonical_url;
+		const hostname =
+			typeof row.hostname === 'string' && row.hostname ? row.hostname : new URL(normalizedUrl).hostname;
+		const decision = evaluateStoaLicense(normalizedUrl);
 		return {
 			queueRecordId: normalizeRecordId(row.id) ?? String(row.id),
-			url: row.canonical_url,
+			url: normalizedUrl,
 			hostname,
 			status: 'pending',
 			lastUpdatedAtMs: nowMs(),
