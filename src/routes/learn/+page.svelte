@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getIdToken } from '$lib/firebase';
+  import { getIdToken } from '$lib/authClient';
   import { renderMarkdown } from '$lib/utils/markdown';
   import { formatWordRange, resolveShortReviewWordRange } from '$lib/utils/learnWordRange';
   import type { EssayFeedback, LessonUnit, ShortAnswerMiniReview, SkillScores } from '$lib/types/learn';

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getIdToken } from '$lib/firebase';
+  import { getIdToken } from '$lib/authClient';
 
   type RowRole = 'owner' | 'user';
 

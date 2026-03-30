@@ -647,6 +647,8 @@ class IngestRunManager extends EventEmitter {
       this.spawnIngestionProcess(runId, snapshot, actorEmail);
     } else {
       this.addLog(runId, '[QUEUE] Ingest run queued for worker execution.');
+      // Same-process kick: Cloud Run may not fire the interval before scale-down; claim promptly.
+      void this.pollQueueOnce();
     }
     return runId;
   }

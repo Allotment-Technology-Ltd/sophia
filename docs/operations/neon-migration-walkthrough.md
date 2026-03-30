@@ -367,7 +367,7 @@ The `infra/` program still documents intent; optional local `pulumi` is describe
 
 3. Run **`pnpm migrate:firestore-to-neon -- --execute`** against production Neon (from a trusted machine with Firebase Admin + `DATABASE_URL`) **before** or right after enabling `SOPHIA_DATA_BACKEND=neon`, so `sophia_documents` has the rows the app expects.
 
-4. Keep **Firebase** secrets (`firebase-api-key`, `firebase-auth-domain`, etc.) for Auth and any remaining Firestore use.
+4. **Neon Auth:** set `USE_NEON_AUTH=1`, `NEON_AUTH_BASE_URL`, and build-time `VITE_NEON_AUTH_URL` (GitHub Actions uses repo secret `NEON_AUTH_BASE_URL`; Pulumi stacks can use Secret Manager `neon-auth-base-url`). Replace `admin-uids` / `owner-uids` with **Neon JWT `sub`** values, not legacy Firebase UIDs (see `docs/operations/neon-auth-migration.md`).
 
 ### Rollback
 

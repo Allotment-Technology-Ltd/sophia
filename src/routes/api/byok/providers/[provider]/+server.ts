@@ -19,7 +19,7 @@ export const PUT: RequestHandler = async ({ locals, request, params }) => {
     return problemJson({
       status: 401,
       title: 'Authentication required',
-      detail: 'Provide a valid Firebase bearer token.',
+      detail: 'Provide a valid Neon Auth JWT (Authorization: Bearer …).',
       requestId
     });
   }
@@ -128,7 +128,7 @@ export const DELETE: RequestHandler = async ({ locals, request, params }) => {
     return problemJson({
       status: 401,
       title: 'Authentication required',
-      detail: 'Provide a valid Firebase bearer token.',
+      detail: 'Provide a valid Neon Auth JWT (Authorization: Bearer …).',
       requestId
     });
   }

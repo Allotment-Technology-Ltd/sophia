@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 /**
- * Local dev entry: load .env, then ensure Firebase Admin can reach Firestore (BYOK list, etc.)
- * by resolving GOOGLE_APPLICATION_CREDENTIALS to an on-disk service account JSON.
- *
- * Convention: place your key at `secrets/firebase-adminsdk.json` (gitignored) or set the env var in `.env`.
+ * Local dev entry: load `.env`, optional GCP ADC for Vertex/logging, then start Vite.
+ * App data lives in Neon (`DATABASE_URL`); optional legacy Firestore migration scripts may still use a service account JSON.
  */
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -51,11 +49,8 @@ if (resolved) {
   }
 } else if (!process.env.FIRESTORE_EMULATOR_HOST?.trim()) {
   console.info(
-    '[dev] No service account JSON found (BYOK/Firestore Admin may fail). Add one of:\n' +
-      '  • secrets/firebase-adminsdk.json\n' +
-      '  • GOOGLE_APPLICATION_CREDENTIALS or FIREBASE_SERVICE_ACCOUNT_JSON in .env\n' +
-      '  • or set FIRESTORE_EMULATOR_HOST for the emulator\n' +
-      '  • or rely on degraded BYOK in dev (see BYOK_PROVIDERS_FALLBACK_EMPTY for preview builds)'
+    '[dev] No GCP service account JSON found (Vertex ADC / legacy scripts only). For Neon-backed dev, set DATABASE_URL.\n' +
+      '  Optional: secrets/google-application-credentials.json or GOOGLE_APPLICATION_CREDENTIALS in .env'
   );
 }
 
@@ -108,6 +103,14 @@ function parseSurrealUrlParts(raw) {
 
 function isLocalHost(host) {
   return ['localhost', '127.0.0.1', '::1'].includes((host || '').toLowerCase());
+}
+
+function parsePositiveIntEnv(name, fallback) {
+  const raw = (process.env[name] || '').trim();
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
 }
 
 async function listRunningComposeServices() {
@@ -189,18 +192,31 @@ async function ensureSurrealTunnelIfConfigured() {
   console.info(
     `[dev] Starting Surreal tunnel localhost:${localPort} -> ${target.host}:${target.port} via ${instance}/${zone}...`
   );
+  const tunnelReadyTimeoutMs = parsePositiveIntEnv('DEV_SURREAL_TUNNEL_READY_TIMEOUT_MS', 30000);
+  const tunnelPollMs = parsePositiveIntEnv('DEV_SURREAL_TUNNEL_READY_POLL_MS', 500);
+  const progressLogEveryMs = 3000;
   const tunnelChild = spawn('gcloud', tunnelArgs, {
     cwd: root,
     stdio: 'inherit',
     env: process.env
   });
   let spawnFailed = false;
+  let exited = false;
+  let exitCode = null;
+  let exitSignal = null;
   tunnelChild.on('error', (err) => {
     spawnFailed = true;
     console.warn(`[dev] Failed to start gcloud tunnel: ${err?.message || String(err)}`);
   });
+  tunnelChild.on('exit', (code, signal) => {
+    exited = true;
+    exitCode = code;
+    exitSignal = signal;
+  });
 
-  for (let i = 0; i < 12; i++) {
+  const startedAt = Date.now();
+  let lastProgressLog = startedAt;
+  while (Date.now() - startedAt < tunnelReadyTimeoutMs) {
     // eslint-disable-next-line no-await-in-loop
     const open = await isPortOpen('127.0.0.1', localPort);
     if (open) {
@@ -210,12 +226,24 @@ async function ensureSurrealTunnelIfConfigured() {
       console.info('[dev] Surreal tunnel is ready.');
       return tunnelChild;
     }
+    if (exited) break;
+    if (Date.now() - lastProgressLog >= progressLogEveryMs) {
+      const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+      console.info(`[dev] Waiting for Surreal tunnel... (${elapsedSeconds}s elapsed)`);
+      lastProgressLog = Date.now();
+    }
     // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, tunnelPollMs));
   }
 
-  if (!spawnFailed) {
-    console.warn('[dev] Surreal tunnel did not become ready in time; continuing without tunnel override.');
+  if (exited) {
+    console.warn(
+      `[dev] Surreal tunnel process exited before ready (code=${String(exitCode)}, signal=${String(exitSignal)}).`
+    );
+  } else if (!spawnFailed) {
+    console.warn(
+      `[dev] Surreal tunnel did not become ready within ${tunnelReadyTimeoutMs}ms; continuing without tunnel override.`
+    );
   }
   return null;
 }

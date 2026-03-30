@@ -3,7 +3,7 @@ import { hasOwnerRole } from '$lib/server/authRoles';
 import { loadByokProviderApiKeys } from './store';
 import type { ProviderApiKeys } from './types';
 
-/** Short stable fingerprint for logs — avoids logging raw Firebase UIDs (CodeQL / privacy). */
+/** Short stable fingerprint for logs — avoids logging raw user ids (CodeQL / privacy). */
 function uidLogFingerprint(uid: string): string {
   return createHash('sha256').update(uid, 'utf8').digest('hex').slice(0, 12);
 }

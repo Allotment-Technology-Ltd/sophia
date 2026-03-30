@@ -107,7 +107,7 @@ async function main(): Promise<void> {
   const { dryRun, uid } = parseArgs(process.argv);
   const uids = resolveTargetUids(uid);
   if (uids.length === 0) {
-    console.error('No target uids: pass --uid=<firebaseUid> or set OWNER_UIDS (comma-separated).');
+    console.error('No target uids: pass --uid=<neonSub> or set OWNER_UIDS (comma-separated Neon JWT sub).');
     process.exitCode = 1;
     return;
   }

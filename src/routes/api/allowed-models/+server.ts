@@ -88,6 +88,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   });
 
   let liveAllowlist: Partial<Record<ReasoningProvider, Set<string>>> | null = null;
+  let catalogFreshnessDegraded = false;
   try {
     const catalog = await restormelGetLiveReasoningAllowlist();
     if (!isRestormelCatalogContractSupported(catalog.contractVersion)) {
@@ -96,14 +97,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
       );
     }
     if (!catalog.allFresh) {
-      return json({
-        defaults: { mode: 'auto' },
-        models: [],
-        allowed_by_provider: {},
-        filtering: { active: false, degraded: true, routeId: getRouteId(url) ?? null },
-        error:
-          'Model catalog freshness signals are stale. Automatic routing remains available while external health recovers.'
-      });
+      catalogFreshnessDegraded = true;
     }
     liveAllowlist = catalog.allowlist;
   } catch (err) {
@@ -153,6 +147,16 @@ export const GET: RequestHandler = async ({ locals, url }) => {
     defaults: { mode: 'auto' },
     models: filteredModels,
     allowed_by_provider: allowedByProvider,
-    filtering: { active: false, degraded: false, routeId: routeId ?? null }
+    filtering: {
+      active: false,
+      degraded: catalogFreshnessDegraded,
+      routeId: routeId ?? null
+    },
+    ...(catalogFreshnessDegraded
+      ? {
+          error:
+            'Model catalog freshness signals are stale; lists use the last-known allowlist. Automatic routing remains available while external health recovers.'
+        }
+      : {})
   });
 };

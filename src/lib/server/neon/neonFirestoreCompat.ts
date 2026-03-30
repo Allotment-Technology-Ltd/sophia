@@ -3,8 +3,7 @@
  * (DATABASE_URL set and SOPHIA_DATA_BACKEND not `firestore`).
  */
 
-import { Timestamp } from 'firebase-admin/firestore';
-import type { Firestore } from 'firebase-admin/firestore';
+import { Timestamp } from '$lib/server/fsCompat';
 import { and, eq, sql } from 'drizzle-orm';
 import { getDrizzleDb } from '$lib/server/db/neon';
 import { sophiaDocuments } from '$lib/server/db/schema';
@@ -199,9 +198,10 @@ export class NeonDocSnap {
     public readonly ref: NeonDocRef
   ) {}
 
-  data(): Record<string, unknown> | undefined {
+  /** `any` matches legacy Firestore `DocumentData` so callers can use Timestamp `.toDate()` etc. */
+  data(): Record<string, any> | undefined {
     if (!this.raw) return undefined;
-    return decodeFirestoreValue(this.raw) as Record<string, unknown>;
+    return decodeFirestoreValue(this.raw) as Record<string, any>;
   }
 }
 
@@ -428,6 +428,8 @@ class NeonFirestoreCompat {
   }
 }
 
-export function createNeonFirestoreCompat(): Firestore {
-  return new NeonFirestoreCompat() as unknown as Firestore;
+export type NeonCompatFirestore = NeonFirestoreCompat;
+
+export function createNeonFirestoreCompat(): NeonCompatFirestore {
+  return new NeonFirestoreCompat();
 }

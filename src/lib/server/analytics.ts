@@ -1,4 +1,4 @@
-import { Timestamp } from 'firebase-admin/firestore';
+import { Timestamp } from '$lib/server/fsCompat';
 import { PostHog } from 'posthog-node';
 import { adminDb } from '$lib/server/firebase-admin';
 

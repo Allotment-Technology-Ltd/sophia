@@ -98,15 +98,8 @@ describe('checkRateLimit', () => {
       doc: vi.fn().mockReturnThis(),
       runTransaction: vi.fn(),
     };
-    return { adminDb: mockDb, adminAuth: {} };
+    return { adminDb: mockDb };
   });
-
-  // Also mock FieldValue so the import doesn't break
-  vi.mock('firebase-admin/firestore', () => ({
-    FieldValue: {
-      increment: (n: number) => ({ _increment: n }),
-    },
-  }));
 
   beforeEach(() => {
     vi.resetModules();

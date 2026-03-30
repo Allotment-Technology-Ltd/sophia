@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { Timestamp } from 'firebase-admin/firestore';
+import { Timestamp } from '$lib/server/fsCompat';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
 import { adminDb } from '$lib/server/firebase-admin';

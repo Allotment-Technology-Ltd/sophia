@@ -183,8 +183,13 @@ const appService = new gcp.cloudrunv2.Service("sophia-app", {
         { name: "GOOGLE_VERTEX_PROJECT",  value: projectId },
         { name: "GCP_LOCATION",           value: region },
         { name: "GOOGLE_VERTEX_LOCATION", value: "us-central1" },
-        { name: "VITE_FIREBASE_PROJECT_ID", value: projectId },
         { name: "SOPHIA_DATA_BACKEND", value: "neon" },
+        { name: "USE_NEON_AUTH", value: "1" },
+        // Same branch auth base_url as VITE_NEON_AUTH_URL at image build (Console → Auth or Neon API).
+        {
+          name: "NEON_AUTH_BASE_URL",
+          valueSource: { secretKeyRef: { secret: "neon-auth-base-url", version: "latest" } },
+        },
         {
           name: "DATABASE_URL",
           valueSource: { secretKeyRef: { secret: "neon-database-url", version: "latest" } },
@@ -204,14 +209,6 @@ const appService = new gcp.cloudrunv2.Service("sophia-app", {
         {
           name: "GOOGLE_AI_API_KEY",
           valueSource: { secretKeyRef: { secret: "google-ai-api-key", version: "latest" } },
-        },
-        {
-          name: "VITE_FIREBASE_API_KEY",
-          valueSource: { secretKeyRef: { secret: "firebase-api-key", version: "latest" } },
-        },
-        {
-          name: "VITE_FIREBASE_AUTH_DOMAIN",
-          valueSource: { secretKeyRef: { secret: "firebase-auth-domain", version: "latest" } },
         },
         {
           name: "ADMIN_UIDS",

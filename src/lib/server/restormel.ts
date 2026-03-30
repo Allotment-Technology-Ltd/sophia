@@ -156,7 +156,10 @@ import {
 } from '@restormel/contracts/providers';
 import type { ValidateRouteBindingResult } from '@restormel/keys/dashboard';
 import { validateRouteBinding } from '@restormel/keys/dashboard';
-import { readRestormelCatalogDataModels } from './restormelCatalogRows';
+import {
+  parseCatalogFreshnessFromPayload,
+  readRestormelCatalogDataModels
+} from './restormelCatalogRows';
 
 /**
  * `providerPreference` slugs allowed when replacing route steps (Dashboard API).
@@ -1027,16 +1030,6 @@ function parseCatalogAllowlist(payload: unknown): Partial<Record<ReasoningProvid
   return allowlist;
 }
 
-function parseCatalogFreshness(payload: unknown): { allFresh: boolean } {
-  const obj = isRecord(payload) ? payload : null;
-  const data = isRecord(obj?.data) ? obj.data : null;
-  const externalSignals = isRecord(data?.externalSignals) ? data.externalSignals : null;
-  const freshness = isRecord(externalSignals?.freshness) ? externalSignals.freshness : null;
-  return {
-    allFresh: freshness?.allFresh === true
-  };
-}
-
 function parseCatalogContractVersion(payload: unknown): string {
   const obj = isRecord(payload) ? payload : null;
   const data = isRecord(obj?.data) ? obj.data : null;
@@ -1075,7 +1068,7 @@ export async function restormelGetLiveReasoningAllowlist(): Promise<{
       );
     }
     const allowlist = parseCatalogAllowlist(payload);
-    const { allFresh } = parseCatalogFreshness(payload);
+    const { allFresh } = parseCatalogFreshnessFromPayload(payload);
     liveAllowlistSnapshot = {
       contractVersion,
       fetchedAt: now,

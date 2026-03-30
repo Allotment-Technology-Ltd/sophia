@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getIdToken } from '$lib/firebase';
+  import { getIdToken } from '$lib/authClient';
   import {
     INGESTION_PHASE_COLUMN_ORDER,
     INGESTION_PHASE_TABLE_HEADING,

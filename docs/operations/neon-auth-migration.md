@@ -1,68 +1,50 @@
-# Neon Auth migration (checklist)
+# Neon Auth (current default)
 
-Sophia verifies **Firebase ID tokens** first, then **Neon Auth JWTs** when `USE_NEON_AUTH=1` (`src/lib/server/bearerAuthVerification.ts`, `src/lib/server/neon/neonAuthJwt.ts`).
+Sophia uses **Neon Auth JWTs only** for Bearer verification on protected `/api/*` routes (`src/lib/server/bearerAuthVerification.ts`, `src/lib/server/neon/neonAuthJwt.ts`). There is no Firebase ID token path.
 
-## 1. Enable Neon Auth on the branch
+## Required environment variables (every environment)
 
-In the [Neon Console](https://console.neon.tech), open your project → **Auth**, or use the [Neon API](https://neon.com/docs/auth/guides/manage-auth-api):
-
-`GET https://console.neon.tech/api/v2/projects/{project_id}/branches/{branch_id}/auth`
-
-The response includes **`base_url`** and **`jwks_url`**. Auth is branch-scoped; preview branches can differ from production.
-
-## 2. Sophia environment variables
-
-**Recommended (single variable):**
-
-- `USE_NEON_AUTH=1`
-- `NEON_AUTH_BASE_URL=<base_url from API or console>`  
-  Example shape: `https://….neonauth….neon.tech/neondb/auth`
-
-Sophia sets:
-
-- JWKS URL → `{BASE_URL}/.well-known/jwks.json` (unless you override `NEON_AUTH_JWKS_URL`)
-- Issuer → origin of that URL (JWT `iss` per [Neon JWT guide](https://neon.com/docs/auth/guides/plugins/jwt))
-- Audience → same origin (JWT `aud` in Neon’s default tokens)
+| Variable | Where | Purpose |
+|----------|--------|---------|
+| `DATABASE_URL` | Runtime | Neon Postgres; required for `adminDb` when `SOPHIA_DATA_BACKEND=neon` (default). |
+| `USE_NEON_AUTH` | Runtime | Must be `1` / `true` / `yes` so APIs verify Neon JWTs. |
+| `NEON_AUTH_BASE_URL` | Runtime | Branch auth `base_url` from Neon (ends with `/…/auth`). Derives JWKS, issuer, audience per [Neon JWT guide](https://neon.com/docs/auth/guides/plugins/jwt). |
+| `VITE_NEON_AUTH_URL` | **Build** (Vite) | Same URL as `NEON_AUTH_BASE_URL` for the browser auth client (`src/lib/authClient.ts`). |
 
 **Explicit mode** (no base URL): set `NEON_AUTH_ISSUER` and `NEON_AUTH_JWKS_URL`, and optionally `NEON_AUTH_AUDIENCE`.
 
-## 3. Print env lines from the API
-
-Create a Neon **API key** (Account → API keys). Then either set `NEON_PROJECT_ID`, `NEON_BRANCH_ID`, and run:
+## Print server env lines
 
 ```bash
 pnpm neon:auth-env
+# or: pnpm neon:auth-env -- <project_id> <branch_id>
 ```
 
-Or pass ids after `--`:
+Needs `NEON_API_KEY` (Account → API keys) and project/branch ids.
 
-```bash
-pnpm neon:auth-env -- <project_id> <branch_id>
-```
+## Client sessions
 
-Paste the printed lines into `.env` / Cloud Run secrets (do not commit secrets).
+The app uses `@neondatabase/neon-js` with `VITE_NEON_AUTH_URL`. API calls send `Authorization: Bearer <access_token>` from `getSession()` (`src/lib/authClient.ts`).
 
-**Cursor:** the Neon MCP can list projects/branches (`list_projects`, `describe_project`) but does not return `base_url`; use the script above or a one-off `curl` with `NEON_API_KEY`.
+## Identity and `users/{uid}` documents
 
-## 4. Client tokens
+- JWT **`sub`** is the canonical user id for new `users/{sub}` rows in `sophia_documents`.
+- **`OWNER_EMAILS`**: owner capability by **normalized email** (still works across id changes).
+- **`syncAuthenticatedUserRole`** can merge **roles** from other `users/*` docs that share the same email (helps after migrating from Firebase-era ids). It does **not** move BYOK subcollections automatically.
 
-Neon Auth normally uses HTTP-only cookies. For `/api/*` Bearer auth, obtain a JWT via the Neon SDK (`authClient.token()` or session response header `set-auth-jwt`) as described in the [JWT plugin doc](https://neon.com/docs/auth/guides/plugins/jwt). Wire that into your Svelte app’s `Authorization` header (Sophia’s Firebase `getIdToken()` path remains for dual migration).
+## `OWNER_UIDS` and `ADMIN_UIDS` (Neon `sub`)
 
-## 5. Identity mapping
-
-Map stable JWT `sub` to `users/{uid}` in your datastore (`syncAuthenticatedUserRole` uses `sub` as the document id). Plan user migration from Firebase `uid` to Neon `sub` if ids change.
-
-## Rollout
-
-- Server verifies **Neon JWT first** when `USE_NEON_AUTH=1`, then Firebase for legacy tokens.
-- Refresh JWTs before expiry (Neon access tokens are short-lived, ~15 minutes per docs).
-- Configure **trusted domains** and Google OAuth in Neon Auth for your production hostname (and `http://localhost:5173` for local dev).
+- Use **comma-separated Neon Auth user ids** — the JWT claim **`sub`**, not email and not legacy Firebase UIDs.
+- **`ADMIN_UIDS`**: identities allowed for admin-only APIs (e.g. service accounts that mint JWTs with a fixed `sub`).
+- **`OWNER_UIDS`**: first id is the primary **operator BYOK** document path: `users/{sub}/byokProviders`. After cutover, **replace** old Firebase UIDs in Secret Manager / env with each operator’s Neon `sub`, or re-save BYOK under the new `users/{sub}` path.
+- If someone signs in with Neon and already had a Firebase-era row, **email-based role merge** may restore `owner`/`user` roles on the new `users/{sub}` doc, but **operator keys** still live under whatever `sub` `OWNER_UIDS` points at — update `OWNER_UIDS` to match.
 
 ## Production (GitHub Actions → Cloud Run)
 
-Add repository secret **`NEON_AUTH_BASE_URL`** with the same value as local `NEON_AUTH_BASE_URL` / `VITE_NEON_AUTH_URL` (Neon branch auth base URL ending in `/…/auth`). The deploy workflow passes it into the Docker build as `VITE_NEON_AUTH_URL` and into Cloud Run as `NEON_AUTH_BASE_URL`, with `USE_NEON_AUTH=1`.
+1. Repository secret **`NEON_AUTH_BASE_URL`** — used for the Docker **`VITE_NEON_AUTH_URL`** build arg and for Cloud Run **`NEON_AUTH_BASE_URL`** with **`USE_NEON_AUTH=1`** (see `.github/workflows/deploy.yml`).
+2. Secret Manager **`neon-database-url`** → **`DATABASE_URL`** on Cloud Run.
+3. Update secrets **`admin-uids`** / **`owner-uids`** to Neon **`sub`** values as above.
 
-## Post-cutover operations
+## JWT lifetime
 
-- **`OWNER_UIDS`** / operator BYOK paths use Firebase UIDs today. After cutover, update `OWNER_UIDS` (and any docs keyed by old `users/{firebaseUid}`) to Neon Auth user ids (`sub`) where needed.
-- **Subcollections** under `users/{firebaseUid}` (e.g. BYOK) are **not** moved automatically; merge by email only lifts **roles** on the app user row. Plan a data migration or re-link BYOK for power users if required.
+Neon access tokens are short-lived; the client should refresh via the Neon auth client before calling APIs.

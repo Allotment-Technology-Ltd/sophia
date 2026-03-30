@@ -1,4 +1,4 @@
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from '$lib/server/fsCompat';
 import { adminDb } from '$lib/server/firebase-admin';
 
 export const APP_USER_ROLE_VALUES = ['user', 'owner'] as const;
@@ -9,8 +9,7 @@ export interface AuthenticatedUserProfile {
   email: string | null;
   displayName: string | null;
   photoURL: string | null;
-  /** Set when Bearer verification used Neon Auth after Firebase failed (dual migration). */
-  authProvider?: 'firebase' | 'neon';
+  authProvider?: 'neon';
 }
 
 export interface UserRoleRecord {
@@ -132,7 +131,7 @@ export async function syncAuthenticatedUserRole(
       role,
       roles,
       auth: {
-        provider: profile.authProvider === 'neon' ? 'neon_auth' : 'google',
+        provider: 'neon_auth',
         last_authenticated_at: Timestamp.now()
       },
       updated_at: Timestamp.now(),

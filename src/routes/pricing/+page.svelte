@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { browser } from '$app/environment';
-  import { auth, getIdToken, onAuthChange } from '$lib/firebase';
+  import { auth, getIdToken, onAuthChange } from '$lib/authClient';
   import { LEGAL_CHANGELOG_PATH, LEGAL_EFFECTIVE_DATE, LEGAL_VERSION } from '$lib/constants/legal';
   import PublicHeader from '$lib/components/shell/PublicHeader.svelte';
 

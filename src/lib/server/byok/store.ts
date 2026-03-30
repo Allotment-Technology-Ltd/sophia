@@ -1,4 +1,4 @@
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from '$lib/server/fsCompat';
 import { adminDb } from '$lib/server/firebase-admin';
 import { decryptByokSecret, encryptByokSecret, type EncryptedSecret } from './crypto';
 import { type ByokCredentialStatus, type ByokProvider, type ByokProviderStatus, type ProviderApiKeys } from './types';

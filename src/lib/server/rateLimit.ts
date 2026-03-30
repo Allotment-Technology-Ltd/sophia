@@ -1,5 +1,5 @@
 import { adminDb } from './firebase-admin';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue } from '$lib/server/fsCompat';
 
 export const DAILY_QUERY_LIMIT = 20;
 export type PlatformBudgetPlan = 'free' | 'founder' | 'pro' | 'premium';

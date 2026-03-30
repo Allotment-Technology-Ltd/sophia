@@ -1,4 +1,4 @@
-import { Timestamp } from 'firebase-admin/firestore';
+import { Timestamp } from '$lib/server/fsCompat';
 import { query } from '$lib/server/db';
 import { adminDb } from '$lib/server/firebase-admin';
 import { createApiKey } from '$lib/server/apiAuth';
@@ -157,7 +157,7 @@ export async function loadAdminDashboardData(): Promise<AdminDashboardData> {
 			.limit(50)
 			.get();
 		const apiKeys: ApiKeyItem[] = apiKeySnapshot.docs.map((doc) => {
-			const data = doc.data();
+			const data = doc.data() ?? {};
 			return {
 				key_id: doc.id,
 				name: data.name ?? 'API key',

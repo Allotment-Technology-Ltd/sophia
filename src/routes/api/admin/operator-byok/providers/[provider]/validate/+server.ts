@@ -20,7 +20,7 @@ export const POST: RequestHandler = async ({ locals, request, params }) => {
     return problemJson({
       status: 503,
       title: 'Operator BYOK target not configured',
-      detail: 'Set OWNER_UIDS to at least one Firebase UID.',
+      detail: 'Set OWNER_UIDS to at least one Neon Auth user id (JWT sub).',
       requestId
     });
   }

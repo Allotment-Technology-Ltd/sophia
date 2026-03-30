@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { signInWithGoogle } from '$lib/firebase';
+  import { signInWithGoogle } from '$lib/authClient';
   import { goto } from '$app/navigation';
   import DialecticalTriangle from '$lib/components/DialecticalTriangle.svelte';
 

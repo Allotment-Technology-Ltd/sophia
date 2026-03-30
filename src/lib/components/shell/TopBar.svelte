@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { auth, signOutUser, onAuthChange, getIdToken } from '$lib/firebase';
+  import { auth, signOutUser, onAuthChange, getIdToken } from '$lib/authClient';
   import { goto } from '$app/navigation';
   import { browser } from '$app/environment';
   import { page } from '$app/stores';

@@ -22,7 +22,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
       .get();
 
     const reports = snap.docs.map((doc) => {
-      const d = doc.data();
+      const d = doc.data() ?? {};
       return {
         id: doc.id,
         runId: d.runId ?? doc.id,

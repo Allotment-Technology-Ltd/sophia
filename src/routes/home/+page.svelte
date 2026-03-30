@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation';
   import { browser } from '$app/environment';
   import { onMount } from 'svelte';
-  import { auth, getIdToken, onAuthChange } from '$lib/firebase';
+  import { auth, getIdToken, onAuthChange } from '$lib/authClient';
   import { env as publicEnv } from '$env/dynamic/public';
 
   interface FounderOfferSummary {

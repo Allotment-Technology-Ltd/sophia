@@ -20,7 +20,7 @@ export const handle: Handle = async ({ event, resolve }) => {
       return problemJson({
         status: 401,
         title: 'Authentication required',
-        detail: 'Provide a valid bearer token (Firebase ID token or Neon Auth JWT) in the Authorization header.',
+        detail: 'Provide a valid Neon Auth JWT in the Authorization header.',
         requestId
       });
     }

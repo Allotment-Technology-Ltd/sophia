@@ -60,8 +60,7 @@ function createVertexProvider(): EmbeddingProvider {
 			process.env.GOOGLE_VERTEX_PROJECT ||
 			process.env.GCP_PROJECT_ID ||
 			process.env.GOOGLE_CLOUD_PROJECT ||
-			process.env.GCLOUD_PROJECT ||
-			process.env.VITE_FIREBASE_PROJECT_ID
+			process.env.GCLOUD_PROJECT
 		);
 	}
 

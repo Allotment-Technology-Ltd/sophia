@@ -3,7 +3,7 @@ import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '@res
 import type { ReasoningEvaluation } from '@restormel/contracts/verification';
 import type { ModelProvider, ReasoningProvider } from '@restormel/contracts/providers';
 import type { GraphEdge, GraphNode, GraphSnapshotMeta } from '@restormel/contracts/api';
-import { getIdToken } from '$lib/firebase';
+import { getIdToken } from '$lib/authClient';
 
 const MAX_CACHE_ENTRIES = 10;
 

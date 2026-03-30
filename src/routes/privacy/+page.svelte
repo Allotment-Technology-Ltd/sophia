@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { browser } from '$app/environment';
-  import { auth, onAuthChange } from '$lib/firebase';
+  import { auth, onAuthChange } from '$lib/authClient';
   import PublicHeader from '$lib/components/shell/PublicHeader.svelte';
   import {
     LEGAL_CHANGELOG_PATH,
@@ -80,8 +80,8 @@
 
       <h3>Account and Authentication</h3>
       <p>
-        We receive your name, email address, and account identifiers from Firebase Authentication
-        when you sign in.
+        We receive your name, email address, and account identifiers from Neon Auth when you sign
+        in (including when you use Google as the identity provider).
       </p>
 
       <h3>Billing and Payments (Paddle as Merchant of Record)</h3>
@@ -133,7 +133,8 @@
         We do not sell personal data. We share data with vendors only to provide SOPHIA:
       </p>
       <ul>
-        <li><strong>Google</strong>: Firebase Auth, Firestore, Cloud infrastructure, and model/runtime services.</li>
+        <li><strong>Google</strong>: Sign-in via Google OAuth, Cloud infrastructure, and model/runtime services where configured.</li>
+        <li><strong>Neon</strong>: hosted Postgres, authentication service, and related infrastructure for accounts and app data.</li>
         <li><strong>Paddle</strong>: billing checkout, subscriptions, customer portal, payment administration.</li>
         <li><strong>Model providers</strong>: BYOK and platform model calls according to your selected run configuration.</li>
       </ul>

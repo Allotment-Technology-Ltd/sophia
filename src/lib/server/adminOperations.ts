@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from '$lib/server/fsCompat';
 import { z } from 'zod';
 import { adminDb } from '$lib/server/firebase-admin';
 import { query as surrealQuery } from '$lib/server/db';

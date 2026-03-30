@@ -42,7 +42,8 @@
     "neon:auth-env": "tsx --env-file=.env scripts/neon-auth-print-env.ts",
     "verify:neon-ingest-run": "tsx scripts/verify-neon-ingest-run.ts",
     "verify:prod-ingest": "bash scripts/verify-prod-ingest-isolated.sh",
-    "byok:reencrypt-kms-to-local": "tsx --env-file=.env scripts/byok-reencrypt-kms-to-local.ts"
+    "byok:reencrypt-kms-to-local": "tsx --env-file=.env scripts/byok-reencrypt-kms-to-local.ts",
+    "secrets:sync-gcp": "tsx scripts/sync-gcp-secret-manager-from-env.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.58",
@@ -61,19 +62,21 @@
     "ai": "6.0.105",
     "dotenv": "^17.3.1",
     "drizzle-orm": "^0.40.1",
-    "firebase": "^12.10.0",
-    "firebase-admin": "^13.0.0",
     "google-auth-library": "^10.6.1",
+    "gsap": "^3.14.2",
     "jose": "^6.2.2",
     "marked": "^17.0.3",
     "node-html-parser": "^7.1.0",
     "posthog-node": "^5.28.0",
+    "split-type": "^0.3.4",
     "surrealdb": "^2.0.0",
+    "three": "^0.183.2",
     "tsx": "^4.21.0",
     "voyageai": "^0.2.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "firebase-admin": "^13.0.0",
     "@playwright/test": "^1.58.2",
     "@sveltejs/adapter-node": "^5.0.0",
     "@sveltejs/kit": "^2.53.4",

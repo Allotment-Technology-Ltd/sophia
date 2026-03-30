@@ -3,7 +3,7 @@
  * Pairs with `ingestRuns.ts` (in-memory) and `ingestion_run_reports` in Firestore (durable).
  */
 
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from '$lib/server/fsCompat';
 import {
   neonAppendIssue,
   neonListRecentReportRows,
@@ -499,7 +499,7 @@ export async function listRecentIngestRunReportSummaries(
       .get();
 
     return snap.docs.map((d) => {
-      const data = d.data();
+      const data = d.data() ?? {};
       const createdAt = data.createdAt as Timestamp | undefined;
       const completedAt = data.completedAt as Timestamp | undefined;
       return {

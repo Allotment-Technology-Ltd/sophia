@@ -15,7 +15,7 @@ export const GET: RequestHandler = async ({ locals, request }) => {
       status: 503,
       title: 'Operator BYOK target not configured',
       detail:
-        'Set OWNER_UIDS in the environment to a comma-separated list of Firebase UIDs. Keys are stored on the first UID’s Firestore user document (users/{uid}/byokProviders).',
+        'Set OWNER_UIDS to comma-separated Neon Auth user ids (JWT `sub`). Keys are stored on the first id’s user document (users/{uid}/byokProviders).',
       requestId
     });
   }

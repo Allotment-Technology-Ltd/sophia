@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { Timestamp } from 'firebase-admin/firestore';
+import { Timestamp } from '$lib/server/fsCompat';
 import { adminDb } from '$lib/server/firebase-admin';
 import { createApiKey } from '$lib/server/apiAuth';
 import { hasOwnerRole } from '$lib/server/authRoles';
@@ -12,7 +12,7 @@ function getAuthContext(user: App.Locals['user']): { uid: string; isAdmin: boole
     return problemJson({
       status: 401,
       title: 'Authentication required',
-      detail: 'Provide a valid Firebase bearer token.'
+      detail: 'Provide a valid Neon Auth JWT (Authorization: Bearer …).'
     });
   }
 
@@ -50,7 +50,7 @@ export const GET: RequestHandler = async ({ locals, request, url }) => {
   const snapshot = await query.get();
 
   const keys = snapshot.docs.map((doc) => {
-    const data = doc.data();
+    const data = doc.data() ?? {};
     return {
       key_id: doc.id,
       owner_uid: data.owner_uid,
@@ -184,8 +184,8 @@ export const DELETE: RequestHandler = async ({ locals, request, url }) => {
     });
   }
 
-  const keyData = keyDoc.data();
-  const ownerUid = String(keyData?.owner_uid ?? '');
+  const keyData = keyDoc.data() ?? {};
+  const ownerUid = String(keyData.owner_uid ?? '');
   if (!auth.isAdmin && ownerUid !== auth.uid) {
     return problemJson({
       status: 403,

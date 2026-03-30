@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getIdToken } from '$lib/firebase';
+  import { getIdToken } from '$lib/authClient';
   import {
     BYOK_PROVIDER_ORDER,
     PROVIDER_UI_META,
@@ -224,7 +224,8 @@
           <p class="mt-3 text-xs leading-relaxed text-sophia-dark-muted">
             This comes from the <strong class="text-sophia-dark-text">server</strong> env (the Node process running
             <code class="text-sophia-dark-text">pnpm dev</code>), not from your login. Other admin pages do not need
-            <code class="text-sophia-dark-text">OWNER_UIDS</code>. Set comma-separated Firebase UIDs in
+            <code class="text-sophia-dark-text">OWNER_UIDS</code>. Set comma-separated Neon Auth user ids (JWT
+            <code class="text-sophia-dark-text">sub</code>) in
             <code class="text-sophia-dark-text">.env.local</code> (see <code class="text-sophia-dark-text">.env.example</code>)
             and <strong class="text-sophia-dark-text">restart the dev server</strong>.
           </p>

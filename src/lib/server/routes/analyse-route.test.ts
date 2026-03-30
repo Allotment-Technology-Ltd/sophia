@@ -114,12 +114,16 @@ vi.mock('$lib/server/billing/wallet', () => ({
   debitByokHandlingFee: mockDebitByokHandlingFee
 }));
 
+const mockRateLimitSnap = { data: () => ({}) };
 vi.mock('$lib/server/firebase-admin', () => ({
   adminDb: {
     collection: vi.fn(() => ({
       doc: vi.fn(() => ({
         collection: vi.fn(() => ({
           add: vi.fn(async () => ({})),
+          doc: vi.fn(() => ({
+            path: 'users/x/rateLimits/platformDaily'
+          })),
           where: vi.fn(() => ({
             orderBy: vi.fn(() => ({
               limit: vi.fn(() => ({
@@ -129,7 +133,15 @@ vi.mock('$lib/server/firebase-admin', () => ({
           }))
         }))
       }))
-    }))
+    })),
+    runTransaction: vi.fn(async (fn: (tx: { get: () => Promise<typeof mockRateLimitSnap> }) => unknown) => {
+      const tx = {
+        get: vi.fn(async () => mockRateLimitSnap),
+        set: vi.fn(),
+        update: vi.fn()
+      };
+      return fn(tx);
+    })
   }
 }));
 

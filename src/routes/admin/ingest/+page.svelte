@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { getIdToken } from '$lib/firebase';
+  import { getIdToken } from '$lib/authClient';
   import { isEmbeddingModelEntry } from '$lib/ingestionModelCatalogMerge';
   import { INGESTION_SOURCE_MODEL_HINTS } from '$lib/ingestionModelCatalog';
   import { entryMeetsPresetStageMinimum } from '$lib/ingestionPipelineModelRequirements';
@@ -2470,7 +2470,7 @@
       const execution = (body?.execution ?? {}) as IngestExecutionInfo;
       if (execution.mode === 'simulated') {
         executionNotice =
-          'Running in simulation mode. To execute real ingestion from localhost, set ADMIN_INGEST_RUN_REAL=1 and provide live SURREAL_URL plus Firebase Admin credentials.';
+          'Running in simulation mode. To execute real ingestion from localhost, set ADMIN_INGEST_RUN_REAL=1, DATABASE_URL, live SURREAL_URL, and model API keys.';
       } else if (execution.mode === 'real') {
         const surreal = execution.surrealTarget ?? 'configured target';
         const firestore = execution.firestoreProject ? `, Firestore project ${execution.firestoreProject}` : '';

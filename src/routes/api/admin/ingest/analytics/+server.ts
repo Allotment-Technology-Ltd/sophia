@@ -48,7 +48,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
     const issueKindByStageHint: Record<string, Record<string, number>> = {};
 
     for (const doc of snap.docs) {
-      const d = doc.data();
+      const d = doc.data() ?? {};
       const status = typeof d.status === 'string' && d.status.trim() ? d.status.trim() : 'unknown';
       byStatus[status] = (byStatus[status] ?? 0) + 1;
 

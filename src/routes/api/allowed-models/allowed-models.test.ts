@@ -254,7 +254,7 @@ describe('/api/allowed-models', () => {
     expect(body.models[0].id).toBe('gpt-4o');
   });
 
-  it('returns degraded response when external freshness is stale', async () => {
+  it('returns models with degraded flag when external freshness is stale (last-known allowlist)', async () => {
     mockRestormelGetLiveReasoningAllowlist.mockResolvedValueOnce({
       allowlist: {
         anthropic: new Set(['claude-3-5-sonnet']),
@@ -274,7 +274,7 @@ describe('/api/allowed-models', () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.filtering.degraded).toBe(true);
-    expect(body.models).toEqual([]);
+    expect(body.models).toHaveLength(2);
     expect(body.error).toContain('freshness');
   });
 });

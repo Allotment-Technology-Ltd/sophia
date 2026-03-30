@@ -1,4 +1,4 @@
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue } from '$lib/server/fsCompat';
 import { adminDb } from '$lib/server/firebase-admin';
 import { creditWalletTopup } from './wallet';
 import { upsertBillingProfile } from './store';

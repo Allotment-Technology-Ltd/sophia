@@ -11,6 +11,8 @@ type HistoryEntry = {
   modelProvider?: ModelProvider;
   modelId?: string;
   depthMode?: 'quick' | 'standard' | 'deep';
+  /** Reference URLs supplied for that inquiry run (when stored). */
+  userLinks?: string[];
 };
 
 export const GET: RequestHandler = async ({ locals }) => {
@@ -28,7 +30,7 @@ export const GET: RequestHandler = async ({ locals }) => {
       .get();
 
     const entries: HistoryEntry[] = snapshot.docs.map(doc => {
-      const data = doc.data();
+      const data = doc.data() ?? {};
       const events = Array.isArray(data.events) ? data.events : [];
       const passCount = events.filter((e: { type: string }) => e.type === 'pass_complete').length;
           const metadataEvent = events.find((e: { type?: string }) => e.type === 'metadata') as
@@ -39,6 +41,11 @@ export const GET: RequestHandler = async ({ locals }) => {
           }
         | undefined;
 
+      const storedLinks = data.user_links;
+      const userLinks = Array.isArray(storedLinks)
+        ? storedLinks.filter((u: unknown): u is string => typeof u === 'string' && u.trim().length > 0)
+        : undefined;
+
       return {
         id: doc.id,
         question: data.query ?? '',
@@ -46,7 +53,8 @@ export const GET: RequestHandler = async ({ locals }) => {
         passCount: Math.max(1, passCount),
         modelProvider: data.model_provider ?? metadataEvent?.selected_model_provider ?? undefined,
         modelId: data.model_id ?? metadataEvent?.selected_model_id ?? undefined,
-        depthMode: data.depth_mode ?? metadataEvent?.depth_mode ?? undefined
+        depthMode: data.depth_mode ?? metadataEvent?.depth_mode ?? undefined,
+        userLinks: userLinks && userLinks.length > 0 ? userLinks : undefined
       };
     });
 

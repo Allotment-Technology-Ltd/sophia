@@ -1,6 +1,6 @@
 /**
- * Operator BYOK keys are stored on the Firestore user document identified by OWNER_UIDS
- * (comma-separated Firebase UIDs). The first UID is the primary operator key bucket.
+ * Operator BYOK keys are stored on the `sophia_documents` user row identified by OWNER_UIDS
+ * (comma-separated Neon Auth user ids, JWT `sub`). The first id is the primary operator key bucket.
  */
 export function getOperatorByokTargetUid(): string | null {
   const configured =

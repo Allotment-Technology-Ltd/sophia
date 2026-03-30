@@ -29,6 +29,9 @@ memory/
 # Local design documents — do not commit work-in-progress design files
 docs/design/MASTER-IMPLEMENTATION-GUIDE.md
 
+# Local scratch (often contains SQL/passwords — never commit)
+history.txt
+
 # Environment & secrets — never commit real keys
 # Local service account JSON (pnpm dev → scripts/dev.mjs discovers secrets/*.json)
 secrets/*

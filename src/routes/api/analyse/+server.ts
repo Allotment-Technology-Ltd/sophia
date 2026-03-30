@@ -129,7 +129,7 @@ async function loadFirestoreCache(uid: string, queryHash: string): Promise<SSEEv
       .limit(1)
       .get();
     if (snapshot.empty) return null;
-    const data = snapshot.docs[0].data();
+    const data = snapshot.docs[0].data() ?? {};
     const createdAt: Date = data.createdAt?.toDate?.() ?? new Date(0);
     const ageMs = Date.now() - createdAt.getTime();
     if (ageMs > FIRESTORE_CACHE_TTL_DAYS * 24 * 60 * 60 * 1000) return null;
@@ -151,7 +151,8 @@ async function saveFirestoreCache(
   domainMode: 'auto' | 'manual',
   domain: 'ethics' | 'philosophy_of_mind' | undefined,
   events: SSEEvent[],
-  runTrace?: RunTrace
+  runTrace?: RunTrace,
+  userLinks: string[] = []
 ): Promise<void> {
   try {
     const storageEvents = events.filter((e) => REPLAY_EVENT_TYPES.has(e.type));
@@ -167,6 +168,7 @@ async function saveFirestoreCache(
         model_id: modelId ?? null,
         domain_mode: domainMode,
         domain: domain ?? null,
+        user_links: userLinks.length > 0 ? userLinks : null,
         events: storageEvents,
         run_trace: runTrace ?? null,
         createdAt: new Date()
@@ -1787,7 +1789,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
               domainMode,
               domain,
               replayEvents,
-              runTrace
+              runTrace,
+              normalizedUserLinks
             );
           }
 

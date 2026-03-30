@@ -1,7 +1,7 @@
 <script lang="ts">
   import { browser } from '$app/environment';
   import { goto } from '$app/navigation';
-  import { auth, onAuthChange, getIdToken } from '$lib/firebase';
+  import { auth, onAuthChange, getIdToken } from '$lib/authClient';
   import { env as publicEnv } from '$env/dynamic/public';
   import { onMount } from 'svelte';
   import {

@@ -7,7 +7,7 @@ import { handleSSEEvent } from '$lib/utils/sseHandler';
 import { referencesStore } from '$lib/stores/references.svelte';
 import { historyStore, type CachedQueryResult } from '$lib/stores/history.svelte';
 import { graphStore } from '$lib/stores/graph.svelte';
-import { getIdToken } from '$lib/firebase';
+import { getIdToken } from '$lib/authClient';
 import { trackEvent } from '$lib/utils/analytics';
 import type { ByokProvider, ModelProvider, ReasoningProvider } from '@restormel/contracts/providers';
 

@@ -42,7 +42,7 @@ ENABLE_FIRESTORE_ANALYTICS_FALLBACK=false
 
 ### ADMIN_UIDS secret (Secret Manager: `admin-uids`)
 
-The secret is comma-separated Firebase UIDs. Current value includes both the primary admin and the Zuplo service account UID. To update:
+The secret is comma-separated **Neon Auth user ids** (JWT claim **`sub`**), same as Sophia’s `ADMIN_UIDS` env. Include both human admins and any machine identity (e.g. Zuplo) that presents a Bearer token with that `sub`. To update:
 
 ```bash
 # Read current value
@@ -75,10 +75,10 @@ gcloud run services update sophia --region=europe-west2 --project=sophia-488807 
 The Zuplo gateway needs its own `sk-sophia-…` key to authenticate against the SOPHIA backend. This is separate from consumer Zuplo API keys (`zpka_…`).
 
 ### Prerequisites
-- Firebase UID for the Zuplo service account must be in `ADMIN_UIDS` (done above)
-- A Firebase ID token for that UID (see minting steps below)
+- The **Neon JWT `sub`** used by the Zuplo → Sophia caller must be listed in `ADMIN_UIDS` (Secret Manager `admin-uids`).
+- A valid **Neon Auth access token** for that identity (short-lived). The steps below are **legacy Firebase-era** minting; replace with whatever your control plane uses to obtain a Neon Bearer token today.
 
-### Mint Firebase ID token for admin UID
+### Legacy: mint Firebase ID token (superseded by Neon Auth)
 
 ```bash
 # 1. Create a temporary firebase-adminsdk SA key
@@ -261,7 +261,7 @@ curl -i -X POST "https://sophia-210020077715.europe-west2.run.app/api/v1/verify"
 
 - Remove Zuplo route exposure and point clients back to direct backend endpoint.
 - Keep PostHog analytics enabled; no backend schema rollback required.
-- To revoke the upstream backend key: `DELETE /api/v1/keys?key_id=bf776bc027f2fd0ab2b960d989c65cc8` with an admin Firebase token.
+- To revoke the upstream backend key: `DELETE /api/v1/keys?key_id=bf776bc027f2fd0ab2b960d989c65cc8` with an admin **Neon Auth** access token (or equivalent Bearer accepted by `USE_NEON_AUTH=1`).
 
 ---
 
@@ -270,4 +270,4 @@ curl -i -X POST "https://sophia-210020077715.europe-west2.run.app/api/v1/verify"
 - The `sk-sophia-…` backend key is stored in Secret Manager (`sophia-backend-api-key`). Retrieve it only when needed; do not log or commit it.
 - The temporary firebase-adminsdk SA key used to mint tokens must be deleted immediately after use (30 second window max).
 - Rotate the `SOPHIA_BACKEND_API_KEY` every 90 days: create a new key via `POST /api/v1/keys`, update Zuplo env var, redeploy, then revoke the old key.
-- The `ZV01xuSKQpgojvNvXJjMD3eipDh2` Firebase UID is a service account identity in ADMIN_UIDS. It has no password and can only mint tokens via firebase-adminsdk. Do not add it to `ALLOWED_EMAILS`.
+- Machine identities in `ADMIN_UIDS` use a fixed Neon **`sub`**; they are not end-user emails. Do not add those subs to `ALLOWED_EMAILS`.

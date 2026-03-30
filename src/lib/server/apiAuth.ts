@@ -1,5 +1,5 @@
 import { randomBytes, scryptSync } from 'node:crypto';
-import { Timestamp } from 'firebase-admin/firestore';
+import { Timestamp } from '$lib/server/fsCompat';
 import { adminDb } from './firebase-admin';
 
 const DEFAULT_DAILY_QUOTA = Number.parseInt(process.env.API_KEY_DAILY_QUOTA ?? '100', 10);
@@ -96,7 +96,7 @@ export async function verifyApiKey(request: Request): Promise<ApiKeyVerification
   }
 
   const doc = snapshot.docs[0];
-  const data = doc.data() as ApiKeyRecord;
+  const data = doc.data() as unknown as ApiKeyRecord;
 
   if (!data.active) {
     return { valid: false, key_id: doc.id, error: 'inactive' };
@@ -107,7 +107,7 @@ export async function verifyApiKey(request: Request): Promise<ApiKeyVerification
 
   const updateResult = await adminDb.runTransaction(async (tx) => {
     const fresh = await tx.get(doc.ref);
-    const latest = fresh.data() as ApiKeyRecord | undefined;
+    const latest = fresh.data() as unknown as ApiKeyRecord | undefined;
 
     if (!latest || !latest.active) {
       return { valid: false, error: 'inactive' as const };

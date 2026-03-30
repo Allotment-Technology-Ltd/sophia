@@ -42,4 +42,4 @@ Use this checklist to compare **before/after** throughput work: telemetry in the
 
 ## Operator BYOK
 
-Operational keys live on the first `OWNER_UIDS` Firebase UID and merge when tenant keys are empty (`mergeOwnerEnvFallbackIfEmpty`). Use **Admin → Operator BYOK** to validate precedence after key rotation.
+Operational keys live on the first `OWNER_UIDS` Neon Auth `sub` and merge when tenant keys are empty (`mergeOwnerEnvFallbackIfEmpty`). Use **Admin → Operator BYOK** to validate precedence after key rotation.

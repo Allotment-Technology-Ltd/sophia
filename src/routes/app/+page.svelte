@@ -16,7 +16,7 @@
   import { goto, replaceState } from '$app/navigation';
   import { page } from '$app/state';
   import { onMount } from 'svelte';
-  import { getIdToken } from '$lib/firebase';
+  import { getIdToken } from '$lib/authClient';
   import { fly, fade } from 'svelte/transition';
   import { quintOut } from 'svelte/easing';
   import SidePanel from '$lib/components/panel/SidePanel.svelte';
@@ -82,12 +82,6 @@
     updated_at: string | null;
     last_error: string | null;
   }
-  interface IngestionBillingSnapshot {
-    publicRemaining: number | null;
-    privateRemaining: number | null;
-    walletAvailableCents: number | null;
-    walletCurrency: 'GBP' | 'USD';
-  }
   interface RunCostPassEstimate {
     pass: 'analysis' | 'critique' | 'synthesis' | 'verification';
     modelLabels: string[];
@@ -142,17 +136,6 @@
   let previousKeySource: QueryKeySource = 'platform';
   let selectedDepth = $state<'quick' | 'standard' | 'deep'>('standard');
   let userLinksInput = $state('');
-  let ingestSelections = $state<Record<string, boolean>>({});
-  let ingestVisibilities = $state<Record<string, 'public_shared' | 'private_user_only'>>({});
-  let publicShareAcks = $state<Record<string, boolean>>({});
-  let ingestionBilling = $state<IngestionBillingSnapshot>({
-    publicRemaining: null,
-    privateRemaining: null,
-    walletAvailableCents: null,
-    walletCurrency: 'GBP'
-  });
-  let ingestionBillingLoading = $state(false);
-  let ingestionBillingError = $state('');
   let selectedDomain = $state<'auto' | 'ethics' | 'philosophy_of_mind'>('auto');
   let activeTab = $state<TabId>('references');
   let settingsSubTab = $state<SettingsSubTab>('general');
@@ -365,37 +348,6 @@
     }
   }
 
-  async function refreshIngestionBilling(token: string): Promise<void> {
-    ingestionBillingLoading = true;
-    ingestionBillingError = '';
-    try {
-      const response = await fetch('/api/billing/entitlements', {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (!response.ok) throw new Error(`status ${response.status}`);
-      const payload = await response.json();
-      const entitlements = payload?.entitlements ?? {};
-      const wallet = payload?.wallet ?? {};
-      ingestionBilling = {
-        publicRemaining: Number.isFinite(entitlements?.publicRemaining)
-          ? Number(entitlements.publicRemaining)
-          : null,
-        privateRemaining: Number.isFinite(entitlements?.privateRemaining)
-          ? Number(entitlements.privateRemaining)
-          : null,
-        walletAvailableCents: Number.isFinite(wallet?.available_cents)
-          ? Number(wallet.available_cents)
-          : null,
-        walletCurrency: wallet?.currency === 'USD' ? 'USD' : 'GBP'
-      };
-    } catch (err) {
-      ingestionBillingError = err instanceof Error ? err.message : 'Unable to load ingestion limits';
-    } finally {
-      ingestionBillingLoading = false;
-    }
-  }
-
   const ALLOWED_MODELS_FETCH_TIMEOUT_MS = 25_000;
   /** Clears stuck loading if the model-refresh effect abort/restart races or fetch hangs past all timeouts. */
   const MODEL_OPTIONS_REFRESH_SAFETY_MS = 45_000;
@@ -494,7 +446,6 @@
         const token = await getIdToken();
         if (token) {
           await loadByokProviders(token);
-          await refreshIngestionBilling(token);
         }
       } catch {
         modelOptions = [];
@@ -559,24 +510,6 @@
     if (selectedModelValue === 'auto') return;
     if (selectableModelValues.has(selectedModelValue)) return;
     selectedModelValue = 'auto';
-  });
-
-  $effect(() => {
-    if (runtimeUserLinks.length === 0) return;
-    let changed = false;
-    const next = { ...ingestVisibilities };
-    for (const url of runtimeUserLinks) {
-      if (!ingestSelections[url]) continue;
-      const current = next[url] ?? 'public_shared';
-      if (current === 'public_shared' && !publicIngestionAvailable && privateIngestionAvailable) {
-        next[url] = 'private_user_only';
-        changed = true;
-      } else if (current === 'private_user_only' && !privateIngestionAvailable && publicIngestionAvailable) {
-        next[url] = 'public_shared';
-        changed = true;
-      }
-    }
-    if (changed) ingestVisibilities = next;
   });
 
   $effect(() => {
@@ -834,30 +767,6 @@
   const runtimeUserLinks = $derived(
     parseUserLinksInput(userLinksInput)
   );
-  const selectedIngestionCount = $derived.by(() =>
-    runtimeUserLinks.filter((url) => ingestSelections[url] === true).length
-  );
-  const publicIngestionAvailable = $derived.by(() => {
-    const remaining = ingestionBilling.publicRemaining;
-    return remaining === null ? true : remaining > 0;
-  });
-  const privateIngestionAvailable = $derived.by(() => {
-    const remaining = ingestionBilling.privateRemaining;
-    const wallet = ingestionBilling.walletAvailableCents;
-    const remainingOk = remaining === null ? true : remaining > 0;
-    const walletOk = wallet === null ? true : wallet > 0;
-    return remainingOk && walletOk;
-  });
-  const canQueueAnyIngestion = $derived.by(() => publicIngestionAvailable || privateIngestionAvailable);
-  const hasPendingPublicShareAcknowledgement = $derived.by(() =>
-    runtimeUserLinks.some(
-      (url) =>
-        ingestSelections[url] === true &&
-        (ingestVisibilities[url] ?? 'public_shared') === 'public_shared' &&
-        publicShareAcks[url] !== true
-    )
-  );
-
   const comparisonCandidate = $derived.by(() => {
     const normalizedQuery = currentQueryNormalized;
     if (!normalizedQuery || !lastAssistantMsg?.passes) return null;
@@ -962,73 +871,7 @@
       .slice(0, 5);
   }
 
-  function linkIngestionSelected(url: string): boolean {
-    return ingestSelections[url] === true;
-  }
-
-  function linkIngestionVisibility(url: string): 'public_shared' | 'private_user_only' {
-    return ingestVisibilities[url] ?? 'public_shared';
-  }
-
-  function publicShareAcknowledged(url: string): boolean {
-    return publicShareAcks[url] === true;
-  }
-
-  function setLinkIngestionSelected(url: string, selected: boolean): void {
-    ingestSelections = {
-      ...ingestSelections,
-      [url]: selected
-    };
-    if (selected) {
-      const current = ingestVisibilities[url] ?? 'public_shared';
-      const fallbackVisibility = publicIngestionAvailable
-        ? 'public_shared'
-        : privateIngestionAvailable
-          ? 'private_user_only'
-          : current;
-      if (
-        (current === 'public_shared' && !publicIngestionAvailable) ||
-        (current === 'private_user_only' && !privateIngestionAvailable)
-      ) {
-        ingestVisibilities = {
-          ...ingestVisibilities,
-          [url]: fallbackVisibility
-        };
-      }
-    }
-    if (!selected) {
-      publicShareAcks = {
-        ...publicShareAcks,
-        [url]: false
-      };
-    }
-  }
-
-  function setLinkIngestionVisibility(
-    url: string,
-    visibility: 'public_shared' | 'private_user_only'
-  ): void {
-    if (visibility === 'public_shared' && !publicIngestionAvailable) return;
-    if (visibility === 'private_user_only' && !privateIngestionAvailable) return;
-    ingestVisibilities = {
-      ...ingestVisibilities,
-      [url]: visibility
-    };
-    if (visibility !== 'public_shared') {
-      publicShareAcks = {
-        ...publicShareAcks,
-        [url]: false
-      };
-    }
-  }
-
-  function setPublicShareAck(url: string, acknowledged: boolean): void {
-    publicShareAcks = {
-      ...publicShareAcks,
-      [url]: acknowledged
-    };
-  }
-
+  /** Self-serve corpus queue UI is disabled; links are retrieval context only for now. */
   function buildLinkIngestionPreferences(
     userLinks: string[]
   ): Array<{
@@ -1037,24 +880,11 @@
     ingest_visibility: 'public_shared' | 'private_user_only';
     acknowledge_public_share?: boolean;
   }> {
-    return userLinks.map((url) => {
-      const selected = linkIngestionSelected(url);
-      const visibility = linkIngestionVisibility(url);
-      return {
-        url,
-        ingest_selected: selected,
-        ingest_visibility: visibility,
-        acknowledge_public_share: visibility === 'public_shared' ? publicShareAcknowledged(url) : undefined
-      };
-    });
-  }
-
-  function formatWalletCents(value: number | null, currency: 'GBP' | 'USD'): string {
-    if (value === null) return '—';
-    return new Intl.NumberFormat('en-GB', {
-      style: 'currency',
-      currency
-    }).format(Math.max(0, value) / 100);
+    return userLinks.map((url) => ({
+      url,
+      ingest_selected: false,
+      ingest_visibility: 'private_user_only'
+    }));
   }
 
   function formatRunVariantLabel(
@@ -1230,7 +1060,7 @@
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   async function handleSubmit(): Promise<void> {
-    if (!queryInput.trim() || conversation.isLoading || hasPendingPublicShareAcknowledgement) return;
+    if (!queryInput.trim() || conversation.isLoading) return;
     const query = queryInput.trim();
     queryInput = '';
     prepareForNewRun();
@@ -1402,7 +1232,7 @@
   }
 
   async function rerunWithExternalSources(): Promise<void> {
-    if (conversation.isLoading || hasPendingPublicShareAcknowledgement) return;
+    if (conversation.isLoading) return;
     const lastQuery = conversation.messages.findLast((m) => m.role === 'user')?.content;
     if (!lastQuery) return;
     prepareForNewRun();
@@ -1933,27 +1763,12 @@
                 />
 
                 <div class="resource-frame">
-                  <div class="frame-title">Reference Material (optional)</div>
+                  <div class="frame-title">Reference material (optional)</div>
                   <p class="resource-copy">
-                    Add URLs you want SOPHIA to consider during analysis.
+                    Add URLs you want SOPHIA to fetch and weigh during this inquiry (retrieval context for this run
+                    only).
                   </p>
-                  <div class="ingestion-budget">
-                    <span>Remaining public ingestions: {ingestionBilling.publicRemaining ?? '—'}</span>
-                    <span>Remaining private ingestions: {ingestionBilling.privateRemaining ?? '—'}</span>
-                    <span>Wallet: {formatWalletCents(ingestionBilling.walletAvailableCents, ingestionBilling.walletCurrency)}</span>
-                    <button
-                      class="ingestion-refresh"
-                      type="button"
-                      onclick={async () => {
-                        const token = await getIdToken();
-                        if (token) await refreshIngestionBilling(token);
-                      }}
-                      disabled={ingestionBillingLoading}
-                    >
-                      {ingestionBillingLoading ? 'Refreshing…' : 'Refresh limits'}
-                    </button>
-                  </div>
-                  <label class="resource-label" for="user-links">Sources to prioritize (optional)</label>
+                  <label class="resource-label" for="user-links">Reference URLs (optional)</label>
                   <textarea
                     id="user-links"
                     bind:value={userLinksInput}
@@ -1961,104 +1776,13 @@
                     rows="4"
                     placeholder="https://example.com/source-1"
                   ></textarea>
-                  {#if runtimeUserLinks.length > 0}
-                    <div class="ingestion-preferences">
-                      <p class="resource-note">
-                        Choose which links to ingest overnight and whether each source is private or shared.
-                      </p>
-                      {#each runtimeUserLinks as link}
-                        <div class="ingestion-item">
-                          <div class="ingestion-head">
-                            <label class="ingestion-toggle">
-                              <input
-                                type="checkbox"
-                                checked={linkIngestionSelected(link)}
-                                disabled={!canQueueAnyIngestion}
-                                onchange={(event) =>
-                                  setLinkIngestionSelected(
-                                    link,
-                                    (event.currentTarget as HTMLInputElement).checked
-                                  )}
-                              />
-                              <span>Queue this source for ingestion</span>
-                            </label>
-                            <p class="ingestion-link">{link}</p>
-                          </div>
-                          <div class="ingestion-visibility" class:is-disabled={!linkIngestionSelected(link)}>
-                            <label>
-                              <input
-                                type="radio"
-                                name={`visibility-${link}`}
-                                checked={linkIngestionVisibility(link) === 'public_shared'}
-                                disabled={!linkIngestionSelected(link) || !publicIngestionAvailable}
-                                onchange={() => setLinkIngestionVisibility(link, 'public_shared')}
-                              />
-                              Public shared ({ingestionBilling.publicRemaining ?? '—'} left)
-                            </label>
-                            <label>
-                              <input
-                                type="radio"
-                                name={`visibility-${link}`}
-                                checked={linkIngestionVisibility(link) === 'private_user_only'}
-                                disabled={!linkIngestionSelected(link) || !privateIngestionAvailable}
-                                onchange={() => setLinkIngestionVisibility(link, 'private_user_only')}
-                              />
-                              Private to my account ({ingestionBilling.privateRemaining ?? '—'} left)
-                            </label>
-                          </div>
-                          {#if !linkIngestionSelected(link)}
-                            <p class="ingestion-visibility-note">
-                              Select ingestion above to apply private/public choice for this source.
-                            </p>
-                          {/if}
-                          {#if linkIngestionSelected(link)}
-                            {#if !publicIngestionAvailable || !privateIngestionAvailable}
-                              <p class="ingestion-limit-note">
-                                {#if !publicIngestionAvailable && !privateIngestionAvailable}
-                                  No ingestion capacity left. Top up wallet and/or wait for monthly reset.
-                                {:else if !publicIngestionAvailable}
-                                  Public ingestion allowance reached.
-                                {:else if !privateIngestionAvailable}
-                                  Private ingestion unavailable (private allowance reached or wallet empty).
-                                {/if}
-                              </p>
-                            {/if}
-                            {#if linkIngestionVisibility(link) === 'public_shared'}
-                              <label class="ingestion-ack">
-                                <input
-                                  type="checkbox"
-                                  checked={publicShareAcknowledged(link)}
-                                  onchange={(event) =>
-                                    setPublicShareAck(
-                                      link,
-                                      (event.currentTarget as HTMLInputElement).checked
-                                    )}
-                                />
-                                <span>
-                                  I confirm this source may be shared with all users under the
-                                  <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.
-                                </span>
-                              </label>
-                            {/if}
-                          {/if}
-                        </div>
-                      {/each}
-                    </div>
-                  {/if}
                   <p class="resource-note">
-                    {#if hasPendingPublicShareAcknowledgement}
-                      Public-share acknowledgement is required for selected public sources.
-                    {:else if !canQueueAnyIngestion}
-                      Ingestion options are disabled until allowance resets or wallet is topped up.
-                    {:else if runtimeUserLinks.length > 0}
-                      {runtimeUserLinks.length} link(s) will be used now. {selectedIngestionCount} selected for overnight ingestion.
+                    {#if runtimeUserLinks.length > 0}
+                      {runtimeUserLinks.length} link(s) will be used for this run.
                     {:else}
-                      You can also add sources after the first run, then re-run and compare pass/graph differences.
+                      You can add links after the first run and explore again to compare results.
                     {/if}
                   </p>
-                  {#if ingestionBillingError}
-                    <p class="resource-note resource-error">Unable to load billing limits: {ingestionBillingError}</p>
-                  {/if}
                 </div>
               {/if}
 
@@ -2066,7 +1790,7 @@
                 <Button
                   variant="primary"
                   onclick={handleSubmit}
-                  disabled={conversation.isLoading || !queryInput.trim() || hasPendingPublicShareAcknowledgement}
+                  disabled={conversation.isLoading || !queryInput.trim()}
                 >
                   Begin Inquiry →
                 </Button>
@@ -2391,106 +2115,26 @@
                   Custom model overrides are unavailable while Restormel model policy data is constrained.
                 </p>
               {/if}
-              <div class="ingestion-budget compact">
-                <span>Public left: {ingestionBilling.publicRemaining ?? '—'}</span>
-                <span>Private left: {ingestionBilling.privateRemaining ?? '—'}</span>
-                <span>Wallet: {formatWalletCents(ingestionBilling.walletAvailableCents, ingestionBilling.walletCurrency)}</span>
-              </div>
+              <label class="resource-label" for="rerun-user-links">Reference URLs (optional)</label>
               <textarea
+                id="rerun-user-links"
                 bind:value={userLinksInput}
                 class="links-input"
                 rows="3"
                 placeholder="https://example.com/new-source"
               ></textarea>
               {#if runtimeUserLinks.length > 0}
-                <div class="ingestion-preferences compact">
-                  {#each runtimeUserLinks as link}
-                    <div class="ingestion-item">
-                      <div class="ingestion-head">
-                        <label class="ingestion-toggle">
-                          <input
-                            type="checkbox"
-                            checked={linkIngestionSelected(link)}
-                            disabled={!canQueueAnyIngestion}
-                            onchange={(event) =>
-                              setLinkIngestionSelected(
-                                link,
-                                (event.currentTarget as HTMLInputElement).checked
-                              )}
-                          />
-                          <span>Queue ingestion</span>
-                        </label>
-                        <p class="ingestion-link">{link}</p>
-                      </div>
-                      <div class="ingestion-visibility" class:is-disabled={!linkIngestionSelected(link)}>
-                        <label>
-                          <input
-                            type="radio"
-                            name={`rerun-visibility-${link}`}
-                            checked={linkIngestionVisibility(link) === 'public_shared'}
-                            disabled={!linkIngestionSelected(link) || !publicIngestionAvailable}
-                            onchange={() => setLinkIngestionVisibility(link, 'public_shared')}
-                          />
-                          Public ({ingestionBilling.publicRemaining ?? '—'} left)
-                        </label>
-                        <label>
-                          <input
-                            type="radio"
-                            name={`rerun-visibility-${link}`}
-                            checked={linkIngestionVisibility(link) === 'private_user_only'}
-                            disabled={!linkIngestionSelected(link) || !privateIngestionAvailable}
-                            onchange={() => setLinkIngestionVisibility(link, 'private_user_only')}
-                          />
-                          Private ({ingestionBilling.privateRemaining ?? '—'} left)
-                        </label>
-                      </div>
-                      {#if !linkIngestionSelected(link)}
-                        <p class="ingestion-visibility-note">
-                          Select ingestion above to apply private/public choice for this source.
-                        </p>
-                      {/if}
-                      {#if linkIngestionSelected(link)}
-                        {#if !publicIngestionAvailable || !privateIngestionAvailable}
-                          <p class="ingestion-limit-note">
-                            {#if !publicIngestionAvailable && !privateIngestionAvailable}
-                              No ingestion capacity left. Top up wallet and/or wait for monthly reset.
-                            {:else if !publicIngestionAvailable}
-                              Public ingestion allowance reached.
-                            {:else}
-                              Private ingestion unavailable (private allowance reached or wallet empty).
-                            {/if}
-                          </p>
-                        {/if}
-                        {#if linkIngestionVisibility(link) === 'public_shared'}
-                          <label class="ingestion-ack">
-                            <input
-                              type="checkbox"
-                              checked={publicShareAcknowledged(link)}
-                              onchange={(event) =>
-                                setPublicShareAck(
-                                  link,
-                                  (event.currentTarget as HTMLInputElement).checked
-                                )}
-                            />
-                            <span>I confirm this source can be shared publicly.</span>
-                          </label>
-                        {/if}
-                      {/if}
-                    </div>
-                  {/each}
-                </div>
+                <p class="resource-note">{runtimeUserLinks.length} link(s) will be used for this run.</p>
               {/if}
               <div class="upgrade-row">
                 <button
                   class="upgrade-btn"
                   onclick={rerunWithExternalSources}
-                  disabled={conversation.isLoading || hasPendingPublicShareAcknowledgement}
+                  disabled={conversation.isLoading}
                 >
                   Explore Again
                 </button>
-                <span class="upgrade-note">
-                  Uses selected key/model above. {selectedIngestionCount} link(s) selected for ingestion.
-                </span>
+                <span class="upgrade-note">Uses the key and model selected above.</span>
               </div>
             </div>
 
@@ -3045,39 +2689,6 @@
     color: var(--color-text-muted);
   }
 
-  .ingestion-budget {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px 12px;
-    align-items: center;
-    font-family: var(--font-ui);
-    font-size: 0.7rem;
-    color: var(--color-dim);
-  }
-
-  .ingestion-budget.compact {
-    font-size: 0.68rem;
-    margin-top: -2px;
-  }
-
-  .ingestion-refresh {
-    margin-left: auto;
-    font-size: 0.66rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--color-text);
-    background: transparent;
-    border: 1px solid var(--color-border);
-    border-radius: 4px;
-    padding: 4px 8px;
-    cursor: pointer;
-  }
-
-  .ingestion-refresh:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
   .links-input {
     width: 100%;
     resize: vertical;
@@ -3097,96 +2708,6 @@
     font-size: 0.72rem;
     color: var(--color-muted);
     text-align: left;
-  }
-
-  .ingestion-preferences {
-    display: grid;
-    gap: 0.5rem;
-    border: 1px solid var(--color-border);
-    border-radius: 8px;
-    padding: 0.55rem;
-    background: var(--color-surface);
-  }
-
-  .ingestion-preferences.compact {
-    padding: 0.5rem;
-  }
-
-  .ingestion-item {
-    display: grid;
-    gap: 0.45rem;
-    border: 1px solid color-mix(in oklab, var(--color-border) 75%, transparent);
-    border-radius: 8px;
-    padding: 0.5rem;
-    background: color-mix(in oklab, var(--color-bg-soft) 85%, transparent);
-  }
-
-  .ingestion-head {
-    display: grid;
-    gap: 0.25rem;
-  }
-
-  .ingestion-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    font-size: 0.78rem;
-    color: var(--color-text);
-  }
-
-  .ingestion-link {
-    margin: 0;
-    font-size: 0.72rem;
-    color: var(--color-dim);
-    overflow-wrap: anywhere;
-  }
-
-  .ingestion-visibility {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.7rem;
-    font-size: 0.75rem;
-    color: var(--color-text);
-  }
-
-  .ingestion-visibility label {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-  }
-
-  .ingestion-visibility.is-disabled {
-    opacity: 0.6;
-  }
-
-  .ingestion-visibility-note {
-    margin: 0;
-    font-size: 0.68rem;
-    color: var(--color-dim);
-  }
-
-  .ingestion-ack {
-    display: inline-flex;
-    align-items: flex-start;
-    gap: 0.35rem;
-    font-size: 0.72rem;
-    color: var(--color-muted);
-    line-height: 1.4;
-  }
-
-  .ingestion-ack a {
-    color: var(--color-blue);
-    text-decoration: underline;
-  }
-
-  .ingestion-limit-note {
-    margin: 0;
-    font-size: 0.7rem;
-    color: #f0c0aa;
-  }
-
-  .resource-error {
-    color: #f0c0aa;
   }
 
   .resource-rerun-card {

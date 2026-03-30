@@ -26,7 +26,7 @@ export const GET: RequestHandler = async ({ locals, request, url }) => {
     return problemJson({
       status: 401,
       title: 'Authentication required',
-      detail: 'Provide a valid Firebase bearer token.',
+      detail: 'Provide a valid Neon Auth JWT (Authorization: Bearer …).',
       requestId
     });
   }
@@ -52,7 +52,7 @@ export const GET: RequestHandler = async ({ locals, request, url }) => {
     .get();
 
   const keys: UsageKeyRow[] = snapshot.docs.map((doc) => {
-    const data = doc.data();
+    const data = doc.data() ?? {};
     return {
       key_id: doc.id,
       name: data.name ?? 'API key',

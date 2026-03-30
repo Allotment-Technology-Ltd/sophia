@@ -1,4 +1,4 @@
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue } from '$lib/server/fsCompat';
 import { adminDb } from '$lib/server/firebase-admin';
 import { billingWalletRef, ensureBillingState } from '$lib/server/billing/store';
 import { currentMonthKeyUtc, type BillingTier } from '$lib/server/billing/types';

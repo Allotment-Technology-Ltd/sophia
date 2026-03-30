@@ -5,7 +5,7 @@
   import { referencesStore } from '$lib/stores/references.svelte';
   import { historyStore } from '$lib/stores/history.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
-  import { auth, onAuthChange } from '$lib/firebase';
+  import { auth, onAuthChange } from '$lib/authClient';
   import { goto, afterNavigate } from '$app/navigation';
   import { page } from '$app/stores';
   import { browser } from '$app/environment';
@@ -54,7 +54,7 @@
       '/api-access'
     ]);
     const isPublicRoute = (path: string) =>
-      PUBLIC_ROUTES.has(path) || path.startsWith('/auth');
+      PUBLIC_ROUTES.has(path) || path.startsWith('/auth') || path.startsWith('/prototype/');
 
     let lastAuthUid: string | null = auth?.currentUser?.uid ?? null;
 
@@ -104,7 +104,7 @@
     if (path === '/pricing' || path === '/privacy' || path === '/terms') {
       return !isAuthenticated;
     }
-    return BARE_ROUTES.has(path);
+    return BARE_ROUTES.has(path) || path.startsWith('/prototype/');
   });
 
   // Context query: the most recent user message (shown centred in TopBar on results/loading screens)
@@ -193,10 +193,11 @@
 {#if isAuthPage || authResolved}
   <div class="layout-shell">
     <div id="main" class="layout-main" style={isAuthPage ? '' : 'padding-top: var(--nav-height);'}>
-      {#if isAuthPage || isAuthenticated || BARE_ROUTES.has($page.url.pathname)}
+      {#if isAuthPage || isAuthenticated || BARE_ROUTES.has($page.url.pathname) || $page.url.pathname.startsWith('/prototype/')}
         {@render children()}
       {/if}
     </div>
+    {#if !$page.url.pathname.startsWith('/prototype/')}
     <footer class="site-footer" aria-label="Site footer">
       <nav class="footer-nav" aria-label="Legal links">
         <a href="/" aria-current={$page.url.pathname === '/' ? 'page' : undefined}>About</a>
@@ -205,6 +206,7 @@
         <a href="/terms" aria-current={$page.url.pathname === '/terms' ? 'page' : undefined}>Terms</a>
       </nav>
     </footer>
+    {/if}
   </div>
 {/if}
 

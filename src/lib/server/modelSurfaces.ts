@@ -1,4 +1,4 @@
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue } from '$lib/server/fsCompat';
 import { z } from 'zod';
 import { extractModelRowsFromRestormelPayload } from '$lib/ingestionModelCatalogMerge';
 import { adminDb } from '$lib/server/firebase-admin';

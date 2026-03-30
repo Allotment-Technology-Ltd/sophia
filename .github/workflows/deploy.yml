@@ -2,7 +2,7 @@
 #
 # Handles application deployments; optional Pulumi (off by default during migration).
 #
-#   src/**, scripts/**, Dockerfile, package.json, etc.  →  build + gcloud run deploy
+#   src/**, scripts/**, docs/**, Dockerfile, package.json, etc.  →  build + gcloud run deploy
 #   Production DB / Neon: DATABASE_URL + SOPHIA_DATA_BACKEND come from the deploy step
 #   (--set-secrets / --set-env-vars), not Pulumi, while IAC is paused.
 #
@@ -14,10 +14,16 @@
 #
 # PREREQUISITES:
 # ─ GCP secrets in Secret Manager: anthropic-api-key, voyage-api-key,
-#   google-ai-api-key, surreal-db-pass, firebase-api-key,
-#   firebase-auth-domain, admin-uids, owner-uids (maps to env OWNER_UIDS),
-#   neon-database-url (Neon pooled DATABASE_URL for ingest + optional adminDb mirror)
+#   google-ai-api-key, surreal-db-pass, admin-uids, owner-uids (maps to env OWNER_UIDS),
+#   neon-database-url → DATABASE_URL (required; ingest + sophia_documents / adminDb)
+# ─ GitHub secret: NEON_AUTH_BASE_URL (same value for VITE_NEON_AUTH_URL at build + runtime JWT verify)
 # ─ Workload Identity Federation configured for this GitHub repo
+#
+# Secret → Cloud Run binding: every app-deploy runs `gcloud run deploy … --set-secrets=…`
+# (see app-deploy job). Pulumi is optional and does not run unless repo variable
+# ENABLE_PULUMI_IAC is the literal string `true`; when Pulumi is off, app-deploy still
+# applies the same secret mounts. Rotated only GCP secrets with no repo diff: run this
+# workflow via workflow_dispatch with force_app_deploy=true.
 # ─ GitHub repository secrets:
 #     WIF_PROVIDER        projects/{N}/locations/global/workloadIdentityPools/{P}/providers/{ID}
 #     WIF_SERVICE_ACCOUNT github-deploy@sophia-488807.iam.gserviceaccount.com
@@ -119,6 +125,7 @@ jobs:
               - 'src/**'
               - 'scripts/**'
               - 'static/**'
+              - 'docs/**'
               - 'Dockerfile'
               - 'package.json'
               - 'pnpm-lock.yaml'
@@ -348,20 +355,23 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGISTRY }}
 
-      - name: Load Firebase public config for client build
+      - name: Load Neon Auth URL for client build
         run: |
-          echo "VITE_FIREBASE_API_KEY=$(gcloud secrets versions access latest --secret=firebase-api-key --project=${{ env.PROJECT_ID }})" >> "$GITHUB_ENV"
-          echo "VITE_FIREBASE_AUTH_DOMAIN=$(gcloud secrets versions access latest --secret=firebase-auth-domain --project=${{ env.PROJECT_ID }})" >> "$GITHUB_ENV"
-          echo "VITE_FIREBASE_PROJECT_ID=${{ env.PROJECT_ID }}" >> "$GITHUB_ENV"
-          # Same URL as server NEON_AUTH_BASE_URL (Neon Console → Auth → base URL, ends with /…/auth).
+          # Same as server NEON_AUTH_BASE_URL (Neon Console → Auth → base URL, ends with /…/auth).
           echo "VITE_NEON_AUTH_URL=${{ secrets.NEON_AUTH_BASE_URL }}" >> "$GITHUB_ENV"
+
+      - name: Resolve production SURREAL_URL
+        id: surreal
+        run: |
+          if [ -n "${{ secrets.SURREAL_RPC_URL }}" ]; then
+            echo "url=${{ secrets.SURREAL_RPC_URL }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=http://10.154.0.2:8000" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build Docker image
         run: |
           docker build --no-cache --pull \
-            --build-arg VITE_FIREBASE_API_KEY=${{ env.VITE_FIREBASE_API_KEY }} \
-            --build-arg VITE_FIREBASE_AUTH_DOMAIN=${{ env.VITE_FIREBASE_AUTH_DOMAIN }} \
-            --build-arg VITE_FIREBASE_PROJECT_ID=${{ env.VITE_FIREBASE_PROJECT_ID }} \
             --build-arg VITE_NEON_AUTH_URL=${{ env.VITE_NEON_AUTH_URL }} \
             -t ${{ env.IMAGE_BASE }}:${{ github.sha }} \
             -t ${{ env.IMAGE_BASE }}:latest .
@@ -384,8 +394,8 @@ jobs:
             --max-instances=3 \
             --vpc-connector=sophia-connector \
             --vpc-egress=private-ranges-only \
-            --set-env-vars="^|^SURREAL_URL=http://10.154.0.2:8000|SURREAL_USER=root|SURREAL_NAMESPACE=sophia|SURREAL_DATABASE=sophia|ADMIN_INGEST_RUN_REAL=1|SOPHIA_DATA_BACKEND=neon|USE_NEON_AUTH=1|NEON_AUTH_BASE_URL=${{ secrets.NEON_AUTH_BASE_URL }}|GCP_PROJECT_ID=${{ env.PROJECT_ID }}|GCP_LOCATION=${{ env.REGION }}|GOOGLE_VERTEX_LOCATION=us-central1|VITE_FIREBASE_PROJECT_ID=${{ env.PROJECT_ID }}|ALLOWED_EMAILS=adam.boon1984@gmail.com,adam.boon1984@googlemail.com,admin@usesophia.app|PADDLE_RUNTIME=production|BYOK_DISABLE_CLOUD_KMS_ENCRYPT=1|RESTORMEL_GATEWAY_KEY=${{ env.RESTORMEL_GATEWAY_KEY }}|RESTORMEL_PROJECT_ID=${{ env.RESTORMEL_PROJECT_ID }}|RESTORMEL_ENVIRONMENT_ID=${{ env.RESTORMEL_ENVIRONMENT_ID }}|RESTORMEL_KEYS_BASE=${{ env.RESTORMEL_KEYS_BASE }}|RESTORMEL_BASE_URL=${{ env.RESTORMEL_BASE_URL }}|RESTORMEL_ANALYSE_ROUTE_ID=${{ env.RESTORMEL_ANALYSE_ROUTE_ID }}|RESTORMEL_VERIFY_ROUTE_ID=${{ env.RESTORMEL_VERIFY_ROUTE_ID }}|RESTORMEL_PROJECT_MODEL_REGISTRY_BINDINGS=1" \
-            --set-secrets="ANTHROPIC_API_KEY=anthropic-api-key:latest,SURREAL_PASS=surreal-db-pass:latest,VOYAGE_API_KEY=voyage-api-key:latest,GOOGLE_AI_API_KEY=google-ai-api-key:latest,DATABASE_URL=neon-database-url:latest,VITE_FIREBASE_API_KEY=firebase-api-key:latest,VITE_FIREBASE_AUTH_DOMAIN=firebase-auth-domain:latest,ADMIN_UIDS=admin-uids:latest,OWNER_UIDS=owner-uids:latest,PADDLE_API_KEY_PRODUCTION=PADDLE_API_KEY_PRODUCTION:latest,PADDLE_WEBHOOK_SECRET_PRODUCTION=PADDLE_WEBHOOK_SECRET_PRODUCTION:latest,PADDLE_PRICE_PRO_GBP_PRODUCTION=PADDLE_PRICE_PRO_GBP_PRODUCTION:latest,PADDLE_PRICE_PRO_USD_PRODUCTION=PADDLE_PRICE_PRO_USD_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_GBP_PRODUCTION=PADDLE_PRICE_PREMIUM_GBP_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_USD_PRODUCTION=PADDLE_PRICE_PREMIUM_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION:latest,PUBLIC_PADDLE_CLIENT_TOKEN_PRODUCTION=PADDLE_CLIENT_TOKEN:latest"
+            --set-env-vars="^|^SURREAL_URL=${{ steps.surreal.outputs.url }}|SURREAL_USER=root|SURREAL_NAMESPACE=sophia|SURREAL_DATABASE=sophia|ADMIN_INGEST_RUN_REAL=1|INGEST_QUEUE_ENABLED=0|SOPHIA_DATA_BACKEND=neon|USE_NEON_AUTH=1|NEON_AUTH_BASE_URL=${{ secrets.NEON_AUTH_BASE_URL }}|GCP_PROJECT_ID=${{ env.PROJECT_ID }}|GCP_LOCATION=${{ env.REGION }}|GOOGLE_VERTEX_LOCATION=us-central1|ALLOWED_EMAILS=adam.boon1984@gmail.com,adam.boon1984@googlemail.com,admin@usesophia.app|PADDLE_RUNTIME=production|BYOK_DISABLE_CLOUD_KMS_ENCRYPT=1|RESTORMEL_GATEWAY_KEY=${{ env.RESTORMEL_GATEWAY_KEY }}|RESTORMEL_PROJECT_ID=${{ env.RESTORMEL_PROJECT_ID }}|RESTORMEL_ENVIRONMENT_ID=${{ env.RESTORMEL_ENVIRONMENT_ID }}|RESTORMEL_KEYS_BASE=${{ env.RESTORMEL_KEYS_BASE }}|RESTORMEL_BASE_URL=${{ env.RESTORMEL_BASE_URL }}|RESTORMEL_ANALYSE_ROUTE_ID=${{ env.RESTORMEL_ANALYSE_ROUTE_ID }}|RESTORMEL_VERIFY_ROUTE_ID=${{ env.RESTORMEL_VERIFY_ROUTE_ID }}|RESTORMEL_PROJECT_MODEL_REGISTRY_BINDINGS=1" \
+            --set-secrets="ANTHROPIC_API_KEY=anthropic-api-key:latest,SURREAL_PASS=surreal-db-pass:latest,VOYAGE_API_KEY=voyage-api-key:latest,GOOGLE_AI_API_KEY=google-ai-api-key:latest,DATABASE_URL=neon-database-url:latest,ADMIN_UIDS=admin-uids:latest,OWNER_UIDS=owner-uids:latest,PADDLE_API_KEY_PRODUCTION=PADDLE_API_KEY_PRODUCTION:latest,PADDLE_WEBHOOK_SECRET_PRODUCTION=PADDLE_WEBHOOK_SECRET_PRODUCTION:latest,PADDLE_PRICE_PRO_GBP_PRODUCTION=PADDLE_PRICE_PRO_GBP_PRODUCTION:latest,PADDLE_PRICE_PRO_USD_PRODUCTION=PADDLE_PRICE_PRO_USD_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_GBP_PRODUCTION=PADDLE_PRICE_PREMIUM_GBP_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_USD_PRODUCTION=PADDLE_PRICE_PREMIUM_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION:latest,PUBLIC_PADDLE_CLIENT_TOKEN_PRODUCTION=PADDLE_CLIENT_TOKEN:latest"
 
       - name: Route 100% traffic to latest revision
         run: |

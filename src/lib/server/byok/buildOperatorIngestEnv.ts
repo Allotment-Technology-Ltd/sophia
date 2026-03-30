@@ -21,7 +21,7 @@ function knownIngestPlatformApiKeyEnvNames(): string[] {
 }
 
 /**
- * After Firestore operator BYOK is applied, fill missing provider keys from `process.env`
+ * After operator BYOK from `sophia_documents` is applied, fill missing provider keys from `process.env`
  * (e.g. `.env.local` for dev). Set `INGEST_PREFER_LOCAL_PROVIDER_KEYS=1` to use local env
  * whenever set, even when Firestore already has a value (prod keys not copied locally).
  */
@@ -39,13 +39,13 @@ function applyIngestProviderKeyResolution(out: Record<string, string>): void {
 }
 
 /**
- * Maps operator BYOK (Firestore `users/{OWNER_UIDS[0]}/byokProviders`) into process.env
+ * Maps operator BYOK (`users/{OWNER_UIDS[0]}/byokProviders` in `sophia_documents`) into process.env
  * keys (`MISTRAL_API_KEY`, `OPENAI_API_KEY`, …) for the admin `scripts/ingest.ts` worker.
  *
  * This lets ingestion use the same keys as **Admin → Operator BYOK** without duplicating
  * them in Cloud Run Secret Manager.
  *
- * Local dev: keys in `.env` / `.env.local` are merged when Firestore has no value for that
+ * Local dev: keys in `.env` / `.env.local` are merged when the store has no value for that
  * provider, or always when `INGEST_PREFER_LOCAL_PROVIDER_KEYS=1`.
  */
 export async function buildOperatorByokProcessEnv(): Promise<Record<string, string>> {

@@ -1,8 +1,7 @@
 import type { JWTPayload } from 'jose';
-import { adminAuth } from '$lib/server/firebase-admin';
 import { isNeonAuthEnabled, verifyNeonAuthJwt } from '$lib/server/neon/neonAuthJwt';
 
-export type BearerAuthProvider = 'firebase' | 'neon';
+export type BearerAuthProvider = 'neon';
 
 export interface ResolvedBearerProfile {
   uid: string;
@@ -29,34 +28,30 @@ function claimsFromJwtPayload(raw: JWTPayload): { displayName: string | null; ph
 }
 
 /**
- * Verifies a Bearer token for protected API routes. When `USE_NEON_AUTH` is enabled, tries Neon Auth JWT
- * first, then Firebase ID tokens (legacy clients / mis-ordered tokens).
+ * Verifies a Bearer token for protected API routes (Neon Auth JWT only).
  */
 export async function verifyBearerTokenForApi(token: string): Promise<ResolvedBearerProfile> {
-  if (isNeonAuthEnabled()) {
-    try {
-      const neon = await verifyNeonAuthJwt(token);
-      if (neon) {
-        const extra = claimsFromJwtPayload(neon.raw);
-        return {
-          uid: neon.sub,
-          email: neon.email ?? null,
-          displayName: extra.displayName,
-          photoURL: extra.photoURL,
-          authProvider: 'neon'
-        };
-      }
-    } catch {
-      // Not a valid Neon JWT; try Firebase (dual migration / legacy clients).
-    }
+  if (!isNeonAuthEnabled()) {
+    throw new Error(
+      'Authentication requires USE_NEON_AUTH=1 and NEON_AUTH_BASE_URL (or NEON_AUTH_ISSUER + NEON_AUTH_JWKS_URL).'
+    );
   }
 
-  const decoded = await adminAuth.verifyIdToken(token);
-  return {
-    uid: decoded.uid,
-    email: decoded.email ?? null,
-    displayName: decoded.name ?? null,
-    photoURL: decoded.picture ?? null,
-    authProvider: 'firebase'
-  };
+  try {
+    const neon = await verifyNeonAuthJwt(token);
+    if (!neon) {
+      throw new Error('Neon Auth is not enabled.');
+    }
+    const extra = claimsFromJwtPayload(neon.raw);
+    return {
+      uid: neon.sub,
+      email: neon.email ?? null,
+      displayName: extra.displayName,
+      photoURL: extra.photoURL,
+      authProvider: 'neon'
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid or expired session: ${message}`);
+  }
 }

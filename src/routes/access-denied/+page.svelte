@@ -1,6 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { signOutUser } from '$lib/firebase';
+  import { signOutUser } from '$lib/authClient';
 
   async function handleSignOut() {
     await signOutUser();

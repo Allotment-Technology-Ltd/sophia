@@ -46,7 +46,7 @@ function mergeIssueSummaryInto(
 }
 
 function aggregateCoachSignalsFromReportDocs(
-  docs: Array<{ data(): Record<string, unknown> }>
+  docs: Array<{ data(): Record<string, unknown> | undefined }>
 ): CoachAggregatedSignals {
   const issueKindTotals: Record<string, number> = {};
   let totalIssues = 0;
@@ -55,7 +55,7 @@ function aggregateCoachSignalsFromReportDocs(
   let runsWithTerminalError = 0;
 
   for (const doc of docs) {
-    const d = doc.data();
+    const d = doc.data() ?? {};
     const ic = typeof d.issueCount === 'number' && Number.isFinite(d.issueCount) ? Math.trunc(d.issueCount) : 0;
     totalIssues += Math.max(0, ic);
     mergeIssueSummaryInto(issueKindTotals, d.issueSummary);
@@ -270,7 +270,7 @@ export async function runIngestionCoach(limit: number): Promise<{
 
   const lines: string[] = [];
   for (const doc of snap.docs) {
-    const d = doc.data();
+    const d = doc.data() ?? {};
     const summary = d.issueSummary && typeof d.issueSummary === 'object' ? JSON.stringify(d.issueSummary) : '{}';
     const routingStats =
       d.routingStats && typeof d.routingStats === 'object' ? JSON.stringify(d.routingStats) : '{}';

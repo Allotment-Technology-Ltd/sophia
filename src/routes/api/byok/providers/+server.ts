@@ -17,7 +17,7 @@ export const GET: RequestHandler = async ({ locals, request }) => {
     return problemJson({
       status: 401,
       title: 'Authentication required',
-      detail: 'Provide a valid Firebase bearer token.',
+      detail: 'Provide a valid Neon Auth JWT (Authorization: Bearer …).',
       requestId
     });
   }

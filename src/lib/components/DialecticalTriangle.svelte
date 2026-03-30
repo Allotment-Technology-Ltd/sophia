@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { DIALECTICAL_EDGE_LEN } from '$lib/marketing/dialecticalTriangleGeometry';
+
   interface Props {
     mode: 'logo' | 'loading' | 'complete';
     currentPass?: string | null;
@@ -27,13 +29,8 @@
   // Synthesis vertex = (-39, 22)  bottom-left,  blue
   // O = (0, 0)     centre,       amber
 
-  // Edge lengths in SVG units
-  const LEN_AC = Math.sqrt(39 ** 2 + 67 ** 2); // A→C ≈ 77.52
-  const LEN_CS = 78; // C→S
-  const LEN_SA = LEN_AC; // S→A ≈ 77.52
-  const LEN_AO = 45; // A→O
-  const LEN_CO = Math.sqrt(39 ** 2 + 22 ** 2); // C→O ≈ 44.78
-  const LEN_SO = LEN_CO; // S→O ≈ 44.78
+  // Edge lengths in SVG units (canonical: dialecticalTriangleGeometry.ts)
+  const { LEN_AC, LEN_CS, LEN_SA, LEN_AO, LEN_CO, LEN_SO } = DIALECTICAL_EDGE_LEN;
 
   // Pass state
   const isAnalysisActive  = $derived(currentPass === 'analysis');

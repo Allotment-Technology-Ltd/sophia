@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getIdToken } from '$lib/firebase';
+  import { getIdToken } from '$lib/authClient';
 
   interface Props {
     queryId?: string;
