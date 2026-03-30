@@ -229,7 +229,10 @@ async function main(): Promise<void> {
 		for (const row of queue) {
 			const rawName = typeof row.raw_name === 'string' ? row.raw_name.trim() : '';
 			const canonical = typeof row.canonical_name === 'string' ? row.canonical_name : canonicalizeThinkerName(rawName);
-			const queueRecordId = recordIdToString(row.id);
+			const queueRecordIdRaw = recordIdToString(row.id);
+			const queueRecordId = queueRecordIdRaw.includes(':')
+				? queueRecordIdRaw.split(':').slice(1).join(':')
+				: queueRecordIdRaw;
 			if (!rawName || !queueRecordId) continue;
 			const candidates: ThinkerIdentityCandidate[] = [];
 			for (const thinker of thinkers) {
@@ -302,7 +305,7 @@ async function main(): Promise<void> {
 					);
 				}
 				await db.query(
-					`UPSERT thinker_alias:$rid CONTENT {
+					`UPSERT type::record('thinker_alias', $rid) CONTENT {
 						canonical_name: $canonical_name,
 						raw_name: $raw_name,
 						wikidata_id: $wikidata_id,
@@ -321,7 +324,7 @@ async function main(): Promise<void> {
 						wikidata_id: chosen.wikidata_id,
 						label: chosen.name,
 						confidence: chosen.confidence,
-						source_contexts: sourceIds.map((sid) => `source:${sid}`)
+						source_contexts: sourceIds.map((sid) => (sid.includes(':') ? sid : `source:${sid}`))
 					}
 				);
 				for (const sourceId of sourceIds) {
@@ -343,7 +346,7 @@ async function main(): Promise<void> {
 					);
 				}
 				await db.query(
-					`UPDATE type::thing($queue_record_id) MERGE {
+					`UPDATE type::record('unresolved_thinker_reference', $queue_record_id) MERGE {
 						status: 'resolved',
 						resolver_notes: $notes,
 						last_seen_at: time::now()

@@ -7,8 +7,12 @@ const {
   mockLoadProfile,
   mockAppendTurns,
   mockUpdateProfile,
+  mockListIncompleteActionItems,
+  mockListRelevantJournalEntries,
+  mockUpsertActionItems,
   mockRetrieveGrounding,
   mockScoreCitationQuality,
+  mockBuildGroundingExplainer,
   mockClassifyStanceV2,
   mockShouldEscalate,
   mockRunDeepEscalation,
@@ -20,8 +24,12 @@ const {
   mockLoadProfile: vi.fn(),
   mockAppendTurns: vi.fn(),
   mockUpdateProfile: vi.fn(),
+  mockListIncompleteActionItems: vi.fn(),
+  mockListRelevantJournalEntries: vi.fn(),
+  mockUpsertActionItems: vi.fn(),
   mockRetrieveGrounding: vi.fn(),
   mockScoreCitationQuality: vi.fn(),
+  mockBuildGroundingExplainer: vi.fn(),
   mockClassifyStanceV2: vi.fn(),
   mockShouldEscalate: vi.fn(),
   mockRunDeepEscalation: vi.fn(),
@@ -44,12 +52,16 @@ vi.mock('$lib/server/stoa/sessionStore', () => ({
   loadStoaSession: mockLoadSession,
   loadStoaProfile: mockLoadProfile,
   appendStoaTurns: mockAppendTurns,
-  updateStoaProfileFromTurns: mockUpdateProfile
+  updateStoaProfileFromTurns: mockUpdateProfile,
+  listIncompleteActionItems: mockListIncompleteActionItems,
+  listRelevantJournalEntries: mockListRelevantJournalEntries,
+  upsertActionItems: mockUpsertActionItems
 }));
 
 vi.mock('$lib/server/stoa/grounding', () => ({
   retrieveStoaGroundingWithMode: mockRetrieveGrounding,
-  scoreCitationQuality: mockScoreCitationQuality
+  scoreCitationQuality: mockScoreCitationQuality,
+  buildGroundingExplainer: mockBuildGroundingExplainer
 }));
 
 vi.mock('$lib/server/stoa/safety', () => ({
@@ -120,6 +132,9 @@ describe('/api/stoa/dialogue SSE contract', () => {
     mockLoadSession.mockResolvedValue({ turns: [] });
     mockLoadProfile.mockResolvedValue({ userId: 'u1', goals: [], triggers: [], practices: [], updatedAt: null });
     mockClassifyStanceV2.mockResolvedValue(DEFAULT_STANCE);
+    mockListIncompleteActionItems.mockResolvedValue([]);
+    mockListRelevantJournalEntries.mockResolvedValue([]);
+    mockUpsertActionItems.mockResolvedValue(undefined);
     mockRetrieveGrounding.mockResolvedValue({
       claims: [
         {
@@ -137,6 +152,10 @@ describe('/api/stoa/dialogue SSE contract', () => {
     mockScoreCitationQuality.mockReturnValue({
       overall: 'high',
       details: []
+    });
+    mockBuildGroundingExplainer.mockReturnValue({
+      reasons: [],
+      explanation: 'Grounding is strong.'
     });
     mockResolveReasoningModelRoute.mockResolvedValue({
       model: { id: 'fake-model' },

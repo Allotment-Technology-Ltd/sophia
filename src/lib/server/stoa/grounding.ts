@@ -4,6 +4,7 @@ import type {
   CitationQuality,
   ClaimReference,
   ConversationTurn,
+  GroundingExplainer,
   GroundingConfidenceLevel,
   GroundingResult
 } from './types';
@@ -31,8 +32,25 @@ export async function retrieveStoaGrounding(params: {
     sourceText: claim.text,
     sourceAuthor: claim.source_author?.join(', ') || 'Unknown',
     sourceWork: claim.source_title || 'Unknown source',
-    relevanceScore: claim.confidence ?? 0
+    relevanceScore: claim.confidence ?? 0,
+    citationLabel: claim.source_title || 'Stoic source',
+    passageExcerpt: claim.text.slice(0, 320),
+    publicDomainUrl: buildPublicDomainUrl(claim.source_title || '')
   }));
+}
+
+function buildPublicDomainUrl(sourceTitle: string): string | undefined {
+  const low = sourceTitle.toLowerCase();
+  if (low.includes('meditations')) {
+    return 'https://en.wikisource.org/wiki/The_Meditations_of_the_Emperor_Marcus_Antoninus';
+  }
+  if (low.includes('discourses') || low.includes('enchiridion')) {
+    return 'https://en.wikisource.org/wiki/Discourses_of_Epictetus';
+  }
+  if (low.includes('letters') || low.includes('seneca')) {
+    return 'https://en.wikisource.org/wiki/Moral_letters_to_Lucilius';
+  }
+  return undefined;
 }
 
 function tokenizeQuery(text: string): string[] {
@@ -104,14 +122,19 @@ async function retrieveLexicalFallback(params: {
 
   return scored.map((row) => {
     const sourceInfo = typeof row.source === 'string' ? sourceMap.get(row.source) : undefined;
+    const sourceTitle = sourceInfo?.title || 'Unknown source';
     return {
       claimId: row.id,
       sourceText: row.text ?? '',
       sourceAuthor: Array.isArray(sourceInfo?.author) && sourceInfo.author.length > 0
         ? sourceInfo.author.join(', ')
         : 'Unknown',
-      sourceWork: sourceInfo?.title || 'Unknown source',
+      sourceWork: sourceTitle,
       relevanceScore: Math.min(1, (row.lexicalScore / Math.max(tokens.length, 1)) * 0.9 + 0.1)
+      ,
+      citationLabel: sourceTitle,
+      passageExcerpt: (row.text ?? '').slice(0, 320),
+      publicDomainUrl: buildPublicDomainUrl(sourceTitle)
     };
   });
 }
@@ -221,5 +244,29 @@ export async function retrieveStoaGroundingWithMode(params: {
     warning: 'Grounding unavailable for this turn.',
     confidence: 'low'
   };
+}
+
+export function buildGroundingExplainer(params: {
+  groundingMode: GroundingResult['mode'];
+  confidence: GroundingConfidenceLevel;
+  sourceClaims: ClaimReference[];
+  citationQuality: CitationQuality[];
+}): GroundingExplainer {
+  const reasons: string[] = [];
+  if (params.sourceClaims.length === 0) reasons.push('no_claims_retrieved');
+  if (params.groundingMode === 'lexical_fallback') reasons.push('fallback_mode_active');
+  if (params.groundingMode === 'degraded_none') reasons.push('fallback_mode_active');
+  const weakCount = params.citationQuality.filter((item) => item.confidence === 'low').length;
+  if (weakCount > 0) reasons.push('weak_claim_overlap');
+  if (params.sourceClaims.some((claim) => claim.sourceAuthor === 'Unknown')) {
+    reasons.push('source_provenance_uncertain');
+  }
+  const explanation =
+    params.confidence === 'high'
+      ? 'Grounding is strong for this reply: multiple relevant source claims were linked with good overlap.'
+      : params.confidence === 'medium'
+        ? 'Grounding is partial: some source support exists, but confidence is moderate.'
+        : 'Grounding is limited: treat this as reflective guidance and verify specific textual claims.';
+  return { reasons: Array.from(new Set(reasons)), explanation };
 }
 

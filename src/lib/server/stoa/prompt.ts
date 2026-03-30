@@ -16,7 +16,8 @@ function formatSources(sources: ClaimReference[]): string {
     .slice(0, 6)
     .map(
       (source) =>
-        `- [${source.claimId}] ${source.sourceText} (${source.sourceAuthor}, ${source.sourceWork})`
+        `- [${source.claimId}] ${source.sourceText} (${source.sourceAuthor}, ${source.sourceWork})` +
+        `${source.citationLabel ? ` citation:${source.citationLabel}` : ''}`
     )
     .join('\n');
 }
@@ -91,7 +92,7 @@ Output style:
 - No bullet lists unless the user asks for a checklist.
 - End with one actionable next step.
 - Include explicit check-ins framed as "Today", "Tonight", and "This week" when practical.
-- If sources are used, cite claim IDs inline like [claim:abc123].
+- If sources are used, cite claim IDs inline like [claim:abc123] and prefer natural text references like "Meditations 4.3" when available.
 - If grounding is unavailable, explicitly say you are giving provisional guidance.
 `.trim();
 }

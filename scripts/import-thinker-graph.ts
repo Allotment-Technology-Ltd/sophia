@@ -53,6 +53,8 @@ interface ImportSummary {
 	authorLinksInserted: number;
 	authorLinksSkipped: number;
 	unmatchedAuthors: number;
+	authorSourceRowsScanned: number;
+	authorNameCandidatesScanned: number;
 	errors: string[];
 }
 
@@ -62,6 +64,22 @@ interface ExistingThinkerProfile {
 	traditions_count: number;
 	domains_count: number;
 }
+
+interface ThinkerAliasRow {
+	canonical_name?: unknown;
+	raw_name?: unknown;
+	wikidata_id?: unknown;
+	status?: unknown;
+}
+
+type ThinkerWriteContent = {
+	wikidata_id: string;
+	name: string;
+	traditions: string[];
+	domains: string[];
+	birth_year?: number;
+	death_year?: number;
+};
 
 function parseFlags(argv: string[]): ImportFlags {
 	return {
@@ -76,9 +94,72 @@ function normalizeName(value: string): string {
 	return value.toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
+function normalizeAscii(value: string): string {
+	return value
+		.normalize('NFKD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.toLowerCase();
+}
+
+function normalizePersonName(value: string): string {
+	const ascii = normalizeAscii(value)
+		.replace(/[`'.]/g, '')
+		.replace(/[^a-z0-9,\s-]/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
+	if (!ascii) return '';
+	const commaParts = ascii.split(',').map((part) => part.trim()).filter(Boolean);
+	let normalized = ascii;
+	if (commaParts.length >= 2) {
+		const last = commaParts[0];
+		const rest = commaParts.slice(1).join(' ').trim();
+		normalized = `${rest} ${last}`.trim();
+	}
+	normalized = normalized
+		.replace(/\b(jr|sr|ii|iii|iv|phd|md)\b/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
+	return normalized;
+}
+
+function personNameVariants(value: string): string[] {
+	const base = normalizePersonName(value);
+	if (!base) return [];
+	const variants = new Set<string>();
+	const tokens = base.split(' ').filter(Boolean);
+	variants.add(base);
+	if (tokens.length >= 2) {
+		const nonInitialTokens = tokens.filter((token) => token.length > 1);
+		if (nonInitialTokens.length >= 2) {
+			variants.add(nonInitialTokens.join(' '));
+		}
+		const first = tokens[0];
+		const last = tokens[tokens.length - 1];
+		if (first && last) {
+			variants.add(`${first} ${last}`);
+			variants.add(`${first[0]} ${last}`);
+			variants.add(`${last} ${first}`);
+		}
+	}
+	return Array.from(variants);
+}
+
+function unresolvedRecordId(canonicalName: string): string {
+	const slug = canonicalName
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '_')
+		.replace(/^_+|_+$/g, '')
+		.slice(0, 120);
+	return slug || 'unknown_name';
+}
+
 function toQid(value: string): string {
 	const match = value.match(/Q\d+$/);
 	return match?.[0] ?? value;
+}
+
+function isQid(value: string): boolean {
+	return /^Q\d+$/.test(value);
 }
 
 function isThinkerNode(value: unknown): value is ThinkerNode {
@@ -211,8 +292,36 @@ function parseRecordIdToQid(recordId: unknown): string | null {
 	return null;
 }
 
+function normalizeRecordId(recordId: unknown): string | null {
+	if (typeof recordId === 'string') return recordId;
+	if (typeof recordId === 'object' && recordId !== null) {
+		const value = recordId as { tb?: unknown; id?: unknown };
+		if (typeof value.tb === 'string' && value.id !== undefined) {
+			return `${value.tb}:${String(value.id)}`;
+		}
+		if (typeof value.id === 'string') return value.id;
+	}
+	return null;
+}
+
 function edgeKey(fromQid: string, toQid: string): string {
 	return `${fromQid}::${toQid}`;
+}
+
+function buildThinkerWriteContent(thinker: ThinkerNode): ThinkerWriteContent {
+	const content: ThinkerWriteContent = {
+		wikidata_id: thinker.wikidata_id,
+		name: thinker.name,
+		traditions: thinker.traditions,
+		domains: thinker.domains
+	};
+	if (typeof thinker.birth_year === 'number') {
+		content.birth_year = thinker.birth_year;
+	}
+	if (typeof thinker.death_year === 'number') {
+		content.death_year = thinker.death_year;
+	}
+	return content;
 }
 
 function estimateAuthorMatchConfidence(author: string, thinkerName: string): number {
@@ -286,6 +395,51 @@ async function loadExistingAuthoredRelations(db: Surreal): Promise<Set<string>> 
 	return result;
 }
 
+async function loadActiveThinkerAliases(db: Surreal): Promise<ThinkerAliasRow[]> {
+	try {
+		const rows =
+			(await db.query<ThinkerAliasRow[][]>(
+				`SELECT canonical_name, raw_name, wikidata_id, status
+				 FROM thinker_alias
+				 WHERE status = 'active'`
+			))?.[0] ?? [];
+		return rows;
+	} catch {
+		return [];
+	}
+}
+
+function collectAuthorNames(authorValue: unknown): string[] {
+	if (typeof authorValue === 'string') {
+		return authorValue
+			.split(/;| and /i)
+			.map((item) => item.trim())
+			.filter(Boolean);
+	}
+	if (Array.isArray(authorValue)) {
+		const names: string[] = [];
+		for (const entry of authorValue) {
+			if (typeof entry === 'string') {
+				const trimmed = entry.trim();
+				if (trimmed) names.push(trimmed);
+				continue;
+			}
+			if (entry && typeof entry === 'object') {
+				const record = entry as Record<string, unknown>;
+				const fromName = typeof record.name === 'string' ? record.name.trim() : '';
+				const fromFullName = typeof record.full_name === 'string' ? record.full_name.trim() : '';
+				const family = typeof record.family === 'string' ? record.family.trim() : '';
+				const given = typeof record.given === 'string' ? record.given.trim() : '';
+				if (fromName) names.push(fromName);
+				else if (fromFullName) names.push(fromFullName);
+				else if (family || given) names.push(`${given} ${family}`.trim());
+			}
+		}
+		return names.filter(Boolean);
+	}
+	return [];
+}
+
 async function main(): Promise<void> {
 	const flags = parseFlags(process.argv.slice(2));
 	const summary: ImportSummary = {
@@ -299,6 +453,8 @@ async function main(): Promise<void> {
 		authorLinksInserted: 0,
 		authorLinksSkipped: 0,
 		unmatchedAuthors: 0,
+		authorSourceRowsScanned: 0,
+		authorNameCandidatesScanned: 0,
 		errors: []
 	};
 
@@ -350,14 +506,7 @@ async function main(): Promise<void> {
 		for (let i = 0; i < thinkers.length; i++) {
 			const thinker = thinkers[i];
 			const thinkerId = thinker.wikidata_id;
-			const thinkerData = {
-				wikidata_id: thinkerId,
-				name: thinker.name,
-				birth_year: thinker.birth_year,
-				death_year: thinker.death_year,
-				traditions: thinker.traditions,
-				domains: thinker.domains
-			};
+			const thinkerData = buildThinkerWriteContent(thinker);
 
 			if (!flags.force && existingThinkers.has(thinkerId)) {
 				const profile = existingProfiles.get(thinkerId);
@@ -370,7 +519,7 @@ async function main(): Promise<void> {
 				if (needsBioBackfill || needsTaxonomyBackfill) {
 					try {
 						await db.query(
-							`UPDATE type::thing($id) MERGE {
+							`UPDATE type::record($id) MERGE {
 								birth_year: if birth_year = NONE AND $birth_year != NONE then $birth_year else birth_year end,
 								death_year: if death_year = NONE AND $death_year != NONE then $death_year else death_year end,
 								traditions: if array::len(traditions) = 0 AND array::len($traditions) > 0 then $traditions else traditions end,
@@ -399,8 +548,8 @@ async function main(): Promise<void> {
 			try {
 				if (flags.force) {
 					await db.query(
-						`UPSERT type::thing('thinker', $wikidata_id) CONTENT {
-							id: type::thing('thinker', $wikidata_id),
+						`UPSERT type::record('thinker', $wikidata_id) CONTENT {
+							id: type::record('thinker', $wikidata_id),
 							wikidata_id: $wikidata_id,
 							name: $name,
 							birth_year: $birth_year,
@@ -419,8 +568,8 @@ async function main(): Promise<void> {
 					}
 				} else {
 					await db.query(
-						`CREATE ONLY type::thing('thinker', $wikidata_id) CONTENT {
-							id: type::thing('thinker', $wikidata_id),
+						`CREATE ONLY type::record('thinker', $wikidata_id) CONTENT {
+							id: type::record('thinker', $wikidata_id),
 							wikidata_id: $wikidata_id,
 							name: $name,
 							birth_year: $birth_year,
@@ -471,11 +620,14 @@ async function main(): Promise<void> {
 						continue;
 					}
 					try {
+						if (!isQid(fromId) || !isQid(toId)) {
+							summary.errors.push(`influenced_by ${fromId}->${toId}: invalid thinker id format`);
+							continue;
+						}
 						await db.query(
-							`RELATE $from->influenced_by->$to
+							`RELATE thinker:${fromId}->influenced_by->thinker:${toId}
 							 SET relation_subtype = 'influenced_by',
-							     imported_at = time::now()`,
-							{ from: `thinker:${fromId}`, to: `thinker:${toId}` }
+							     imported_at = time::now()`
 						);
 						existingInfluencedBy.add(key);
 						summary.influencedByInserted += 1;
@@ -493,11 +645,14 @@ async function main(): Promise<void> {
 						continue;
 					}
 					try {
+						if (!isQid(fromId) || !isQid(toId)) {
+							summary.errors.push(`student_of ${fromId}->${toId}: invalid thinker id format`);
+							continue;
+						}
 						await db.query(
-							`RELATE $from->student_of->$to
+							`RELATE thinker:${fromId}->student_of->thinker:${toId}
 							 SET relation_subtype = 'student_of',
-							     imported_at = time::now()`,
-							{ from: `thinker:${fromId}`, to: `thinker:${toId}` }
+							     imported_at = time::now()`
 						);
 						existingStudentOf.add(key);
 						summary.studentOfInserted += 1;
@@ -528,17 +683,46 @@ async function main(): Promise<void> {
 				list.push(thinker);
 				thinkerByNormalizedName.set(normalized, list);
 			}
+			const thinkerByPersonVariant = new Map<string, ThinkerNode[]>();
+			for (const thinker of thinkers) {
+				for (const variant of personNameVariants(thinker.name)) {
+					const list = thinkerByPersonVariant.get(variant) ?? [];
+					if (!list.some((candidate) => candidate.wikidata_id === thinker.wikidata_id)) {
+						list.push(thinker);
+					}
+					thinkerByPersonVariant.set(variant, list);
+				}
+			}
+			const aliasRows = await loadActiveThinkerAliases(db);
+			for (const alias of aliasRows) {
+				const wikidataId = typeof alias.wikidata_id === 'string' ? toQid(alias.wikidata_id) : '';
+				if (!wikidataId) continue;
+				const thinker = thinkers.find((candidate) => candidate.wikidata_id === wikidataId);
+				if (!thinker) continue;
+				const aliasNames: string[] = [];
+				if (typeof alias.canonical_name === 'string') aliasNames.push(alias.canonical_name);
+				if (typeof alias.raw_name === 'string') aliasNames.push(alias.raw_name);
+				for (const aliasName of aliasNames) {
+					for (const variant of personNameVariants(aliasName)) {
+						const list = thinkerByPersonVariant.get(variant) ?? [];
+						if (!list.some((candidate) => candidate.wikidata_id === thinker.wikidata_id)) {
+							list.push(thinker);
+						}
+						thinkerByPersonVariant.set(variant, list);
+					}
+				}
+			}
 
 			const existingAuthoredEdges = await loadExistingAuthoredRelations(db);
 			const unmatchedAuthors = new Set<string>();
 
 			for (const source of sourceRows) {
-				const authorList = Array.isArray(source.author)
-					? source.author.filter((name): name is string => typeof name === 'string')
-					: [];
+				summary.authorSourceRowsScanned += 1;
+				const authorList = collectAuthorNames(source.author);
 				if (authorList.length === 0) continue;
+				summary.authorNameCandidatesScanned += authorList.length;
 
-				const sourceId = typeof source.id === 'string' ? source.id : '';
+				const sourceId = normalizeRecordId(source.id) ?? '';
 				if (!sourceId) continue;
 
 				for (const author of authorList) {
@@ -551,9 +735,19 @@ async function main(): Promise<void> {
 					}
 
 					if (candidates.length === 0) {
+						const personVariants = personNameVariants(author);
+						for (const variant of personVariants) {
+							const variantMatches = thinkerByPersonVariant.get(variant) ?? [];
+							for (const thinker of variantMatches) {
+								candidates.push({ thinker, confidence: 0.95 });
+							}
+						}
+					}
+
+					if (candidates.length === 0) {
 						for (const thinker of thinkers) {
 							const confidence = estimateAuthorMatchConfidence(author, thinker.name);
-							if (confidence > 0) {
+							if (confidence >= 0.65) {
 								candidates.push({ thinker, confidence });
 							}
 						}
@@ -561,12 +755,50 @@ async function main(): Promise<void> {
 
 					if (candidates.length === 0) {
 						unmatchedAuthors.add(normalizedAuthor);
+						const canonicalName = normalizePersonName(author);
+						if (canonicalName) {
+							try {
+								await db.query(
+									`UPSERT type::record('unresolved_thinker_reference', $rid) SET
+										raw_name = $raw_name,
+										canonical_name = $canonical_name,
+										status = if status = 'resolved' then status else 'queued' end,
+										seen_count = if seen_count = NONE then 1 else seen_count + 1 end,
+										source_ids = if source_ids = NONE
+											then [$source_id]
+											else array::distinct(source_ids + [$source_id])
+										end,
+										contexts = if contexts = NONE then [] else contexts end,
+										proposed_qids = if proposed_qids = NONE then [] else proposed_qids end,
+										proposed_labels = if proposed_labels = NONE then [] else proposed_labels end,
+										first_seen_at = if first_seen_at = NONE then time::now() else first_seen_at end,
+										last_seen_at = time::now()`,
+									{
+										rid: unresolvedRecordId(canonicalName),
+										raw_name: author,
+										canonical_name: canonicalName,
+										source_id: sourceId
+									}
+								);
+							} catch {
+								// Best-effort unresolved queue capture; no hard fail.
+							}
+						}
 						continue;
 					}
 
 					candidates.sort((a, b) => b.confidence - a.confidence);
 					const bestConfidence = candidates[0].confidence;
-					const bestMatches = candidates.filter((candidate) => candidate.confidence === bestConfidence);
+					const bestMatches = candidates
+						.filter((candidate) => candidate.confidence === bestConfidence)
+						.filter(
+							(candidate, index, list) =>
+								list.findIndex((entry) => entry.thinker.wikidata_id === candidate.thinker.wikidata_id) === index
+						);
+					if (bestConfidence < 0.8) {
+						unmatchedAuthors.add(normalizedAuthor);
+						continue;
+					}
 
 					for (const match of bestMatches) {
 						const thinkerQid = match.thinker.wikidata_id;
@@ -577,13 +809,11 @@ async function main(): Promise<void> {
 						}
 						try {
 							await db.query(
-								`RELATE $from->authored->$to
+								`RELATE thinker:${thinkerQid}->authored->${sourceId}
 								 SET match_type = 'name_match',
 								     confidence = $confidence,
 								     linked_at = time::now()`,
 								{
-									from: `thinker:${thinkerQid}`,
-									to: sourceId,
 									confidence: bestConfidence
 								}
 							);
@@ -615,6 +845,8 @@ async function main(): Promise<void> {
 	console.log(`  authored links inserted: ${summary.authorLinksInserted}`);
 	console.log(`  authored links skipped: ${summary.authorLinksSkipped}`);
 	console.log(`  Unmatched author names: ${summary.unmatchedAuthors}`);
+	console.log(`  Author source rows scanned: ${summary.authorSourceRowsScanned}`);
+	console.log(`  Author names scanned: ${summary.authorNameCandidatesScanned}`);
 	console.log(`  Errors: ${summary.errors.length}`);
 	console.log(`  Duration: ${overallTimer.end()}`);
 

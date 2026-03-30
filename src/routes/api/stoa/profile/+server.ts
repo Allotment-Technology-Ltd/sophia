@@ -11,6 +11,9 @@ export const GET: RequestHandler = async ({ locals }) => {
     goals: profile.goals,
     triggers: profile.triggers,
     practices: profile.practices,
+    stoicLevel: profile.stoicLevel ?? null,
+    primaryChallenge: profile.primaryChallenge ?? null,
+    intakeCompletedAt: profile.intakeCompletedAt ?? null,
     updatedAt: profile.updatedAt ?? null
   });
 };
@@ -32,7 +35,26 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     userId: uid,
     goals: coerce((body as Record<string, unknown>).goals),
     triggers: coerce((body as Record<string, unknown>).triggers),
-    practices: coerce((body as Record<string, unknown>).practices)
+    practices: coerce((body as Record<string, unknown>).practices),
+    stoicLevel:
+      (body as Record<string, unknown>).stoicLevel === 'some_exposure' ||
+      (body as Record<string, unknown>).stoicLevel === 'regular_practitioner'
+        ? ((body as Record<string, unknown>).stoicLevel as 'some_exposure' | 'regular_practitioner')
+        : (body as Record<string, unknown>).stoicLevel === 'new'
+          ? 'new'
+          : undefined,
+    primaryChallenge:
+      typeof (body as Record<string, unknown>).primaryChallenge === 'string'
+        ? String((body as Record<string, unknown>).primaryChallenge).trim()
+        : undefined,
+    intakeCompletedAt:
+      typeof (body as Record<string, unknown>).intakeCompletedAt === 'string'
+        ? String((body as Record<string, unknown>).intakeCompletedAt)
+        : undefined,
+    intakeVersion:
+      typeof (body as Record<string, unknown>).intakeVersion === 'number'
+        ? ((body as Record<string, unknown>).intakeVersion as number)
+        : undefined
   });
   return json({
     goals: saved.goals,

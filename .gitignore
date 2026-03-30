@@ -41,6 +41,9 @@ repomix-knowledge-base*.md
 
 # Local scratch (often contains SQL/passwords — never commit)
 history.txt
+Q*:
+docs/stoa_game.zip
+data/thinker-graph/unmatched-authors.latest.json
 
 # Environment & secrets — never commit real keys
 # Local service account JSON (pnpm dev → scripts/dev.mjs discovers secrets/*.json)

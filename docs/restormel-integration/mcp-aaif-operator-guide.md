@@ -20,6 +20,12 @@ Use the published runtime directly:
 pnpm mcp:restormel
 ```
 
+Quick setup/readiness report:
+
+```bash
+pnpm restormel:setup:status
+```
+
 Recommended client config:
 
 ```json
@@ -27,7 +33,7 @@ Recommended client config:
   "mcpServers": {
     "restormel": {
       "command": "pnpm",
-      "args": ["exec", "restormel-mcp"],
+      "args": ["dlx", "@restormel/mcp"],
       "env": {
         "RESTORMEL_GATEWAY_KEY": "...",
         "RESTORMEL_EVALUATE_URL": "https://restormel.dev/keys/dashboard/api/policies/evaluate"
@@ -81,11 +87,12 @@ Run these after the 100% Restormel release is live:
 
 1. `pnpm check`
 2. `pnpm test`
-3. `pnpm smoke:restormel`
+3. `pnpm smoke:restormel:mcp`
 4. Exercise `POST /api/beta/aaif` with `chat`, `completion`, and `embedding`.
-5. Confirm `/api/v1/verify` still returns the same schema and now reports the actual routed model id.
-6. Run the MCP server in a client and confirm all seven tools respond with live credentials.
-7. Run `npx tsx --env-file=.env scripts/ingest.ts <source.txt> --validate` and confirm each stage logs a Restormel-planned provider/model/routing source instead of local model profiles.
+5. `pnpm smoke:restormel`
+6. Confirm `/api/v1/verify` still returns the same schema and now reports the actual routed model id.
+7. Run the MCP server in a client and confirm all seven tools respond with live credentials.
+8. Run `npx tsx --env-file=.env scripts/ingest.ts <source.txt> --validate` and confirm each stage logs a Restormel-planned provider/model/routing source instead of local model profiles.
 
 ## Known constraints
 

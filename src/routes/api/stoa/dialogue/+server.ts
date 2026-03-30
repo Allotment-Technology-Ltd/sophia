@@ -4,11 +4,18 @@ import { loadInquiryEffectiveProviderApiKeys } from '$lib/server/byok/effectiveK
 import { resolveReasoningModelRoute } from '$lib/server/vertex';
 import {
   appendStoaTurns,
+  listIncompleteActionItems,
+  listRelevantJournalEntries,
   loadStoaProfile,
   loadStoaSession,
+  upsertActionItems,
   updateStoaProfileFromTurns
 } from '$lib/server/stoa/sessionStore';
-import { retrieveStoaGroundingWithMode, scoreCitationQuality } from '$lib/server/stoa/grounding';
+import {
+  buildGroundingExplainer,
+  retrieveStoaGroundingWithMode,
+  scoreCitationQuality
+} from '$lib/server/stoa/grounding';
 import { detectCrisisRisk, detectSuppressionMisuse, buildCrisisSupportMessage } from '$lib/server/stoa/safety';
 import { buildStoaSystemPrompt, buildStoaUserPrompt } from '$lib/server/stoa/prompt';
 import { decideEscalation, runDeepEscalationAnalysis } from '$lib/server/stoa/escalation';
@@ -19,7 +26,7 @@ import type {
 } from '$lib/server/stoa/types';
 import { STOIC_FRAMEWORKS } from '$lib/server/stoa/frameworks';
 import { classifyStanceV2 } from '$lib/server/stoa/stanceClassifier';
-import { buildActionLoop } from '$lib/server/stoa/actionLoop';
+import { buildActionLoop, detectActionSuggestions } from '$lib/server/stoa/actionLoop';
 import { recordStoaTelemetry } from '$lib/server/stoa/observability';
 
 function sendSse(controller: ReadableStreamDefaultController<Uint8Array>, payload: unknown): void {
@@ -106,6 +113,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         const requestHistory = normalizeHistory(body.history);
         const history = storedSession.turns.length > 0 ? storedSession.turns : requestHistory;
         const profile = await loadStoaProfile(uid);
+        const pendingActions = await listIncompleteActionItems({ userId: uid, lookbackDays: 14 });
+        const relevantJournal = await listRelevantJournalEntries({
+          userId: uid,
+          message,
+          limit: 3
+        });
         const userTurn: ConversationTurn = {
           role: 'user',
           content: message,
@@ -214,6 +227,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           groundingMode,
           groundingConfidence,
           groundingWarning,
+          pendingActions,
+          relevantJournal,
           escalated,
           escalationReasons: escalationDecision.reasons
         });
@@ -252,6 +267,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           responseText,
           sourceClaims
         });
+        const groundingExplainer = buildGroundingExplainer({
+          groundingMode,
+          confidence: citationQuality.overall,
+          sourceClaims,
+          citationQuality: citationQuality.details
+        });
 
         let escalationResult: Awaited<ReturnType<typeof runDeepEscalationAnalysis>> | null = null;
         if (escalated) {
@@ -277,6 +298,19 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             ? `${responseText}\n\n---\n\nDeep analysis:\n${escalationResult.analysis}`
             : responseText;
         const actionLoop = buildActionLoop({ responseText: finalResponse, stance: stanceDecision.stance });
+        const actionSuggestions = detectActionSuggestions(finalResponse);
+        if (actionSuggestions.length > 0) {
+          await upsertActionItems({
+            userId: uid,
+            sessionId,
+            items: actionSuggestions.map((item) => ({
+              text: item.text,
+              timeframe: item.timeframe,
+              origin: 'auto_detected',
+              confidenceScore: item.confidenceScore
+            }))
+          });
+        }
 
         const agentTurn: ConversationTurn = {
           role: 'agent',
@@ -314,8 +348,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           groundingMode,
           groundingWarning: groundingWarning ?? null,
           groundingConfidence: citationQuality.overall,
+          groundingReasons: groundingExplainer.reasons,
+          groundingExplainer: groundingExplainer.explanation,
           citationQuality: citationQuality.details,
           actionLoop,
+          actionSuggestions,
+          pendingActions,
+          relevantJournal,
           profile,
           escalated,
           escalationResult: escalationResult

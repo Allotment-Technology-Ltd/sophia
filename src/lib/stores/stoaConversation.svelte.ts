@@ -1,9 +1,16 @@
 import { getIdToken } from '$lib/authClient';
 import type {
+  ActionSuggestion,
   CitationQuality,
   ClaimReference,
+  CurriculumProgress,
+  CurriculumWeek,
   GroundingConfidenceLevel,
+  GroundingExplainer,
+  JournalEntry,
   GroundingMode,
+  StoaActionItem,
+  StoaOnboardingProfile,
   StanceType
 } from '$lib/server/stoa/types';
 
@@ -24,6 +31,7 @@ export interface ActionLoopState {
 
 type ProfileKind = 'goals' | 'triggers' | 'practices';
 type StoaProfileState = { goals: string[]; triggers: string[]; practices: string[] };
+type OnboardingStatus = 'unknown' | 'required' | 'complete';
 
 function createStoaConversationStore() {
   let messages = $state<StoaMessage[]>([]);
@@ -40,6 +48,22 @@ function createStoaConversationStore() {
   let escalationReasons = $state<string[]>([]);
   let actionLoop = $state<ActionLoopState | null>(null);
   let profile = $state<StoaProfileState | null>(null);
+  let onboardingStatus = $state<OnboardingStatus>('unknown');
+  let onboardingDraft = $state<StoaOnboardingProfile>({
+    stoicLevel: 'new',
+    primaryChallenge: '',
+    goals: [],
+    triggers: [],
+    intakeVersion: 1
+  });
+  let actionSuggestions = $state<ActionSuggestion[]>([]);
+  let pendingActions = $state<StoaActionItem[]>([]);
+  let groundingExplainer = $state<GroundingExplainer | null>(null);
+  let curriculumWeeks = $state<CurriculumWeek[]>([]);
+  let curriculumProgress = $state<CurriculumProgress | null>(null);
+  let currentCurriculumWeek = $state<CurriculumWeek | null>(null);
+  let journalEntries = $state<JournalEntry[]>([]);
+  let relevantJournal = $state<JournalEntry[]>([]);
 
   function reset(): void {
     messages = [];
@@ -55,7 +79,75 @@ function createStoaConversationStore() {
     escalationReasons = [];
     actionLoop = null;
     profile = null;
+    actionSuggestions = [];
+    pendingActions = [];
+    relevantJournal = [];
+    groundingExplainer = null;
     sessionId = `stoa-${crypto.randomUUID()}`;
+  }
+
+  async function loadBootstrap(): Promise<void> {
+    const token = await getIdToken();
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const [onboardingRes, curriculumRes, journalRes, incompleteRes] = await Promise.all([
+      fetch('/api/stoa/onboarding/status', { headers }),
+      fetch('/api/stoa/curriculum', { headers }),
+      fetch('/api/stoa/journal?limit=20', { headers }),
+      fetch('/api/stoa/action-loop/incomplete?lookbackDays=14', { headers })
+    ]);
+    if (onboardingRes.ok) {
+      const payload = await onboardingRes.json();
+      onboardingStatus = payload.onboardingStatus === 'complete' ? 'complete' : 'required';
+      if (payload.profile && typeof payload.profile === 'object') {
+        onboardingDraft = {
+          ...onboardingDraft,
+          stoicLevel: payload.profile.stoicLevel ?? 'new',
+          primaryChallenge: payload.profile.primaryChallenge ?? '',
+          goals: Array.isArray(payload.profile.goals) ? payload.profile.goals : [],
+          triggers: Array.isArray(payload.profile.triggers) ? payload.profile.triggers : []
+        };
+      }
+    }
+    if (curriculumRes.ok) {
+      const payload = await curriculumRes.json();
+      curriculumWeeks = Array.isArray(payload.weeks) ? payload.weeks : [];
+      curriculumProgress = payload.progress ?? null;
+      currentCurriculumWeek = payload.currentWeek ?? null;
+    }
+    if (journalRes.ok) {
+      const payload = await journalRes.json();
+      journalEntries = Array.isArray(payload.items) ? payload.items : [];
+    }
+    if (incompleteRes.ok) {
+      const payload = await incompleteRes.json();
+      pendingActions = Array.isArray(payload.items) ? payload.items : [];
+    }
+  }
+
+  async function completeOnboarding(payload: StoaOnboardingProfile): Promise<void> {
+    const token = await getIdToken();
+    const response = await fetch('/api/stoa/onboarding/complete', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) throw new Error(`Failed onboarding (${response.status})`);
+    onboardingStatus = 'complete';
+    const body = await response.json();
+    profile = body.profile ?? profile;
+  }
+
+  async function resetOnboarding(): Promise<void> {
+    const token = await getIdToken();
+    const response = await fetch('/api/stoa/onboarding/reset', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    });
+    if (!response.ok) throw new Error(`Failed onboarding reset (${response.status})`);
+    onboardingStatus = 'required';
   }
 
   async function send(message: string): Promise<void> {
@@ -132,6 +224,12 @@ function createStoaConversationStore() {
               escalationReasons = Array.isArray(payload.escalationReasons)
                 ? payload.escalationReasons.filter((r: unknown): r is string => typeof r === 'string')
                 : [];
+              pendingActions = Array.isArray(payload.pendingActions)
+                ? (payload.pendingActions as StoaActionItem[])
+                : pendingActions;
+              relevantJournal = Array.isArray(payload.relevantJournal)
+                ? (payload.relevantJournal as JournalEntry[])
+                : relevantJournal;
             } else if (payload.type === 'delta') {
               const text = typeof payload.text === 'string' ? payload.text : '';
               if (!agentMessage) {
@@ -162,10 +260,31 @@ function createStoaConversationStore() {
                 payload.actionLoop && typeof payload.actionLoop === 'object'
                   ? (payload.actionLoop as ActionLoopState)
                   : actionLoop;
+              actionSuggestions = Array.isArray(payload.actionSuggestions)
+                ? (payload.actionSuggestions as ActionSuggestion[])
+                : [];
               profile =
                 payload.profile && typeof payload.profile === 'object'
                   ? (payload.profile as { goals: string[]; triggers: string[]; practices: string[] })
                   : profile;
+              pendingActions = Array.isArray(payload.pendingActions)
+                ? (payload.pendingActions as StoaActionItem[])
+                : pendingActions;
+              relevantJournal = Array.isArray(payload.relevantJournal)
+                ? (payload.relevantJournal as JournalEntry[])
+                : relevantJournal;
+              groundingExplainer =
+                (Array.isArray(payload.groundingReasons) || typeof payload.groundingExplainer === 'string')
+                  ? {
+                      reasons: Array.isArray(payload.groundingReasons)
+                        ? payload.groundingReasons.filter((reason: unknown): reason is string => typeof reason === 'string')
+                        : [],
+                      explanation:
+                        typeof payload.groundingExplainer === 'string'
+                          ? payload.groundingExplainer
+                          : 'Grounding explanation unavailable.'
+                    }
+                  : groundingExplainer;
               groundingWarning =
                 typeof payload.groundingWarning === 'string' && payload.groundingWarning.trim()
                   ? payload.groundingWarning
@@ -222,6 +341,101 @@ function createStoaConversationStore() {
     }
   }
 
+  async function confirmActionSuggestions(selectedIds: string[]): Promise<void> {
+    if (selectedIds.length === 0) return;
+    const selected = actionSuggestions.filter((item) => selectedIds.includes(item.id));
+    if (selected.length === 0) return;
+    const token = await getIdToken();
+    const response = await fetch('/api/stoa/action-loop/suggestions/confirm', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({
+        sessionId,
+        suggestions: selected
+      })
+    });
+    if (!response.ok) throw new Error(`Failed to confirm suggestions (${response.status})`);
+    await loadBootstrap();
+    actionSuggestions = actionSuggestions.filter((item) => !selectedIds.includes(item.id));
+  }
+
+  async function updateActionStatus(itemId: string, status: 'pending' | 'done' | 'archived' | 'carried_forward') {
+    const token = await getIdToken();
+    const response = await fetch(`/api/stoa/action-loop/item/${itemId}/status`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({ status })
+    });
+    if (!response.ok) throw new Error(`Failed action update (${response.status})`);
+    await loadBootstrap();
+  }
+
+  async function saveJournalReflection(entryText: string, themes: string[] = []): Promise<void> {
+    const text = entryText.trim();
+    if (!text) return;
+    const token = await getIdToken();
+    const response = await fetch('/api/stoa/journal', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({
+        sessionId,
+        entryText: text,
+        themes
+      })
+    });
+    if (!response.ok) throw new Error(`Failed journal save (${response.status})`);
+    await loadBootstrap();
+  }
+
+  async function runRitual(params: {
+    ritualType: 'morning' | 'evening';
+    answers: Record<string, string>;
+    durationSeconds: number;
+  }): Promise<{ actionText: string | null }> {
+    const token = await getIdToken();
+    const response = await fetch('/api/stoa/ritual', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({
+        sessionId,
+        ...params
+      })
+    });
+    if (!response.ok) throw new Error(`Failed ritual run (${response.status})`);
+    const payload = await response.json();
+    await loadBootstrap();
+    return { actionText: typeof payload.actionText === 'string' ? payload.actionText : null };
+  }
+
+  async function updateCurriculum(params: { currentWeek: number; completedWeeks: number[] }): Promise<void> {
+    const token = await getIdToken();
+    const response = await fetch('/api/stoa/curriculum', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(params)
+    });
+    if (!response.ok) throw new Error(`Failed curriculum update (${response.status})`);
+    const payload = await response.json();
+    curriculumProgress = payload.progress ?? curriculumProgress;
+    const week = curriculumWeeks.find((item) => item.weekNumber === curriculumProgress?.currentWeek);
+    if (week) currentCurriculumWeek = week;
+  }
+
   return {
     get messages() {
       return messages;
@@ -265,9 +479,47 @@ function createStoaConversationStore() {
     get profile() {
       return profile;
     },
+    get onboardingStatus() {
+      return onboardingStatus;
+    },
+    get onboardingDraft() {
+      return onboardingDraft;
+    },
+    get actionSuggestions() {
+      return actionSuggestions;
+    },
+    get pendingActions() {
+      return pendingActions;
+    },
+    get groundingExplainer() {
+      return groundingExplainer;
+    },
+    get curriculumWeeks() {
+      return curriculumWeeks;
+    },
+    get curriculumProgress() {
+      return curriculumProgress;
+    },
+    get currentCurriculumWeek() {
+      return currentCurriculumWeek;
+    },
+    get journalEntries() {
+      return journalEntries;
+    },
+    get relevantJournal() {
+      return relevantJournal;
+    },
     addProfileItem,
+    confirmActionSuggestions,
+    completeOnboarding,
+    loadBootstrap,
+    resetOnboarding,
     reset,
-    send
+    runRitual,
+    saveJournalReflection,
+    send,
+    updateActionStatus,
+    updateCurriculum
   };
 }
 
