@@ -27,6 +27,7 @@ export class DatabaseError extends Error {
 const DB_REQUEST_TIMEOUT_MS = Number(process.env.DB_REQUEST_TIMEOUT_MS || '10000');
 const DB_MAX_RETRIES = Number(process.env.DB_MAX_RETRIES || '2');
 const DB_RETRY_BASE_MS = Number(process.env.DB_RETRY_BASE_MS || '300');
+const DB_SIGNIN_TOKEN_SKEW_MS = 15_000;
 
 // Normalise URL: strip any /rpc or /sql suffix so we always hit the root
 function baseUrl(): string {
@@ -35,14 +36,88 @@ function baseUrl(): string {
 	return normalizedScheme.replace(/\/rpc\/?$/, '').replace(/\/sql\/?$/, '').replace(/\/$/, '');
 }
 
-function authHeader(): string {
-	const user = process.env.SURREAL_USER || 'root';
-	const pass = process.env.SURREAL_PASS || 'root';
-	return 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
-}
+function surrealUser(): string { return process.env.SURREAL_USER || 'root'; }
+function surrealPass(): string { return process.env.SURREAL_PASS || 'root'; }
 
 function ns(): string { return process.env.SURREAL_NAMESPACE || 'sophia'; }
 function db(): string { return process.env.SURREAL_DATABASE || 'sophia'; }
+
+type CachedSigninToken = {
+	token: string;
+	expiresAtMs: number | null;
+};
+
+let cachedSigninToken: CachedSigninToken | null = null;
+let inFlightSignin: Promise<string> | null = null;
+
+function decodeJwtExpiryMs(token: string): number | null {
+	try {
+		const parts = token.split('.');
+		if (parts.length < 2) return null;
+		const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as {
+			exp?: unknown;
+		};
+		return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+	} catch {
+		return null;
+	}
+}
+
+function isCachedTokenUsable(nowMs: number): boolean {
+	if (!cachedSigninToken) return false;
+	if (cachedSigninToken.expiresAtMs === null) return true;
+	return cachedSigninToken.expiresAtMs - DB_SIGNIN_TOKEN_SKEW_MS > nowMs;
+}
+
+async function signinForSqlToken(): Promise<string> {
+	const res = await fetchWithTimeout(
+		`${baseUrl()}/signin`,
+		{
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'Accept': 'application/json'
+			},
+			body: JSON.stringify({
+				user: surrealUser(),
+				pass: surrealPass(),
+				ns: ns(),
+				db: db()
+			})
+		},
+		DB_REQUEST_TIMEOUT_MS
+	);
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`SurrealDB signin HTTP ${res.status}: ${text}`);
+	}
+	const payload = await res.json() as { token?: unknown; code?: unknown; details?: unknown };
+	const token = typeof payload.token === 'string' ? payload.token.trim() : '';
+	if (!token) {
+		throw new Error('SurrealDB signin did not return a token');
+	}
+	cachedSigninToken = {
+		token,
+		expiresAtMs: decodeJwtExpiryMs(token)
+	};
+	return token;
+}
+
+async function getSqlBearerToken(forceRefresh = false): Promise<string> {
+	const now = Date.now();
+	if (!forceRefresh && isCachedTokenUsable(now)) {
+		return cachedSigninToken!.token;
+	}
+	if (inFlightSignin) return inFlightSignin;
+	inFlightSignin = (async () => {
+		try {
+			return await signinForSqlToken();
+		} finally {
+			inFlightSignin = null;
+		}
+	})();
+	return inFlightSignin;
+}
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -122,6 +197,7 @@ async function sqlFetch(sql: string, vars?: Record<string, unknown>): Promise<un
 	let lastError: unknown;
 	for (let attempt = 0; attempt <= DB_MAX_RETRIES; attempt++) {
 		try {
+			const token = await getSqlBearerToken(attempt > 0);
 			const res = await fetchWithTimeout(
 				`${baseUrl()}/sql`,
 				{
@@ -129,7 +205,7 @@ async function sqlFetch(sql: string, vars?: Record<string, unknown>): Promise<un
 					headers: {
 						'Content-Type': 'text/plain',
 						'Accept': 'application/json',
-						'Authorization': authHeader(),
+						'Authorization': `Bearer ${token}`,
 						'surreal-ns': ns(),
 						'surreal-db': db(),
 					},
@@ -140,6 +216,9 @@ async function sqlFetch(sql: string, vars?: Record<string, unknown>): Promise<un
 
 			if (!res.ok) {
 				const text = await res.text().catch(() => '');
+				if (res.status === 401) {
+					cachedSigninToken = null;
+				}
 				throw new Error(`SurrealDB HTTP ${res.status}: ${text}`);
 			}
 
