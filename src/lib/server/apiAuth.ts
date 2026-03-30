@@ -1,6 +1,6 @@
 import { randomBytes, scryptSync } from 'node:crypto';
 import { Timestamp } from '$lib/server/fsCompat';
-import { adminDb } from './firebase-admin';
+import { sophiaDocumentsDb } from './sophiaDocumentsDb';
 
 const DEFAULT_DAILY_QUOTA = Number.parseInt(process.env.API_KEY_DAILY_QUOTA ?? '100', 10);
 
@@ -85,7 +85,7 @@ export async function verifyApiKey(request: Request): Promise<ApiKeyVerification
 
   const keyHash = hashApiKey(rawApiKey);
 
-  const snapshot = await adminDb
+  const snapshot = await sophiaDocumentsDb
     .collection('api_keys')
     .where('key_hash', '==', keyHash)
     .limit(1)
@@ -105,7 +105,7 @@ export async function verifyApiKey(request: Request): Promise<ApiKeyVerification
   const now = new Date();
   const nowTimestamp = Timestamp.fromDate(now);
 
-  const updateResult = await adminDb.runTransaction(async (tx) => {
+  const updateResult = await sophiaDocumentsDb.runTransaction(async (tx) => {
     const fresh = await tx.get(doc.ref);
     const latest = fresh.data() as unknown as ApiKeyRecord | undefined;
 

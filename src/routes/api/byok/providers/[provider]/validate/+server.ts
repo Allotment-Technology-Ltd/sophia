@@ -9,12 +9,13 @@ import {
 } from '$lib/server/byok/store';
 import { validateProviderApiKey } from '$lib/server/byok/validation';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
+import { resolveByokStoreUidForSession } from '$lib/server/byok/operatorByokTarget';
 
 export const POST: RequestHandler = async ({ locals, request, params }) => {
   const requestId = resolveRequestId(request);
-  const uid = locals.user?.uid;
+  const sessionUid = locals.user?.uid;
 
-  if (!uid) {
+  if (!sessionUid) {
     return problemJson({
       status: 401,
       title: 'Authentication required',
@@ -22,6 +23,8 @@ export const POST: RequestHandler = async ({ locals, request, params }) => {
       requestId
     });
   }
+
+  const uid = resolveByokStoreUidForSession(sessionUid, locals.user);
 
   const provider = parseByokProvider(params.provider);
   const enabledProviders = getEnabledByokProviders();

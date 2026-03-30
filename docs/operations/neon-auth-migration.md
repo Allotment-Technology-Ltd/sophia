@@ -6,7 +6,7 @@ Sophia uses **Neon Auth JWTs only** for Bearer verification on protected `/api/*
 
 | Variable | Where | Purpose |
 |----------|--------|---------|
-| `DATABASE_URL` | Runtime | Neon Postgres; required for `adminDb` when `SOPHIA_DATA_BACKEND=neon` (default). |
+| `DATABASE_URL` | Runtime | Neon Postgres; required for `sophiaDocumentsDb` when `SOPHIA_DATA_BACKEND=neon` (default). |
 | `USE_NEON_AUTH` | Runtime | Must be `1` / `true` / `yes` so APIs verify Neon JWTs. |
 | `NEON_AUTH_BASE_URL` | Runtime | Branch auth `base_url` from Neon (ends with `/…/auth`). Derives JWKS, issuer, audience per [Neon JWT guide](https://neon.com/docs/auth/guides/plugins/jwt). |
 | `VITE_NEON_AUTH_URL` | **Build** (Vite) | Same URL as `NEON_AUTH_BASE_URL` for the browser auth client (`src/lib/authClient.ts`). |
@@ -51,7 +51,7 @@ After that, redeploy the frontend only if you changed env; changing Neon/Google 
 
 - Use **comma-separated Neon Auth user ids** — the JWT claim **`sub`**, not email and not legacy Firebase UIDs.
 - **`ADMIN_UIDS`**: identities allowed for admin-only APIs (e.g. service accounts that mint JWTs with a fixed `sub`).
-- **`OWNER_UIDS`**: first id is the primary **operator BYOK** document path: `users/{sub}/byokProviders`. After cutover, **replace** old Firebase UIDs in Secret Manager / env with each operator’s Neon `sub`, or re-save BYOK under the new `users/{sub}` path.
+- **`OWNER_UIDS`**: first id is the primary **operator BYOK** document path: `users/{sub}/byokProviders`. After cutover, **replace** old Firebase UIDs in Secret Manager / env with each operator’s Neon `sub`, or re-save BYOK under the new `users/{sub}` path. **Owners** (seeded email, JWT `owner` role, or uid listed in `OWNER_UIDS`) hit that same path from **Settings → BYOK** (`/api/byok/*`), so it stays aligned with **Admin → Operator BYOK**.
 - If someone signs in with Neon and already had a Firebase-era row, **email-based role merge** may restore `owner`/`user` roles on the new `users/{sub}` doc, but **operator keys** still live under whatever `sub` `OWNER_UIDS` points at — update `OWNER_UIDS` to match.
 
 ## Production (GitHub Actions → Cloud Run)

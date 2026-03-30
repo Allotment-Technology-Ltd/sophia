@@ -23,9 +23,15 @@ import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.j
 import { z } from 'zod';
 import {
 	planIngestionStage,
+	planIngestionStageWithExplicitModel,
 	type IngestionStagePlan,
-	type IngestProviderPreference
+	type IngestProviderPreference,
+	type IngestionPlanningContext
 } from '../src/lib/server/aaif/ingestion-plan.js';
+import {
+	canonicalModelChainForStage,
+	type IngestionLlmStageKey
+} from '../src/lib/ingestionCanonicalPipeline.js';
 import { summarizeIngestPinsForLog } from '../src/lib/server/ingestRuns.js';
 import {
 	loadIngestPartialFromNeon,
@@ -1535,6 +1541,13 @@ function assertRelationIntegrity(relations: PhaseOneRelation[], claims: PhaseOne
 	}
 }
 
+function planMatchesCanonicalTier(
+	plan: IngestionStagePlan,
+	tier: { provider: string; modelId: string }
+): boolean {
+	return plan.provider === tier.provider && plan.model === tier.modelId;
+}
+
 async function callStageModel(params: {
 	stage: StageKey;
 	plan: IngestionStagePlan;
@@ -1543,102 +1556,172 @@ async function callStageModel(params: {
 	systemPrompt: string;
 	userMessage: string;
 	maxTokens?: number;
+	/** Used to replan explicit fallback tiers after transient failures. */
+	planningContext: IngestionPlanningContext;
 }): Promise<string> {
-	const { stage, plan, budget, tracker, systemPrompt, userMessage, maxTokens = 32768 } = params;
+	const {
+		stage,
+		plan,
+		budget,
+		tracker,
+		systemPrompt,
+		userMessage,
+		maxTokens = 32768,
+		planningContext
+	} = params;
+
+	const llmStage = stage as IngestionLlmStageKey;
+	const chain = canonicalModelChainForStage(llmStage);
+	const idxInChain = chain.findIndex((t) => planMatchesCanonicalTier(plan, t));
+
 	let lastError: Error | null = null;
 
-	for (let attempt = 0; attempt <= budget.maxRetries; attempt++) {
-		try {
-			if (attempt > 0) {
-				if (tracker.retries >= budget.maxRetries) {
-					throw new Error(`[BUDGET] ${stage} exceeded retry cap (${budget.maxRetries})`);
+	async function runInnerRetries(activePlan: IngestionStagePlan): Promise<string | null> {
+		for (let attempt = 0; attempt <= budget.maxRetries; attempt++) {
+			try {
+				if (attempt > 0) {
+					if (tracker.retries >= budget.maxRetries) {
+						throw new Error(`[BUDGET] ${stage} exceeded retry cap (${budget.maxRetries})`);
+					}
+					tracker.retries += 1;
+					const delayMs = 1000 * Math.pow(2, attempt - 1);
+					if (activeIngestTiming) {
+						activeIngestTiming.model_retries += 1;
+						activeIngestTiming.retry_backoff_ms_total += delayMs;
+					}
+					console.log(
+						`  [RETRY] ${stage} ${activePlan.provider}:${activePlan.model} attempt ${attempt + 1}/${budget.maxRetries + 1} (${delayMs}ms backoff)`
+					);
+					await sleep(delayMs);
 				}
-				tracker.retries += 1;
-				const delayMs = 1000 * Math.pow(2, attempt - 1);
+
+				if (!activePlan.route) {
+					throw new Error(`No executable route available for ${stage}`);
+				}
+
+				const callStarted = Date.now();
+				const routingProvider = activePlan.route.provider ?? activePlan.provider;
+				const foldSystem = shouldFoldSystemPromptIntoUserForProvider(routingProvider);
+				const result = await withTimeout(
+					generateText(
+						foldSystem
+							? {
+									model: activePlan.route.model,
+									messages: [
+										{
+											role: 'user',
+											content: `${systemPrompt}\n\n${userMessage}`
+										}
+									],
+									temperature: 0.1,
+									maxOutputTokens: maxTokens
+								}
+							: {
+									model: activePlan.route.model,
+									system: systemPrompt,
+									messages: [{ role: 'user', content: userMessage }],
+									temperature: 0.1,
+									maxOutputTokens: maxTokens
+								}
+					),
+					budget.timeoutMs,
+					`${stage} ${activePlan.provider}:${activePlan.model}`
+				);
 				if (activeIngestTiming) {
-					activeIngestTiming.model_retries += 1;
-					activeIngestTiming.retry_backoff_ms_total += delayMs;
+					const wall = Date.now() - callStarted;
+					activeIngestTiming.model_calls[stage] = (activeIngestTiming.model_calls[stage] ?? 0) + 1;
+					activeIngestTiming.model_call_wall_ms[stage] =
+						(activeIngestTiming.model_call_wall_ms[stage] ?? 0) + wall;
+				}
+				const inputTokens = result.usage?.inputTokens ?? 0;
+				const outputTokens = result.usage?.outputTokens ?? 0;
+				const usageCostUsd = trackReasoningCost(activePlan.model, inputTokens, outputTokens);
+				if (result.finishReason === 'length') {
+					throw new Error('Model output was truncated (max_tokens reached)');
 				}
 				console.log(
-					`  [RETRY] ${stage} ${plan.provider}:${plan.model} attempt ${attempt + 1}/${budget.maxRetries + 1} (${delayMs}ms backoff)`
+					`  [ROUTE] ${stage}: ${activePlan.provider}/${activePlan.model} source=${activePlan.routingSource} step=${activePlan.selectedStepId ?? '—'} order=${activePlan.selectedOrderIndex ?? '—'} switch=${activePlan.switchReasonCode ?? '—'} cost~$${usageCostUsd.toFixed(4)}`
 				);
-				await sleep(delayMs);
+				assertStageBudget(budget, tracker);
+				return result.text;
+			} catch (error) {
+				lastError = error instanceof Error ? error : new Error(String(error));
+				const msg = lastError.message;
+				const retryable =
+					msg.includes('429') ||
+					msg.includes('529') ||
+					msg.includes('500') ||
+					msg.includes('overloaded') ||
+					msg.includes('timeout') ||
+					msg.includes('prompt_too_long') ||
+					msg.includes('context_length') ||
+					/resource exhausted/i.test(msg) ||
+					/rate limit|quota|too many requests/i.test(msg);
+				console.warn(
+					`  [WARN] ${stage} ${activePlan.provider}:${activePlan.model} failed: ${formatModelCallErrorDetails(error)}`
+				);
+				if (isModelUnavailableError(lastError)) break;
+				if (!retryable) break;
 			}
+		}
+		return null;
+	}
 
-			if (!plan.route) {
-				throw new Error(`No executable route available for ${stage}`);
+	if (idxInChain < 0) {
+		const primaryText = await runInnerRetries(plan);
+		if (primaryText !== null) return primaryText;
+		for (let ci = 0; ci < chain.length; ci++) {
+			const tier = chain[ci]!;
+			if (planMatchesCanonicalTier(plan, tier)) continue;
+			let activePlan: IngestionStagePlan;
+			try {
+				activePlan = await planIngestionStageWithExplicitModel(stage, planningContext, tier);
+				console.warn(
+					`  [FALLBACK] ${stage}: escalating to ${activePlan.provider}/${activePlan.model} after primary tier exhausted`
+				);
+			} catch (planErr) {
+				console.warn(
+					`  [FALLBACK] ${stage}: could not plan ${tier.provider}/${tier.modelId} — ${
+						planErr instanceof Error ? planErr.message : String(planErr)
+					}`
+				);
+				lastError = planErr instanceof Error ? planErr : new Error(String(planErr));
+				continue;
 			}
-
-			const callStarted = Date.now();
-			const routingProvider = plan.route.provider ?? plan.provider;
-			const foldSystem = shouldFoldSystemPromptIntoUserForProvider(routingProvider);
-			const result = await withTimeout(
-				generateText(
-					foldSystem
-						? {
-								model: plan.route.model,
-								messages: [
-									{
-										role: 'user',
-										content: `${systemPrompt}\n\n${userMessage}`
-									}
-								],
-								temperature: 0.1,
-								maxOutputTokens: maxTokens
-							}
-						: {
-								model: plan.route.model,
-								system: systemPrompt,
-								messages: [{ role: 'user', content: userMessage }],
-								temperature: 0.1,
-								maxOutputTokens: maxTokens
-							}
-				),
-				budget.timeoutMs,
-				`${stage} ${plan.provider}:${plan.model}`
-			);
-			if (activeIngestTiming) {
-				const wall = Date.now() - callStarted;
-				activeIngestTiming.model_calls[stage] = (activeIngestTiming.model_calls[stage] ?? 0) + 1;
-				activeIngestTiming.model_call_wall_ms[stage] =
-					(activeIngestTiming.model_call_wall_ms[stage] ?? 0) + wall;
+			const t = await runInnerRetries(activePlan);
+			if (t !== null) return t;
+		}
+	} else {
+		for (let ci = idxInChain; ci < chain.length; ci++) {
+			const tier = chain[ci]!;
+			let activePlan: IngestionStagePlan;
+			if (ci === idxInChain && planMatchesCanonicalTier(plan, tier)) {
+				activePlan = plan;
+			} else {
+				try {
+					activePlan = await planIngestionStageWithExplicitModel(stage, planningContext, tier);
+					console.warn(
+						`  [FALLBACK] ${stage}: escalating to ${activePlan.provider}/${activePlan.model} after primary tier exhausted`
+					);
+				} catch (planErr) {
+					console.warn(
+						`  [FALLBACK] ${stage}: could not plan ${tier.provider}/${tier.modelId} — ${
+							planErr instanceof Error ? planErr.message : String(planErr)
+						}`
+					);
+					lastError = planErr instanceof Error ? planErr : new Error(String(planErr));
+					continue;
+				}
 			}
-			const inputTokens = result.usage?.inputTokens ?? 0;
-			const outputTokens = result.usage?.outputTokens ?? 0;
-			const usageCostUsd = trackReasoningCost(plan.model, inputTokens, outputTokens);
-			if (result.finishReason === 'length') {
-				throw new Error('Model output was truncated (max_tokens reached)');
-			}
-			console.log(
-				`  [ROUTE] ${stage}: ${plan.provider}/${plan.model} source=${plan.routingSource} step=${plan.selectedStepId ?? '—'} order=${plan.selectedOrderIndex ?? '—'} switch=${plan.switchReasonCode ?? '—'} cost~$${usageCostUsd.toFixed(4)}`
-			);
-			assertStageBudget(budget, tracker);
-			return result.text;
-		} catch (error) {
-			lastError = error instanceof Error ? error : new Error(String(error));
-			const msg = lastError.message;
-			const retryable =
-				msg.includes('429') ||
-				msg.includes('529') ||
-				msg.includes('500') ||
-				msg.includes('overloaded') ||
-				msg.includes('timeout') ||
-				msg.includes('prompt_too_long') ||
-				msg.includes('context_length') ||
-				/resource exhausted/i.test(msg) ||
-				/rate limit|quota|too many requests/i.test(msg);
-			console.warn(
-				`  [WARN] ${stage} ${plan.provider}:${plan.model} failed: ${formatModelCallErrorDetails(error)}`
-			);
-			if (isModelUnavailableError(lastError)) break;
-			if (!retryable) break;
+			const t = await runInnerRetries(activePlan);
+			if (t !== null) return t;
 		}
 	}
 
 	const detail =
 		lastError != null ? formatModelCallErrorDetails(lastError) : 'Unknown error';
 	throw new Error(
-		`[${stage}] Planned route exhausted (${plan.provider}:${plan.model}): ${detail}. If this is Anthropic, check the model id is not retired (see https://docs.anthropic.com/en/docs/about-claude/model-deprecations).`
+		`[${stage}] Planned route and canonical fallbacks exhausted (${plan.provider}:${plan.model}): ${detail}. If this is Anthropic, check the model id is not retired (see https://docs.anthropic.com/en/docs/about-claude/model-deprecations).`
 	);
 }
 
@@ -1651,6 +1734,7 @@ async function callStageModelWithProgress(params: {
 	userMessage: string;
 	label: string;
 	maxTokens?: number;
+	planningContext: IngestionPlanningContext;
 }): Promise<string> {
 	const spinner = startSpinner(params.label);
 	try {
@@ -1669,7 +1753,8 @@ async function fixJsonWithModel(
 	repairTracker: StageUsageTracker,
 	originalJson: string,
 	parseError: string,
-	schema: string
+	schema: string,
+	planningContext: IngestionPlanningContext
 ): Promise<string> {
 	if (activeIngestTiming) activeIngestTiming.json_repair_invocations += 1;
 	console.log(`  [FIX] Repair route: ${repairPlan.provider}:${repairPlan.model}`);
@@ -1693,7 +1778,8 @@ Respond ONLY with the corrected JSON array. No explanation, no markdown backtick
 		systemPrompt:
 			'You are a JSON repair assistant. Fix the malformed JSON to be valid. Respond with only the corrected JSON.',
 		userMessage: fixPrompt,
-		label: 'Fixing malformed JSON'
+		label: 'Fixing malformed JSON',
+		planningContext
 	});
 }
 
@@ -1710,6 +1796,7 @@ type ValidationBatchExecContext = {
 	arguments_: GroupingOutput;
 	sourceText: string;
 	sourceTitle: string;
+	planningContext: IngestionPlanningContext;
 };
 
 async function executeValidationBatchModelCall(
@@ -1735,7 +1822,8 @@ async function executeValidationBatchModelCall(
 		budget: ctx.validationBudget,
 		tracker: ctx.validationTracker,
 		systemPrompt: 'You are a strict validation assistant. Return JSON only.',
-		userMessage: validationPrompt
+		userMessage: validationPrompt,
+		planningContext: ctx.planningContext
 	});
 }
 
@@ -1755,7 +1843,8 @@ async function parseValidationResponseWithRepair(
 			ctx.repairTracker,
 			responseText,
 			parseError instanceof Error ? parseError.message : String(parseError),
-			'Object with { claims?, relations?, arguments?, quarantine_items?, summary }'
+			'Object with { claims?, relations?, arguments?, quarantine_items?, summary }',
+			ctx.planningContext
 		);
 		const fixedParsed = parseJsonResponse(fixedResponse);
 		return normalizeValidationOutput(fixedParsed);
@@ -2551,7 +2640,8 @@ async function main() {
 							tracker: extractionTracker,
 							systemPrompt: EXTRACTION_SYSTEM,
 							userMessage: userMsg,
-							label: `Extracting batch ${batchLabel} (${queuePos}/${queueTotal})`
+							label: `Extracting batch ${batchLabel} (${queuePos}/${queueTotal})`,
+							planningContext: basePlanningContext
 						});
 					} catch (apiError) {
 						const apiMsg = apiError instanceof Error ? apiError.message : String(apiError);
@@ -2605,7 +2695,8 @@ async function main() {
 								repairTracker,
 								rawResponse,
 								parseError instanceof Error ? parseError.message : String(parseError),
-								'Array of { text, claim_type, domain, passage_id, section_context, position_in_source, confidence }'
+								'Array of { text, claim_type, domain, passage_id, section_context, position_in_source, confidence }',
+								basePlanningContext
 							);
 						} catch (fixError) {
 							const fixMsg = fixError instanceof Error ? fixError.message : String(fixError);
@@ -2758,6 +2849,10 @@ async function main() {
 				);
 			}
 
+			const relationsPlanningContext = {
+				...basePlanningContext,
+				claimCount: allClaims.length
+			};
 			for (let batchIndex = startBatchIndex; batchIndex < relationsBatches.length; batchIndex++) {
 				const batchClaims = relationsBatches[batchIndex]!;
 				const claimsJson = JSON.stringify(batchClaims, null, 2);
@@ -2775,7 +2870,8 @@ async function main() {
 					budget: relationBudget,
 					tracker: relationsTracker,
 					systemPrompt: RELATIONS_SYSTEM,
-					userMessage: relUserMsg
+					userMessage: relUserMsg,
+					planningContext: relationsPlanningContext
 				});
 				logStageCost('Relations', relationsTracker, relationPlan);
 
@@ -2792,7 +2888,8 @@ async function main() {
 						repairTracker,
 						relRawResponse,
 						parseError instanceof Error ? parseError.message : String(parseError),
-						'Array of { from_position, to_position, relation_type, strength, note? }'
+						'Array of { from_position, to_position, relation_type, strength, note? }',
+						relationsPlanningContext
 					);
 					const fixedParsed = parseJsonResponse(fixedResponse);
 					batchRelations = attachRelationMetadata(RelationsOutputSchema.parse(fixedParsed), allClaims);
@@ -2907,6 +3004,11 @@ async function main() {
 					);
 				}
 
+				const groupingPlanningContext = {
+					...basePlanningContext,
+					claimCount: allClaims.length,
+					relationCount: relations.length
+				};
 				for (let batchIndex = startGroupingBatchIndex; batchIndex < groupingBatches.length; batchIndex++) {
 					const batch = groupingBatches[batchIndex];
 					const claimsJson = JSON.stringify(batch.claims, null, 2);
@@ -2921,7 +3023,8 @@ async function main() {
 						budget: groupingBudget,
 						tracker: groupingTracker,
 						systemPrompt: GROUPING_SYSTEM,
-						userMessage: grpUserMsg
+						userMessage: grpUserMsg,
+						planningContext: groupingPlanningContext
 					});
 					saveGroupingDebugRaw(slug, batchIndex, grpRawResponse);
 					logStageCost('Grouping', groupingTracker, groupingPlan);
@@ -2943,7 +3046,8 @@ async function main() {
 							repairTracker,
 							grpRawResponse,
 							parseError instanceof Error ? parseError.message : String(parseError),
-							'Array of { name, tradition?, domain, summary, claims: [{ position_in_source, role }] }'
+							'Array of { name, tradition?, domain, summary, claims: [{ position_in_source, role }] }',
+							groupingPlanningContext
 						);
 						const fixedParsed = parseJsonResponse(fixedResponse);
 						const fixedArguments = GroupingOutputSchema.parse(normalizeGroupingPayload(fixedParsed));
@@ -3188,6 +3292,16 @@ async function main() {
 					);
 				}
 
+				const validationPlanningContext: IngestionPlanningContext = {
+					...basePlanningContext,
+					claimCount: allClaims.length,
+					relationCount: relations.length,
+					argumentCount: arguments_.length,
+					claimTextChars: allClaims.reduce(
+						(sum, c) => sum + (typeof c.text === 'string' ? c.text.length : 0),
+						0
+					)
+				};
 				const validationExecCtx: ValidationBatchExecContext = {
 					validationPlan,
 					validationBudget,
@@ -3198,7 +3312,8 @@ async function main() {
 					relations,
 					arguments_,
 					sourceText,
-					sourceTitle: sourceMeta.title
+					sourceTitle: sourceMeta.title,
+					planningContext: validationPlanningContext
 				};
 
 				for (let batchIndex = startValidationBatchIndex; batchIndex < validationBatches.length; batchIndex++) {

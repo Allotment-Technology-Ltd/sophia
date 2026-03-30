@@ -10,7 +10,7 @@ import {
   neonMirrorIngestReportDocument,
   neonSetReportEnvelope
 } from '$lib/server/db/ingestRunRepository';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 
 export type IngestIssueKind =
@@ -288,7 +288,7 @@ export interface IngestRunSnapshotForReport {
     source_type: string;
     validate?: boolean;
     stop_before_store?: boolean;
-    pipeline_preset?: 'budget' | 'balanced' | 'complexity';
+    pipeline_preset?: 'production' | 'budget' | 'balanced' | 'complexity';
     model_chain: { extract: string; relate: string; group: string; validate: string };
     embedding_model?: string;
     batch_overrides?: {
@@ -420,7 +420,7 @@ export async function persistIngestRunReport(state: IngestRunSnapshotForReport):
       return;
     }
 
-    const ref = adminDb.collection(FIRESTORE_COLLECTION).doc(state.id);
+    const ref = sophiaDocumentsDb.collection(FIRESTORE_COLLECTION).doc(state.id);
     const payload = state.payload;
     const routingStats = summarizeRoutingFromLogLines(state.logLines);
     const timingTelemetry = parseIngestTimingFromLogLines(state.logLines);
@@ -492,7 +492,7 @@ export async function listRecentIngestRunReportSummaries(
       return neonListRecentReportRows(cap);
     }
 
-    const snap = await adminDb
+    const snap = await sophiaDocumentsDb
       .collection(FIRESTORE_COLLECTION)
       .orderBy('completedAt', 'desc')
       .limit(cap)

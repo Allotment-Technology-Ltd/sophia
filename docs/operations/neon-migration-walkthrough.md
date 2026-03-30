@@ -25,7 +25,7 @@ Work through **phases in order**. Do not enable `SOPHIA_DATA_BACKEND=neon` in pr
 - **Branch** — Neon’s git-like DB branch (e.g. `main` for prod, `dev` for local).
 - **`DATABASE_URL`** — connection string the app uses (pooler URL recommended for serverless).
 - **`drizzle/0000_neon_first.sql`** — canonical schema in this repo (ingest tables + `sophia_documents`).
-- **Two switches** — (1) `DATABASE_URL` enables durable **ingest orchestration + staging**; (2) `SOPHIA_DATA_BACKEND=neon` moves **`adminDb`** off Firestore onto **`sophia_documents`**.
+- **Two switches** — (1) `DATABASE_URL` enables durable **ingest orchestration + staging**; (2) `SOPHIA_DATA_BACKEND=neon` moves **`sophiaDocumentsDb`** off Google Firestore onto **`sophia_documents`** (Postgres).
 
 ---
 
@@ -175,7 +175,7 @@ Add a one-off script suggestion only: how to run pnpm check and a minimal tsx on
 At this stage:
 
 - Set **`DATABASE_URL`**.
-- **Do not** set `SOPHIA_DATA_BACKEND=neon` yet (Firestore still serves `adminDb`).
+- **Do not** set `SOPHIA_DATA_BACKEND=neon` yet (Google Firestore still serves the app document store).
 
 This already enables:
 
@@ -257,7 +257,7 @@ Read scripts/migrate-firestore-to-neon.ts and list the default collection names 
 
 ---
 
-## Phase 6 — Cut over `adminDb` to Neon (staging first)
+## Phase 6 — Cut over `sophiaDocumentsDb` to Neon (staging first)
 
 When migrated data looks correct:
 
@@ -392,7 +392,7 @@ Copy-paste and adjust:
 2. **Env audit**
 
    ```text
-   List every process.env key read by src/lib/server/db/neon.ts and src/lib/server/neon/datastore.ts and firebase-admin.ts for Neon / adminDb routing. No secret values.
+   List every process.env key read by src/lib/server/db/neon.ts and src/lib/server/neon/datastore.ts and sophiaDocumentsDb.ts for Neon / document-store routing. No secret values.
    ```
 
 3. **Failure injection test plan**

@@ -1,16 +1,16 @@
 import { FieldValue } from '$lib/server/fsCompat';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { creditWalletTopup } from './wallet';
 import { upsertBillingProfile } from './store';
 import { mapWebhookCurrency, type PaddleWebhookEvent } from './paddle';
 import { normalizeTier } from './types';
 
 function customerMapRef(customerId: string) {
-  return adminDb.collection('billingCustomers').doc(customerId);
+  return sophiaDocumentsDb.collection('billingCustomers').doc(customerId);
 }
 
 function webhookEventRef(eventId: string) {
-  return adminDb.collection('billingWebhookEvents').doc(eventId);
+  return sophiaDocumentsDb.collection('billingWebhookEvents').doc(eventId);
 }
 
 async function rememberCustomerUid(customerId: string, uid: string): Promise<void> {
@@ -60,7 +60,7 @@ export async function handlePaddleWebhookEvent(event: PaddleWebhookEvent): Promi
   const eventType = event.event_type ?? '';
   const eventId = event.event_id ?? '';
   if (eventId) {
-    const shouldProcess = await adminDb.runTransaction(async (tx) => {
+    const shouldProcess = await sophiaDocumentsDb.runTransaction(async (tx) => {
       const ref = webhookEventRef(eventId);
       const snap = await tx.get(ref);
       if (snap.exists) return false;

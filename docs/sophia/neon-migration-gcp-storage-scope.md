@@ -24,7 +24,7 @@ From [`infra/index.ts`](../../infra/index.ts) (and `bin/index.js`):
 | Resource | Role |
 | -------- | ---- |
 | **Artifact Registry** (`gcp.artifactregistry.Repository`) | Stores **Docker images** for Cloud Run (app + ingest). Stays relevant as long as you deploy on GCP; **not** replaced by Neon. |
-| **Firestore** (`roles/datastore.user` on the app SA) | **Database** access for `firebase-admin` Firestore — this **is** in scope for moving **data** to Neon Postgres, but it is **not** GCS. |
+| **Firestore** (`roles/datastore.user` on the app SA) | Legacy **Google Firestore** access for the old document store — replaced in app code by Neon `sophia_documents` via `sophiaDocumentsDb`; **not** GCS. |
 | **Cloud Logging** (`roles/logging.logWriter`) | Logs, not blobs. |
 
 No Pulumi-managed **Cloud Storage bucket** for app data appears in the infra files reviewed.

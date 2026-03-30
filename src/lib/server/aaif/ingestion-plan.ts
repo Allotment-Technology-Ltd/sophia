@@ -2,6 +2,10 @@ import { estimateCost, defaultProviders } from '@restormel/keys';
 import type { AAIFLatency, AAIFRequest } from '@restormel/aaif';
 import type { ModelProvider } from '@restormel/contracts/providers';
 import type { RestormelFallbackCandidate } from '../restormel.js';
+import {
+  CANONICAL_INGESTION_PRIMARY_MODELS,
+  type IngestionLlmStageKey
+} from '$lib/ingestionCanonicalPipeline';
 import { EMBEDDING_MODEL } from '../embeddings.js';
 import {
   resolveExtractionModelRoute,
@@ -99,16 +103,9 @@ function stageLatency(stage: IngestionStage, context: IngestionPlanningContext):
   const tokens = context.estimatedTokens;
   const claims = claimCountEstimate(context);
   if (stage === 'grouping') {
-    if (isBookSource(context.sourceType)) {
-      return tokens > 8_000 || claims > 40 ? 'high' : 'balanced';
-    }
-    if (isPaperSource(context.sourceType)) {
-      return tokens > 10_000 || claims > 45 ? 'high' : 'balanced';
-    }
-    if (isEncyclopediaSource(context.sourceType)) {
-      return tokens > 12_000 || claims > 50 ? 'high' : 'balanced';
-    }
-    return tokens > 12_000 || claims > 50 ? 'high' : 'balanced';
+    // Single production profile: keep grouping on balanced routing depth unless the source is very large.
+    if (tokens > 22_000 || claims > 70) return 'high';
+    return 'balanced';
   }
   if (stage === 'validation') {
     if (isBookSource(context.sourceType) && claims > 55) return 'high';
@@ -145,13 +142,24 @@ const PIN_ENV_SUFFIX: Record<Exclude<IngestionStage, 'embedding'>, string> = {
 };
 
 /** Admin-spawned workers set `INGEST_PIN_PROVIDER_*` + `INGEST_PIN_MODEL_*` (see `modelChainLabelsToEnv`). */
-function readPinnedModel(stage: IngestionStage): { provider?: ModelProvider; modelId?: string } {
+function readPinnedModel(
+  stage: IngestionStage,
+  preferred: IngestProviderPreference
+): { provider?: ModelProvider; modelId?: string } {
   if (stage === 'embedding') return {};
   const suffix = PIN_ENV_SUFFIX[stage];
   const modelId = process.env[`INGEST_PIN_MODEL_${suffix}`]?.trim();
   const provider = process.env[`INGEST_PIN_PROVIDER_${suffix}`]?.trim().toLowerCase() as ModelProvider | undefined;
-  if (!modelId || !provider) return {};
-  return { provider, modelId };
+  if (modelId && provider) return { provider, modelId };
+
+  const disableCanonical = ['1', 'true', 'yes'].includes(
+    (process.env.INGEST_DISABLE_CANONICAL_DEFAULTS ?? '').trim().toLowerCase()
+  );
+  if (disableCanonical || preferred !== 'auto') return {};
+
+  const canon = CANONICAL_INGESTION_PRIMARY_MODELS[stage as IngestionLlmStageKey];
+  if (canon) return { provider: canon.provider, modelId: canon.modelId };
+  return {};
 }
 
 /**
@@ -368,7 +376,7 @@ export async function planIngestionStage(
 
   const routeIdForResolve = stageRouteBindingFromEnv(stage).routeId?.trim() || undefined;
 
-  const pin = readPinnedModel(stage);
+  const pin = readPinnedModel(stage, context.preferredProvider ?? 'auto');
   const requestedProvider = (pin.provider ?? context.preferredProvider ?? 'auto') as ModelProvider;
   const requestedModelId = pin.modelId;
   const routeIdForLog = routeIdForResolve ? '(bound)' : '(none)';
@@ -440,6 +448,84 @@ export async function planIngestionStage(
         : route.routingSource === 'requested'
           ? 'Sophia used the operator-requested provider for this ingestion stage.'
           : 'Restormel selected this route for the ingestion stage.'),
+    route
+  };
+}
+
+/**
+ * Build a plan for an explicit provider/model (used after transient failures to try the next tier
+ * in {@link CANONICAL_INGESTION_MODEL_FALLBACKS}). Fails hard if credentials are missing.
+ */
+export async function planIngestionStageWithExplicitModel(
+  stage: IngestionStage,
+  context: IngestionPlanningContext,
+  explicit: { provider: ModelProvider; modelId: string }
+): Promise<IngestionStagePlan> {
+  if (stage === 'embedding') {
+    return planIngestionStage(stage, context);
+  }
+
+  const request = buildStageRequest(stage, context);
+  const routeIdForResolve = stageRouteBindingFromEnv(stage).routeId?.trim() || undefined;
+
+  const route =
+    stage === 'extraction'
+      ? await resolveExtractionModelRoute({
+          requestedProvider: explicit.provider,
+          requestedModelId: explicit.modelId,
+          routeId: routeIdForResolve,
+          failureMode: 'error',
+          restormelContext: buildStageRestormelContext({
+            stage,
+            task: request.task,
+            estimatedInputTokens: context.estimatedTokens,
+            estimatedInputChars: context.sourceLengthChars ?? context.estimatedTokens * 4,
+            complexity:
+              context.estimatedTokens > 18_000 ? 'high' : context.estimatedTokens > 8_000 ? 'medium' : 'low',
+            constraints: request.constraints
+          })
+        })
+      : await resolveReasoningModelRoute({
+          pass: stagePass(stage),
+          depthMode: latencyToDepth(stageLatency(stage, context)),
+          routeId: routeIdForResolve,
+          requestedProvider: explicit.provider,
+          requestedModelId: explicit.modelId,
+          failureMode: 'error',
+          restormelContext: buildStageRestormelContext({
+            stage,
+            task: request.task,
+            estimatedInputTokens: estimateStageUsage(stage, context).inputTokens,
+            estimatedInputChars:
+              typeof context.sourceLengthChars === 'number'
+                ? context.sourceLengthChars
+                : Math.max(context.estimatedTokens * 4, 0),
+            complexity:
+              stageLatency(stage, context) === 'high'
+                ? 'high'
+                : stageLatency(stage, context) === 'balanced'
+                  ? 'medium'
+                  : 'low',
+            constraints: request.constraints
+          })
+        });
+
+  const usage = estimateStageUsage(stage, context);
+
+  return {
+    stage,
+    request,
+    routeId: route.resolvedRouteId ?? routeIdForResolve ?? undefined,
+    provider: route.provider,
+    model: route.modelId,
+    estimatedCostUsd: estimateReasoningCostUsd(route, usage.inputTokens, usage.outputTokens),
+    routingSource: 'requested',
+    selectedStepId: route.resolvedStepId ?? null,
+    selectedOrderIndex: route.resolvedOrderIndex ?? null,
+    switchReasonCode: route.resolvedSwitchReasonCode ?? null,
+    matchedCriteria: route.resolvedMatchedCriteria ?? null,
+    fallbackCandidates: route.resolvedFallbackCandidates ?? null,
+    routingReason: `Fallback tier: explicit ${explicit.provider}/${explicit.modelId}.`,
     route
   };
 }

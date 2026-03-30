@@ -11,6 +11,8 @@
  *           voyage-4-large for queries (shared embedding space)
  */
 
+import { GoogleAuth } from 'google-auth-library';
+
 import { loadServerEnv } from './env';
 
 type EmbeddingTaskType = 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY';
@@ -52,8 +54,6 @@ function isRetryableEmbeddingError(error: unknown): boolean {
 // ─── Vertex AI Provider ─────────────────────────────────────────────────────
 
 function createVertexProvider(): EmbeddingProvider {
-	const { GoogleAuth } = require('google-auth-library') as typeof import('google-auth-library');
-
 	function projectId(): string | undefined {
 		loadServerEnv();
 		return (

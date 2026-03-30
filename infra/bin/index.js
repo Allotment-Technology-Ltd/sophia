@@ -84,7 +84,7 @@ new gcp.projects.IAMMember("app-sa-log-writer", {
     role: "roles/logging.logWriter",
     member: pulumi.interpolate `serviceAccount:${appSa.email}`,
 });
-// Firestore read/write — required by firebase-admin Firestore (history cache, rate limits)
+// Document store (sophia_documents / sophiaDocumentsDb): history cache, rate limits, BYOK, billing
 new gcp.projects.IAMMember("app-sa-datastore-user", {
     project: projectId,
     role: "roles/datastore.user",

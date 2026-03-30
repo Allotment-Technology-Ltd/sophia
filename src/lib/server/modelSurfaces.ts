@@ -1,7 +1,7 @@
 import { FieldValue } from '$lib/server/fsCompat';
 import { z } from 'zod';
 import { extractModelRowsFromRestormelPayload } from '$lib/ingestionModelCatalogMerge';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import type { RestormelProjectModelBindingInput } from '$lib/server/restormel';
 import {
 	restormelListGlobalDashboardModels,
@@ -64,7 +64,7 @@ const DEFAULT_STORED: ModelSurfacesStored = {
 };
 
 function docRef() {
-	return adminDb.collection(COLLECTION).doc(DOC_ID);
+	return sophiaDocumentsDb.collection(COLLECTION).doc(DOC_ID);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

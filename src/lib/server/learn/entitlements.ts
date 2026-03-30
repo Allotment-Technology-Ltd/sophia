@@ -1,5 +1,5 @@
 import { FieldValue } from '$lib/server/fsCompat';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { billingWalletRef, ensureBillingState } from '$lib/server/billing/store';
 import { currentMonthKeyUtc, type BillingTier } from '$lib/server/billing/types';
 
@@ -65,7 +65,7 @@ const LEARN_RULES: Record<BillingTier, LearnQuotaRules> = {
 export const SCHOLAR_CREDIT_PRICE_CENTS = Number.parseInt(process.env.SCHOLAR_CREDIT_PRICE_CENTS ?? '100', 10) || 100;
 
 function learnQuotaRef(uid: string) {
-  return adminDb.collection('users').doc(uid).collection('learn').doc('quota');
+  return sophiaDocumentsDb.collection('users').doc(uid).collection('learn').doc('quota');
 }
 
 function defaultLearnEntitlements(): LearnEntitlementState {
@@ -222,7 +222,7 @@ export async function consumeLearnEntitlement(
   const billing = await ensureBillingState(uid);
   const quotaRef = learnQuotaRef(uid);
 
-  return adminDb.runTransaction(async (tx) => {
+  return sophiaDocumentsDb.runTransaction(async (tx) => {
     const quotaSnap = await tx.get(quotaRef);
 
     const normalized = ensureMonth(normalizeLearnEntitlements(quotaSnap.exists ? quotaSnap.data() : null));
@@ -263,7 +263,7 @@ export async function convertWalletToScholarCredits(
   const quotaRef = learnQuotaRef(uid);
   const walletRef = billingWalletRef(uid);
 
-  return adminDb.runTransaction(async (tx) => {
+  return sophiaDocumentsDb.runTransaction(async (tx) => {
     const [quotaSnap, walletSnap] = await Promise.all([tx.get(quotaRef), tx.get(walletRef)]);
 
     const quotaState = ensureMonth(normalizeLearnEntitlements(quotaSnap.exists ? quotaSnap.data() : null));

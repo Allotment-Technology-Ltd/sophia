@@ -102,7 +102,8 @@ async function main(): Promise<void> {
     if (projectId) initializeApp({ projectId });
     else initializeApp();
   }
-  const adminDb = getFirestore();
+  /** Google Cloud Firestore (legacy migration script only; app runtime uses Neon `sophia_documents`). */
+  const legacyGcpFirestore = getFirestore();
 
   const { dryRun, uid } = parseArgs(process.argv);
   const uids = resolveTargetUids(uid);
@@ -123,7 +124,7 @@ async function main(): Promise<void> {
 
   for (const targetUid of uids) {
     for (const provider of BYOK_PROVIDER_ORDER) {
-      const ref = adminDb.collection('users').doc(targetUid).collection('byokProviders').doc(provider);
+      const ref = legacyGcpFirestore.collection('users').doc(targetUid).collection('byokProviders').doc(provider);
       const snap = await ref.get();
       if (!snap.exists) {
         skipped += 1;

@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { Timestamp } from '$lib/server/fsCompat';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { createApiKey } from '$lib/server/apiAuth';
 import { hasOwnerRole } from '$lib/server/authRoles';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
@@ -40,7 +40,7 @@ export const GET: RequestHandler = async ({ locals, request, url }) => {
     });
   }
 
-  let query = adminDb.collection('api_keys').orderBy('created_at', 'desc').limit(100);
+  let query = sophiaDocumentsDb.collection('api_keys').orderBy('created_at', 'desc').limit(100);
   if (ownerUidParam) {
     query = query.where('owner_uid', '==', ownerUidParam) as typeof query;
   } else if (!auth.isAdmin) {
@@ -108,7 +108,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   const { rawKey, keyId, keyHash, prefix } = createApiKey();
   const now = Timestamp.now();
 
-  await adminDb.collection('api_keys').doc(keyId).set({
+  await sophiaDocumentsDb.collection('api_keys').doc(keyId).set({
     key_hash: keyHash,
     owner_uid: ownerUid,
     name,
@@ -173,7 +173,7 @@ export const DELETE: RequestHandler = async ({ locals, request, url }) => {
     });
   }
 
-  const keyRef = adminDb.collection('api_keys').doc(keyId);
+  const keyRef = sophiaDocumentsDb.collection('api_keys').doc(keyId);
   const keyDoc = await keyRef.get();
   if (!keyDoc.exists) {
     return problemJson({

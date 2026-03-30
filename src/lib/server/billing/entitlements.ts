@@ -1,5 +1,5 @@
 import { FieldValue } from '$lib/server/fsCompat';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import {
   currentMonthKeyUtc,
   summarizeEntitlements,
@@ -56,12 +56,13 @@ export async function getEntitlementSummary(
 ): Promise<EntitlementSummary> {
   const snapshot = await ensureBillingState(uid);
   if (options?.ownerDisplay) {
-    return summarizeEntitlements(
+    const base = summarizeEntitlements(
       'premium',
       'active',
       snapshot.profile.currency,
       snapshot.entitlements
     );
+    return { ...base, ownerIngestionUnlimited: true };
   }
   return summarizeEntitlements(
     snapshot.effectiveTier,
@@ -86,7 +87,7 @@ export async function consumeIngestionEntitlement(
   const profileRef = billingProfileRef(uid);
   const entitlementsRef = billingEntitlementsRef(uid);
 
-  return adminDb.runTransaction(async (tx) => {
+  return sophiaDocumentsDb.runTransaction(async (tx) => {
     const [profileSnap, entitlementSnap] = await Promise.all([
       tx.get(profileRef),
       tx.get(entitlementsRef)
@@ -219,7 +220,7 @@ export async function consumeIngestionEntitlements(
   const profileRef = billingProfileRef(uid);
   const entitlementsRef = billingEntitlementsRef(uid);
 
-  return adminDb.runTransaction(async (tx) => {
+  return sophiaDocumentsDb.runTransaction(async (tx) => {
     const [profileSnap, entitlementSnap] = await Promise.all([
       tx.get(profileRef),
       tx.get(entitlementsRef)
@@ -320,7 +321,7 @@ export async function applyByokFeeUsage(
 ): Promise<void> {
   if (!Number.isFinite(amountCents) || amountCents <= 0) return;
   const entitlementsRef = billingEntitlementsRef(uid);
-  await adminDb.runTransaction(async (tx) => {
+  await sophiaDocumentsDb.runTransaction(async (tx) => {
     const entSnap = await tx.get(entitlementsRef);
     const baseline = defaultEntitlements();
     const currentMonth = currentMonthKeyUtc();

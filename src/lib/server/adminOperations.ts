@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FieldValue, Timestamp } from '$lib/server/fsCompat';
 import { z } from 'zod';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { query as surrealQuery } from '$lib/server/db';
 import { canonicalizeAndHashSourceUrl } from '$lib/server/sourceIdentity';
 import type { AdminActor } from '$lib/server/adminAccess';
@@ -166,7 +166,7 @@ const runningProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 const processingPromises = new Map<string, Promise<void>>();
 
 function operationsCollection() {
-  return adminDb.collection(ADMIN_OPERATIONS_COLLECTION);
+  return sophiaDocumentsDb.collection(ADMIN_OPERATIONS_COLLECTION);
 }
 
 function toIso(value: Timestamp | null | undefined): string | null {

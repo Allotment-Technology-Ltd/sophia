@@ -15,7 +15,7 @@
 # PREREQUISITES:
 # ─ GCP secrets in Secret Manager: anthropic-api-key, voyage-api-key,
 #   google-ai-api-key, surreal-db-pass, admin-uids, owner-uids (maps to env OWNER_UIDS),
-#   neon-database-url → DATABASE_URL (required; ingest + sophia_documents / adminDb)
+#   neon-database-url → DATABASE_URL (required; ingest + sophia_documents / sophiaDocumentsDb)
 # ─ GitHub secret: NEON_AUTH_BASE_URL (same value for VITE_NEON_AUTH_URL at build + runtime JWT verify)
 # ─ Workload Identity Federation configured for this GitHub repo
 #

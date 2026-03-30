@@ -1,5 +1,5 @@
 import { FieldValue } from '$lib/server/fsCompat';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import {
   currentMonthKeyUtc,
   deriveEffectiveTier,
@@ -21,7 +21,7 @@ import {
 } from './founder';
 
 function userRef(uid: string) {
-  return adminDb.collection('users').doc(uid);
+  return sophiaDocumentsDb.collection('users').doc(uid);
 }
 
 export function billingProfileRef(uid: string) {
@@ -41,7 +41,7 @@ export function billingLedgerRef(uid: string, key: string) {
 }
 
 function founderProgramRef() {
-  return adminDb.collection('billingPrograms').doc(FOUNDER_PROGRAM_ID);
+  return sophiaDocumentsDb.collection('billingPrograms').doc(FOUNDER_PROGRAM_ID);
 }
 
 export function defaultBillingProfile(): BillingProfile {
@@ -126,7 +126,7 @@ export async function ensureBillingState(uid: string): Promise<{
   const entitlementsRef = billingEntitlementsRef(uid);
   const walletRef = billingWalletRef(uid);
 
-  return adminDb.runTransaction(async (tx) => {
+  return sophiaDocumentsDb.runTransaction(async (tx) => {
     const [profileSnap, entSnap, walletSnap] = await Promise.all([
       tx.get(profileRef),
       tx.get(entitlementsRef),

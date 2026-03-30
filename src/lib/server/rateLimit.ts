@@ -1,4 +1,4 @@
-import { adminDb } from './firebase-admin';
+import { sophiaDocumentsDb } from './sophiaDocumentsDb';
 import { FieldValue } from '$lib/server/fsCompat';
 
 export const DAILY_QUERY_LIMIT = 20;
@@ -77,10 +77,10 @@ export function todayUtc(): string {
  * Uses a Firestore transaction so concurrent requests cannot both slip past the limit.
  */
 export async function checkRateLimit(uid: string): Promise<{ allowed: boolean; remaining: number }> {
-  const ref = adminDb.collection('users').doc(uid).collection('rateLimits').doc('daily');
+  const ref = sophiaDocumentsDb.collection('users').doc(uid).collection('rateLimits').doc('daily');
   const today = todayUtc();
 
-  return adminDb.runTransaction(async (tx) => {
+  return sophiaDocumentsDb.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const data = snap.data();
 
@@ -158,7 +158,7 @@ export async function consumePlatformBudget(
     };
   }
 
-  const ref = adminDb.collection('users').doc(uid).collection('rateLimits').doc('platformDaily');
+  const ref = sophiaDocumentsDb.collection('users').doc(uid).collection('rateLimits').doc('platformDaily');
   const today = todayUtc();
   const isFollowUp = options.queryKind === 'follow_up';
   const isStandardNewQuery = !isFollowUp && options.depthMode === 'standard';
@@ -166,7 +166,7 @@ export async function consumePlatformBudget(
   const isPremiumQuery = options.resourceMode === 'expanded';
   const creditsToConsume = queryCredits(options.depthMode);
 
-  return adminDb.runTransaction(async (tx) => {
+  return sophiaDocumentsDb.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const data = (snap.data() ?? {}) as PlatformBudgetRecord;
     const activeDate = data.date === today ? data.date : today;

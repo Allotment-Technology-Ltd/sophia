@@ -1,6 +1,6 @@
 import { Timestamp } from '$lib/server/fsCompat';
 import { query } from '$lib/server/db';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { createApiKey } from '$lib/server/apiAuth';
 import type { AdminActor } from '$lib/server/adminAccess';
 
@@ -151,7 +151,7 @@ export async function loadAdminDashboardData(): Promise<AdminDashboardData> {
 			LIMIT 10
 		`);
 
-		const apiKeySnapshot = await adminDb
+		const apiKeySnapshot = await sophiaDocumentsDb
 			.collection('api_keys')
 			.orderBy('created_at', 'desc')
 			.limit(50)
@@ -213,7 +213,7 @@ export async function createAdminApiKey(
 	const { rawKey, keyId, keyHash, prefix } = createApiKey();
 	const now = Timestamp.now();
 
-	await adminDb.collection('api_keys').doc(keyId).set({
+	await sophiaDocumentsDb.collection('api_keys').doc(keyId).set({
 		key_hash: keyHash,
 		owner_uid: ownerUid,
 		name,

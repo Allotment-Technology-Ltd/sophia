@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 
 interface FeedbackPayload {
   queryId: string;
@@ -29,7 +29,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ error: 'Invalid rating' }, { status: 400 });
   }
 
-  await adminDb
+  await sophiaDocumentsDb
     .collection('feedback')
     .doc(payload.queryId)
     .collection('passes')

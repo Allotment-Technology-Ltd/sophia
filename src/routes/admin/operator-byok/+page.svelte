@@ -202,7 +202,7 @@
         <p class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-dim">Admin</p>
         <h1 class="mt-2 font-serif text-3xl text-sophia-dark-text sm:text-[2.1rem]">Operator BYOK</h1>
         <p class="mt-2 max-w-3xl text-sm leading-6 text-sophia-dark-muted">
-          Manage provider keys on the <strong class="text-sophia-dark-text">OWNER_UIDS</strong> Firestore bucket (first
+          Manage provider keys on the <strong class="text-sophia-dark-text">OWNER_UIDS</strong> document-store bucket (first
           UID). These keys back operational fallbacks when tenant BYOK is empty — see the shared effective-key resolver
           (<code class="font-mono text-xs text-sophia-dark-text">effectiveKeys.ts</code>).
         </p>

@@ -18,7 +18,7 @@ export type CoachUiVariableId = z.infer<typeof CoachUiVariableIdSchema>;
 
 /** Monospace labels for the pipeline UI. */
 export const COACH_UI_VARIABLE_LABELS: Record<CoachUiVariableId, string> = {
-  pipeline_preset: 'Pipeline preset (budget / balanced / complexity)',
+  pipeline_preset: 'Pipeline profile (production)',
   cross_model_validation: 'Run cross-model validation',
   batch_extractionMaxTokensPerSection: 'Advanced · extraction max tokens per section',
   batch_groupingTargetTokens: 'Advanced · grouping target tokens',
@@ -36,7 +36,7 @@ export const CoachSettingTweakSchema = z.object({
   evidenceIssueKinds: z.array(z.string().max(64)).max(16).optional(),
   /** When scope is UI-tweakable, set this so the UI can show a consistent variable name. */
   uiVariableId: CoachUiVariableIdSchema.optional(),
-  preset: z.enum(['budget', 'balanced', 'complexity']).optional(),
+  preset: z.union([z.literal('production'), z.enum(['budget', 'balanced', 'complexity'])]).optional(),
   runValidation: z.boolean().optional(),
   batchOverrideKey: z
     .enum([

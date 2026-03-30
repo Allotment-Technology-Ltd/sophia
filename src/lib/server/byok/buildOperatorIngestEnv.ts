@@ -23,7 +23,7 @@ function knownIngestPlatformApiKeyEnvNames(): string[] {
 /**
  * After operator BYOK from `sophia_documents` is applied, fill missing provider keys from `process.env`
  * (e.g. `.env.local` for dev). Set `INGEST_PREFER_LOCAL_PROVIDER_KEYS=1` to use local env
- * whenever set, even when Firestore already has a value (prod keys not copied locally).
+ * whenever set, even when sophia_documents already has a value (prod keys not copied locally).
  */
 function applyIngestProviderKeyResolution(out: Record<string, string>): void {
   const preferLocal = ['1', 'true', 'yes'].includes(

@@ -9,8 +9,14 @@ export type IngestionAdvisorMode = 'off' | 'shadow' | 'auto';
 
 export type AdvisorAutoApplyField = 'preset' | 'validation';
 
+export type IngestionPipelinePresetAdvisor = 'production';
+
+const LEGACY_PRESETS = z.enum(['budget', 'balanced', 'complexity']);
+
 export const PreScanAdvisorSchema = z.object({
-  recommendedPreset: z.enum(['budget', 'balanced', 'complexity']),
+  recommendedPreset: z
+    .union([z.literal('production'), LEGACY_PRESETS])
+    .transform((): IngestionPipelinePresetAdvisor => 'production'),
   confidence: z.number().min(0).max(1),
   rationale: z.string().max(2500),
   suggestCrossModelValidation: z.boolean(),
@@ -21,7 +27,7 @@ export const PreScanAdvisorSchema = z.object({
 export type PreScanAdvisorOutput = z.infer<typeof PreScanAdvisorSchema>;
 
 export interface HeuristicBaseline {
-  recommendedPreset: 'budget' | 'balanced' | 'complexity';
+  recommendedPreset: IngestionPipelinePresetAdvisor;
   suggestCrossModelValidation: boolean;
   /** How baseline was derived (for UI) */
   basis: string;
@@ -75,25 +81,19 @@ export function parseAdvisorAutoApplyFromRequest(body: unknown): Set<AdvisorAuto
 }
 
 /**
- * Token-based preset aligned with existing admin presets (budget / balanced / complexity).
+ * Single production pipeline; token scale only steers validation default (cost vs coverage).
  */
 export function heuristicPresetFromPreScan(approxContentTokens: number): HeuristicBaseline {
   const t = Math.max(1, approxContentTokens);
-  let recommendedPreset: HeuristicBaseline['recommendedPreset'];
-  let basis: string;
-  if (t < 18_000) {
-    recommendedPreset = 'budget';
-    basis = 'Token estimate under 18k → budget-style routing.';
-  } else if (t < 90_000) {
-    recommendedPreset = 'balanced';
-    basis = 'Token estimate 18k–90k → balanced preset.';
-  } else {
-    recommendedPreset = 'complexity';
-    basis = 'Large source (≥90k est. tokens) → complexity preset.';
-  }
-  const suggestCrossModelValidation = t >= 25_000 || recommendedPreset !== 'budget';
+  const basis =
+    t < 18_000
+      ? 'Smaller source (<18k est. tokens) — production pipeline; cross-model validation optional by default.'
+      : t < 90_000
+        ? 'Medium source (18k–90k est. tokens) — production pipeline with validation recommended.'
+        : 'Large source (≥90k est. tokens) — production pipeline; validation strongly recommended.';
+  const suggestCrossModelValidation = t >= 18_000;
   return {
-    recommendedPreset,
+    recommendedPreset: 'production',
     suggestCrossModelValidation,
     basis
   };
@@ -103,7 +103,7 @@ export function clampAdvisorOutput(raw: unknown): PreScanAdvisorOutput {
   const parsed = PreScanAdvisorSchema.safeParse(raw);
   if (parsed.success) return parsed.data;
   return PreScanAdvisorSchema.parse({
-    recommendedPreset: 'balanced',
+    recommendedPreset: 'production',
     confidence: 0.3,
     rationale: 'Advisor output failed validation; using safe defaults.',
     suggestCrossModelValidation: true,
@@ -112,7 +112,7 @@ export function clampAdvisorOutput(raw: unknown): PreScanAdvisorOutput {
 }
 
 export interface AdvisorApplyResult {
-  appliedPreset: 'budget' | 'balanced' | 'complexity';
+  appliedPreset: IngestionPipelinePresetAdvisor;
   appliedValidation: boolean;
   autoAppliedPreset: boolean;
   autoAppliedValidation: boolean;

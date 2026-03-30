@@ -85,20 +85,20 @@ describe('consumePlatformBudget bypassQuota', () => {
   });
 });
 
-// ─── checkRateLimit (mocked Firestore) ────────────────────────────────────
+// ─── checkRateLimit (mocked sophia_documents compat) ─────────────────────
 
 describe('checkRateLimit', () => {
   const today = new Date().toISOString().slice(0, 10);
 
-  // We mock the firebase-admin module so tests don't need a real GCP connection.
-  // Each test overrides adminDb.runTransaction to simulate different Firestore states.
-  vi.mock('./firebase-admin', () => {
+  // Mock `sophiaDocumentsDb` so tests don't need DATABASE_URL or a real DB.
+  // Each test overrides sophiaDocumentsDb.runTransaction to simulate document state.
+  vi.mock('./sophiaDocumentsDb', () => {
     const mockDb = {
       collection: vi.fn().mockReturnThis(),
       doc: vi.fn().mockReturnThis(),
       runTransaction: vi.fn(),
     };
-    return { adminDb: mockDb };
+    return { sophiaDocumentsDb: mockDb };
   });
 
   beforeEach(() => {
@@ -106,8 +106,8 @@ describe('checkRateLimit', () => {
   });
 
   it('allows a request when count is below the limit', async () => {
-    const { adminDb } = await import('./firebase-admin');
-    (adminDb.runTransaction as ReturnType<typeof vi.fn>).mockImplementationOnce(
+    const { sophiaDocumentsDb } = await import('./sophiaDocumentsDb');
+    (sophiaDocumentsDb.runTransaction as ReturnType<typeof vi.fn>).mockImplementationOnce(
       async (fn: (tx: unknown) => Promise<unknown>) => {
         const tx = {
           get: vi.fn().mockResolvedValue({ data: () => ({ date: today, count: 5 }) }),
@@ -125,8 +125,8 @@ describe('checkRateLimit', () => {
   });
 
   it('blocks a request when count equals the limit', async () => {
-    const { adminDb } = await import('./firebase-admin');
-    (adminDb.runTransaction as ReturnType<typeof vi.fn>).mockImplementationOnce(
+    const { sophiaDocumentsDb } = await import('./sophiaDocumentsDb');
+    (sophiaDocumentsDb.runTransaction as ReturnType<typeof vi.fn>).mockImplementationOnce(
       async (fn: (tx: unknown) => Promise<unknown>) => {
         const tx = {
           get: vi.fn().mockResolvedValue({ data: () => ({ date: today, count: DAILY_QUERY_LIMIT }) }),
@@ -145,9 +145,9 @@ describe('checkRateLimit', () => {
 
   it('resets the counter when the stored date is yesterday', async () => {
     const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-    const { adminDb } = await import('./firebase-admin');
+    const { sophiaDocumentsDb } = await import('./sophiaDocumentsDb');
     const mockSet = vi.fn();
-    (adminDb.runTransaction as ReturnType<typeof vi.fn>).mockImplementationOnce(
+    (sophiaDocumentsDb.runTransaction as ReturnType<typeof vi.fn>).mockImplementationOnce(
       async (fn: (tx: unknown) => Promise<unknown>) => {
         const tx = {
           get: vi.fn().mockResolvedValue({
@@ -170,8 +170,8 @@ describe('checkRateLimit', () => {
   });
 
   it('allows the last request before the limit (count = limit - 1)', async () => {
-    const { adminDb } = await import('./firebase-admin');
-    (adminDb.runTransaction as ReturnType<typeof vi.fn>).mockImplementationOnce(
+    const { sophiaDocumentsDb } = await import('./sophiaDocumentsDb');
+    (sophiaDocumentsDb.runTransaction as ReturnType<typeof vi.fn>).mockImplementationOnce(
       async (fn: (tx: unknown) => Promise<unknown>) => {
         const tx = {
           get: vi.fn().mockResolvedValue({
@@ -191,9 +191,9 @@ describe('checkRateLimit', () => {
   });
 
   it('handles a brand-new user (no doc exists)', async () => {
-    const { adminDb } = await import('./firebase-admin');
+    const { sophiaDocumentsDb } = await import('./sophiaDocumentsDb');
     const mockSet = vi.fn();
-    (adminDb.runTransaction as ReturnType<typeof vi.fn>).mockImplementationOnce(
+    (sophiaDocumentsDb.runTransaction as ReturnType<typeof vi.fn>).mockImplementationOnce(
       async (fn: (tx: unknown) => Promise<unknown>) => {
         const tx = {
           get: vi.fn().mockResolvedValue({ data: () => undefined }),

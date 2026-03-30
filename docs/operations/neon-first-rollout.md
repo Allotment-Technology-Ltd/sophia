@@ -16,7 +16,7 @@ Enable the **pgvector** extension in the Neon project if the editor prompts you.
 | Variable | Purpose |
 |----------|---------|
 | `DATABASE_URL` | Neon pooled connection string (required for durable ingest + optional Firestore mirror) |
-| `SOPHIA_DATA_BACKEND=neon` | Route `adminDb` through Postgres (`sophia_documents`) instead of Firestore |
+| `SOPHIA_DATA_BACKEND=neon` | Route `sophiaDocumentsDb` through Postgres (`sophia_documents`) instead of Google Firestore |
 | `INGEST_ORCHESTRATION_RUN_ID` | Set automatically on admin ingest workers; do not set manually |
 
 See root `.env.example` for full comments.

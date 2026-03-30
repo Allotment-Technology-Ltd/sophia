@@ -72,7 +72,7 @@ export interface IngestRunPayload {
     group: string;
     validate: string;
   };
-  /** Recorded in Firestore for analytics (budget / balanced / complexity). */
+  /** Recorded in Firestore for analytics (production; legacy values may appear on old runs). */
   pipeline_preset?: IngestionPipelinePreset;
   /** Optional link queue record id for self-serve/nightly promotion flow. */
   queue_record_id?: string;

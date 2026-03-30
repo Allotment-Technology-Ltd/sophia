@@ -1,16 +1,29 @@
 /**
- * Preset × pipeline-stage minimum model quality floors for admin ingestion.
- * Budget / balanced / complexity tighten differently based on typical failure modes
- * (weak grouping, relation drift, shallow validation, brittle JSON repair).
- * Wave 1 quality analysis: relation density failures → budget relations floor raised to strong;
- * JSON repair stability → balanced json_repair floor raised to strong.
+ * Production ingestion quality floors for admin model picking (single profile).
+ * Legacy presets (budget / balanced / complexity) map to this profile for analytics and old reports.
  */
 
 import type { IngestionCostTier, IngestionModelCatalogEntry, IngestionQualityTier } from './ingestionModelCatalog';
 import { INGESTION_MODEL_CATALOG } from './ingestionModelCatalog';
 import { isEmbeddingModelEntry } from './ingestionModelCatalogMerge';
+import { INGESTION_PIPELINE_PRESET, type IngestionPipelinePreset } from './ingestionCanonicalPipeline';
 
-export type IngestionPipelinePreset = 'budget' | 'balanced' | 'complexity';
+export type { IngestionPipelinePreset };
+export { INGESTION_PIPELINE_PRESET };
+
+/** Accept legacy stored values; all resolve to the same floors as `production`. */
+export type IngestionPipelinePresetInput =
+	| IngestionPipelinePreset
+	| 'budget'
+	| 'balanced'
+	| 'complexity';
+
+export function normalizeIngestionPipelinePreset(p: IngestionPipelinePresetInput | string | undefined): IngestionPipelinePreset {
+	const v = (p ?? INGESTION_PIPELINE_PRESET).trim().toLowerCase();
+	if (v === INGESTION_PIPELINE_PRESET) return INGESTION_PIPELINE_PRESET;
+	if (v === 'budget' || v === 'balanced' || v === 'complexity') return INGESTION_PIPELINE_PRESET;
+	return INGESTION_PIPELINE_PRESET;
+}
 
 /** Admin / Restormel stage keys (matches RESTORMEL_STAGES[].key). */
 export type IngestionPipelineStageKey =
@@ -101,45 +114,28 @@ export function resolveCatalogQualityCost(entry: CatalogLikeEntry): {
 	};
 }
 
-/** Minimum quality tier for (preset, stage). Embedding may bump under high token pressure. */
+/** Minimum quality tier per stage for the production pipeline (aligned with canonical primaries + structural gates). */
+const PRODUCTION_MIN_QUALITY: Record<string, IngestionQualityTier> = {
+	ingestion_extraction: 'capable',
+	ingestion_relations: 'strong',
+	ingestion_grouping: 'strong',
+	ingestion_validation: 'capable',
+	ingestion_embedding: 'capable',
+	ingestion_json_repair: 'capable'
+};
+
+/** Minimum quality tier for (preset, stage). Legacy presets ignored — all use production floors. */
 export function minimumQualityTierForStage(
-	preset: IngestionPipelinePreset,
+	_preset: IngestionPipelinePresetInput,
 	stageKey: string,
 	options?: { embeddingHighPressure?: boolean }
 ): IngestionQualityTier {
 	if (stageKey === 'ingestion_fetch') return 'capable';
 
-	const table: Record<IngestionPipelinePreset, Record<string, IngestionQualityTier>> = {
-		budget: {
-			ingestion_extraction: 'capable',
-			ingestion_relations: 'strong',
-			ingestion_grouping: 'strong',
-			ingestion_validation: 'strong',
-			ingestion_embedding: 'capable',
-			ingestion_json_repair: 'capable'
-		},
-		balanced: {
-			ingestion_extraction: 'strong',
-			ingestion_relations: 'strong',
-			ingestion_grouping: 'strong',
-			ingestion_validation: 'strong',
-			ingestion_embedding: 'capable',
-			ingestion_json_repair: 'strong'
-		},
-		complexity: {
-			ingestion_extraction: 'strong',
-			ingestion_relations: 'strong',
-			ingestion_grouping: 'frontier',
-			ingestion_validation: 'frontier',
-			ingestion_embedding: 'strong',
-			ingestion_json_repair: 'strong'
-		}
-	};
+	let min = PRODUCTION_MIN_QUALITY[stageKey] ?? 'strong';
 
-	let min = table[preset][stageKey] ?? 'strong';
-
-	if (stageKey === 'ingestion_embedding' && options?.embeddingHighPressure && preset === 'balanced') {
-		if (min === 'capable') min = 'strong';
+	if (stageKey === 'ingestion_embedding' && options?.embeddingHighPressure && min === 'capable') {
+		min = 'strong';
 	}
 
 	return min;
@@ -191,10 +187,10 @@ export function passesStructuralStageGate(
 }
 
 /**
- * Whether the catalog row meets preset × stage minimum quality (and structural gates).
+ * Whether the catalog row meets production minimum quality (and structural gates).
  */
 export function entryMeetsPresetStageMinimum(
-	preset: IngestionPipelinePreset,
+	_preset: IngestionPipelinePresetInput,
 	stageKey: string,
 	entry: CatalogLikeEntry,
 	options?: { embed?: boolean; embeddingHighPressure?: boolean }
@@ -203,28 +199,14 @@ export function entryMeetsPresetStageMinimum(
 	if (!passesStructuralStageGate(stageKey, entry, embed)) return false;
 
 	const { qualityTier } = resolveCatalogQualityCost(entry);
-	const minQ = minimumQualityTierForStage(preset, stageKey, {
+	const minQ = minimumQualityTierForStage(INGESTION_PIPELINE_PRESET, stageKey, {
 		embeddingHighPressure: options?.embeddingHighPressure
 	});
 
-	if (qualityTierAtLeast(qualityTier, minQ)) return true;
-
-	/** Complexity grouping/validation: require frontier in catalog; allow strong if inference says frontier-capable family. */
-	if (preset === 'complexity' && minQ === 'frontier') {
-		if (qualityTier === 'strong') {
-			const blob = labelBlob(entry);
-			const nearFrontier =
-				/(sonnet-4|opus|gpt-5|o3|gemini-2\.5-pro|gemini-3|reasoner|deepseek-r1|mistral-large|command-r\+)/i.test(
-					blob
-				);
-			if (nearFrontier) return true;
-		}
-	}
-
-	return false;
+	return qualityTierAtLeast(qualityTier, minQ);
 }
 
-/** UI indicator per pipeline stage (balanced vs budget floors; na = wrong modality or no LLM). */
+/** UI indicator per pipeline stage. */
 export type IngestionPhaseSuitabilityLevel = 'yes' | 'weak' | 'no' | 'na';
 
 /** Column order aligned with admin ingest Restormel stages. */
@@ -281,18 +263,20 @@ function suitabilityLevelForStage(
 	}
 
 	const embed = stageKey === 'ingestion_embedding';
-	if (entryMeetsPresetStageMinimum('balanced', stageKey, entry, { embed })) {
+	if (entryMeetsPresetStageMinimum(INGESTION_PIPELINE_PRESET, stageKey, entry, { embed })) {
 		return 'yes';
 	}
-	if (entryMeetsPresetStageMinimum('budget', stageKey, entry, { embed })) {
-		return 'weak';
+	// Structural pass + at least capable: operator hint only (below production floor).
+	if (passesStructuralStageGate(stageKey, entry, embed)) {
+		const { qualityTier } = resolveCatalogQualityCost(entry);
+		if (qualityTierAtLeast(qualityTier, 'capable')) return 'weak';
 	}
 	return 'no';
 }
 
 /**
  * Per-stage suitability for the model availability / operations picker.
- * **yes** = meets **balanced** preset floor; **weak** = meets **budget** only; **no** = below budget or structural block; **na** = not applicable (fetch has no LLM; modality mismatch for embed vs chat).
+ * **yes** = meets production floor; **weak** = structurally ok but below production quality; **no** = blocked.
  */
 export function computeIngestionPhaseSuitability(
 	providerType: string,
@@ -323,10 +307,10 @@ export function ingestionPhaseSuitabilityTitle(
 		return `${stage}: embedding models are not used in this stage`;
 	}
 	if (level === 'yes') {
-		return `${stage}: meets balanced preset quality floor (and structural checks)`;
+		return `${stage}: meets production pipeline quality floor`;
 	}
 	if (level === 'weak') {
-		return `${stage}: meets budget preset only — below balanced floor`;
+		return `${stage}: below production floor — usable only for experiments`;
 	}
-	return `${stage}: below budget preset floor or failed structural gate (e.g. size/modality)`;
+	return `${stage}: below production floor or failed structural gate (e.g. size/modality)`;
 }

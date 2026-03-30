@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import type { ModelProvider } from '$lib/types/providers';
 
 type HistoryEntry = {
@@ -22,7 +22,7 @@ export const GET: RequestHandler = async ({ locals }) => {
   }
 
   try {
-    const snapshot = await adminDb
+    const snapshot = await sophiaDocumentsDb
       .collection('users').doc(uid)
       .collection('queries')
       .orderBy('createdAt', 'desc')
@@ -83,7 +83,7 @@ export const DELETE: RequestHandler = async ({ locals, url }) => {
   }
 
   try {
-    await adminDb
+    await sophiaDocumentsDb
       .collection('users').doc(uid)
       .collection('queries').doc(entryId)
       .delete();

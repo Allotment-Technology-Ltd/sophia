@@ -2,7 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
 import { neonGetReportEnvelope } from '$lib/server/db/ingestRunRepository';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 
 const COLLECTION = 'ingestion_run_reports';
@@ -56,7 +56,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
       });
     }
 
-    const snap = await adminDb.collection(COLLECTION).doc(runId).get();
+    const snap = await sophiaDocumentsDb.collection(COLLECTION).doc(runId).get();
     if (!snap.exists) {
       return json({ error: 'Report not found' }, { status: 404 });
     }

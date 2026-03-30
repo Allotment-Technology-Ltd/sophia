@@ -3,6 +3,7 @@ import {
 	computeIngestionPhaseSuitability,
 	entryMeetsPresetStageMinimum,
 	inferQualityTierFromModelIdentity,
+	INGESTION_PIPELINE_PRESET,
 	minimumQualityTierForStage,
 	qualityTierAtLeast,
 	resolveCatalogQualityCost
@@ -17,29 +18,40 @@ describe('qualityTierAtLeast', () => {
 });
 
 describe('minimumQualityTierForStage', () => {
-	it('raises balanced embedding floor under high pressure', () => {
+	it('raises embedding floor under high pressure', () => {
 		expect(
-			minimumQualityTierForStage('balanced', 'ingestion_embedding', { embeddingHighPressure: false })
+			minimumQualityTierForStage(INGESTION_PIPELINE_PRESET, 'ingestion_embedding', {
+				embeddingHighPressure: false
+			})
 		).toBe('capable');
 		expect(
-			minimumQualityTierForStage('balanced', 'ingestion_embedding', { embeddingHighPressure: true })
+			minimumQualityTierForStage(INGESTION_PIPELINE_PRESET, 'ingestion_embedding', {
+				embeddingHighPressure: true
+			})
 		).toBe('strong');
 	});
 
-	it('uses frontier for complexity grouping and validation', () => {
-		expect(minimumQualityTierForStage('complexity', 'ingestion_grouping')).toBe('frontier');
-		expect(minimumQualityTierForStage('complexity', 'ingestion_validation')).toBe('frontier');
+	it('uses strong for relations and grouping', () => {
+		expect(minimumQualityTierForStage(INGESTION_PIPELINE_PRESET, 'ingestion_relations')).toBe('strong');
+		expect(minimumQualityTierForStage(INGESTION_PIPELINE_PRESET, 'ingestion_grouping')).toBe('strong');
 	});
 
-	it('uses strong json repair for balanced preset', () => {
-		expect(minimumQualityTierForStage('balanced', 'ingestion_json_repair')).toBe('strong');
+	it('uses capable for extraction, validation, and json repair', () => {
+		expect(minimumQualityTierForStage(INGESTION_PIPELINE_PRESET, 'ingestion_extraction')).toBe('capable');
+		expect(minimumQualityTierForStage(INGESTION_PIPELINE_PRESET, 'ingestion_validation')).toBe('capable');
+		expect(minimumQualityTierForStage(INGESTION_PIPELINE_PRESET, 'ingestion_json_repair')).toBe('capable');
+	});
+
+	it('maps legacy preset inputs to production floors', () => {
+		expect(minimumQualityTierForStage('budget', 'ingestion_extraction')).toBe('capable');
+		expect(minimumQualityTierForStage('complexity', 'ingestion_grouping')).toBe('strong');
 	});
 });
 
 describe('entryMeetsPresetStageMinimum', () => {
-	it('rejects tiny models for extraction even on budget', () => {
+	it('accepts capable extraction models that pass structural gates', () => {
 		expect(
-			entryMeetsPresetStageMinimum('budget', 'ingestion_extraction', {
+			entryMeetsPresetStageMinimum(INGESTION_PIPELINE_PRESET, 'ingestion_extraction', {
 				label: 'openai · gpt-4o-mini',
 				provider: 'openai',
 				modelId: 'gpt-4o-mini',
@@ -49,7 +61,7 @@ describe('entryMeetsPresetStageMinimum', () => {
 		).toBe(true);
 
 		expect(
-			entryMeetsPresetStageMinimum('budget', 'ingestion_extraction', {
+			entryMeetsPresetStageMinimum(INGESTION_PIPELINE_PRESET, 'ingestion_extraction', {
 				label: 'x · tiny-3b-instruct',
 				provider: 'x',
 				modelId: 'tiny-3b-instruct',
@@ -59,10 +71,9 @@ describe('entryMeetsPresetStageMinimum', () => {
 		).toBe(false);
 	});
 
-
-	it('requires strong relations for budget preset (Wave 1 relation-density signal)', () => {
+	it('requires strong relations', () => {
 		expect(
-			entryMeetsPresetStageMinimum('budget', 'ingestion_relations', {
+			entryMeetsPresetStageMinimum(INGESTION_PIPELINE_PRESET, 'ingestion_relations', {
 				label: 'openai · gpt-4o-mini',
 				provider: 'openai',
 				modelId: 'gpt-4o-mini',
@@ -72,7 +83,7 @@ describe('entryMeetsPresetStageMinimum', () => {
 		).toBe(false);
 
 		expect(
-			entryMeetsPresetStageMinimum('budget', 'ingestion_relations', {
+			entryMeetsPresetStageMinimum(INGESTION_PIPELINE_PRESET, 'ingestion_relations', {
 				label: 'openai · gpt-4o',
 				provider: 'openai',
 				modelId: 'gpt-4o',
@@ -82,9 +93,9 @@ describe('entryMeetsPresetStageMinimum', () => {
 		).toBe(true);
 	});
 
-	it('requires strong grouping for budget preset', () => {
+	it('requires strong grouping', () => {
 		expect(
-			entryMeetsPresetStageMinimum('budget', 'ingestion_grouping', {
+			entryMeetsPresetStageMinimum(INGESTION_PIPELINE_PRESET, 'ingestion_grouping', {
 				label: 'anthropic · claude-haiku-4-5-20251001',
 				provider: 'anthropic',
 				modelId: 'claude-haiku-4-5-20251001',
@@ -94,7 +105,7 @@ describe('entryMeetsPresetStageMinimum', () => {
 		).toBe(false);
 
 		expect(
-			entryMeetsPresetStageMinimum('budget', 'ingestion_grouping', {
+			entryMeetsPresetStageMinimum(INGESTION_PIPELINE_PRESET, 'ingestion_grouping', {
 				label: 'anthropic · claude-sonnet-4-20250514',
 				provider: 'anthropic',
 				modelId: 'claude-sonnet-4-20250514',
@@ -104,7 +115,7 @@ describe('entryMeetsPresetStageMinimum', () => {
 		).toBe(true);
 	});
 
-	it('allows near-frontier strong models for complexity grouping', () => {
+	it('allows strong models for grouping (legacy complexity-style picks)', () => {
 		expect(
 			entryMeetsPresetStageMinimum('complexity', 'ingestion_grouping', {
 				label: 'anthropic · claude-sonnet-4-5-20250929',
@@ -157,13 +168,13 @@ describe('computeIngestionPhaseSuitability', () => {
 		expect(m.ingestion_embedding).toBe('yes');
 	});
 
-	it('returns weak when only budget preset passes', () => {
+	it('returns yes for capable extraction and weak for grouping when only capable-tier', () => {
 		const m = computeIngestionPhaseSuitability('anthropic', 'claude-haiku-4-5-20251001', false, {
 			label: 'Haiku',
 			qualityTier: 'capable',
 			costTier: 'low'
 		});
-		expect(m.ingestion_extraction).toBe('weak');
-		expect(m.ingestion_grouping).toBe('no');
+		expect(m.ingestion_extraction).toBe('yes');
+		expect(m.ingestion_grouping).toBe('weak');
 	});
 });

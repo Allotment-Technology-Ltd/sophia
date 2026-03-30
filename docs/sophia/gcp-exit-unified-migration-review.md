@@ -48,7 +48,7 @@ From [`infra/index.ts`](../../infra/index.ts) (and `bin/index.js`):
 | Resource | Role |
 | -------- | ---- |
 | **Artifact Registry** (`gcp.artifactregistry.Repository`) | Stores **Docker images** for Cloud Run (app + ingest). Stays relevant as long as you deploy on GCP; **not** replaced by Neon. |
-| **Firestore** (`roles/datastore.user` on the app SA) | **Database** access for `firebase-admin` Firestore — this **is** in scope for moving **data** to Neon Postgres, but it is **not** GCS. |
+| **Firestore** (`roles/datastore.user` on the app SA) | Legacy Google Firestore IAM; app data now targets Neon `sophia_documents` via `sophiaDocumentsDb`. **Not** GCS. |
 | **Cloud Logging** (`roles/logging.logWriter`) | Logs, not blobs. |
 
 No Pulumi-managed **Cloud Storage bucket** for app data appears in the infra files reviewed.
@@ -105,7 +105,7 @@ This section is grounded in [`infra/index.ts`](../../infra/index.ts), [`svelte.c
 | **Jobs** | Cloud Run Jobs: ingestion + nightly link ingest; Cloud Scheduler triggers nightly job | Long timeouts, VPC, **not** a good fit for vanilla serverless HTTP without redesign. |
 | **Networking** | Serverless VPC connector (`minInstances: 2`, `maxInstances: 10`), firewall to DB | Common **cost driver**; required for private SurrealDB reachability from Cloud Run. |
 | **Data plane** | SurrealDB at **private** `SURREAL_URL` → `http://10.154.0.2:8000/rpc` (from Pulumi env) | Documented as GCE VM in runbooks (`docs/archive/delivery/gcp-org-migration.md`); VM not fully defined in the scanned `infra/index.ts` slice—likely manual or another stack. **Any “just use Vercel” plan must solve DB connectivity.** |
-| **Firebase** | Auth + Firestore (`firebase-admin`, `roles/datastore.user` on app SA) | Matches `docs/sophia/architecture.md`: history, BYOK, billing, entitlements. Neon direction replaces this data/auth layer but **requires application work**. |
+| **Firebase** | Legacy Auth + Firestore (`roles/datastore.user` on app SA); Neon Auth + `sophiaDocumentsDb` replace these in current direction | Matches `docs/sophia/architecture.md`: history, BYOK, billing, entitlements. |
 | **Vertex AI** | `GOOGLE_VERTEX_PROJECT`, `roles/aiplatform.user` on app + ingest SAs | Used for embeddings / Gemini-style routes (`src/lib/server/vertex.ts`). **Can move off GCP billing** with **Google AI Studio API keys** (`GOOGLE_AI_API_KEY`) or non-Google providers—**without** hosting on GCP, if code paths support it. |
 | **Secrets** | Secret Manager secrets wired in Cloud Run | Replace with Vercel env, Doppler, 1Password, etc. |
 | **Edge / TLS** | Global HTTPS LB, managed certs, static IP for `usesophia.app` / `www` | Replace with host-provided TLS (Vercel, Cloudflare, etc.) or smaller LB elsewhere. |

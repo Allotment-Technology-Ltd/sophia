@@ -1,13 +1,13 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { migrateLegacyRoleToken } from '$lib/server/authRoles';
 
 export const GET: RequestHandler = async ({ locals }) => {
   assertAdminAccess(locals);
 
-  const snap = await adminDb.collection('users').get();
+  const snap = await sophiaDocumentsDb.collection('users').get();
   const users = snap.docs.map((d) => {
     const x = d.data() as Record<string, unknown>;
     const role = migrateLegacyRoleToken(x.role) ?? 'user';

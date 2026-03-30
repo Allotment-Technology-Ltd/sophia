@@ -422,6 +422,49 @@ export async function setupSchema(existingDb?: Surreal) {
 		`);
 		console.log('[SETUP] ✓ Indexes: link_ingestion_queue (canonical_hash, status, last_submitted_at)');
 
+		// 15. THINKER GRAPH TABLES
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS thinker SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS wikidata_id ON thinker TYPE string;
+			DEFINE FIELD IF NOT EXISTS name ON thinker TYPE string;
+			DEFINE FIELD IF NOT EXISTS birth_year ON thinker TYPE option<int>;
+			DEFINE FIELD IF NOT EXISTS death_year ON thinker TYPE option<int>;
+			DEFINE FIELD IF NOT EXISTS traditions ON thinker TYPE array<string>;
+			DEFINE FIELD IF NOT EXISTS domains ON thinker TYPE array<string>;
+			DEFINE FIELD IF NOT EXISTS imported_at ON thinker TYPE datetime;
+		`);
+		console.log('[SETUP] ✓ Table: thinker');
+
+		await db.query(`
+			DEFINE INDEX IF NOT EXISTS thinker_wikidata_id ON thinker FIELDS wikidata_id UNIQUE;
+			DEFINE INDEX IF NOT EXISTS thinker_name ON thinker FIELDS name;
+		`);
+		console.log('[SETUP] ✓ Indexes: thinker (wikidata_id, name)');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS influenced_by TYPE RELATION IN thinker OUT thinker SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS relation_subtype ON influenced_by TYPE string
+				ASSERT $value IN ['influenced_by', 'inspired_by'];
+			DEFINE FIELD IF NOT EXISTS imported_at ON influenced_by TYPE datetime;
+		`);
+		console.log('[SETUP] ✓ Relation: influenced_by');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS student_of TYPE RELATION IN thinker OUT thinker SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS relation_subtype ON student_of TYPE string
+				ASSERT $value IN ['student_of'];
+			DEFINE FIELD IF NOT EXISTS imported_at ON student_of TYPE datetime;
+		`);
+		console.log('[SETUP] ✓ Relation: student_of');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS authored TYPE RELATION IN thinker OUT source SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS match_type ON authored TYPE string;
+			DEFINE FIELD IF NOT EXISTS confidence ON authored TYPE float;
+			DEFINE FIELD IF NOT EXISTS linked_at ON authored TYPE datetime;
+		`);
+		console.log('[SETUP] ✓ Relation: authored');
+
 		// Verify schema by querying table counts
 		console.log('\n[SETUP] Verifying schema...');
 
@@ -439,7 +482,11 @@ export async function setupSchema(existingDb?: Surreal) {
 			'part_of',
 			'review_audit_log',
 			'query_cache',
-			'link_ingestion_queue'
+			'link_ingestion_queue',
+			'thinker',
+			'influenced_by',
+			'student_of',
+			'authored'
 		];
 
 		for (const table of tables) {
@@ -454,6 +501,7 @@ export async function setupSchema(existingDb?: Surreal) {
 		console.log('  • claim (individual philosophical claims with embeddings)');
 		console.log('  • argument (philosophical arguments)');
 		console.log('  • review_audit_log (moderation and promotion audit trail)');
+		console.log('  • thinker (philosopher nodes from Wikidata)');
 		console.log('\nRelation tables created:');
 		console.log('  • supports (claim supports claim)');
 		console.log('  • contradicts (claim contradicts claim)');
@@ -461,7 +509,10 @@ export async function setupSchema(existingDb?: Surreal) {
 		console.log('  • responds_to (claim responds to claim)');
 		console.log('  • defines (claim defines claim)');
 		console.log('  • qualifies (claim qualifies claim)');
-		console.log('  • part_of (claim is part of argument)\n');
+		console.log('  • part_of (claim is part of argument)');
+		console.log('  • influenced_by (thinker influenced_by thinker)');
+		console.log('  • student_of (thinker student_of thinker)');
+		console.log('  • authored (thinker authored source)\n');
 
 		if (ownsConnection) {
 			await db.close();

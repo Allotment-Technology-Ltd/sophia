@@ -1,6 +1,6 @@
 import { Timestamp } from '$lib/server/fsCompat';
 import { PostHog } from 'posthog-node';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 
 export interface ServerAnalyticsEvent {
   event: string;
@@ -58,7 +58,7 @@ async function sendToPostHog(event: ServerAnalyticsEvent): Promise<void> {
 }
 
 async function sendToFirestore(event: ServerAnalyticsEvent): Promise<void> {
-  await adminDb.collection('analytics').add({
+  await sophiaDocumentsDb.collection('analytics').add({
     ...event,
     created_at: Timestamp.now()
   });

@@ -1,6 +1,6 @@
 /**
- * Firestore-shaped API on `sophia_documents` when `useNeonDatastore()` is true
- * (DATABASE_URL set and SOPHIA_DATA_BACKEND not `firestore`).
+ * Firestore-shaped API on Neon Postgres table `sophia_documents` when `useNeonDatastore()` is true.
+ * The app imports the singleton as `sophiaDocumentsDb` from `sophiaDocumentsDb.ts` (not Google Firestore).
  */
 
 import { Timestamp } from '$lib/server/fsCompat';

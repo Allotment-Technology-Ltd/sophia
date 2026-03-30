@@ -62,6 +62,7 @@ data/sources/*.txt
 data/sources/*.meta.json
 data/ingested/*.json
 data/ingested/*.raw.txt
+data/thinker-graph/philosophers.json
 
 # Database files
 *.db

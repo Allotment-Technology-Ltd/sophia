@@ -23,7 +23,7 @@ RUN pnpm install --frozen-lockfile
 # Copy source code
 COPY . .
 
-# `vite build` / SvelteKit postbuild analyse import server chunks that load `firebase-admin.ts`,
+# `vite build` / SvelteKit postbuild analyse import server chunks that load `sophiaDocumentsDb.ts`,
 # which requires `DATABASE_URL` when `SOPHIA_DATA_BACKEND=neon`. Runtime gets the real URL from
 # Cloud Run secrets; the builder only needs a syntactically valid placeholder (no connection).
 ENV DATABASE_URL=postgresql://sveltekit_build_placeholder@127.0.0.1:5432/postgres?sslmode=disable

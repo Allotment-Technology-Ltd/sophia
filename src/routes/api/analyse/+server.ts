@@ -5,7 +5,7 @@ import type { SSEEvent } from '$lib/types/api';
 import type { RunTrace } from '@restormel/contracts/trace';
 import { createHash, randomUUID } from 'node:crypto';
 import { query as dbQuery } from '$lib/server/db';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { eventsToTrace, serializeReasoningEvent } from '@restormel/observability';
 import { runVerificationPipeline } from '$lib/server/verification/pipeline';
 import { runDepthEnrichment } from '$lib/server/enrichment/pipeline';
@@ -121,7 +121,7 @@ type LinkQueueRow = {
 
 async function loadFirestoreCache(uid: string, queryHash: string): Promise<SSEEvent[] | null> {
   try {
-    const snapshot = await adminDb
+    const snapshot = await sophiaDocumentsDb
       .collection('users').doc(uid)
       .collection('queries')
       .where('queryHash', '==', queryHash)
@@ -156,7 +156,7 @@ async function saveFirestoreCache(
 ): Promise<void> {
   try {
     const storageEvents = events.filter((e) => REPLAY_EVENT_TYPES.has(e.type));
-    await adminDb
+    await sophiaDocumentsDb
       .collection('users').doc(uid)
       .collection('queries')
       .add({

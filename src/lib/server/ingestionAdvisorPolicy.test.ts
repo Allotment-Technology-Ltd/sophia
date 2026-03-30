@@ -51,32 +51,30 @@ describe('getAdvisorAutoApplyFields', () => {
 });
 
 describe('heuristicPresetFromPreScan', () => {
-  it('uses budget for small sources', () => {
-    const h = heuristicPresetFromPreScan(1000);
-    expect(h.recommendedPreset).toBe('budget');
-    expect(h.basis).toContain('18k');
-  });
+  it('always recommends production; validation scales with source size', () => {
+    const small = heuristicPresetFromPreScan(1000);
+    expect(small.recommendedPreset).toBe('production');
+    expect(small.suggestCrossModelValidation).toBe(false);
 
-  it('uses balanced for mid sources', () => {
-    const h = heuristicPresetFromPreScan(50_000);
-    expect(h.recommendedPreset).toBe('balanced');
-  });
+    const medium = heuristicPresetFromPreScan(50_000);
+    expect(medium.recommendedPreset).toBe('production');
+    expect(medium.suggestCrossModelValidation).toBe(true);
 
-  it('uses complexity for large sources', () => {
-    const h = heuristicPresetFromPreScan(100_000);
-    expect(h.recommendedPreset).toBe('complexity');
+    const large = heuristicPresetFromPreScan(100_000);
+    expect(large.recommendedPreset).toBe('production');
+    expect(large.suggestCrossModelValidation).toBe(true);
   });
 
   it('clamps non-positive token input', () => {
     const h = heuristicPresetFromPreScan(0);
-    expect(h.recommendedPreset).toBe('budget');
+    expect(h.recommendedPreset).toBe('production');
   });
 });
 
 describe('resolveAdvisorApply', () => {
   const baseline = heuristicPresetFromPreScan(20_000);
   const suggestion = {
-    recommendedPreset: 'complexity' as const,
+    recommendedPreset: 'production' as const,
     confidence: 0.9,
     rationale: 'test',
     suggestCrossModelValidation: false
@@ -86,12 +84,12 @@ describe('resolveAdvisorApply', () => {
     const r = resolveAdvisorApply('shadow', suggestion, baseline, new Set(['preset', 'validation']));
     expect(r.appliedPreset).toBe(baseline.recommendedPreset);
     expect(r.autoAppliedPreset).toBe(false);
-    expect(r.shadowDiff.presetChangedVsHeuristic).toBe(true);
+    expect(r.shadowDiff.presetChangedVsHeuristic).toBe(false);
   });
 
   it('auto applies allowlisted fields', () => {
     const r = resolveAdvisorApply('auto', suggestion, baseline, new Set(['preset', 'validation']));
-    expect(r.appliedPreset).toBe('complexity');
+    expect(r.appliedPreset).toBe('production');
     expect(r.appliedValidation).toBe(false);
     expect(r.autoAppliedPreset).toBe(true);
     expect(r.autoAppliedValidation).toBe(true);
@@ -99,26 +97,26 @@ describe('resolveAdvisorApply', () => {
 
   it('auto respects preset-only allowlist', () => {
     const r = resolveAdvisorApply('auto', suggestion, baseline, new Set(['preset']));
-    expect(r.appliedPreset).toBe('complexity');
+    expect(r.appliedPreset).toBe('production');
     expect(r.appliedValidation).toBe(baseline.suggestCrossModelValidation);
     expect(r.autoAppliedValidation).toBe(false);
   });
 });
 
 describe('clampAdvisorOutput', () => {
-  it('returns valid objects unchanged', () => {
+  it('normalizes legacy preset strings to production', () => {
     const o = {
       recommendedPreset: 'balanced' as const,
       confidence: 0.5,
       rationale: 'ok',
       suggestCrossModelValidation: true
     };
-    expect(clampAdvisorOutput(o)).toEqual(o);
+    expect(clampAdvisorOutput(o).recommendedPreset).toBe('production');
   });
 
   it('repairs invalid input', () => {
     const c = clampAdvisorOutput({ nonsense: true });
-    expect(c.recommendedPreset).toBe('balanced');
-    expect(c.rationale).toContain('validation');
+    expect(c.recommendedPreset).toBe('production');
+    expect(c.rationale).toContain('safe defaults');
   });
 });

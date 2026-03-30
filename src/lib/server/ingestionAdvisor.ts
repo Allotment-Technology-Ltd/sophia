@@ -17,7 +17,7 @@ import {
   type IngestionAdvisorMode,
   type PreScanAdvisorOutput
 } from '$lib/server/ingestionAdvisorPolicy';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import {
   clampCoachOutput,
   COACH_SCHEMA,
@@ -91,10 +91,10 @@ function buildPreScanAdvisorPrompt(input: {
 }): string {
   return `You are a systems planner for a philosophy corpus ingestion pipeline (fetch → extract claims → relations → grouping → optional validation → embeddings → store).
 
-Given pre-scan metadata, recommend ONE pipeline preset for the operator UI and whether cross-model validation is worthwhile.
+Given pre-scan metadata, confirm the fixed **production** pipeline profile and whether cross-model validation is worthwhile (the only operator-facing cost/quality lever besides per-stage models).
 
-**Heuristic baseline (deterministic — you may agree or override with clear reason):**
-- Recommended preset: ${input.heuristic.recommendedPreset}
+**Heuristic baseline (deterministic — you may agree or override validation only; preset is always production):**
+- Pipeline profile: ${input.heuristic.recommendedPreset}
 - Suggest cross-model validation: ${input.heuristic.suggestCrossModelValidation}
 - Basis: ${input.heuristic.basis}
 
@@ -107,7 +107,7 @@ Given pre-scan metadata, recommend ONE pipeline preset for the operator UI and w
 **Phase token estimates (JSON):**
 ${input.phaseEstimatesJson}
 
-Respond with structured fields only. Prefer cost-aware choices when quality risk is low; prefer stronger presets when the source is long, dense, or likely to stress JSON/schema conformance.`;
+Respond with structured fields only. Set recommendedPreset to "production". Prefer cost-aware choices when quality risk is low; recommend validation when the source is long, dense, or likely to stress JSON/schema conformance.`;
 }
 
 const PRECAN_SYSTEM = `You output only the required JSON object. Be concise in rationale. Never suggest skipping validation solely to save cost when the source is large or structurally messy.`;
@@ -126,7 +126,7 @@ export interface AdvisorApiEnvelope {
   heuristicBaseline: HeuristicBaseline;
   suggestion: PreScanAdvisorOutput | null;
   applied: {
-    preset: 'budget' | 'balanced' | 'complexity';
+    preset: 'production';
     runValidate: boolean;
   };
   autoApplied: {
@@ -247,7 +247,7 @@ export async function runIngestionCoach(limit: number): Promise<{
   const cap = Math.min(100, Math.max(3, limit));
   let snap;
   try {
-    snap = await adminDb
+    snap = await sophiaDocumentsDb
       .collection(REPORTS_COLLECTION)
       .orderBy('completedAt', 'desc')
       .limit(cap)

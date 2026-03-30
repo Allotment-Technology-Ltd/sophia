@@ -1,5 +1,9 @@
 import { FieldValue, Timestamp } from '$lib/server/fsCompat';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
+
+function getConfiguredOwnerUids(): string[] {
+  return process.env.OWNER_UIDS?.split(',').map((value) => value.trim()).filter(Boolean) ?? [];
+}
 
 export const APP_USER_ROLE_VALUES = ['user', 'owner'] as const;
 export type AppUserRole = (typeof APP_USER_ROLE_VALUES)[number];
@@ -62,8 +66,10 @@ function resolvePrimaryRole(data: Record<string, unknown> | undefined, email: st
   return 'user';
 }
 
-export function hasOwnerRole(user: { role?: string | null; roles?: string[] | null } | null | undefined): boolean {
+export function hasOwnerRole(user: { uid?: string; role?: string | null; roles?: string[] | null } | null | undefined): boolean {
   if (!user) return false;
+  const uid = user.uid?.trim();
+  if (uid && getConfiguredOwnerUids().includes(uid)) return true;
   if (migrateLegacyRoleToken(user.role) === 'owner') return true;
   return (
     Array.isArray(user.roles) && user.roles.some((r) => migrateLegacyRoleToken(r) === 'owner')
@@ -80,7 +86,7 @@ async function legacyAppRolesFromOtherUserDocsByEmail(
 ): Promise<AppUserRole[]> {
   if (!email) return [];
   try {
-    const snap = await adminDb.collection('users').where('email', '==', email).limit(25).get();
+    const snap = await sophiaDocumentsDb.collection('users').where('email', '==', email).limit(25).get();
     const found: AppUserRole[] = [];
     for (const doc of snap.docs) {
       if (doc.id === currentUid) continue;
@@ -105,7 +111,7 @@ export async function syncAuthenticatedUserRole(
   profile: AuthenticatedUserProfile
 ): Promise<UserRoleRecord> {
   const email = normalizeEmail(profile.email);
-  const ref = adminDb.collection('users').doc(profile.uid);
+  const ref = sophiaDocumentsDb.collection('users').doc(profile.uid);
   const snapshot = await ref.get();
   const existing = snapshot.exists ? (snapshot.data() as Record<string, unknown>) : undefined;
 
@@ -164,7 +170,7 @@ export function isLastOwnerDemotion(params: {
 }
 
 export async function countOwnerUsersInFirestore(): Promise<number> {
-  const snap = await adminDb.collection('users').get();
+  const snap = await sophiaDocumentsDb.collection('users').get();
   let n = 0;
   for (const doc of snap.docs) {
     if (isOwnerUserDoc(doc.data() as Record<string, unknown>)) n += 1;
@@ -178,7 +184,7 @@ export async function assignOwnerRoleByEmail(email: string): Promise<{ uid: stri
     throw new Error('A valid email is required to assign owner role.');
   }
 
-  const snapshot = await adminDb
+  const snapshot = await sophiaDocumentsDb
     .collection('users')
     .where('email', '==', normalizedEmail)
     .limit(1)

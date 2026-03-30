@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const setMock = vi.fn(async () => undefined);
-vi.mock('$lib/server/firebase-admin', () => ({
-  adminDb: {
+vi.mock('$lib/server/sophiaDocumentsDb', () => ({
+  sophiaDocumentsDb: {
     collection: vi.fn(() => ({
       doc: vi.fn(() => ({
         collection: vi.fn(() => ({

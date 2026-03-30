@@ -3,7 +3,10 @@
   import { getIdToken } from '$lib/authClient';
   import { isEmbeddingModelEntry } from '$lib/ingestionModelCatalogMerge';
   import { INGESTION_SOURCE_MODEL_HINTS } from '$lib/ingestionModelCatalog';
-  import { entryMeetsPresetStageMinimum } from '$lib/ingestionPipelineModelRequirements';
+  import {
+    entryMeetsPresetStageMinimum,
+    INGESTION_PIPELINE_PRESET
+  } from '$lib/ingestionPipelineModelRequirements';
   import { resolveRouteForStage } from '$lib/utils/ingestionRouting';
   import {
     COACH_UI_VARIABLE_LABELS,
@@ -15,7 +18,7 @@
 
   type StageStatus = 'idle' | 'running' | 'done' | 'error' | 'skipped';
   type FlowState = 'setup' | 'running' | 'awaiting_sync' | 'done' | 'error';
-  type PipelinePreset = 'budget' | 'balanced' | 'complexity';
+  type PipelinePreset = typeof INGESTION_PIPELINE_PRESET;
 
   type Stage = {
     key: string;
@@ -557,7 +560,7 @@
     if (!row) return;
     const list = modelsForStage(row);
     if (list.length === 0) return;
-    const presetForFloor = selectedPreset ?? 'balanced';
+    const presetForFloor = INGESTION_PIPELINE_PRESET;
 
     // Ensure validation PRIMARY differs from Extraction / Relations / Grouping to avoid self-review bias.
     const currentPrimary = getCatalogEntryByStableId(stageModelIds[row.key] ?? '');
@@ -696,11 +699,11 @@
     return preScanEstimateForRow(row.key)?.totalTokens ?? 0;
   }
 
-  /** Preset-aware floors: budget / balanced / complexity (see `ingestionPipelineModelRequirements.ts`). */
+  /** Production quality floors (see `ingestionPipelineModelRequirements.ts`). */
   function isStageMinimumViableModel(
     row: (typeof RESTORMEL_STAGES)[number],
     entry: CatalogEntry,
-    preset: PipelinePreset = 'balanced'
+    preset: PipelinePreset = INGESTION_PIPELINE_PRESET
   ): boolean {
     if (row.key === 'ingestion_fetch') return true;
     const embeddingHighPressure = row.embed && stageTokens(row) >= 180_000;
@@ -751,11 +754,10 @@
     // Presets should always respect phase minimums, then prefer recommended fits.
     const candidateOptions = recommendedOptions.length > 0 ? recommendedOptions : minimumViable;
 
-    const hints = INGESTION_SOURCE_MODEL_HINTS[sourceTypeForHints()];
-    const hintedLabel =
-      preset === 'budget' ? hints.budget : preset === 'complexity' ? hints.quality : hints.balanced;
-    const hinted = parseHintLabel(hintedLabel);
     const sourceTokens = sourcePreScanResult?.preScan?.approxContentTokens ?? 0;
+    const hints = INGESTION_SOURCE_MODEL_HINTS[sourceTypeForHints()];
+    const hintedLabel = sourceTokens >= 40_000 ? hints.quality : hints.balanced;
+    const hinted = parseHintLabel(hintedLabel);
     const phaseTokens = stageTokens(row);
     const largeSource = sourceTokens >= 18_000;
     const veryLargeSource = sourceTokens >= 40_000;
@@ -792,22 +794,20 @@
       );
 
       let score = 0;
-      if (preset === 'budget') {
-        score =
-          sourceBoost + costSignal * 1.4 + speedSignal + rateFriendly + (row.embed ? 0.5 : 0) - qualitySignal * 0.35;
-      } else if (preset === 'balanced') {
-        score = sourceBoost + recommendationBoost + speedSignal * 0.7 + qualitySignal * 0.9 + rateFriendly + (2 - Math.abs(cost - 1.2));
-      } else {
-        score =
-          sourceBoost + recommendationBoost * 1.2 + qualitySignal * 1.8 + rateFriendly * 0.4 + Math.min(cost, 8) * 0.25 - speedSignal * 0.2;
-      }
+      score =
+        sourceBoost +
+        recommendationBoost +
+        speedSignal * 0.7 +
+        qualitySignal * 0.9 +
+        rateFriendly +
+        (2 - Math.abs(cost - 1.2));
 
       // Hardening from prior ingestion runs:
       // - very heavy reasoning models are fragile under high token pressure/rate limits
       // - JSON repair should prioritize deterministic/faster options
       // - embedding on large sources should prefer throughput-friendly variants
       if ((heavyGroupingStage || heavyValidationStage || veryLargeSource) && heavyweightReasoner) {
-        score -= preset === 'complexity' ? 0.6 : 2.2;
+        score -= 2.2;
       }
       if ((heavyGroupingStage || heavyValidationStage) && rateFriendly) {
         score += 0.9;
@@ -834,7 +834,7 @@
     return best;
   }
 
-  function applyPipelinePreset(preset: PipelinePreset): void {
+  function applyPipelinePreset(preset: PipelinePreset = INGESTION_PIPELINE_PRESET): void {
     if (runInProgress()) return;
     const nextModelIds = { ...stageModelIds };
     const nextProviders = { ...stageProviders };
@@ -891,7 +891,7 @@
     ensureValidationModelIsIndependent();
     selectedPreset = preset;
     const sourceLabel = SOURCE_TYPES.find((option) => option.value === sourceType)?.label ?? sourceType;
-    const presetLabel = preset === 'budget' ? 'Budget' : preset === 'complexity' ? 'Complexity' : 'Balanced';
+    const presetLabel = 'Production';
     const hardened = sourcePreScanResult ? ' with hardening heuristics from pre-scan load profile.' : '.';
     if (missingMinimumStages.length > 0) {
       presetMessage = `${presetLabel} preset applied for ${sourceLabel}${hardened} No minimum-viable model available for: ${missingMinimumStages.join(', ')}.`;
@@ -2053,7 +2053,7 @@
   }
 
   function pipelinePresetChosen(): boolean {
-    return selectedPreset !== null;
+    return ingestionModelsReady();
   }
 
   function costTabComplete(): boolean {
@@ -2184,8 +2184,8 @@
     switch (tw.scope) {
       case 'ui_preset': {
         const p = tw.preset;
-        if (p === 'budget' || p === 'balanced' || p === 'complexity') {
-          applyPipelinePreset(p);
+        if (p === 'production' || p === 'budget' || p === 'balanced' || p === 'complexity') {
+          applyPipelinePreset(INGESTION_PIPELINE_PRESET);
         }
         break;
       }
@@ -2447,7 +2447,7 @@
           source_type: sourceType,
           validate: runValidate,
           stop_before_store: true,
-          pipeline_preset: selectedPreset ?? 'balanced',
+          pipeline_preset: INGESTION_PIPELINE_PRESET,
           embedding_model: stageModelIds.ingestion_embedding,
           batch_overrides: mergedBatchOverrides,
           model_chain: {
@@ -3224,7 +3224,7 @@
 
               <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/45 p-3">
                 <div class="flex flex-wrap items-start justify-between gap-4">
-                  <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Pipeline presets</p>
+                  <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Production pipeline</p>
                   <button
                     type="button"
                     disabled={runInProgress()}
@@ -3237,40 +3237,27 @@
 
                 <div class="mt-4 rounded border border-sophia-dark-border/70 bg-sophia-dark-bg/30 p-4" role="group" aria-labelledby="ingestion-depth-label">
                   <p id="ingestion-depth-label" class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
-                    Ingestion depth
+                    Model defaults
                   </p>
                   <p class="mt-2 text-xs text-sophia-dark-muted">
-                    Choose how strongly models are weighted for each stage—budget (lean), balanced, or complexity (heavier reasoning). You need to pick one before continuing.
+                    Ingestion uses one production profile: per-stage models below follow production quality floors, tuned for
+                    your source type. The worker also applies canonical model fallbacks when a stage’s primary fails after
+                    retries (unless you pin stages via env). Use <span class="font-mono">Apply production defaults</span> to
+                    repopulate picks from the current catalog and routes.
                   </p>
                   <div class="mt-4 flex flex-wrap gap-2">
                     <button
                       type="button"
                       disabled={runInProgress()}
-                      onclick={() => applyPipelinePreset('budget')}
-                      class="rounded border px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] disabled:opacity-50 {selectedPreset === 'budget' ? 'border-sophia-dark-sage/45 bg-sophia-dark-sage/14 text-sophia-dark-sage' : 'border-sophia-dark-border text-sophia-dark-muted hover:bg-sophia-dark-surface-raised'}"
+                      onclick={() => applyPipelinePreset()}
+                      class="min-h-11 rounded border px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] disabled:opacity-50 {selectedPreset === INGESTION_PIPELINE_PRESET ? 'border-sophia-dark-sage/45 bg-sophia-dark-sage/14 text-sophia-dark-sage' : 'border-sophia-dark-border text-sophia-dark-muted hover:bg-sophia-dark-surface-raised'}"
                     >
-                      Budget
-                    </button>
-                    <button
-                      type="button"
-                      disabled={runInProgress()}
-                      onclick={() => applyPipelinePreset('balanced')}
-                      class="rounded border px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] disabled:opacity-50 {selectedPreset === 'balanced' ? 'border-sophia-dark-sage/45 bg-sophia-dark-sage/14 text-sophia-dark-sage' : 'border-sophia-dark-border text-sophia-dark-muted hover:bg-sophia-dark-surface-raised'}"
-                    >
-                      Balanced
-                    </button>
-                    <button
-                      type="button"
-                      disabled={runInProgress()}
-                      onclick={() => applyPipelinePreset('complexity')}
-                      class="rounded border px-4 py-2 font-mono text-xs uppercase tracking-[0.12em] disabled:opacity-50 {selectedPreset === 'complexity' ? 'border-sophia-dark-sage/45 bg-sophia-dark-sage/14 text-sophia-dark-sage' : 'border-sophia-dark-border text-sophia-dark-muted hover:bg-sophia-dark-surface-raised'}"
-                    >
-                      Complexity
+                      Apply production defaults
                     </button>
                   </div>
                 </div>
                 <p class="mt-3 text-xs text-sophia-dark-muted">
-                  Presets adapt to source type and only use models currently available in your Restormel/Keys context.
+                  Picks adapt to source type and only use models currently available in your Restormel/Keys context.
                 </p>
                 {#if presetMessage}
                   <p class="mt-2 font-mono text-xs text-sophia-dark-sage">{presetMessage}</p>
@@ -3313,7 +3300,7 @@
                             bind:checked={ingestionAdvisorAutoApplyPreset}
                             class="rounded border-sophia-dark-border"
                           />
-                          Auto-apply preset
+                          Auto-apply production model picks
                         </label>
                         <label class="flex cursor-pointer items-center gap-2 font-mono text-xs text-sophia-dark-muted">
                           <input

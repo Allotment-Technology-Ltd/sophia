@@ -1,6 +1,6 @@
 /**
- * Firestore-compatible Timestamp and FieldValue sentinels for the Neon `sophia_documents` layer.
- * Replaces `firebase-admin/firestore` types so the app runtime does not depend on Firebase SDKs.
+ * Firestore-shaped Timestamp and FieldValue sentinels for the Neon `sophia_documents` layer (`sophiaDocumentsDb`).
+ * Keeps types aligned with the compat API without depending on Google Firestore SDKs at runtime.
  */
 
 export class Timestamp {

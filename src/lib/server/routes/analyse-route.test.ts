@@ -115,8 +115,8 @@ vi.mock('$lib/server/billing/wallet', () => ({
 }));
 
 const mockRateLimitSnap = { data: () => ({}) };
-vi.mock('$lib/server/firebase-admin', () => ({
-  adminDb: {
+vi.mock('$lib/server/sophiaDocumentsDb', () => ({
+  sophiaDocumentsDb: {
     collection: vi.fn(() => ({
       doc: vi.fn(() => ({
         collection: vi.fn(() => ({

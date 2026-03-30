@@ -20,6 +20,7 @@
 import { isDatabaseUnavailable, query } from './db';
 import { embedQuery } from './embeddings';
 import type { PhilosophicalDomain } from '@restormel/contracts/domains';
+import type { Surreal } from 'surrealdb';
 import {
 	detectCorpusLevelQuery,
 	extractLexicalTerms,
@@ -56,6 +57,20 @@ export interface RetrievedArgument {
 	summary: string;
 	conclusion_text: string | null;
 	key_premises: string[];
+}
+
+export interface ThinkerSummary {
+	wikidata_id: string;
+	name: string;
+	birth_year: number | null;
+	death_year: number | null;
+	traditions: string[];
+}
+
+export interface ThinkerContext {
+	direct_authors: ThinkerSummary[];
+	influences: ThinkerSummary[];
+	teachers: ThinkerSummary[];
 }
 
 export type RejectedClaimReasonCode =
@@ -131,6 +146,7 @@ export interface RetrievalResult {
 	relations: RetrievedRelation[];
 	arguments: RetrievedArgument[];
 	seed_claim_ids: string[];
+	thinker_context?: ThinkerContext | null;
 	trace?: {
 		seed_pool_count: number;
 		selected_seed_count: number;
@@ -179,6 +195,8 @@ export interface RetrievalOptions {
 	hybridMode?: 'auto' | 'dense_only';
 	/** Optional viewer context for trace/audit routing */
 	viewerUid?: string | null;
+	/** Opt-in thinker graph enrichment for retrieved claim context */
+	enrichWithThinkerContext?: boolean;
 }
 
 const EMPTY_RESULT: RetrievalResult = {
@@ -186,6 +204,7 @@ const EMPTY_RESULT: RetrievalResult = {
 	relations: [],
 	arguments: [],
 	seed_claim_ids: [],
+	thinker_context: null,
 	degraded: false
 };
 
@@ -293,6 +312,160 @@ function parseRelationStrengthWeight(strength?: string): number {
 	return 1;
 }
 
+function toThinkerSummary(node: unknown): ThinkerSummary | null {
+	if (!node || typeof node !== 'object') return null;
+	const row = node as Record<string, unknown>;
+	const wikidata_id = typeof row.wikidata_id === 'string' ? row.wikidata_id : '';
+	const name = typeof row.name === 'string' ? row.name.trim() : '';
+	if (!name) return null;
+	return {
+		wikidata_id,
+		name,
+		birth_year: typeof row.birth_year === 'number' ? row.birth_year : null,
+		death_year: typeof row.death_year === 'number' ? row.death_year : null,
+		traditions: Array.isArray(row.traditions)
+			? row.traditions.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+			: []
+	};
+}
+
+function capThinkerContext(context: ThinkerContext, maxNodes = 10): ThinkerContext {
+	const seen = new Set<string>();
+	const take = (items: ThinkerSummary[]): ThinkerSummary[] => {
+		const result: ThinkerSummary[] = [];
+		for (const item of items) {
+			const key = item.wikidata_id || item.name.toLowerCase();
+			if (seen.has(key)) continue;
+			if (seen.size >= maxNodes) break;
+			seen.add(key);
+			result.push(item);
+		}
+		return result;
+	};
+	return {
+		direct_authors: take(context.direct_authors),
+		influences: take(context.influences),
+		teachers: take(context.teachers)
+	};
+}
+
+async function fetchThinkerContext(
+	db: Surreal,
+	claimIds: string[]
+): Promise<ThinkerContext | null> {
+	void db;
+	if (!Array.isArray(claimIds) || claimIds.length === 0) return null;
+
+	try {
+		type ThinkerQueryResult = {
+			direct_authors?: unknown[];
+			influences?: unknown[];
+			teachers?: unknown[];
+		};
+
+		const result = await query<ThinkerQueryResult[]>(
+			`LET $source_ids = array::distinct((SELECT VALUE source FROM claim WHERE id INSIDE $claim_ids));
+			 LET $author_rows = (SELECT <-authored<-thinker AS thinkers FROM $source_ids FETCH thinkers);
+			 LET $direct_authors = array::flatten($author_rows.thinkers);
+			 LET $influence_rows = (SELECT ->influenced_by->thinker AS thinkers FROM $direct_authors.id FETCH thinkers);
+			 LET $teacher_rows = (SELECT ->student_of->thinker AS thinkers FROM $direct_authors.id FETCH thinkers);
+			 RETURN {
+			 	direct_authors: $direct_authors,
+			 	influences: array::flatten($influence_rows.thinkers),
+			 	teachers: array::flatten($teacher_rows.thinkers)
+			 };`,
+			{ claim_ids: claimIds }
+		);
+
+		const row = Array.isArray(result) ? result[0] : null;
+		if (!row) return null;
+
+		const directAuthors = (row.direct_authors ?? [])
+			.map((entry) => toThinkerSummary(entry))
+			.filter((entry): entry is ThinkerSummary => entry !== null);
+		const influences = (row.influences ?? [])
+			.map((entry) => toThinkerSummary(entry))
+			.filter((entry): entry is ThinkerSummary => entry !== null);
+		const teachers = (row.teachers ?? [])
+			.map((entry) => toThinkerSummary(entry))
+			.filter((entry): entry is ThinkerSummary => entry !== null);
+
+		if (directAuthors.length === 0 && influences.length === 0 && teachers.length === 0) {
+			return null;
+		}
+
+		return capThinkerContext(
+			{
+				direct_authors: directAuthors,
+				influences,
+				teachers
+			},
+			10
+		);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		const lower = message.toLowerCase();
+		if (
+			(lower.includes('authored') ||
+				lower.includes('thinker') ||
+				lower.includes('influenced_by') ||
+				lower.includes('student_of')) &&
+			(lower.includes('table') ||
+				lower.includes('record') ||
+				lower.includes('not found') ||
+				lower.includes('does not exist') ||
+				lower.includes('invalid'))
+		) {
+			console.debug(
+				'[RETRIEVAL] Thinker enrichment unavailable (missing thinker graph tables); returning null'
+			);
+			return null;
+		}
+		console.debug('[RETRIEVAL] Thinker enrichment failed; returning null:', message);
+		return null;
+	}
+}
+
+function formatThinkerDisplayName(thinker: ThinkerSummary): string {
+	const years =
+		thinker.birth_year === null && thinker.death_year === null
+			? ''
+			: ` (${thinker.birth_year ?? '?'}-${thinker.death_year ?? '?'})`;
+	const tradition = thinker.traditions.length > 0 ? `, ${thinker.traditions[0]}` : '';
+	return `${thinker.name}${years}${tradition}`;
+}
+
+export function formatThinkerContextBlock(context: ThinkerContext | null): string {
+	if (!context) return '';
+
+	const directAuthors = context.direct_authors.filter((thinker) => thinker.name.trim().length > 0);
+	const influences = context.influences.filter((thinker) => thinker.name.trim().length > 0).slice(0, 5);
+	const teachers = context.teachers.filter((thinker) => thinker.name.trim().length > 0);
+
+	if (directAuthors.length === 0 && influences.length === 0 && teachers.length === 0) {
+		return '';
+	}
+
+	const lines: string[] = [];
+	lines.push('PHILOSOPHICAL LINEAGE CONTEXT (advisory — heuristic data from Wikidata)');
+	lines.push('(sourced from Wikidata thinker graph — advisory context only)');
+	lines.push('');
+
+	if (directAuthors.length > 0) {
+		lines.push(
+			`Authors of retrieved sources: ${directAuthors.map((thinker) => formatThinkerDisplayName(thinker)).join(', ')}`
+		);
+	}
+	if (influences.length > 0) {
+		lines.push(`Influences in this lineage: ${influences.map((thinker) => formatThinkerDisplayName(thinker)).join(', ')}`);
+	}
+	if (teachers.length > 0) {
+		lines.push(`Teachers in this lineage: ${teachers.map((thinker) => formatThinkerDisplayName(thinker)).join(', ')}`);
+	}
+
+	return lines.join('\n');
+}
+
 // ─── Main retrieval function ───────────────────────────────────────────────
 
 /**
@@ -315,7 +488,8 @@ export async function retrieveContext(
 		minConfidence = 0,
 		maxHops,
 		maxClaims,
-		hybridMode = 'auto'
+		hybridMode = 'auto',
+		enrichWithThinkerContext = false
 	} = options;
 	const traversalMaxHops = Math.max(1, maxHops ?? (topK >= 10 ? 3 : topK <= 3 ? 1 : 2));
 	const traversalClaimCap = Math.max(topK, maxClaims ?? (topK >= 10 ? 120 : topK <= 3 ? 32 : 72));
@@ -1376,6 +1550,11 @@ export async function retrieveContext(
 		}
 
 		console.log(`[RETRIEVAL] ${arguments_.length} arguments assembled`);
+		let thinkerContext: ThinkerContext | null = null;
+		if (enrichWithThinkerContext) {
+			const claimIdsForThinkerContext = claims.map((claim) => claim.id).filter(Boolean);
+			thinkerContext = await fetchThinkerContext({} as Surreal, claimIdsForThinkerContext);
+		}
 		const traversalEdgePriors: Partial<Record<string, number>> = Object.fromEntries(
 			RELATION_TRAVERSAL_BEAM_SPECS.map((spec) => [spec.table, spec.edgePrior])
 		);
@@ -1403,6 +1582,7 @@ export async function retrieveContext(
 			relations,
 			arguments: arguments_,
 			seed_claim_ids: seedClaimIds,
+			thinker_context: thinkerContext,
 			trace: {
 				seed_pool_count: seedPoolCount,
 				selected_seed_count: seedClaimIds.length,

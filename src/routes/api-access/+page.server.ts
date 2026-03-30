@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 
 export const load: PageServerLoad = async () => {
   return {};
@@ -27,7 +27,7 @@ export const actions: Actions = {
       });
     }
 
-    await adminDb.collection('waitlist').add({
+    await sophiaDocumentsDb.collection('waitlist').add({
       name,
       email: email.toLowerCase(),
       use_case: useCase,

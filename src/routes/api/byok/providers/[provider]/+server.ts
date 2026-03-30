@@ -10,12 +10,13 @@ import {
 } from '$lib/server/byok/store';
 import { validateProviderApiKey } from '$lib/server/byok/validation';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
+import { resolveByokStoreUidForSession } from '$lib/server/byok/operatorByokTarget';
 
 export const PUT: RequestHandler = async ({ locals, request, params }) => {
   const requestId = resolveRequestId(request);
-  const uid = locals.user?.uid;
+  const sessionUid = locals.user?.uid;
 
-  if (!uid) {
+  if (!sessionUid) {
     return problemJson({
       status: 401,
       title: 'Authentication required',
@@ -23,6 +24,8 @@ export const PUT: RequestHandler = async ({ locals, request, params }) => {
       requestId
     });
   }
+
+  const uid = resolveByokStoreUidForSession(sessionUid, locals.user);
 
   const provider = parseByokProvider(params.provider);
   const enabledProviders = getEnabledByokProviders();
@@ -63,7 +66,7 @@ export const PUT: RequestHandler = async ({ locals, request, params }) => {
     return problemJson({
       status: 503,
       title: 'Unable to save BYOK credential',
-      detail: `${detail} — Check Firestore access (GOOGLE_APPLICATION_CREDENTIALS / secrets/*.json via pnpm dev) and that rules allow writes to users/{uid}/byokProviders.`,
+      detail: `${detail} — Check DATABASE_URL and sophia_documents access; path users/{uid}/byokProviders.`,
       requestId
     });
   }
@@ -122,9 +125,9 @@ export const PUT: RequestHandler = async ({ locals, request, params }) => {
 
 export const DELETE: RequestHandler = async ({ locals, request, params }) => {
   const requestId = resolveRequestId(request);
-  const uid = locals.user?.uid;
+  const sessionUid = locals.user?.uid;
 
-  if (!uid) {
+  if (!sessionUid) {
     return problemJson({
       status: 401,
       title: 'Authentication required',
@@ -132,6 +135,8 @@ export const DELETE: RequestHandler = async ({ locals, request, params }) => {
       requestId
     });
   }
+
+  const uid = resolveByokStoreUidForSession(sessionUid, locals.user);
 
   const provider = parseByokProvider(params.provider);
   const enabledProviders = getEnabledByokProviders();

@@ -1,6 +1,7 @@
 import { dev } from '$app/environment';
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
+import { resolveByokStoreUidForSession } from '$lib/server/byok/operatorByokTarget';
 import { emptyNotConfiguredByokStatuses, listByokProviderStatuses } from '$lib/server/byok/store';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
 
@@ -23,7 +24,8 @@ export const GET: RequestHandler = async ({ locals, request }) => {
   }
 
   try {
-    const providers = await listByokProviderStatuses(uid);
+    const storeUid = resolveByokStoreUidForSession(uid, locals.user);
+    const providers = await listByokProviderStatuses(storeUid);
     return json(
       { providers },
       {
@@ -41,7 +43,7 @@ export const GET: RequestHandler = async ({ locals, request }) => {
           providers: emptyNotConfiguredByokStatuses(),
           degraded: true,
           detail:
-            'BYOK data could not be loaded (Firestore / credentials). Keys show as not configured until the store is available.'
+            'BYOK data could not be loaded (sophia_documents / DATABASE_URL). Keys show as not configured until the store is available.'
         },
         {
           headers: {

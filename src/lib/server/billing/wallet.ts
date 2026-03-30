@@ -1,5 +1,5 @@
 import { FieldValue } from '$lib/server/fsCompat';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { applyByokFeeUsage } from './entitlements';
 import {
   BYOK_HANDLING_FEE_RATE,
@@ -75,7 +75,7 @@ export async function debitByokHandlingFee(params: {
   const walletRef = billingWalletRef(params.uid);
   const ledgerRef = billingLedgerRef(params.uid, `byok:${params.queryRunId}`);
 
-  const result = await adminDb.runTransaction(async (tx) => {
+  const result = await sophiaDocumentsDb.runTransaction(async (tx) => {
     const [walletSnap, ledgerSnap] = await Promise.all([tx.get(walletRef), tx.get(ledgerRef)]);
 
     if (ledgerSnap.exists) {
@@ -164,7 +164,7 @@ export async function creditWalletTopup(params: {
   const walletRef = billingWalletRef(params.uid);
   const ledgerRef = billingLedgerRef(params.uid, `topup:${params.idempotencyKey}`);
 
-  return adminDb.runTransaction(async (tx) => {
+  return sophiaDocumentsDb.runTransaction(async (tx) => {
     const [walletSnap, ledgerSnap] = await Promise.all([tx.get(walletRef), tx.get(ledgerRef)]);
     const walletData = walletSnap.exists ? (walletSnap.data() as Record<string, unknown>) : defaultWallet();
     const available = Number(walletData.available_cents ?? 0);

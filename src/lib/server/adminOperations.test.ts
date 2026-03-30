@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('$lib/server/firebase-admin', () => ({
-  adminDb: {
+vi.mock('$lib/server/sophiaDocumentsDb', () => ({
+  sophiaDocumentsDb: {
     collection: vi.fn(() => ({
       doc: vi.fn(() => ({
         set: vi.fn(),

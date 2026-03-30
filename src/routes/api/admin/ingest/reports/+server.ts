@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 
 const COLLECTION = 'ingestion_run_reports';
 
@@ -15,7 +15,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   const limit = Math.min(80, Math.max(1, Number.parseInt(limitRaw ?? '30', 10) || 30));
 
   try {
-    const snap = await adminDb
+    const snap = await sophiaDocumentsDb
       .collection(COLLECTION)
       .orderBy('completedAt', 'desc')
       .limit(limit)

@@ -1,5 +1,8 @@
+/**
+ * BYOK credentials live under `users/{uid}/byokProviders/*` in Neon Postgres (`sophia_documents`), via `sophiaDocumentsDb`.
+ */
 import { FieldValue, Timestamp } from '$lib/server/fsCompat';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { decryptByokSecret, encryptByokSecret, type EncryptedSecret } from './crypto';
 import { type ByokCredentialStatus, type ByokProvider, type ByokProviderStatus, type ProviderApiKeys } from './types';
 import { getEnabledByokProviders } from './config';
@@ -19,7 +22,7 @@ interface ByokProviderRecord extends EncryptedSecret {
 }
 
 function providerRef(uid: string, provider: ByokProvider) {
-  return adminDb.collection('users').doc(uid).collection('byokProviders').doc(provider);
+  return sophiaDocumentsDb.collection('users').doc(uid).collection('byokProviders').doc(provider);
 }
 
 function buildFingerprintLast8(apiKey: string): string {
@@ -54,7 +57,7 @@ function toIso(value: unknown): string | null {
   return null;
 }
 
-/** Every enabled BYOK slot as not configured — used when Firestore cannot be reached (e.g. local dev without ADC). */
+/** Every enabled BYOK slot as not configured — used when `sophia_documents` cannot be reached (e.g. missing DATABASE_URL). */
 export function emptyNotConfiguredByokStatuses(): ByokProviderStatus[] {
   return getEnabledByokProviders().map((provider) => ({
     provider,
@@ -68,7 +71,7 @@ export function emptyNotConfiguredByokStatuses(): ByokProviderStatus[] {
 }
 
 export async function listByokProviderStatuses(uid: string): Promise<ByokProviderStatus[]> {
-  const snapshot = await adminDb.collection('users').doc(uid).collection('byokProviders').get();
+  const snapshot = await sophiaDocumentsDb.collection('users').doc(uid).collection('byokProviders').get();
   const byProvider = new Map<string, ByokProviderRecord>();
   for (const doc of snapshot.docs) {
     byProvider.set(doc.id, doc.data() as ByokProviderRecord);

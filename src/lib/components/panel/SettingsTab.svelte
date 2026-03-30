@@ -31,6 +31,7 @@
     effectivePublicMax: number;
     privateMax: number;
     byokFeeChargedCents: number;
+    ownerIngestionUnlimited?: boolean;
   }
 
   interface BillingProfile {
@@ -870,7 +871,11 @@
           </span>
           {#if billingEntitlements}
             <span class="setting-desc">
-              Ingestion remaining this month: public {billingEntitlements.publicRemaining}, private {billingEntitlements.privateRemaining}
+              {#if billingEntitlements.ownerIngestionUnlimited}
+                Ingestion: no monthly cap (owner).
+              {:else}
+                Ingestion remaining this month: public {billingEntitlements.publicRemaining}, private {billingEntitlements.privateRemaining}
+              {/if}
             </span>
           {/if}
         </div>

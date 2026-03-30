@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { hasOwnerRole } from '$lib/server/authRoles';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
 import { logServerAnalytics } from '$lib/server/analytics';
@@ -44,7 +44,7 @@ export const GET: RequestHandler = async ({ locals, request, url }) => {
     });
   }
 
-  const snapshot = await adminDb
+  const snapshot = await sophiaDocumentsDb
     .collection('api_keys')
     .where('owner_uid', '==', ownerUid)
     .orderBy('created_at', 'desc')

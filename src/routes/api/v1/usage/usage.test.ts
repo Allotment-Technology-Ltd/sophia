@@ -29,8 +29,8 @@ const { mockDb, mockLogServerAnalytics } = vi.hoisted(() => {
   };
 });
 
-vi.mock('$lib/server/firebase-admin', () => ({
-  adminDb: mockDb
+vi.mock('$lib/server/sophiaDocumentsDb', () => ({
+  sophiaDocumentsDb: mockDb
 }));
 
 vi.mock('$lib/server/authRoles', () => ({

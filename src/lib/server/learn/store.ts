@@ -1,4 +1,4 @@
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import type { EssayFeedback, ShortAnswerMiniReview, SkillScores } from '$lib/types/learn';
 
 interface CreateSubmissionInput {
@@ -22,7 +22,7 @@ interface CreateVersionInput {
 }
 
 function learnRoot(uid: string) {
-  return adminDb.collection('users').doc(uid).collection('learn').doc('state');
+  return sophiaDocumentsDb.collection('users').doc(uid).collection('learn').doc('state');
 }
 
 function submissionsCol(uid: string) {

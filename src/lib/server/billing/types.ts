@@ -96,6 +96,8 @@ export interface EntitlementSummary {
   effectivePublicMax: number;
   privateMax: number;
   byokFeeChargedCents: number;
+  /** True for app owners: ingestion limits are not enforced (see bypassQuota on consume). */
+  ownerIngestionUnlimited?: boolean;
 }
 
 export interface IngestionConsumeResult {

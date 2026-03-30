@@ -2,7 +2,7 @@ import { json } from '@sveltejs/kit';
 import { Timestamp } from '$lib/server/fsCompat';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import {
   countOwnerUsersInFirestore,
   isLastOwnerDemotion,
@@ -31,7 +31,7 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
   }
   const nextRole = roleRaw as AppUserRole;
 
-  const ref = adminDb.collection('users').doc(uid);
+  const ref = sophiaDocumentsDb.collection('users').doc(uid);
   const snap = await ref.get();
   if (!snap.exists) {
     return json({ error: 'User not found' }, { status: 404 });

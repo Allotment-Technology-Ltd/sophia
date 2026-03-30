@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
-import { adminDb } from '$lib/server/firebase-admin';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 
 const COLLECTION = 'ingestion_run_reports';
 
@@ -32,7 +32,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   const limit = Math.min(200, Math.max(1, Number.parseInt(limitRaw ?? '80', 10) || 80));
 
   try {
-    const snap = await adminDb
+    const snap = await sophiaDocumentsDb
       .collection(COLLECTION)
       .orderBy('completedAt', 'desc')
       .limit(limit)
@@ -74,7 +74,10 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 
       const presetRaw = d.pipelinePreset;
       const presetKey =
-        presetRaw === 'budget' || presetRaw === 'balanced' || presetRaw === 'complexity'
+        presetRaw === 'production' ||
+        presetRaw === 'budget' ||
+        presetRaw === 'balanced' ||
+        presetRaw === 'complexity'
           ? presetRaw
           : 'unknown';
       const prBucket = (byPipelinePreset[presetKey] ??= emptyBucket());
