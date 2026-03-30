@@ -37,7 +37,7 @@ vi.mock('$lib/server/billing/founder', () => ({
   founderOfferSummaryFromProfile: () => null
 }));
 
-import { POST } from './+server';
+import { POST } from '../../../routes/api/billing/checkout/+server';
 
 describe('POST /api/billing/checkout', () => {
   beforeEach(() => {

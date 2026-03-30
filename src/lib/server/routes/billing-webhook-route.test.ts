@@ -19,7 +19,7 @@ vi.mock('$lib/server/billing/webhook', () => ({
   handlePaddleWebhookEvent: mockHandleWebhook
 }));
 
-import { POST } from './+server';
+import { POST } from '../../../routes/api/billing/webhook/+server';
 
 describe('POST /api/billing/webhook signature checks', () => {
   beforeEach(() => {
