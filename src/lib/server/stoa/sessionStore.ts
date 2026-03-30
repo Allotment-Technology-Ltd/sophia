@@ -140,6 +140,44 @@ export async function updateStoaProfileFromTurns(params: {
   }
 }
 
+export async function upsertStoaProfile(params: {
+  userId: string;
+  goals: string[];
+  triggers: string[];
+  practices: string[];
+}): Promise<StoaProfile> {
+  const normalized = {
+    goals: uniq(params.goals),
+    triggers: uniq(params.triggers),
+    practices: uniq(params.practices)
+  };
+  try {
+    await ensureStoaTables();
+    await query(
+      `UPSERT stoa_profile
+       SET user_id = $userId,
+           goals = $goals,
+           triggers = $triggers,
+           practices = $practices,
+           updated_at = time::now()
+       WHERE user_id = $userId`,
+      {
+        userId: params.userId,
+        ...normalized
+      }
+    );
+    return {
+      userId: params.userId,
+      ...normalized
+    };
+  } catch {
+    return {
+      userId: params.userId,
+      ...normalized
+    };
+  }
+}
+
 async function ensureSessionRecord(sessionId: string, userId: string): Promise<void> {
   const rows = await query<SessionRow[]>(
     `SELECT * FROM stoa_session WHERE session_id = $sessionId AND user_id = $userId LIMIT 1`,

@@ -22,6 +22,9 @@ export interface ActionLoopState {
   followUpPrompt: string;
 }
 
+type ProfileKind = 'goals' | 'triggers' | 'practices';
+type StoaProfileState = { goals: string[]; triggers: string[]; practices: string[] };
+
 function createStoaConversationStore() {
   let messages = $state<StoaMessage[]>([]);
   let isLoading = $state(false);
@@ -36,7 +39,7 @@ function createStoaConversationStore() {
   let escalated = $state(false);
   let escalationReasons = $state<string[]>([]);
   let actionLoop = $state<ActionLoopState | null>(null);
-  let profile = $state<{ goals: string[]; triggers: string[]; practices: string[] } | null>(null);
+  let profile = $state<StoaProfileState | null>(null);
 
   function reset(): void {
     messages = [];
@@ -180,6 +183,45 @@ function createStoaConversationStore() {
     }
   }
 
+  async function saveProfile(nextProfile: StoaProfileState): Promise<void> {
+    const token = await getIdToken();
+    const response = await fetch('/api/stoa/profile', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(nextProfile)
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to save profile (${response.status})`);
+    }
+    profile = nextProfile;
+  }
+
+  async function addProfileItem(kind: ProfileKind, value: string): Promise<void> {
+    const text = value.trim();
+    if (!text) return;
+    const current: StoaProfileState = profile ?? { goals: [], triggers: [], practices: [] };
+    const next: StoaProfileState = {
+      goals: kind === 'goals' ? Array.from(new Set([...current.goals, text])).slice(0, 12) : current.goals,
+      triggers:
+        kind === 'triggers'
+          ? Array.from(new Set([...current.triggers, text])).slice(0, 12)
+          : current.triggers,
+      practices:
+        kind === 'practices'
+          ? Array.from(new Set([...current.practices, text])).slice(0, 12)
+          : current.practices
+    };
+    try {
+      await saveProfile(next);
+      error = null;
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   return {
     get messages() {
       return messages;
@@ -223,6 +265,7 @@ function createStoaConversationStore() {
     get profile() {
       return profile;
     },
+    addProfileItem,
     reset,
     send
   };

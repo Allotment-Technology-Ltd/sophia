@@ -2,6 +2,34 @@
   import { stoaConversationStore } from '$lib/stores/stoaConversation.svelte';
 
   let draft = $state('');
+  let showDetails = $state(false);
+  let goalDraft = $state('');
+  let triggerDraft = $state('');
+  let practiceDraft = $state('');
+  let doneToday = $state(false);
+  let doneTonight = $state(false);
+  let doneWeek = $state(false);
+
+  const CONFIDENCE_LABEL: Record<string, string> = {
+    high: 'High',
+    medium: 'Medium',
+    low: 'Low'
+  };
+
+  function addProfile(kind: 'goals' | 'triggers' | 'practices'): void {
+    if (kind === 'goals') {
+      void stoaConversationStore.addProfileItem('goals', goalDraft);
+      goalDraft = '';
+      return;
+    }
+    if (kind === 'triggers') {
+      void stoaConversationStore.addProfileItem('triggers', triggerDraft);
+      triggerDraft = '';
+      return;
+    }
+    void stoaConversationStore.addProfileItem('practices', practiceDraft);
+    practiceDraft = '';
+  }
 
   async function submit(): Promise<void> {
     const message = draft.trim();
@@ -18,23 +46,24 @@
 <main class="stoa-page">
   <section class="stoa-header">
     <h1>Stoa Dialogue (Mode 6)</h1>
-    <p>Adaptive Stoic conversation with stance detection, grounding, and streaming responses.</p>
+    <p>A focused Stoic coach with practical next steps.</p>
   </section>
 
   <section class="stoa-meta" aria-live="polite">
     <span>Stance: {stoaConversationStore.currentStance}</span>
-    <span>Escalation: {stoaConversationStore.escalated ? 'flagged' : 'none'}</span>
-    <span>Sources: {stoaConversationStore.sourceClaims.length}</span>
-    <span>Grounding: {stoaConversationStore.groundingMode}</span>
-    <span>Grounding confidence: {stoaConversationStore.groundingConfidence}</span>
+    <span>Sources: {stoaConversationStore.sourceClaims.length > 0 ? 'linked' : 'none'}</span>
+    <span
+      class="confidence-pill {stoaConversationStore.groundingConfidence}"
+      >Grounding confidence: {CONFIDENCE_LABEL[stoaConversationStore.groundingConfidence]}</span
+    >
   </section>
 
-  {#if stoaConversationStore.escalated && stoaConversationStore.escalationReasons.length > 0}
-    <p class="grounding-warning">Escalation reasons: {stoaConversationStore.escalationReasons.join(', ')}</p>
-  {/if}
-
-  {#if stoaConversationStore.groundingWarning}
-    <p class="grounding-warning">{stoaConversationStore.groundingWarning}</p>
+  {#if stoaConversationStore.groundingMode !== 'graph_dense'}
+    <p class="grounding-note {stoaConversationStore.groundingMode === 'degraded_none' ? 'warn' : 'info'}">
+      {stoaConversationStore.groundingMode === 'lexical_fallback'
+        ? 'Using backup source retrieval for this turn.'
+        : 'Sources unavailable right now; response may be less grounded.'}
+    </p>
   {/if}
 
   <section class="stoa-thread">
@@ -49,60 +78,25 @@
     {/each}
   </section>
 
-  {#if stoaConversationStore.sourceClaims.length > 0}
-    <section class="sources-panel" aria-label="Grounding sources">
-      <h2>Grounding Sources</h2>
-      {#each stoaConversationStore.sourceClaims as source (source.claimId)}
-        <article class="source-card">
-          <p class="source-text">{source.sourceText}</p>
-          <p class="source-meta">
-            <span>{source.sourceAuthor}</span>
-            <span>{source.sourceWork}</span>
-            <span>score {source.relevanceScore.toFixed(2)}</span>
-          </p>
-        </article>
-      {/each}
-      {#if stoaConversationStore.citationQuality.length > 0}
-        <div class="citation-panel">
-          <h3>Citation Quality</h3>
-          {#each stoaConversationStore.citationQuality as quality (quality.claimId)}
-            <p class="citation-line">
-              <span>{quality.claimId}</span>
-              <span>quote overlap {quality.quoteOverlap.toFixed(2)}</span>
-              <span>provenance {quality.provenanceConfidence.toFixed(2)}</span>
-              <span>confidence {quality.confidence}</span>
-            </p>
-          {/each}
-        </div>
-      {/if}
-    </section>
-  {/if}
-
   {#if stoaConversationStore.actionLoop}
     <section class="action-loop" aria-label="Action loop check-ins">
       <h2>Action Loop</h2>
       <article class="loop-card">
         <h3>Today</h3>
+        <label class="loop-check"><input type="checkbox" bind:checked={doneToday} /> Done</label>
         <p>{stoaConversationStore.actionLoop.today}</p>
       </article>
       <article class="loop-card">
         <h3>Tonight</h3>
+        <label class="loop-check"><input type="checkbox" bind:checked={doneTonight} /> Done</label>
         <p>{stoaConversationStore.actionLoop.tonight}</p>
       </article>
       <article class="loop-card">
         <h3>This week</h3>
+        <label class="loop-check"><input type="checkbox" bind:checked={doneWeek} /> Done</label>
         <p>{stoaConversationStore.actionLoop.thisWeek}</p>
       </article>
       <p class="follow-up">Follow-up: {stoaConversationStore.actionLoop.followUpPrompt}</p>
-    </section>
-  {/if}
-
-  {#if stoaConversationStore.profile}
-    <section class="action-loop" aria-label="Personal memory profile">
-      <h2>Personal Memory</h2>
-      <p class="follow-up"><strong>Goals:</strong> {stoaConversationStore.profile.goals.join(' | ') || '(none yet)'}</p>
-      <p class="follow-up"><strong>Triggers:</strong> {stoaConversationStore.profile.triggers.join(' | ') || '(none yet)'}</p>
-      <p class="follow-up"><strong>Practices:</strong> {stoaConversationStore.profile.practices.join(' | ') || '(none yet)'}</p>
     </section>
   {/if}
 
@@ -127,6 +121,63 @@
       <p class="error">{stoaConversationStore.error}</p>
     {/if}
   </form>
+
+  <section class="details-card">
+    <button
+      type="button"
+      class="secondary details-toggle"
+      aria-expanded={showDetails}
+      onclick={() => (showDetails = !showDetails)}
+    >
+      {showDetails ? 'Hide details' : 'Show details'}
+    </button>
+
+    {#if showDetails}
+      <div class="details-grid">
+        <article class="detail-panel">
+          <h3>Personal Memory</h3>
+          <div class="memory-input">
+            <input bind:value={goalDraft} placeholder="Add goal" />
+            <button type="button" class="secondary" onclick={() => addProfile('goals')}>Add</button>
+          </div>
+          <p>{stoaConversationStore.profile?.goals.join(' | ') || '(none yet)'}</p>
+          <div class="memory-input">
+            <input bind:value={triggerDraft} placeholder="Add trigger" />
+            <button type="button" class="secondary" onclick={() => addProfile('triggers')}>Add</button>
+          </div>
+          <p>{stoaConversationStore.profile?.triggers.join(' | ') || '(none yet)'}</p>
+          <div class="memory-input">
+            <input bind:value={practiceDraft} placeholder="Add practice" />
+            <button type="button" class="secondary" onclick={() => addProfile('practices')}>Add</button>
+          </div>
+          <p>{stoaConversationStore.profile?.practices.join(' | ') || '(none yet)'}</p>
+        </article>
+
+        {#if stoaConversationStore.sourceClaims.length > 0}
+          <article class="detail-panel" aria-label="Grounding sources">
+            <h3>Sources</h3>
+            {#each stoaConversationStore.sourceClaims as source (source.claimId)}
+              <p class="source-line">
+                {source.sourceText}
+                <span>{source.sourceAuthor} - {source.sourceWork}</span>
+              </p>
+            {/each}
+          </article>
+        {/if}
+
+        {#if stoaConversationStore.citationQuality.length > 0}
+          <article class="detail-panel">
+            <h3>Citation Quality</h3>
+            {#each stoaConversationStore.citationQuality as quality (quality.claimId)}
+              <p class="citation-line">
+                {quality.claimId} - overlap {quality.quoteOverlap.toFixed(2)}, provenance {quality.provenanceConfidence.toFixed(2)}, confidence {quality.confidence}
+              </p>
+            {/each}
+          </article>
+        {/if}
+      </div>
+    {/if}
+  </section>
 </main>
 
 <style>
@@ -156,10 +207,43 @@
     flex-wrap: wrap;
   }
 
-  .grounding-warning {
-    margin: 0;
+  .confidence-pill {
+    border-radius: var(--radius-full);
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--color-border);
+  }
+
+  .confidence-pill.high {
+    color: var(--color-sage-border);
+    border-color: var(--color-sage-border);
+  }
+
+  .confidence-pill.medium {
     color: var(--color-copper);
+    border-color: var(--color-copper);
+  }
+
+  .confidence-pill.low {
+    color: var(--color-coral);
+    border-color: var(--color-coral);
+  }
+
+  .grounding-note {
+    margin: 0;
     font-size: var(--text-meta);
+    border-radius: var(--radius-md);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border);
+  }
+
+  .grounding-note.info {
+    color: var(--color-dim);
+    background: var(--color-surface);
+  }
+
+  .grounding-note.warn {
+    color: var(--color-copper);
+    background: color-mix(in srgb, var(--color-copper) 8%, var(--color-bg));
   }
 
   .stoa-thread {
@@ -248,30 +332,40 @@
     margin: 0;
   }
 
+  .loop-check {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+    font-size: var(--text-meta);
+    color: var(--color-dim);
+  }
+
   .follow-up {
     margin: 0;
     color: var(--color-dim);
     font-size: var(--text-meta);
   }
 
-  .sources-panel {
+  .details-card {
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     background: var(--color-surface);
-    padding: var(--space-3);
+    padding: var(--space-4);
     display: grid;
     gap: var(--space-3);
   }
 
-  .sources-panel h2 {
-    margin: 0;
-    font-size: var(--text-ui);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--color-muted);
+  .details-toggle {
+    width: fit-content;
   }
 
-  .source-card {
+  .details-grid {
+    display: grid;
+    gap: var(--space-2);
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+
+  .detail-panel {
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     background: var(--color-surface-raised);
@@ -280,41 +374,36 @@
     gap: var(--space-2);
   }
 
-  .source-text {
+  .detail-panel h3,
+  .detail-panel p {
     margin: 0;
-    line-height: var(--leading-ui);
-    color: var(--color-text);
   }
 
-  .source-meta {
-    margin: 0;
+  .memory-input {
     display: flex;
-    gap: var(--space-3);
-    flex-wrap: wrap;
-    color: var(--color-dim);
-    font-size: var(--text-meta);
-  }
-
-  .citation-panel {
-    border-top: 1px solid var(--color-border);
-    padding-top: var(--space-3);
-    display: grid;
     gap: var(--space-2);
+    align-items: center;
   }
 
-  .citation-panel h3 {
-    margin: 0;
-    font-size: var(--text-meta);
-    color: var(--color-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+  .memory-input input {
+    flex: 1;
+    min-height: 36px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg);
+    color: var(--color-text);
+    padding: var(--space-2) var(--space-3);
   }
 
+  .source-line,
   .citation-line {
-    margin: 0;
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-3);
+    line-height: var(--leading-ui);
+    font-size: var(--text-meta);
+  }
+
+  .source-line span {
+    display: block;
+    margin-top: var(--space-1);
     font-size: var(--text-meta);
     color: var(--color-dim);
   }
