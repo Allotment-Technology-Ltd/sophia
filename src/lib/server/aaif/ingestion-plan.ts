@@ -5,7 +5,7 @@ import type { RestormelFallbackCandidate } from '../restormel.js';
 import {
   CANONICAL_INGESTION_PRIMARY_MODELS,
   type IngestionLlmStageKey
-} from '$lib/ingestionCanonicalPipeline';
+} from '../../ingestionCanonicalPipeline.js';
 import { EMBEDDING_MODEL } from '../embeddings.js';
 import {
   resolveExtractionModelRoute,
