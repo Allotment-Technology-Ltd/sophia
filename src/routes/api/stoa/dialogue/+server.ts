@@ -28,6 +28,9 @@ import { STOIC_FRAMEWORKS } from '$lib/server/stoa/frameworks';
 import { classifyStanceV2 } from '$lib/server/stoa/stanceClassifier';
 import { buildActionLoop, detectActionSuggestions } from '$lib/server/stoa/actionLoop';
 import { recordStoaTelemetry } from '$lib/server/stoa/observability';
+import { questEngine } from '$lib/server/stoa/game/quest-engine.js';
+import type { QuestContext } from '$lib/server/stoa/game/quest-definitions/types.js';
+import { getProgress } from '$lib/server/stoa/game/progress-store.js';
 
 function sendSse(controller: ReadableStreamDefaultController<Uint8Array>, payload: unknown): void {
   const encoder = new TextEncoder();
@@ -381,6 +384,76 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             totalTokens: usage.totalTokens ?? 0
           }
         });
+
+        // Async quest evaluation - fire and forget, do not block SSE stream
+        // Errors are logged but not surfaced to the client
+        (async () => {
+          try {
+            const progress = await getProgress(uid);
+            const questContext: QuestContext = {
+              sessionId,
+              userId: uid,
+              frameworksUsed: frameworksReferenced,
+              unlockedThinkers: progress.unlockedThinkers,
+              activeQuestIds: progress.activeQuestIds,
+              completedQuestIds: progress.completedQuestIds
+            };
+
+            // Evaluate completions (triggers are auto-started by the engine)
+            const completedQuests = await questEngine.evaluateCompletions(uid, questContext);
+            const newlyAvailable = await questEngine.evaluateTriggers(uid, questContext);
+
+            // Award completions (idempotent - safe to call multiple times)
+            let xpGained = 0;
+            const questsCompleted: string[] = [];
+            const newUnlocks: string[] = [];
+
+            for (const quest of completedQuests) {
+              await questEngine.awardCompletion(uid, quest, sessionId);
+              xpGained += quest.reward.xp;
+              questsCompleted.push(quest.id);
+              if (quest.reward.unlockThinkerId) {
+                newUnlocks.push(quest.reward.unlockThinkerId);
+              }
+            }
+
+            // Emit progress_update event if anything changed
+            if (xpGained > 0 || newUnlocks.length > 0 || questsCompleted.length > 0) {
+              sendSse(controller, {
+                type: 'progress_update',
+                xpGained,
+                newUnlocks,
+                questsCompleted
+              });
+            }
+
+            // Log quest evaluation results
+            await recordStoaTelemetry({
+              uid,
+              sessionId,
+              route: '/api/stoa/dialogue/quest-evaluation',
+              groundingMode,
+              escalated,
+              errorTaxonomy: null
+            });
+          } catch (questError) {
+            // Log errors but do not surface to SSE stream
+            if (process.env.NODE_ENV !== 'test') {
+              console.warn(
+                '[STOA] Quest evaluation error (non-blocking):',
+                questError instanceof Error ? questError.message : String(questError)
+              );
+            }
+            await recordStoaTelemetry({
+              uid,
+              sessionId,
+              route: '/api/stoa/dialogue/quest-evaluation',
+              groundingMode: 'degraded_none',
+              escalated: false,
+              errorTaxonomy: 'quest_evaluation_error'
+            });
+          }
+        })();
       } catch (error) {
         await recordStoaTelemetry({
           uid,

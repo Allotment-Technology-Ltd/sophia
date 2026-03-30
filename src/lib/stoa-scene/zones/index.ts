@@ -3,6 +3,7 @@ import type { StoaZone } from '$lib/types/stoa';
 import { CameraController } from '../camera/controller';
 import { buildColonnade } from './colonnade';
 import { buildSeaTerrace } from './sea-terrace';
+import { buildShrines } from './shrines';
 
 type ZoneBuilder = () => Promise<THREE.Group>;
 
@@ -54,10 +55,15 @@ export class ZoneManager {
   private activeGroup: THREE.Group | null = null;
   private transitionState: ZoneTransitionState | null = null;
   private transitionQueue: Promise<void> = Promise.resolve();
+  private unlockedThinkers: string[] = ['marcus'];
 
   public constructor(scene: THREE.Scene, camera: THREE.PerspectiveCamera) {
     this.scene = scene;
     this.cameraController = new CameraController(camera);
+  }
+
+  public setUnlockedThinkers(thinkers: string[]): void {
+    this.unlockedThinkers = thinkers;
   }
 
   public async transition(zone: StoaZone): Promise<void> {
@@ -76,8 +82,13 @@ export class ZoneManager {
       return;
     }
 
-    const builder = ZONE_BUILDERS[zone] ?? buildColonnade;
-    const incomingGroup = await builder();
+    let incomingGroup: THREE.Group;
+    if (zone === 'shrines') {
+      incomingGroup = await buildShrines(this.unlockedThinkers);
+    } else {
+      const builder = ZONE_BUILDERS[zone] ?? buildColonnade;
+      incomingGroup = await builder();
+    }
     this.scene.add(incomingGroup);
 
     const incomingMaterials = this.collectMaterials(incomingGroup);

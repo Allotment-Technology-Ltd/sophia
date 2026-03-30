@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
 
-  import type { StanceType } from '$lib/types/stoa';
+  import type { StanceType, StoaProgressState } from '$lib/types/stoa';
   import { stoaSessionStore } from '$lib/stores/stoa-session.svelte';
 
   interface Props {
@@ -36,9 +36,16 @@
     stance?: StanceType;
     frameworksReferenced?: string[];
     sourceClaims?: ClaimReference[];
+    xpGained?: number;
+    newUnlocks?: string[];
+    questsCompleted?: string[];
   }
 
-  const dispatch = createEventDispatcher<{ stanceChange: { stance: StanceType } }>();
+  const dispatch = createEventDispatcher<{
+    stanceChange: { stance: StanceType };
+    progressUpdate: StoaProgressState;
+    dialogueProgressUpdate: { xpGained: number; newUnlocks: string[]; questsCompleted: string[] };
+  }>();
 
   let { stance, sessionId }: Props = $props();
 
@@ -181,6 +188,16 @@
 
           if (event.type === 'error') {
             throw new Error(event.message ?? 'Dialogue stream error');
+          }
+
+          if (event.type === 'progress_update') {
+            // Emit progress update for thinker unlock notifications
+            dispatch('dialogueProgressUpdate', {
+              xpGained: event.xpGained ?? 0,
+              newUnlocks: event.newUnlocks ?? [],
+              questsCompleted: event.questsCompleted ?? []
+            });
+            continue;
           }
         }
       }
