@@ -895,7 +895,7 @@ async function upsertQueueRowForStoa(decision: StoaLicenseDecision, actorUid: st
 				submitted_by_uid: actorUid,
 				submitted_by_uids: mergeUnique(existing.submitted_by_uids, [actorUid]),
 				title_hint: `STOA batch: ${decision.hostname}`,
-				last_error: decision.reuseMode === 'blocked' ? 'stoa_strict_open_blocked' : null
+				last_error: 'stoa_strict_open_blocked'
 			}
 		);
 		return { id: rowId, status: nextStatus };
@@ -918,7 +918,7 @@ async function upsertQueueRowForStoa(decision: StoaLicenseDecision, actorUid: st
 			 grounding_submission_count: 0,
 			 total_submission_count: 1,
 			 attempt_count: 0,
-			 last_error: $last_error,
+			 last_error: NONE,
 			 created_at: time::now(),
 			 queued_at: time::now(),
 			 last_submitted_at: time::now(),
@@ -932,8 +932,7 @@ async function upsertQueueRowForStoa(decision: StoaLicenseDecision, actorUid: st
 			submitted_by_uid: actorUid,
 			status: initialStatus,
 			title_hint: `STOA batch: ${decision.hostname}`,
-			pass_hints: passHints,
-			last_error: decision.reuseMode === 'blocked' ? 'stoa_strict_open_blocked' : null
+			pass_hints: passHints
 		}
 	);
 	const createdId = normalizeRecordId(createdRows?.[0]?.id);
