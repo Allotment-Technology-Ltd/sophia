@@ -31,6 +31,10 @@
     await goto('/learn');
   }
 
+  async function openStoa(): Promise<void> {
+    await goto('/stoa');
+  }
+
   async function fetchFounderOffer(): Promise<void> {
     if (!browser || !auth?.currentUser) {
       founderOffer = null;
@@ -74,7 +78,7 @@
 
 <svelte:head>
   <title>SOPHIA Home</title>
-  <meta name="description" content="Choose your SOPHIA mode: Inquire or Learn." />
+  <meta name="description" content="Choose your SOPHIA mode: Inquire, Learn, or Stoa." />
 </svelte:head>
 
 <main class="home sophia-page-shell">
@@ -92,7 +96,10 @@
   <header class="hero">
     <p class="eyebrow">Welcome back</p>
     <h1>Choose how you want to work.</h1>
-    <p>Inquire for deep three-pass reasoning. Learn for guided drills, essays, and progress tracking.</p>
+    <p>
+      Inquire for deep three-pass reasoning. Learn for guided drills and essays. Stoa for adaptive
+      Stoic dialogue.
+    </p>
   </header>
 
   <section class="modes" aria-label="Primary modes">
@@ -106,6 +113,12 @@
       <h2>Learn</h2>
       <p>Train reasoning with daily drills, practice essays, and dialectical feedback.</p>
       <span>{learnEnabled ? 'Open Learn ->' : 'Learn module disabled'}</span>
+    </button>
+
+    <button class="mode-card" onclick={openStoa}>
+      <h2>Stoa</h2>
+      <p>Work through hard decisions with adaptive Stoic dialogue, grounding, and deep analysis.</p>
+      <span>Open Stoa -></span>
     </button>
   </section>
 

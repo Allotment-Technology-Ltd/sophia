@@ -131,7 +131,7 @@
   </a>
 
   <div class="mode-links" aria-label="App sections">
-    <a href="/app" class="mode-link" aria-current={$page.url.pathname.startsWith('/app') ? 'page' : undefined}>Inquire</a>
+    <a href="/home" class="mode-link" aria-current={$page.url.pathname.startsWith('/home') ? 'page' : undefined}>Mode</a>
     {#if learnEnabled}
       <a href="/learn" class="mode-link" aria-current={$page.url.pathname.startsWith('/learn') ? 'page' : undefined}>Learn</a>
     {/if}
