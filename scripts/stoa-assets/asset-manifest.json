@@ -1,0 +1,84 @@
+{
+  "assets": [
+    {
+      "id": "aegean-waves-loop",
+      "type": "audio",
+      "targetPath": "static/audio/ambient/aegean-waves-loop.mp3",
+      "sourceSuggestion": "freesound.org search: 'aegean waves loop' (or 'waves loop calm')",
+      "license": "CC0 preferred; CC BY acceptable with attribution",
+      "maxSizeKB": 1500,
+      "loopable": true,
+      "acquired": false
+    },
+    {
+      "id": "swift-call-01",
+      "type": "audio",
+      "targetPath": "static/audio/ambient/swift-call-01.mp3",
+      "sourceSuggestion": "freesound.org search: 'swift bird call'",
+      "license": "CC0 preferred; CC BY acceptable with attribution",
+      "maxSizeKB": 600,
+      "loopable": false,
+      "acquired": false
+    },
+    {
+      "id": "swift-call-02",
+      "type": "audio",
+      "targetPath": "static/audio/ambient/swift-call-02.mp3",
+      "sourceSuggestion": "freesound.org search: 'swift bird call'",
+      "license": "CC0 preferred; CC BY acceptable with attribution",
+      "maxSizeKB": 600,
+      "loopable": false,
+      "acquired": false
+    },
+    {
+      "id": "swallow-loop",
+      "type": "audio",
+      "targetPath": "static/audio/ambient/swallow-loop.mp3",
+      "sourceSuggestion": "freesound.org search: 'swallow loop'",
+      "license": "CC0 preferred; CC BY acceptable with attribution",
+      "maxSizeKB": 1000,
+      "loopable": true,
+      "acquired": false
+    },
+    {
+      "id": "column-wind-loop",
+      "type": "audio",
+      "targetPath": "static/audio/ambient/column-wind-loop.mp3",
+      "sourceSuggestion": "freesound.org search: 'wind columns ambiance'",
+      "license": "CC0 preferred; CC BY acceptable with attribution",
+      "maxSizeKB": 1200,
+      "loopable": true,
+      "acquired": false
+    },
+    {
+      "id": "torch-crackle-loop",
+      "type": "audio",
+      "targetPath": "static/audio/ambient/torch-crackle-loop.mp3",
+      "sourceSuggestion": "freesound.org search: 'fire crackle loop'",
+      "license": "CC0 preferred; CC BY acceptable with attribution",
+      "maxSizeKB": 1200,
+      "loopable": true,
+      "acquired": false
+    },
+    {
+      "id": "mediterranean-sky-hdri",
+      "type": "hdri",
+      "targetPath": "static/hdri/mediterranean-sky.hdr",
+      "sourceSuggestion": "Poly Haven API assets: type=hdris, warm outdoor sky (example slug: kloofendal_48d_partly_cloudy), 2K HDR",
+      "license": "CC0 (Poly Haven)",
+      "maxSizeKB": 12000,
+      "loopable": false,
+      "acquired": false
+    },
+    {
+      "id": "stoa-guide-sprite",
+      "type": "image",
+      "targetPath": "static/sprites/stoa/stoa-guide.png",
+      "sourceSuggestion": "Commissioned/generated STOA character PNG with transparent background",
+      "license": "Project-owned or CC0 with verified commercial use",
+      "maxSizeKB": 2048,
+      "loopable": false,
+      "acquired": false
+    }
+  ]
+}

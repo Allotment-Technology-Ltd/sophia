@@ -15,6 +15,13 @@
       emphasis: false
     },
     {
+      href: '/admin/ingest/batch',
+      title: 'STOA batch ingestion',
+      description:
+        'Queue and run strict-open STOA source batches from the frontend: policy preview, bulk approve/reject, run controls, and live progress.',
+      emphasis: false
+    },
+    {
       href: '/admin/operator-byok',
       title: 'Operator BYOK',
       description:

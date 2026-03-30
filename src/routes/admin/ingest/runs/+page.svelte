@@ -152,6 +152,7 @@
       <nav class="flex flex-wrap items-center gap-2" aria-label="Admin shortcuts">
         <a href="/admin" class="admin-hub-action">Admin home</a>
         <a href="/admin/ingest" class="admin-hub-action">Expand</a>
+        <a href="/admin/ingest/batch" class="admin-hub-action">STOA batches</a>
       </nav>
     </div>
   </header>
