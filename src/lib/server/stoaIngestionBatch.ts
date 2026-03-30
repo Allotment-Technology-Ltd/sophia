@@ -23,7 +23,6 @@ type QueueRow = {
 	title_hint?: string | null;
 	updated_at?: string;
 	last_submitted_at?: string;
-	visibility_scope?: 'public_shared' | 'private_user_only';
 };
 
 export type StoaLicenseDecision = {
@@ -905,10 +904,6 @@ async function upsertQueueRowForStoa(decision: StoaLicenseDecision, actorUid: st
 			 canonical_url: $canonical_url,
 			 canonical_url_hash: $canonical_url_hash,
 			 hostname: $hostname,
-			 visibility_scope: 'public_shared',
-			 owner_uid: NONE,
-			 contributor_uid: $contributor_uid,
-			 deletion_state: 'active',
 			 status: $status,
 			 source_kinds: ['stoa', 'stoa_batch'],
 			 query_run_ids: [],
@@ -932,7 +927,6 @@ async function upsertQueueRowForStoa(decision: StoaLicenseDecision, actorUid: st
 			canonical_url: canonicalUrl,
 			canonical_url_hash: canonicalUrlHash,
 			hostname: decision.hostname,
-			contributor_uid: actorUid,
 			submitted_by_uid: actorUid,
 			status: initialStatus,
 			title_hint: `STOA batch: ${decision.hostname}`,
@@ -1154,7 +1148,7 @@ export async function listStoaQueue(filters?: {
 	// Query broadly, then filter in TS so prod rows with source_kinds = NONE
 	// do not trigger Surreal array::contains runtime/type errors.
 	const baseRows = await dbQuery<QueueRow[]>(
-		`SELECT id, canonical_url, canonical_url_hash, hostname, status, source_kinds, pass_hints, last_error, title_hint, updated_at, last_submitted_at, visibility_scope
+		`SELECT id, canonical_url, canonical_url_hash, hostname, status, source_kinds, pass_hints, last_error, title_hint, updated_at, last_submitted_at
 		 FROM link_ingestion_queue
 		 ORDER BY last_submitted_at DESC
 		 LIMIT $limit`,
