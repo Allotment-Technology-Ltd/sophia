@@ -1,0 +1,66 @@
+{
+  "$schema": "https://repomix.dev/schemas/v0.3/schema.json",
+  "input": {
+    "maxFileSize": 45000
+  },
+  "output": {
+    "headerText": "Sophia KB-oriented pack (~200k tokens): omits route +page.svelte, lib/components/**/*.svelte, any file >45KB, docs/archive, docs/restormel tree, tests, static assets; compress + strip comments. Full repo: npx repomix (default, no --config).",
+    "filePath": "repomix-knowledge-base.xml",
+    "style": "xml",
+    "compress": true,
+    "removeComments": true,
+    "removeEmptyLines": false,
+    "truncateBase64": true,
+    "directoryStructure": true,
+    "fileSummary": true,
+    "parsableStyle": false
+  },
+  "include": [
+    "src/**/*.{ts,js,svelte,css}",
+    "scripts/**/*.{ts,mjs,js}",
+    "packages/**/*.ts",
+    "infra/**/*.ts",
+    "apps/**/*.{json,md}",
+    "README.md",
+    "docs/README.md",
+    "docs/operations/**/*.md",
+    "docs/modules/**/*.md",
+    "docs/restormel-integration/**/*.md",
+    "docs/sophia/**/*.md",
+    "docs/admin/**/*.md",
+    "docs/decisions/**/*.md",
+    "docs/reference/api/**/*.md",
+    "docs/reference/operations/**/*.md",
+    "package.json",
+    "pnpm-workspace.yaml",
+    "svelte.config.js",
+    "vite.config.js",
+    "tailwind.config.js",
+    "postcss.config.js",
+    "tsconfig.json",
+    "jsconfig.json",
+    "drizzle.config.ts",
+    "Dockerfile",
+    ".github/workflows/**/*.yml",
+    ".cursor/rules/**/*.mdc"
+  ],
+  "ignore": {
+    "customPatterns": [
+      "**/*.test.ts",
+      "**/*.spec.ts",
+      "**/e2e/**",
+      "**/__tests__/**",
+      "docs/archive/**",
+      "docs/restormel/**",
+      "static/**",
+      "repomix-output.xml",
+      "repomix-knowledge-base.xml",
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/.svelte-kit/**",
+      "**/build/**",
+      "src/routes/**/+page.svelte",
+      "src/lib/components/**/*.svelte"
+    ]
+  }
+}
