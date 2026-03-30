@@ -1,5 +1,8 @@
+import { config as loadEnv } from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import { Surreal } from 'surrealdb';
+
+loadEnv();
 
 /*
  * Stoa immersive schema extension. Run after setup-schema.ts. Do not merge into setup-schema.ts.

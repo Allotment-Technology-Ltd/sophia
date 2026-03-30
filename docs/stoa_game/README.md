@@ -99,6 +99,8 @@ Each prompt must pass `pnpm check` before the next starts.
 Run prompts 2.1 → 2.7 in order from `docs/stoa_game/phase-2-game-logic.md`.
 Requires Phase 1 complete.
 
+**Prompt 2.1 (SurrealDB):** start a local SurrealDB instance (default `http://localhost:8000/rpc`) before `pnpm db:stoa-schema`. In Cursor worktrees without a copied `.env`, set `SURREAL_URL` / `SURREAL_*` in the shell or symlink `.env` from your main clone.
+
 **Deliverable:** Quest journal works, thinker shrines unlock, XP accumulates.
 
 ### Phase 3 — RPG + Desktop (estimated: 3-4 days)
