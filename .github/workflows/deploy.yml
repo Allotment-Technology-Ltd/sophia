@@ -213,6 +213,9 @@ jobs:
 
       - name: Build (verify)
         if: github.event_name == 'pull_request'
+        env:
+          # Same guard as Dockerfile builder: server modules require DATABASE_URL during vite build.
+          DATABASE_URL: postgresql://sveltekit_build_placeholder@127.0.0.1:5432/postgres?sslmode=disable
         run: pnpm build
 
   # ── 2b. CodeQL scan (in unified pipeline) ──────────────────────────────────

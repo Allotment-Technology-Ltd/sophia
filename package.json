@@ -43,7 +43,8 @@
     "verify:neon-ingest-run": "tsx scripts/verify-neon-ingest-run.ts",
     "verify:prod-ingest": "bash scripts/verify-prod-ingest-isolated.sh",
     "byok:reencrypt-kms-to-local": "tsx --env-file=.env scripts/byok-reencrypt-kms-to-local.ts",
-    "secrets:sync-gcp": "tsx scripts/sync-gcp-secret-manager-from-env.ts"
+    "secrets:sync-gcp": "tsx scripts/sync-gcp-secret-manager-from-env.ts",
+    "repomix:kb": "npx --yes repomix --config repomix.knowledge-base.config.json"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.58",
