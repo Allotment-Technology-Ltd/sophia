@@ -43,7 +43,7 @@
     "migrate": "bash scripts/migrate-to-europe-west2.sh",
     "migrate:firestore-to-neon": "tsx scripts/migrate-firestore-to-neon.ts",
     "db:ping": "tsx scripts/db-ping.ts",
-    "db:stoa-schema": "tsx --env-file=.env scripts/setup-stoa-schema.ts",
+    "db:stoa-schema": "tsx scripts/setup-stoa-schema.ts",
     "neon:auth-env": "tsx --env-file=.env scripts/neon-auth-print-env.ts",
     "verify:neon-ingest-run": "tsx scripts/verify-neon-ingest-run.ts",
     "verify:prod-ingest": "bash scripts/verify-prod-ingest-isolated.sh",

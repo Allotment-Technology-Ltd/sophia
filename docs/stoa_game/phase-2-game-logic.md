@@ -5,6 +5,8 @@
 Phase 1 must be complete and passing `pnpm check` before starting Phase 2.
 The dialogue API must be returning SSE events correctly.
 
+**SurrealDB for Prompt 2.1:** start a local SurrealDB instance (defaults match `scripts/setup-stoa-schema.ts`: `SURREAL_URL` `http://localhost:8000/rpc`, user/pass `root`/`root`, namespace/database `sophia`). Copy or symlink `.env` into the worktree if you rely on non-default connection vars. Then run `pnpm db:stoa-schema`.
+
 ---
 
 ## Prompt 2.1 — SurrealDB game schema deployment
