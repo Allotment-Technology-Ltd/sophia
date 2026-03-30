@@ -1,16 +1,191 @@
 <script lang="ts">
-  import type { Beat3Option } from '$lib/server/stoa/prologue/script';
-  import {
-    ASSESSMENT_QUESTIONS_FALLBACK,
-    BEAT1_LINES,
-    BEAT2_LINES,
-    BEAT3_OPTIONS,
-    BEAT4_RESPONSES,
-    BEAT5_QUESTIONS,
-    BEAT6_CLOSING_LINE,
-    QUEST_SEEDS
-  } from '$lib/server/stoa/prologue/script';
-  import type { PrologueState, StoaProfile, StanceType } from '$lib/types/stoa';
+  import type {
+    ArrivalReason,
+    PrologueState,
+    StartingPath,
+    StanceType,
+    StoaProfile
+  } from '$lib/types/stoa';
+
+  const BEAT1_LINES: Record<StartingPath, string[]> = {
+    garden: ['You found the quiet corner.', "Sit if you'd like. The water doesn't go anywhere."],
+    colonnade: ['You walked all the way in.', 'Most people stop at the entrance. Come — sit.'],
+    sea_terrace: ['The sea at this hour.', "There's nowhere better to bring something heavy. Sit with me."]
+  };
+
+  const BEAT2_LINES: Record<StartingPath, string[]> = {
+    garden: [
+      'Peace is an interesting thing to look for.',
+      "Tell me — when was the last time you felt something close to it? Even briefly."
+    ],
+    colonnade: [
+      'Finding your way.',
+      "What does the path look like, when you imagine having found it? Don't tell me where it goes — tell me what it feels like to be on it."
+    ],
+    sea_terrace: [
+      "You can put it down here if you like.",
+      "I won't ask what it is yet. Just — what does it feel like to be carrying it?"
+    ]
+  };
+
+  interface Beat3Option {
+    text: string;
+    stanceSignal: StanceType;
+    primaryStruggleHint: 'cognitive' | 'emotional' | 'existential';
+  }
+
+  const BEAT3_OPTIONS: Record<ArrivalReason, Beat3Option[]> = {
+    seeking_peace: [
+      { text: "Honestly? I can't remember.", stanceSignal: 'sit_with', primaryStruggleHint: 'emotional' },
+      {
+        text: "There are moments. Small ones. But they don't last.",
+        stanceSignal: 'hold',
+        primaryStruggleHint: 'cognitive'
+      },
+      {
+        text: "When I'm alone. When nobody needs anything from me.",
+        stanceSignal: 'guide',
+        primaryStruggleHint: 'existential'
+      }
+    ],
+    seeking_direction: [
+      { text: 'Clear. I want it to feel clear.', stanceSignal: 'guide', primaryStruggleHint: 'cognitive' },
+      {
+        text: "Like I'm doing what I'm supposed to be doing.",
+        stanceSignal: 'hold',
+        primaryStruggleHint: 'existential'
+      },
+      {
+        text: "Like I'm moving instead of waiting.",
+        stanceSignal: 'guide',
+        primaryStruggleHint: 'cognitive'
+      }
+    ],
+    carrying_burden: [
+      {
+        text: "Heavy. Like I can't breathe properly.",
+        stanceSignal: 'sit_with',
+        primaryStruggleHint: 'emotional'
+      },
+      {
+        text: "Like it's mine to carry and I can't give it to anyone.",
+        stanceSignal: 'sit_with',
+        primaryStruggleHint: 'existential'
+      },
+      {
+        text: "Like I keep thinking about it even when I don't want to.",
+        stanceSignal: 'hold',
+        primaryStruggleHint: 'cognitive'
+      }
+    ],
+    uncertain: [
+      { text: 'The quiet. I notice the quiet.', stanceSignal: 'sit_with', primaryStruggleHint: 'existential' },
+      {
+        text: 'How far away everything feels from here.',
+        stanceSignal: 'hold',
+        primaryStruggleHint: 'existential'
+      },
+      {
+        text: "That I don't want to leave yet.",
+        stanceSignal: 'sit_with',
+        primaryStruggleHint: 'emotional'
+      }
+    ]
+  };
+
+  const BEAT4_RESPONSES: Record<ArrivalReason, Record<string, string[]>> = {
+    seeking_peace: {
+      "Honestly? I can't remember.": ["That's honest.", `Not "rarely" — can't remember.`, "Let's start from there."],
+      "There are moments. Small ones. But they don't last.": [
+        'Small moments are still moments.',
+        "We'll come back to that."
+      ],
+      "When I'm alone. When nobody needs anything from me.": [
+        'Solitude as relief.',
+        "Worth understanding whether that's rest — or something else.",
+        'Sit with me a while.'
+      ]
+    },
+    seeking_direction: {
+      'Clear. I want it to feel clear.': ['Clarity.', "What's making it murky right now?"],
+      "Like I'm doing what I'm supposed to be doing.": [
+        '"Supposed to" is interesting.',
+        'Whose sense of supposed-to?',
+        "That's worth sitting with."
+      ],
+      "Like I'm moving instead of waiting.": [
+        "You're waiting.",
+        'For something specific, or just — waiting?',
+        "Let's find out."
+      ]
+    },
+    carrying_burden: {
+      "Heavy. Like I can't breathe properly.": [
+        "That's a real description.",
+        'Not metaphor — physical.',
+        "We'll sit with it before we try to move it."
+      ],
+      "Like it's mine to carry and I can't give it to anyone.": [
+        "That feeling — that it's yours specifically — is worth examining.",
+        'Not to take it from you.',
+        'Just to look at it together.'
+      ],
+      "Like I keep thinking about it even when I don't want to.": [
+        'Yes.',
+        'Unresolved things do that.',
+        'They keep asking for attention until they get it properly.'
+      ]
+    },
+    uncertain: {
+      'The quiet. I notice the quiet.': ['Good.', "That's already something.", 'Sit in it a moment longer.'],
+      'How far away everything feels from here.': [
+        'It is far.',
+        'The academy sits at a certain remove from things.',
+        "That's not an accident."
+      ],
+      "That I don't want to leave yet.": ["Then don't.", "That's enough for now."]
+    }
+  };
+
+  const BEAT5_QUESTIONS: Record<ArrivalReason, Record<string, string>> = {
+    seeking_peace: {
+      "Honestly? I can't remember.": "When was the last time you didn't feel like you needed to be somewhere else?",
+      "There are moments. Small ones. But they don't last.": 'What makes them end, when they do?',
+      "When I'm alone. When nobody needs anything from me.": 'Is that rest, or something else?'
+    },
+    seeking_direction: {
+      'Clear. I want it to feel clear.': "What's making it murky right now?",
+      "Like I'm doing what I'm supposed to be doing.": 'Whose sense of supposed-to is it?',
+      "Like I'm moving instead of waiting.": 'What exactly are you waiting for?'
+    },
+    carrying_burden: {
+      "Heavy. Like I can't breathe properly.": 'Where does it sit in your body?',
+      "Like it's mine to carry and I can't give it to anyone.": 'When did you decide it was yours alone?',
+      "Like I keep thinking about it even when I don't want to.": 'What would it mean to stop — even for an hour?'
+    },
+    uncertain: {
+      'The quiet. I notice the quiet.': 'What does it feel like to be in quiet right now?',
+      'How far away everything feels from here.': 'Is that relief, or something lonelier?',
+      "That I don't want to leave yet.": "What is it you don't want to go back to?"
+    }
+  };
+
+  const ASSESSMENT_QUESTIONS_FALLBACK: Record<StartingPath, string> = {
+    garden: "When was the last time you didn't feel like you needed to be somewhere else?",
+    colonnade: 'What would it mean to know you were on the right path?',
+    sea_terrace: 'What would it look like to put it down, even for a few minutes?'
+  };
+
+  const QUEST_SEEDS: Record<StartingPath, string> = {
+    garden:
+      "One thing worth trying this week: when you notice a moment of stillness — however small — don't reach past it. Just let it be there.",
+    colonnade:
+      'One thing to do before tomorrow: name one action that is entirely in your hands. Not what you hope will happen. What you can actually do.',
+    sea_terrace:
+      "One thing for tonight: write one sentence about what you're carrying. Not to solve it. Just to make it visible outside your own head."
+  };
+
+  const BEAT6_CLOSING_LINE = 'The academy is open.';
 
   let {
     profile,
