@@ -1713,7 +1713,7 @@
                   <p class="key-source-hint">{keySourceDescription}</p>
                   <div class="byok-shortcuts">
                     <p class="byok-shortcuts-copy">
-                      Need a different key source? Configure BYOK or top up wallet credit before your next run.
+                      Need a different key source? Configure BYOK or review your subscription before your next run.
                     </p>
                     <div class="byok-shortcuts-actions">
                       <button
@@ -1728,7 +1728,7 @@
                         type="button"
                         onclick={() => openSettingsSubTab('payments')}
                       >
-                        Open wallet top-ups
+                        Open subscription settings
                       </button>
                     </div>
                   </div>

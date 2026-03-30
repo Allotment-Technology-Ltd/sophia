@@ -56,6 +56,13 @@ interface ImportSummary {
 	errors: string[];
 }
 
+interface ExistingThinkerProfile {
+	birth_year: number | null;
+	death_year: number | null;
+	traditions_count: number;
+	domains_count: number;
+}
+
 function parseFlags(argv: string[]): ImportFlags {
 	return {
 		dryRun: argv.includes('--dry-run'),
@@ -228,6 +235,24 @@ async function loadExistingThinkers(db: Surreal): Promise<Set<string>> {
 	return ids;
 }
 
+async function loadExistingThinkerProfiles(db: Surreal): Promise<Map<string, ExistingThinkerProfile>> {
+	const rows = await db.query<
+		{ id?: unknown; birth_year?: unknown; death_year?: unknown; traditions?: unknown; domains?: unknown }[][]
+	>(`SELECT id, birth_year, death_year, traditions, domains FROM thinker`);
+	const profiles = new Map<string, ExistingThinkerProfile>();
+	for (const row of rows?.[0] ?? []) {
+		const qid = parseRecordIdToQid(row.id);
+		if (!qid) continue;
+		profiles.set(qid, {
+			birth_year: typeof row.birth_year === 'number' ? row.birth_year : null,
+			death_year: typeof row.death_year === 'number' ? row.death_year : null,
+			traditions_count: Array.isArray(row.traditions) ? row.traditions.length : 0,
+			domains_count: Array.isArray(row.domains) ? row.domains.length : 0
+		});
+	}
+	return profiles;
+}
+
 async function loadExistingRelations(db: Surreal, table: 'influenced_by' | 'student_of'): Promise<Set<string>> {
 	const query =
 		table === 'influenced_by' ? 'SELECT in, out FROM influenced_by' : 'SELECT in, out FROM student_of';
@@ -315,6 +340,7 @@ async function main(): Promise<void> {
 	try {
 		const thinkerSpinner = startSpinner(`Preparing thinker upsert (${thinkers.length} records)`);
 		const existingThinkers = await loadExistingThinkers(db);
+		const existingProfiles = await loadExistingThinkerProfiles(db);
 		thinkerSpinner.stop(`✓ Loaded ${existingThinkers.size} existing thinker records`);
 
 		const thinkerWriteSpinner = startSpinner(
@@ -334,7 +360,39 @@ async function main(): Promise<void> {
 			};
 
 			if (!flags.force && existingThinkers.has(thinkerId)) {
-				summary.thinkersSkipped += 1;
+				const profile = existingProfiles.get(thinkerId);
+				const needsBioBackfill =
+					(profile?.birth_year == null && thinker.birth_year != null) ||
+					(profile?.death_year == null && thinker.death_year != null);
+				const needsTaxonomyBackfill =
+					(profile?.traditions_count ?? 0) === 0 && thinker.traditions.length > 0 ||
+					(profile?.domains_count ?? 0) === 0 && thinker.domains.length > 0;
+				if (needsBioBackfill || needsTaxonomyBackfill) {
+					try {
+						await db.query(
+							`UPDATE type::thing($id) MERGE {
+								birth_year: if birth_year = NONE AND $birth_year != NONE then $birth_year else birth_year end,
+								death_year: if death_year = NONE AND $death_year != NONE then $death_year else death_year end,
+								traditions: if array::len(traditions) = 0 AND array::len($traditions) > 0 then $traditions else traditions end,
+								domains: if array::len(domains) = 0 AND array::len($domains) > 0 then $domains else domains end,
+								imported_at: time::now()
+							}`,
+							{
+								id: `thinker:${thinkerId}`,
+								birth_year: thinker.birth_year ?? undefined,
+								death_year: thinker.death_year ?? undefined,
+								traditions: thinker.traditions,
+								domains: thinker.domains
+							}
+						);
+						summary.thinkersUpdated += 1;
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						summary.errors.push(`thinker backfill ${thinkerId}: ${message}`);
+					}
+				} else {
+					summary.thinkersSkipped += 1;
+				}
 				continue;
 			}
 

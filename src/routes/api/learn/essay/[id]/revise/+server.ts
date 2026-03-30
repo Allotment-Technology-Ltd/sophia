@@ -109,7 +109,6 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
     version_number: nextVersion,
     word_count: wordCount,
     feedback,
-    learn_entitlements: essayQuota.summary,
-    used_scholar_credit: essayQuota.usedScholarCredit === true
+    learn_entitlements: essayQuota.summary
   });
 };

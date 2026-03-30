@@ -23,7 +23,7 @@ import {
 } from './store';
 
 function evaluateIngestionConsume(
-  tier: 'free' | 'pro' | 'premium',
+  tier: 'free' | 'premium',
   publicUsed: number,
   privateUsed: number,
   visibility: IngestVisibilityScope
@@ -112,9 +112,6 @@ export async function consumeIngestionEntitlement(
         : 0,
       private_ingest_used: Number.isFinite(entData?.private_ingest_used)
         ? Number(entData.private_ingest_used)
-        : 0,
-      byok_fee_charged_cents: Number.isFinite(entData?.byok_fee_charged_cents)
-        ? Number(entData.byok_fee_charged_cents)
         : 0
     };
 
@@ -176,7 +173,6 @@ export async function consumeIngestionEntitlement(
         month_key: activeEntitlements.month_key,
         public_ingest_used: nextPublic,
         private_ingest_used: nextPrivate,
-        byok_fee_charged_cents: activeEntitlements.byok_fee_charged_cents,
         updated_at: FieldValue.serverTimestamp()
       },
       { merge: true }
@@ -244,9 +240,6 @@ export async function consumeIngestionEntitlements(
     let privateUsed = Number.isFinite(entData?.private_ingest_used)
       ? Number(entData.private_ingest_used)
       : 0;
-    const byokFeeCharged = Number.isFinite(entData?.byok_fee_charged_cents)
-      ? Number(entData.byok_fee_charged_cents)
-      : 0;
     const monthKeyRaw = typeof entData?.month_key === 'string' ? entData.month_key : defaultEnt.month_key;
     const monthKey = monthKeyRaw === currentMonthKeyUtc() ? monthKeyRaw : currentMonthKeyUtc();
     if (monthKey !== monthKeyRaw) {
@@ -261,8 +254,7 @@ export async function consumeIngestionEntitlements(
         summary: summarizeEntitlements(effectiveTier, profile.status, profile.currency, {
           month_key: monthKey,
           public_ingest_used: publicUsed,
-          private_ingest_used: privateUsed,
-          byok_fee_charged_cents: byokFeeCharged
+          private_ingest_used: privateUsed
         })
       };
     }
@@ -281,8 +273,7 @@ export async function consumeIngestionEntitlements(
           summary: summarizeEntitlements(effectiveTier, profile.status, profile.currency, {
             month_key: monthKey,
             public_ingest_used: publicUsed,
-            private_ingest_used: privateUsed,
-            byok_fee_charged_cents: byokFeeCharged
+            private_ingest_used: privateUsed
           })
         };
       }
@@ -297,7 +288,6 @@ export async function consumeIngestionEntitlements(
         month_key: monthKey,
         public_ingest_used: publicUsed,
         private_ingest_used: privateUsed,
-        byok_fee_charged_cents: byokFeeCharged,
         updated_at: FieldValue.serverTimestamp()
       },
       { merge: true }
@@ -308,46 +298,8 @@ export async function consumeIngestionEntitlements(
       summary: summarizeEntitlements(effectiveTier, profile.status, profile.currency, {
         month_key: monthKey,
         public_ingest_used: publicUsed,
-        private_ingest_used: privateUsed,
-        byok_fee_charged_cents: byokFeeCharged
+        private_ingest_used: privateUsed
       })
     };
-  });
-}
-
-export async function applyByokFeeUsage(
-  uid: string,
-  amountCents: number
-): Promise<void> {
-  if (!Number.isFinite(amountCents) || amountCents <= 0) return;
-  const entitlementsRef = billingEntitlementsRef(uid);
-  await sophiaDocumentsDb.runTransaction(async (tx) => {
-    const entSnap = await tx.get(entitlementsRef);
-    const baseline = defaultEntitlements();
-    const currentMonth = currentMonthKeyUtc();
-    const entData = (entSnap.exists ? entSnap.data() : {}) as Record<string, unknown>;
-    const monthKeyRaw = typeof entData.month_key === 'string' ? entData.month_key : baseline.month_key;
-    const isCurrentMonth = monthKeyRaw === currentMonth;
-    const existingByok = Number.isFinite(entData.byok_fee_charged_cents)
-      ? Number(entData.byok_fee_charged_cents)
-      : 0;
-    const existingPublic = Number.isFinite(entData.public_ingest_used)
-      ? Number(entData.public_ingest_used)
-      : 0;
-    const existingPrivate = Number.isFinite(entData.private_ingest_used)
-      ? Number(entData.private_ingest_used)
-      : 0;
-
-    tx.set(
-      entitlementsRef,
-      {
-        month_key: currentMonth,
-        public_ingest_used: isCurrentMonth ? existingPublic : 0,
-        private_ingest_used: isCurrentMonth ? existingPrivate : 0,
-        byok_fee_charged_cents: (isCurrentMonth ? existingByok : 0) + Math.floor(amountCents),
-        updated_at: FieldValue.serverTimestamp()
-      },
-      { merge: true }
-    );
   });
 }

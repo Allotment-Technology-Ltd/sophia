@@ -21,8 +21,7 @@ const mocks = vi.hoisted(() => ({
   mockSaveProgressSnapshot: vi.fn(),
   mockLoadByokProviderApiKeys: vi.fn(),
   mockConsumeLearnEntitlement: vi.fn(),
-  mockGetLearnEntitlementSummary: vi.fn(),
-  mockConvertWalletToScholarCredits: vi.fn()
+  mockGetLearnEntitlementSummary: vi.fn()
 }));
 
 vi.mock('$lib/server/learn/content', () => ({
@@ -59,9 +58,7 @@ vi.mock('$lib/server/byok/store', () => ({
 
 vi.mock('$lib/server/learn/entitlements', () => ({
   consumeLearnEntitlement: mocks.mockConsumeLearnEntitlement,
-  getLearnEntitlementSummary: mocks.mockGetLearnEntitlementSummary,
-  convertWalletToScholarCredits: mocks.mockConvertWalletToScholarCredits,
-  SCHOLAR_CREDIT_PRICE_CENTS: 100
+  getLearnEntitlementSummary: mocks.mockGetLearnEntitlementSummary
 }));
 
 import { GET as getLessons } from '../../../routes/api/learn/lessons/+server';
@@ -147,29 +144,25 @@ describe('Learn routes', () => {
     mocks.mockConsumeLearnEntitlement.mockResolvedValue({
       allowed: true,
       summary: {
-        tier: 'pro',
+        tier: 'premium',
         monthKey: '2026-03',
         microLessonsUsed: 1,
         shortReviewsUsed: 1,
         essayReviewsUsed: 1,
-        microLessonsRemaining: 49,
+        microLessonsRemaining: null,
         shortReviewsRemaining: null,
-        essayReviewsRemaining: 2,
-        scholarCreditsBalance: 2,
-        scholarCreditsSpent: 0
+        essayReviewsRemaining: 9
       }
     });
     mocks.mockGetLearnEntitlementSummary.mockResolvedValue({
-      tier: 'pro',
+      tier: 'premium',
       monthKey: '2026-03',
       microLessonsUsed: 1,
       shortReviewsUsed: 1,
       essayReviewsUsed: 1,
-      microLessonsRemaining: 49,
+      microLessonsRemaining: null,
       shortReviewsRemaining: null,
-      essayReviewsRemaining: 2,
-      scholarCreditsBalance: 2,
-      scholarCreditsSpent: 0
+      essayReviewsRemaining: 9
     });
   });
 
@@ -254,35 +247,17 @@ describe('Learn routes', () => {
     const response = await getLearnEntitlements({ locals: { user: { uid: 'u1' } } } as never);
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.summary.tier).toBe('pro');
+    expect(body.summary.tier).toBe('premium');
   });
 
-  it('converts wallet to scholar credits', async () => {
-    mocks.mockConvertWalletToScholarCredits.mockResolvedValue({
-      converted: true,
-      credits_added: 1,
-      wallet_available_cents: 0,
-      summary: {
-        tier: 'pro',
-        monthKey: '2026-03',
-        microLessonsUsed: 1,
-        shortReviewsUsed: 1,
-        essayReviewsUsed: 1,
-        microLessonsRemaining: 49,
-        shortReviewsRemaining: null,
-        essayReviewsRemaining: 2,
-        scholarCreditsBalance: 3,
-        scholarCreditsSpent: 0
-      }
-    });
-
+  it('returns 410 for removed learn credit payment actions', async () => {
     const response = await postLearnEntitlements({
       locals: { user: { uid: 'u1' } },
       request: jsonRequest({ action: 'convert_wallet_to_scholar_credits', credits: 1 })
     } as never);
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(410);
     const body = await response.json();
-    expect(body.credits_added).toBe(1);
+    expect(body.error).toBe('learn_credit_payments_removed');
   });
 });

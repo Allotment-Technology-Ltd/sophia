@@ -7,6 +7,8 @@ import { BILLING_FEATURE_ENABLED } from '$lib/server/billing/flags';
 import { LEGAL_VERSION } from '$lib/constants/legal';
 import { getCheckoutPresentation } from '$lib/server/billing/checkout-settings';
 import { founderOfferSummaryFromProfile } from '$lib/server/billing/founder';
+import { hasOwnerRole } from '$lib/server/authRoles';
+import { getOrCreateDefaultWorkspace } from '$lib/server/billing/workspaces';
 
 interface CheckoutBody {
   tier?: 'pro' | 'premium';
@@ -27,6 +29,14 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     const email = locals.user?.email;
     if (!uid) {
       return json({ error: 'Authentication required' }, { status: 401 });
+    }
+    if (hasOwnerRole(locals.user)) {
+      return json(
+        {
+          error: 'Owner/admin accounts are exempt from subscriptions and already have premium access.'
+        },
+        { status: 409 }
+      );
     }
 
     const billingState = await ensureBillingState(uid);
@@ -64,8 +74,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     }
 
     const tier = body.tier;
-    if (tier !== 'pro' && tier !== 'premium') {
-      return json({ error: 'tier must be pro or premium' }, { status: 400 });
+    if (tier !== 'premium' && tier !== 'pro') {
+      return json({ error: 'tier must be pro' }, { status: 400 });
     }
     if (body.accept_terms !== true || body.accept_privacy !== true) {
       return json(
@@ -78,12 +88,15 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     const legalPrivacyVersion = body.legal_privacy_version?.trim() || LEGAL_VERSION;
     const currency = normalizeCurrency(body.currency ?? 'GBP');
     const appUrl = new URL(request.url).origin;
+    const workspace = await getOrCreateDefaultWorkspace(uid);
 
     const session = await createSubscriptionCheckout({
       uid,
+      workspaceId: workspace.id,
       email,
-      tier,
+      tier: 'premium',
       currency,
+      billingPeriod: 'monthly',
       appUrl,
       legalTermsVersion,
       legalPrivacyVersion
@@ -111,9 +124,11 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     const checkoutPresentation = getCheckoutPresentation();
     return json({
       checkout_url: session.checkoutUrl,
+      transaction_id: session.transactionId,
       price_id: session.priceId,
-      tier,
+      tier: 'pro',
       currency,
+      workspace_id: workspace.id,
       checkout_presentation: checkoutPresentation
     });
   } catch (err) {

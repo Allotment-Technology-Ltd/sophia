@@ -492,6 +492,204 @@ export async function setupSchema(existingDb?: Surreal) {
 		`);
 		console.log('[SETUP] ✓ Relation: authored');
 
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS unresolved_thinker_reference SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS raw_name ON unresolved_thinker_reference TYPE string;
+			DEFINE FIELD IF NOT EXISTS canonical_name ON unresolved_thinker_reference TYPE string;
+			DEFINE FIELD IF NOT EXISTS source_ids ON unresolved_thinker_reference TYPE array<string>;
+			DEFINE FIELD IF NOT EXISTS contexts ON unresolved_thinker_reference TYPE array<string>;
+			DEFINE FIELD IF NOT EXISTS status ON unresolved_thinker_reference TYPE string
+				DEFAULT 'queued'
+				ASSERT $value IN ['queued', 'resolved', 'rejected'];
+			DEFINE FIELD IF NOT EXISTS seen_count ON unresolved_thinker_reference TYPE int DEFAULT 1;
+			DEFINE FIELD IF NOT EXISTS proposed_qids ON unresolved_thinker_reference TYPE array<string>;
+			DEFINE FIELD IF NOT EXISTS proposed_labels ON unresolved_thinker_reference TYPE array<string>;
+			DEFINE FIELD IF NOT EXISTS resolver_notes ON unresolved_thinker_reference TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS first_seen_at ON unresolved_thinker_reference TYPE datetime VALUE time::now();
+			DEFINE FIELD IF NOT EXISTS last_seen_at ON unresolved_thinker_reference TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Table: unresolved_thinker_reference');
+
+		await db.query(`
+			DEFINE INDEX IF NOT EXISTS unresolved_thinker_reference_status
+				ON unresolved_thinker_reference FIELDS status;
+			DEFINE INDEX IF NOT EXISTS unresolved_thinker_reference_canonical_name
+				ON unresolved_thinker_reference FIELDS canonical_name;
+		`);
+		console.log(
+			'[SETUP] ✓ Indexes: unresolved_thinker_reference (status, canonical_name)'
+		);
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS thinker_alias SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS canonical_name ON thinker_alias TYPE string;
+			DEFINE FIELD IF NOT EXISTS raw_name ON thinker_alias TYPE string;
+			DEFINE FIELD IF NOT EXISTS wikidata_id ON thinker_alias TYPE string;
+			DEFINE FIELD IF NOT EXISTS label ON thinker_alias TYPE string;
+			DEFINE FIELD IF NOT EXISTS confidence ON thinker_alias TYPE float;
+			DEFINE FIELD IF NOT EXISTS resolved_by ON thinker_alias TYPE string
+				ASSERT $value IN ['wikidata', 'manual', 'heuristic'];
+			DEFINE FIELD IF NOT EXISTS status ON thinker_alias TYPE string
+				DEFAULT 'active'
+				ASSERT $value IN ['active', 'rejected'];
+			DEFINE FIELD IF NOT EXISTS reviewer_uid ON thinker_alias TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS reviewer_email ON thinker_alias TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS source_contexts ON thinker_alias TYPE array<string>;
+			DEFINE FIELD IF NOT EXISTS created_at ON thinker_alias TYPE datetime VALUE time::now();
+			DEFINE FIELD IF NOT EXISTS updated_at ON thinker_alias TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Table: thinker_alias');
+
+		await db.query(`
+			DEFINE INDEX IF NOT EXISTS thinker_alias_canonical_name ON thinker_alias FIELDS canonical_name UNIQUE;
+			DEFINE INDEX IF NOT EXISTS thinker_alias_wikidata_id ON thinker_alias FIELDS wikidata_id;
+			DEFINE INDEX IF NOT EXISTS thinker_alias_status ON thinker_alias FIELDS status;
+		`);
+		console.log('[SETUP] ✓ Indexes: thinker_alias (canonical_name, wikidata_id, status)');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS thinker_resolution_audit_log SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS raw_name ON thinker_resolution_audit_log TYPE string;
+			DEFINE FIELD IF NOT EXISTS canonical_name ON thinker_resolution_audit_log TYPE string;
+			DEFINE FIELD IF NOT EXISTS wikidata_id ON thinker_resolution_audit_log TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS label ON thinker_resolution_audit_log TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS action ON thinker_resolution_audit_log TYPE string
+				ASSERT $value IN [
+					'auto_resolve',
+					'manual_resolve',
+					'manual_reject',
+					'auto_queue',
+					'auto_skip_ambiguous',
+					'reconcile_resolve',
+					'reconcile_queue'
+				];
+			DEFINE FIELD IF NOT EXISTS confidence ON thinker_resolution_audit_log TYPE option<float>;
+			DEFINE FIELD IF NOT EXISTS source_id ON thinker_resolution_audit_log TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS queue_record_id ON thinker_resolution_audit_log TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS notes ON thinker_resolution_audit_log TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS metadata ON thinker_resolution_audit_log TYPE option<object>;
+			DEFINE FIELD IF NOT EXISTS created_at ON thinker_resolution_audit_log TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Table: thinker_resolution_audit_log');
+
+		await db.query(`
+			DEFINE INDEX IF NOT EXISTS thinker_resolution_audit_canonical ON thinker_resolution_audit_log FIELDS canonical_name;
+			DEFINE INDEX IF NOT EXISTS thinker_resolution_audit_created_at ON thinker_resolution_audit_log FIELDS created_at;
+		`);
+		console.log('[SETUP] ✓ Indexes: thinker_resolution_audit_log (canonical_name, created_at)');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS tradition SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS name ON tradition TYPE string;
+			DEFINE FIELD IF NOT EXISTS slug ON tradition TYPE string;
+			DEFINE FIELD IF NOT EXISTS imported_at ON tradition TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Table: tradition');
+		await db.query(`
+			DEFINE INDEX IF NOT EXISTS tradition_slug ON tradition FIELDS slug UNIQUE;
+			DEFINE INDEX IF NOT EXISTS tradition_name ON tradition FIELDS name;
+		`);
+		console.log('[SETUP] ✓ Indexes: tradition (slug, name)');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS subject SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS name ON subject TYPE string;
+			DEFINE FIELD IF NOT EXISTS slug ON subject TYPE string;
+			DEFINE FIELD IF NOT EXISTS imported_at ON subject TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Table: subject');
+		await db.query(`
+			DEFINE INDEX IF NOT EXISTS subject_slug ON subject FIELDS slug UNIQUE;
+			DEFINE INDEX IF NOT EXISTS subject_name ON subject FIELDS name;
+		`);
+		console.log('[SETUP] ✓ Indexes: subject (slug, name)');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS period SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS name ON period TYPE string;
+			DEFINE FIELD IF NOT EXISTS slug ON period TYPE string;
+			DEFINE FIELD IF NOT EXISTS year_start ON period TYPE option<int>;
+			DEFINE FIELD IF NOT EXISTS year_end ON period TYPE option<int>;
+			DEFINE FIELD IF NOT EXISTS imported_at ON period TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Table: period');
+		await db.query(`
+			DEFINE INDEX IF NOT EXISTS period_slug ON period FIELDS slug UNIQUE;
+			DEFINE INDEX IF NOT EXISTS period_name ON period FIELDS name;
+		`);
+		console.log('[SETUP] ✓ Indexes: period (slug, name)');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS work SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS title ON work TYPE string;
+			DEFINE FIELD IF NOT EXISTS source_id ON work TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS source_url ON work TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS imported_at ON work TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Table: work');
+		await db.query(`
+			DEFINE INDEX IF NOT EXISTS work_source_id ON work FIELDS source_id UNIQUE;
+			DEFINE INDEX IF NOT EXISTS work_title ON work FIELDS title;
+		`);
+		console.log('[SETUP] ✓ Indexes: work (source_id, title)');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS belongs_to_tradition TYPE RELATION IN thinker OUT tradition SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS confidence ON belongs_to_tradition TYPE option<float>;
+			DEFINE FIELD IF NOT EXISTS imported_at ON belongs_to_tradition TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Relation: belongs_to_tradition');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS works_in_domain TYPE RELATION IN thinker OUT subject SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS confidence ON works_in_domain TYPE option<float>;
+			DEFINE FIELD IF NOT EXISTS imported_at ON works_in_domain TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Relation: works_in_domain');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS about_subject TYPE RELATION IN claim OUT subject SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS confidence ON about_subject TYPE option<float>;
+			DEFINE FIELD IF NOT EXISTS imported_at ON about_subject TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Relation: about_subject');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS active_in_period TYPE RELATION IN thinker OUT period SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS confidence ON active_in_period TYPE option<float>;
+			DEFINE FIELD IF NOT EXISTS imported_at ON active_in_period TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Relation: active_in_period');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS in_period TYPE RELATION IN claim OUT period SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS confidence ON in_period TYPE option<float>;
+			DEFINE FIELD IF NOT EXISTS imported_at ON in_period TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Relation: in_period');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS related_to_subject TYPE RELATION IN subject OUT subject SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS weight ON related_to_subject TYPE option<float>;
+			DEFINE FIELD IF NOT EXISTS reason ON related_to_subject TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS imported_at ON related_to_subject TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Relation: related_to_subject');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS authored_work TYPE RELATION IN thinker OUT work SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS confidence ON authored_work TYPE option<float>;
+			DEFINE FIELD IF NOT EXISTS imported_at ON authored_work TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Relation: authored_work');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS cites_work TYPE RELATION IN claim OUT work SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS confidence ON cites_work TYPE option<float>;
+			DEFINE FIELD IF NOT EXISTS imported_at ON cites_work TYPE datetime VALUE time::now();
+		`);
+		console.log('[SETUP] ✓ Relation: cites_work');
+
 		// Verify schema by querying table counts
 		console.log('\n[SETUP] Verifying schema...');
 
@@ -513,7 +711,22 @@ export async function setupSchema(existingDb?: Surreal) {
 			'thinker',
 			'influenced_by',
 			'student_of',
-			'authored'
+			'authored',
+			'unresolved_thinker_reference',
+			'thinker_alias',
+			'thinker_resolution_audit_log',
+			'tradition',
+			'subject',
+			'period',
+			'work',
+			'belongs_to_tradition',
+			'works_in_domain',
+			'about_subject',
+			'active_in_period',
+			'in_period',
+			'related_to_subject',
+			'authored_work',
+			'cites_work'
 		];
 
 		for (const table of tables) {
@@ -529,6 +742,13 @@ export async function setupSchema(existingDb?: Surreal) {
 		console.log('  • argument (philosophical arguments)');
 		console.log('  • review_audit_log (moderation and promotion audit trail)');
 		console.log('  • thinker (philosopher nodes from Wikidata)');
+		console.log('  • unresolved_thinker_reference (unresolved name queue for review)');
+		console.log('  • thinker_alias (canonical alias map with provenance)');
+		console.log('  • thinker_resolution_audit_log (auto/manual resolver audit trail)');
+		console.log('  • tradition (philosophical tradition nodes)');
+		console.log('  • subject (domain/subject nodes)');
+		console.log('  • period (timeline/era nodes)');
+		console.log('  • work (work-level entities linked to sources)');
 		console.log('\nRelation tables created:');
 		console.log('  • supports (claim supports claim)');
 		console.log('  • contradicts (claim contradicts claim)');
@@ -539,7 +759,15 @@ export async function setupSchema(existingDb?: Surreal) {
 		console.log('  • part_of (claim is part of argument)');
 		console.log('  • influenced_by (thinker influenced_by thinker)');
 		console.log('  • student_of (thinker student_of thinker)');
-		console.log('  • authored (thinker authored source)\n');
+		console.log('  • authored (thinker authored source)');
+		console.log('  • belongs_to_tradition (thinker belongs_to_tradition tradition)');
+		console.log('  • works_in_domain (thinker works_in_domain subject)');
+		console.log('  • about_subject (claim about_subject subject)');
+		console.log('  • active_in_period (thinker active_in_period period)');
+		console.log('  • in_period (claim in_period period)');
+		console.log('  • related_to_subject (subject related_to_subject subject)');
+		console.log('  • authored_work (thinker authored_work work)');
+		console.log('  • cites_work (claim cites_work work)\n');
 
 		if (ownsConnection) {
 			await db.close();

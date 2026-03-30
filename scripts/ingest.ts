@@ -81,6 +81,12 @@ import {
 	filterBoilerplatePassages
 } from '../src/lib/server/ingestion/passageSegmentation.js';
 import { deriveClaimTypingMetadata } from '../src/lib/server/ingestion/claimTyping.js';
+import {
+	canonicalizeThinkerName,
+	estimateThinkerNameConfidence,
+	pickThinkerAutoLinkCandidate,
+	type ThinkerIdentityCandidate
+} from '../src/lib/server/thinkerIdentity.js';
 import type {
 	PassageRecord,
 	PhaseOneClaimMetadata,
@@ -113,6 +119,10 @@ const INGEST_EXTRACTOR_VERSION =
 const LOW_CONFIDENCE_REVIEW_THRESHOLD = Number(
 	process.env.INGEST_LOW_CONFIDENCE_REVIEW_THRESHOLD || '0.65'
 );
+const THINKER_AUTO_LINK_MIN_CONFIDENCE = Number(
+	process.env.THINKER_AUTO_LINK_MIN_CONFIDENCE || '0.86'
+);
+const THINKER_AUTO_LINK_MIN_DELTA = Number(process.env.THINKER_AUTO_LINK_MIN_DELTA || '0.08');
 // Keep sections small enough that Claude's extraction output fits within max_tokens (32768).
 // Each claim is ~150 tokens of JSON. At 10 claims/1k input tokens:
 //   5_000 tokens input → ~50 claims → ~7_500 tokens output → fits in 32768 limit with safety margin.
@@ -2039,6 +2049,286 @@ async function loadPartialResults(slug: string): Promise<PartialResults | null> 
 	}
 }
 
+type ThinkerAliasDbRow = {
+	canonical_name?: string;
+	wikidata_id?: string;
+	label?: string;
+	confidence?: number;
+	status?: string;
+};
+
+function slugifyGraphLabel(value: string): string {
+	return value
+		.normalize('NFKD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '_')
+		.replace(/^_+|_+$/g, '')
+		.slice(0, 96);
+}
+
+async function upsertGraphNamedNode(db: Surreal, table: 'subject' | 'period', name: string): Promise<string | null> {
+	const trimmed = name.trim();
+	if (!trimmed) return null;
+	const slug = slugifyGraphLabel(trimmed);
+	if (!slug) return null;
+	await db.query(
+		`UPSERT type::record('${table}', $slug) CONTENT {
+			name: $name,
+			slug: $slug,
+			imported_at: time::now()
+		}`,
+		{ slug, name: trimmed }
+	);
+	return slug;
+}
+
+async function relateGraphIfAbsent(
+	db: Surreal,
+	table: string,
+	fromId: string,
+	toId: string,
+	setClause: string
+): Promise<boolean> {
+	const existing = await db.query<[{ id: string }[]]>(
+		`SELECT id FROM ${table} WHERE in = $from AND out = $to LIMIT 1`,
+		{ from: fromId, to: toId }
+	);
+	const hasExisting = Array.isArray(existing?.[0]) && existing[0].length > 0;
+	if (hasExisting) return false;
+	await db.query(
+		`RELATE $from->${table}->$to
+		 ${setClause}`,
+		{ from: fromId, to: toId }
+	);
+	return true;
+}
+
+type ThinkerDbRow = {
+	id?: unknown;
+	name?: string;
+};
+
+async function runThinkerIdentityLinking(args: {
+	db: Surreal;
+	sourceId: string;
+	sourceMeta: SourceMeta;
+	claims: PhaseOneClaim[];
+}): Promise<{ authoredInserted: number; queued: number; skippedAmbiguous: number }> {
+	const { db, sourceId, sourceMeta, claims } = args;
+	const authorNames = new Set<string>();
+	for (const author of sourceMeta.author ?? []) {
+		if (typeof author === 'string' && author.trim()) authorNames.add(author.trim());
+	}
+	for (const claim of claims) {
+		if (typeof claim.thinker === 'string' && claim.thinker.trim()) authorNames.add(claim.thinker.trim());
+		for (const name of claim.attributed_to ?? []) {
+			if (typeof name === 'string' && name.trim()) authorNames.add(name.trim());
+		}
+	}
+	if (authorNames.size === 0) return { authoredInserted: 0, queued: 0, skippedAmbiguous: 0 };
+
+	const aliasRows = await db.query<ThinkerAliasDbRow[][]>(
+		`SELECT canonical_name, wikidata_id, label, confidence, status
+		 FROM thinker_alias
+		 WHERE status = 'active'`
+	);
+	const aliasMap = new Map<string, ThinkerAliasDbRow>();
+	for (const row of aliasRows?.[0] ?? []) {
+		const canonical = typeof row.canonical_name === 'string' ? row.canonical_name : '';
+		const qid = typeof row.wikidata_id === 'string' ? row.wikidata_id.trim() : '';
+		if (canonical && qid) aliasMap.set(canonical, row);
+	}
+
+	const thinkerRows = await db.query<ThinkerDbRow[][]>(`SELECT id, name FROM thinker`);
+	const thinkers: { wikidata_id: string; name: string }[] = [];
+	const thinkersByCanonical = new Map<string, { wikidata_id: string; name: string }>();
+	for (const row of thinkerRows?.[0] ?? []) {
+		const rawId =
+			typeof row.id === 'string'
+				? row.id
+				: typeof row.id === 'object' && row.id !== null && typeof (row.id as { id?: unknown }).id === 'string'
+					? (row.id as { id: string }).id
+					: '';
+		const qidMatch = rawId.match(/Q\d+$/);
+		const qid = qidMatch?.[0] ?? '';
+		const name = typeof row.name === 'string' ? row.name.trim() : '';
+		if (!qid || !name) continue;
+		const thinker = { wikidata_id: qid, name };
+		thinkers.push(thinker);
+		thinkersByCanonical.set(canonicalizeThinkerName(name), thinker);
+	}
+
+	let authoredInserted = 0;
+	let queued = 0;
+	let skippedAmbiguous = 0;
+	for (const rawName of authorNames) {
+		const canonical = canonicalizeThinkerName(rawName);
+		if (!canonical) continue;
+		let winner: ThinkerIdentityCandidate | null = null;
+		const alias = aliasMap.get(canonical);
+		if (alias && typeof alias.wikidata_id === 'string' && alias.wikidata_id.trim()) {
+			winner = {
+				wikidata_id: alias.wikidata_id.trim(),
+				name: typeof alias.label === 'string' && alias.label.trim() ? alias.label.trim() : rawName,
+				confidence: typeof alias.confidence === 'number' ? alias.confidence : 0.95
+			};
+		} else {
+			const exact = thinkersByCanonical.get(canonical);
+			if (exact) {
+				winner = {
+					wikidata_id: exact.wikidata_id,
+					name: exact.name,
+					confidence: 1
+				};
+			} else {
+				const candidates: ThinkerIdentityCandidate[] = [];
+				for (const thinker of thinkers) {
+					const confidence = estimateThinkerNameConfidence(rawName, thinker.name);
+					if (confidence > 0) {
+						candidates.push({
+							wikidata_id: thinker.wikidata_id,
+							name: thinker.name,
+							confidence
+						});
+					}
+				}
+				const decision = pickThinkerAutoLinkCandidate(
+					candidates,
+					THINKER_AUTO_LINK_MIN_CONFIDENCE,
+					THINKER_AUTO_LINK_MIN_DELTA
+				);
+				if (decision.best) {
+					winner = decision.best;
+				} else if (decision.reason === 'ambiguous') {
+					skippedAmbiguous += 1;
+					await db.query(
+						`CREATE thinker_resolution_audit_log CONTENT {
+							raw_name: $raw_name,
+							canonical_name: $canonical_name,
+							action: 'auto_skip_ambiguous',
+							source_id: $source_id,
+							notes: $notes,
+							created_at: time::now()
+						}`,
+						{
+							raw_name: rawName,
+							canonical_name: canonical,
+							source_id: sourceId,
+							notes: `Ambiguous match (min_delta=${THINKER_AUTO_LINK_MIN_DELTA})`
+						}
+					);
+				}
+			}
+		}
+
+		if (winner) {
+			await db.query(
+				`UPSERT thinker_alias:$rid CONTENT {
+					canonical_name: $canonical_name,
+					raw_name: $raw_name,
+					wikidata_id: $wikidata_id,
+					label: $label,
+					confidence: $confidence,
+					resolved_by: 'heuristic',
+					status: 'active',
+					source_contexts: [$source_context],
+					updated_at: time::now(),
+					created_at: time::now()
+				}`,
+				{
+					rid: canonical.replace(/[^a-z0-9_]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 96) || 'name',
+					canonical_name: canonical,
+					raw_name: rawName,
+					wikidata_id: winner.wikidata_id,
+					label: winner.name,
+					confidence: winner.confidence,
+					source_context: `source:${sourceId}`
+				}
+			);
+			await db.query(
+				`LET $from = type::record('thinker', $wikidata_id);
+				 LET $to = type::thing($source);
+				 LET $existing = (SELECT id FROM authored WHERE in = $from AND out = $to LIMIT 1);
+				 IF array::len($existing) = 0 {
+				 	RELATE $from->authored->$to
+				 		SET match_type = 'ingest_identity_resolver',
+				 		    confidence = $confidence,
+				 		    linked_at = time::now();
+				 }`,
+				{
+					wikidata_id: winner.wikidata_id,
+					source: sourceId,
+					confidence: winner.confidence
+				}
+			);
+			await db.query(
+				`CREATE thinker_resolution_audit_log CONTENT {
+					raw_name: $raw_name,
+					canonical_name: $canonical_name,
+					wikidata_id: $wikidata_id,
+					label: $label,
+					action: 'auto_resolve',
+					confidence: $confidence,
+					source_id: $source_id,
+					created_at: time::now()
+				}`,
+				{
+					raw_name: rawName,
+					canonical_name: canonical,
+					wikidata_id: winner.wikidata_id,
+					label: winner.name,
+					confidence: winner.confidence,
+					source_id: sourceId
+				}
+			);
+			authoredInserted += 1;
+			continue;
+		}
+
+		const queueId = canonical.replace(/[^a-z0-9_]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 96) || 'name';
+		await db.query(
+			`UPSERT type::record('unresolved_thinker_reference', $rid) CONTENT {
+				raw_name: $raw_name,
+				canonical_name: $canonical_name,
+				source_ids: [$source_id],
+				contexts: [$source_context],
+				status: 'queued',
+				seen_count: 1,
+				proposed_qids: [],
+				proposed_labels: [],
+				last_seen_at: time::now(),
+				first_seen_at: time::now()
+			}`,
+			{
+				rid: queueId,
+				raw_name: rawName,
+				canonical_name: canonical,
+				source_id: sourceId,
+				source_context: `source:${sourceId}`
+			}
+		);
+		await db.query(
+			`CREATE thinker_resolution_audit_log CONTENT {
+				raw_name: $raw_name,
+				canonical_name: $canonical_name,
+				action: 'auto_queue',
+				source_id: $source_id,
+				queue_record_id: $queue_record_id,
+				created_at: time::now()
+			}`,
+			{
+				raw_name: rawName,
+				canonical_name: canonical,
+				source_id: sourceId,
+				queue_record_id: queueId
+			}
+		);
+		queued += 1;
+	}
+	return { authoredInserted, queued, skippedAmbiguous };
+}
+
 // ─── Ingestion Log (DB-based tracking) ────────────────────────────────────
 interface IngestionLogRecord {
 	id?: string;
@@ -3512,6 +3802,31 @@ async function main() {
 				}
 				console.log(`  [OK] Source record: ${sourceId}`);
 
+				const workSlug = slugifyGraphLabel(sourceMeta.canonical_url_hash || sourceMeta.url || sourceMeta.title);
+				const workRecordResult = await db.query<[{ id: string }[]]>(
+					`UPSERT type::record('work', $rid) CONTENT {
+						title: $title,
+						source_id: $source_id,
+						source_url: $source_url,
+						imported_at: time::now()
+					} RETURN AFTER`,
+					{
+						rid: workSlug || `source_${Date.now()}`,
+						title: sourceMeta.title,
+						source_id: sourceId,
+						source_url: sourceMeta.url
+					}
+				);
+				const workId =
+					Array.isArray(workRecordResult) && workRecordResult.length > 0
+						? Array.isArray(workRecordResult[0])
+							? workRecordResult[0][0]?.id
+							: (workRecordResult[0] as any)?.id
+						: null;
+				if (workId) {
+					console.log(`  [OK] Work node: ${workId}`);
+				}
+
 				// 6c. Create passage records (limited parallelism to reduce round-trip latency)
 				console.log(`  Creating ${passages.length} passage records...`);
 				const passageRecordIdMap: Map<string, string> = new Map();
@@ -3673,6 +3988,53 @@ async function main() {
 				console.log('');
 				console.log(`  [OK] Created ${claimIdMap.size} claim records`);
 
+				// 6d2. Connect claims to subject/period/work graph nodes
+				let claimGraphEdges = 0;
+				for (const claim of allClaims) {
+					const claimId = claimIdMap.get(claim.position_in_source);
+					if (!claimId) continue;
+
+					if (claim.domain && claim.domain.trim()) {
+						const subjectSlug = await upsertGraphNamedNode(db, 'subject', claim.domain);
+						if (subjectSlug) {
+							const inserted = await relateGraphIfAbsent(
+								db,
+								'about_subject',
+								claimId,
+								`subject:${subjectSlug}`,
+								`SET confidence = 0.95, imported_at = time::now()`
+							);
+							if (inserted) claimGraphEdges += 1;
+						}
+					}
+					if (claim.era && claim.era.trim()) {
+						const periodSlug = await upsertGraphNamedNode(db, 'period', claim.era);
+						if (periodSlug) {
+							const inserted = await relateGraphIfAbsent(
+								db,
+								'in_period',
+								claimId,
+								`period:${periodSlug}`,
+								`SET confidence = 0.9, imported_at = time::now()`
+							);
+							if (inserted) claimGraphEdges += 1;
+						}
+					}
+					if (workId) {
+						const inserted = await relateGraphIfAbsent(
+							db,
+							'cites_work',
+							claimId,
+							workId,
+							`SET confidence = 0.8, imported_at = time::now()`
+						);
+						if (inserted) claimGraphEdges += 1;
+					}
+				}
+				if (claimGraphEdges > 0) {
+					console.log(`  [OK] Claim graph joins created: ${claimGraphEdges}`);
+				}
+
 				// 6e. Create relation records
 			console.log(`  Creating ${relations.length} relation records...`);
 			let relationsCreated = 0;
@@ -3738,6 +4100,23 @@ async function main() {
 								};
 								assignments.unshift('response_type = $response_type');
 								vars.response_type = responseMap[rel.strength] || 'refinement';
+								break;
+							}
+							case 'refines': {
+								const refinementMap: Record<string, string> = {
+									strong: 'strengthens',
+									moderate: 'clarifies',
+									weak: 'qualifies'
+								};
+								assignments.unshift('refinement_type = $refinement_type');
+								vars.refinement_type = refinementMap[rel.strength] || 'clarifies';
+								break;
+							}
+							case 'exemplifies': {
+								if (rel.note) {
+									assignments.push('note = $note');
+									vars.note = rel.note;
+								}
 								break;
 							}
 							case 'defines': {
@@ -3850,6 +4229,55 @@ async function main() {
 				status: shouldValidate ? 'validated' : 'ingested'
 			});
 			console.log('  [OK] Source record updated');
+
+			// 6g. Ingestion-time thinker identity resolution and authored linking.
+			try {
+				const identity = await runThinkerIdentityLinking({
+					db,
+					sourceId,
+					sourceMeta,
+					claims: allClaims
+				});
+				console.log(
+					`  [OK] Thinker linking: authored=${identity.authoredInserted}, queued=${identity.queued}, ambiguous=${identity.skippedAmbiguous}`
+				);
+
+				if (workId) {
+					const authoredEdges = await db.query<{ in?: unknown }[][]>(
+						`SELECT in FROM authored WHERE out = $source`,
+						{ source: sourceId }
+					);
+					let authoredWorkEdges = 0;
+					for (const edge of authoredEdges?.[0] ?? []) {
+						const thinkerId =
+							typeof edge.in === 'string'
+								? edge.in
+								: typeof edge.in === 'object' &&
+										edge.in !== null &&
+										typeof (edge.in as { id?: unknown }).id === 'string'
+									? (edge.in as { id: string }).id
+									: '';
+						if (!thinkerId) continue;
+						const inserted = await relateGraphIfAbsent(
+							db,
+							'authored_work',
+							thinkerId,
+							workId,
+							`SET confidence = 0.85, imported_at = time::now()`
+						);
+						if (inserted) authoredWorkEdges += 1;
+					}
+					if (authoredWorkEdges > 0) {
+						console.log(`  [OK] Authored-work links created: ${authoredWorkEdges}`);
+					}
+				}
+			} catch (identityError) {
+				console.warn(
+					`  [WARN] Thinker identity linking failed: ${
+						identityError instanceof Error ? identityError.message : String(identityError)
+					}`
+				);
+			}
 
 			// ── Post-store verification ───────────────────────────────
 			// Query DB to confirm expected counts are actually stored.

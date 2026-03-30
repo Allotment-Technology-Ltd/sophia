@@ -62,7 +62,7 @@ export interface CachedQueryResult {
     user_links_count?: number;
     runtime_links_processed?: number;
     nightly_queue_enqueued?: number;
-    billing_tier?: 'free' | 'pro' | 'premium';
+    billing_tier?: 'free' | 'premium';
     billing_status?: 'active' | 'trialing' | 'past_due' | 'canceled' | 'inactive';
     billing_currency?: 'GBP' | 'USD';
     entitlement_month_key?: string;
@@ -71,17 +71,6 @@ export interface CachedQueryResult {
     ingestion_private_used?: number;
     ingestion_private_remaining?: number;
     ingestion_selected_count?: number;
-    byok_wallet_currency?: 'GBP' | 'USD';
-    byok_wallet_available_cents?: number;
-    byok_fee_estimated_cents?: number;
-    byok_fee_charged_cents?: number;
-    byok_fee_charge_status?:
-      | 'not_applicable'
-      | 'pending'
-      | 'shadow'
-      | 'charged'
-      | 'skipped'
-      | 'insufficient';
     query_run_id?: string;
     model_cost_breakdown?: {
       total_estimated_cost_usd: number;

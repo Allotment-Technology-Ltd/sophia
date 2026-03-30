@@ -1,6 +1,5 @@
 import { FieldValue } from '$lib/server/fsCompat';
 import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
-import { applyByokFeeUsage } from './entitlements';
 import {
   BYOK_HANDLING_FEE_RATE,
   normalizeCurrency,
@@ -140,10 +139,6 @@ export async function debitByokHandlingFee(params: {
       availableCents: availableCents - amountCents
     };
   });
-
-  if (result.charged) {
-    await applyByokFeeUsage(params.uid, amountCents);
-  }
 
   return result;
 }

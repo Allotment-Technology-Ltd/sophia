@@ -2,24 +2,28 @@ import { sophiaDocumentsDb } from './sophiaDocumentsDb';
 import { FieldValue } from '$lib/server/fsCompat';
 
 export const DAILY_QUERY_LIMIT = 20;
-export type PlatformBudgetPlan = 'free' | 'founder' | 'pro' | 'premium';
+export type PlatformBudgetPlan = 'free' | 'founder' | 'premium';
+export const PLATFORM_MONTHLY_SPEND_CAP_GBP =
+  Number.parseFloat(process.env.PLATFORM_MONTHLY_SPEND_CAP_GBP ?? '3.5') || 3.5;
+export const PLATFORM_SPEND_USD_PER_GBP =
+  Number.parseFloat(process.env.PLATFORM_SPEND_USD_PER_GBP ?? '1.27') || 1.27;
+export const PLATFORM_MONTHLY_SPEND_CAP_USD = Number(
+  (PLATFORM_MONTHLY_SPEND_CAP_GBP * PLATFORM_SPEND_USD_PER_GBP).toFixed(4)
+);
 
 export const PLATFORM_STANDARD_SEARCH_LIMITS: Record<PlatformBudgetPlan, number> = {
   free: 5,
   founder: 10,
-  pro: 10,
   premium: 20
 };
 export const PLATFORM_DEEP_SEARCH_LIMITS: Record<PlatformBudgetPlan, number> = {
   free: 0,
   founder: 3,
-  pro: 3,
   premium: 3
 };
 export const PLATFORM_PREMIUM_SEARCH_LIMITS: Record<PlatformBudgetPlan, number> = {
   free: 0,
   founder: 1,
-  pro: 1,
   premium: 1
 };
 export const PLATFORM_DAILY_BUDGET_CREDITS = 12; // 12 half-units = 6 standard-equivalent queries
@@ -70,6 +74,10 @@ export function resolvePlatformPremiumSearchLimit(plan: PlatformBudgetPlan = 'fr
 /** Returns today's date as YYYY-MM-DD in UTC. */
 export function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+export function monthKeyUtc(): string {
+  return new Date().toISOString().slice(0, 7);
 }
 
 /**
@@ -281,6 +289,83 @@ export async function consumePlatformBudget(
       standardLimit,
       deepLimit,
       premiumLimit
+    };
+  });
+}
+
+export interface PlatformMonthlySpendSnapshot {
+  monthKey: string;
+  capUsd: number;
+  spentUsd: number;
+  remainingUsd: number;
+  allowed: boolean;
+}
+
+export async function getPlatformMonthlySpend(uid: string): Promise<PlatformMonthlySpendSnapshot> {
+  const ref = sophiaDocumentsDb.collection('users').doc(uid).collection('rateLimits').doc('platformMonthlySpend');
+  const currentMonth = monthKeyUtc();
+  const capUsd = PLATFORM_MONTHLY_SPEND_CAP_USD;
+
+  return sophiaDocumentsDb.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const data = (snap.data() ?? {}) as { month_key?: string; spent_usd?: number };
+    const sameMonth = data.month_key === currentMonth;
+    const spentUsdRaw = sameMonth && Number.isFinite(data.spent_usd) ? Number(data.spent_usd) : 0;
+    const spentUsd = Math.max(0, Number(spentUsdRaw.toFixed(6)));
+    const remainingUsd = Math.max(0, Number((capUsd - spentUsd).toFixed(6)));
+
+    tx.set(
+      ref,
+      {
+        month_key: currentMonth,
+        spent_usd: spentUsd,
+        cap_usd: capUsd,
+        updated_at: FieldValue.serverTimestamp()
+      },
+      { merge: true }
+    );
+
+    return {
+      monthKey: currentMonth,
+      capUsd,
+      spentUsd,
+      remainingUsd,
+      allowed: remainingUsd > 0
+    };
+  });
+}
+
+export async function recordPlatformMonthlySpend(uid: string, estimatedCostUsd: number): Promise<PlatformMonthlySpendSnapshot> {
+  const amount = Number.isFinite(estimatedCostUsd) ? Math.max(0, estimatedCostUsd) : 0;
+  const ref = sophiaDocumentsDb.collection('users').doc(uid).collection('rateLimits').doc('platformMonthlySpend');
+  const currentMonth = monthKeyUtc();
+  const capUsd = PLATFORM_MONTHLY_SPEND_CAP_USD;
+
+  return sophiaDocumentsDb.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const data = (snap.data() ?? {}) as { month_key?: string; spent_usd?: number };
+    const sameMonth = data.month_key === currentMonth;
+    const baseline = sameMonth && Number.isFinite(data.spent_usd) ? Number(data.spent_usd) : 0;
+    const nextSpent = Math.max(0, Number((baseline + amount).toFixed(6)));
+    const remainingUsd = Math.max(0, Number((capUsd - nextSpent).toFixed(6)));
+
+    tx.set(
+      ref,
+      {
+        month_key: currentMonth,
+        spent_usd: nextSpent,
+        cap_usd: capUsd,
+        updated_at: FieldValue.serverTimestamp()
+      },
+      { merge: true }
+    );
+
+    return {
+      monthKey: currentMonth,
+      capUsd,
+      spentUsd: nextSpent,
+      remainingUsd,
+      allowed: remainingUsd > 0
     };
   });
 }

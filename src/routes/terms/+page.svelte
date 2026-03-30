@@ -114,13 +114,13 @@
     </section>
 
     <section>
-      <h2>5. Top-Ups, BYOK Wallet, and Handling Fees</h2>
+      <h2>5. Subscription Billing and BYOK</h2>
       <p>
-        BYOK wallet top-ups are prepaid credit for handling-fee charges. On eligible non-cached BYOK
-        runs, SOPHIA may charge a handling fee derived from estimated run cost.
+        SOPHIA billing is subscription-only with Free and Philosopher&apos;s Desk tiers. BYOK usage
+        does not require wallet top-ups and does not incur SOPHIA handling-fee charges.
       </p>
       <p>
-        Wallet and billing ledger entries are tracked with idempotent event keys for auditability.
+        Billing and subscription events are tracked with idempotent event keys for auditability.
       </p>
     </section>
 

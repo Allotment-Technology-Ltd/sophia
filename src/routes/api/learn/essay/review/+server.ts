@@ -120,7 +120,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     version_number: 1,
     word_count: wordCount,
     feedback,
-    learn_entitlements: lessonQuotaSummary ?? essayQuota.summary,
-    used_scholar_credit: essayQuota.usedScholarCredit === true
+    learn_entitlements: lessonQuotaSummary ?? essayQuota.summary
   });
 };

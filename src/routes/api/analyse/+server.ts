@@ -30,15 +30,16 @@ import {
   type ModelProvider
 } from '@restormel/contracts/providers';
 import { hasOwnerRole } from '$lib/server/authRoles';
-import { consumePlatformBudget, type PlatformBudgetPlan, type QueryKind } from '$lib/server/rateLimit';
+import {
+  consumePlatformBudget,
+  getPlatformMonthlySpend,
+  recordPlatformMonthlySpend,
+  type PlatformBudgetPlan,
+  type QueryKind
+} from '$lib/server/rateLimit';
 import {
   consumeIngestionEntitlements
 } from '$lib/server/billing/entitlements';
-import {
-  assertByokWalletBalance,
-  computeByokFeeCents,
-  debitByokHandlingFee
-} from '$lib/server/billing/wallet';
 import {
   isFounderOfferActive,
   summarizeEntitlements,
@@ -49,8 +50,6 @@ import {
 import { ensureBillingState } from '$lib/server/billing/store';
 import {
   BILLING_FEATURE_ENABLED,
-  BYOK_WALLET_CHARGING_ENABLED,
-  BYOK_WALLET_SHADOW_MODE,
   INGEST_VISIBILITY_MODE_ENABLED
 } from '$lib/server/billing/flags';
 import { isIP } from 'node:net';
@@ -1077,8 +1076,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const constitutionInAnalyseEnabled =
     process.env.ENABLE_CONSTITUTION_IN_ANALYSE?.toLowerCase() === 'true';
   const billingEnabled = BILLING_FEATURE_ENABLED;
-  const byokChargingEnabled = billingEnabled && BYOK_WALLET_CHARGING_ENABLED && usingByok;
-  const byokShadowMode = byokChargingEnabled && BYOK_WALLET_SHADOW_MODE;
 
   if (
     selectedIngestionLinks.some((link) => link.visibilityScope === 'private_user_only') &&
@@ -1091,8 +1088,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   let entitlementSummarySnapshot: EntitlementSummary | null = null;
-  let walletSnapshot: { availableCents: number; currency: 'GBP' | 'USD' } | null = null;
   let platformBudgetPlan: PlatformBudgetPlan = 'free';
+  let platformSpendRemainingUsd: number | undefined;
 
   if (uid && billingEnabled) {
     try {
@@ -1103,10 +1100,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
         billingState.profile.currency,
         billingState.entitlements
       );
-      walletSnapshot = {
-        availableCents: billingState.wallet.available_cents,
-        currency: billingState.wallet.currency
-      };
       platformBudgetPlan = isFounderOfferActive(billingState.profile.founder_offer)
         ? 'founder'
         : billingState.effectiveTier;
@@ -1193,25 +1186,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
   } // end if (!cachedEvents)
 
-  if (!cachedEvents && uid && byokChargingEnabled && !byokShadowMode && !isOwner) {
-    const walletCheck = await assertByokWalletBalance(uid);
-    if (!walletCheck.ok) {
-      return json(
-        {
-          error:
-            'Insufficient BYOK wallet balance for handling fees. Please top up your wallet to continue.',
-          required_cents: walletCheck.requiredCents,
-          available_cents: walletCheck.availableCents
-        },
-        { status: 402 }
-      );
-    }
-    walletSnapshot = {
-      availableCents: walletCheck.availableCents,
-      currency: walletSnapshot?.currency ?? 'GBP'
-    };
-  }
-
   if (process.env.NODE_ENV !== 'test' && !cachedEvents && uid && !usingByok) {
     const budget = await consumePlatformBudget(uid, {
       depthMode,
@@ -1261,6 +1235,27 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           error: 'Daily platform token budget reached. Add BYOK to continue running queries today.'
         },
         { status: 429 }
+      );
+    }
+  }
+
+  if (process.env.NODE_ENV !== 'test' && !cachedEvents && uid && !usingByok && !isOwner) {
+    try {
+      const spendSnapshot = await getPlatformMonthlySpend(uid);
+      platformSpendRemainingUsd = spendSnapshot.remainingUsd;
+      if (!spendSnapshot.allowed) {
+        return json(
+          {
+            error:
+              'Monthly platform model budget reached (£3.50). Add BYOK to continue this month or wait for the monthly reset.'
+          },
+          { status: 429 }
+        );
+      }
+    } catch (err) {
+      console.warn(
+        '[BILLING] Failed to read monthly platform spend cap:',
+        err instanceof Error ? err.message : String(err)
       );
     }
   }
@@ -1326,21 +1321,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             total_estimated_cost_usd: number;
           }
         | undefined;
-      let byokEstimatedFeeCents = 0;
-      let byokChargedFeeCents = 0;
-      let byokFeeChargeStatus:
-        | 'not_applicable'
-        | 'pending'
-        | 'shadow'
-        | 'charged'
-        | 'skipped'
-        | 'insufficient' = usingByok
-        ? byokChargingEnabled
-          ? byokShadowMode
-            ? 'shadow'
-            : 'pending'
-          : 'skipped'
-        : 'not_applicable';
       const { block: externalContextBlock, processedCount: runtimeLinksProcessed } =
         await buildRuntimeExternalContext(normalizedUserLinks, resourceMode);
 
@@ -1429,9 +1409,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
                   total_estimated_cost_usd: modelCostBreakdown.total_estimated_cost_usd
                 }
               : undefined;
-            byokEstimatedFeeCents = computeByokFeeCents(
-              latestModelCostBreakdown?.total_estimated_cost_usd ?? 0
-            );
             if (queueForNightlyIngest && nightlyIngestionEnabled) {
               queuePreviewCount = buildQueueCandidateRollup(
                 selectedIngestionLinks,
@@ -1481,15 +1458,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
                     ingestion_selected_count: selectedIngestionLinks.length
                   }
                 : {}),
-              ...(walletSnapshot
-                ? {
-                    byok_wallet_currency: walletSnapshot.currency,
-                    byok_wallet_available_cents: walletSnapshot.availableCents
-                  }
-                : {}),
-              byok_fee_estimated_cents: byokEstimatedFeeCents,
-              byok_fee_charged_cents: byokChargedFeeCents,
-              byok_fee_charge_status: byokFeeChargeStatus,
               depth_mode: depthMode,
               selected_model_provider: effectiveModelProvider,
               selected_model_id: modelId,
@@ -1510,7 +1478,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           viewerUid: uid,
           queryRunId,
           reuse: normalizedReuse,
-          providerApiKeys: effectiveProviderApiKeys
+          providerApiKeys: effectiveProviderApiKeys,
+          platformMaxCostUsd: platformSpendRemainingUsd
         });
 
         const claimsAll = (['analysis', 'critique', 'synthesis'] as const)
@@ -1724,52 +1693,24 @@ export const POST: RequestHandler = async ({ request, locals }) => {
               : {})
           });
 
-          const estimatedRunCostUsd = latestModelCostBreakdown?.total_estimated_cost_usd ?? 0;
-          byokEstimatedFeeCents = computeByokFeeCents(estimatedRunCostUsd);
-
-          if (uid && byokChargingEnabled && !isOwner) {
-            if (byokEstimatedFeeCents <= 0) {
-              byokFeeChargeStatus = 'skipped';
-              byokChargedFeeCents = 0;
-            } else if (byokShadowMode) {
-              byokFeeChargeStatus = 'shadow';
-              byokChargedFeeCents = 0;
-            } else {
-              const byokCharge = await debitByokHandlingFee({
-                uid,
-                queryRunId,
-                estimatedRunCostUsd,
-                currency: walletSnapshot?.currency
-              });
-              byokChargedFeeCents = byokCharge.charged ? byokCharge.amountCents : 0;
-              byokFeeChargeStatus = byokCharge.insufficient
-                ? 'insufficient'
-                : byokCharge.charged
-                  ? 'charged'
-                  : 'skipped';
-              walletSnapshot = {
-                availableCents: byokCharge.availableCents,
-                currency: walletSnapshot?.currency ?? 'GBP'
-              };
+          if (
+            process.env.NODE_ENV !== 'test' &&
+            uid &&
+            !usingByok &&
+            !isOwner &&
+            latestModelCostBreakdown &&
+            Number.isFinite(latestModelCostBreakdown.total_estimated_cost_usd) &&
+            latestModelCostBreakdown.total_estimated_cost_usd > 0
+          ) {
+            try {
+              await recordPlatformMonthlySpend(uid, latestModelCostBreakdown.total_estimated_cost_usd);
+            } catch (err) {
+              console.warn(
+                '[BILLING] Failed to record monthly platform spend:',
+                err instanceof Error ? err.message : String(err)
+              );
             }
-          } else if (usingByok) {
-            byokFeeChargeStatus =
-              isOwner ? 'skipped' : byokChargingEnabled ? 'pending' : 'skipped';
-          } else {
-            byokFeeChargeStatus = 'not_applicable';
           }
-
-          patchMetadataEvent({
-            byok_fee_estimated_cents: byokEstimatedFeeCents,
-            byok_fee_charged_cents: byokChargedFeeCents,
-            byok_fee_charge_status: byokFeeChargeStatus,
-            ...(walletSnapshot
-              ? {
-                  byok_wallet_currency: walletSnapshot.currency,
-                  byok_wallet_available_cents: walletSnapshot.availableCents
-                }
-              : {})
-          });
 
           // A4: Save to Firestore (per-user)
           if (uid) {

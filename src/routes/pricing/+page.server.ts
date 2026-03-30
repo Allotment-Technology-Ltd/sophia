@@ -34,6 +34,14 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean 
   return fallback;
 }
 
+function resolveRuntimeServerEnv(base: string, runtime: PaddleRuntime): string | null {
+  const runtimeKey = runtime === 'sandbox' ? `${base}_SANDBOX` : `${base}_PRODUCTION`;
+  const runtimeValue = process.env[runtimeKey]?.trim();
+  if (runtimeValue) return runtimeValue;
+  const plain = process.env[base]?.trim();
+  return plain || null;
+}
+
 function resolveCheckoutTheme(): 'light' | 'dark' | null {
   const raw = publicEnv.PUBLIC_PADDLE_CHECKOUT_THEME?.trim().toLowerCase();
   if (raw === 'light' || raw === 'dark') return raw;
@@ -49,9 +57,18 @@ function resolveCheckoutVariant(): 'one-page' | 'multi-page' | null {
 
 export const load: PageServerLoad = async ({ locals, url }) => {
   const runtime = resolvePaddleRuntime({ requestUrl: url.toString() });
+  const proMonthlyPriceIds = {
+    GBP:
+      resolveRuntimeServerEnv('PADDLE_PRICE_KEYS_PRO_MONTHLY_GBP', runtime) ??
+      resolveRuntimeServerEnv('PADDLE_PRICE_PREMIUM_GBP', runtime),
+    USD:
+      resolveRuntimeServerEnv('PADDLE_PRICE_KEYS_PRO_MONTHLY_USD', runtime) ??
+      resolveRuntimeServerEnv('PADDLE_PRICE_PREMIUM_USD', runtime)
+  };
   return {
     paddleRuntime: runtime,
     paddleClientToken: resolveClientToken(runtime),
+    proMonthlyPriceIds,
     isAuthenticated: Boolean(locals.user?.uid),
     checkoutSettings: {
       locale: publicEnv.PUBLIC_PADDLE_CHECKOUT_LOCALE?.trim() || null,

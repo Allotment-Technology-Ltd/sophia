@@ -20,7 +20,7 @@
   }
 
   interface BillingEntitlements {
-    tier: 'free' | 'pro' | 'premium';
+    tier: 'free' | 'premium';
     status: 'active' | 'trialing' | 'past_due' | 'canceled' | 'inactive';
     currency: 'GBP' | 'USD';
     monthKey: string;
@@ -30,22 +30,16 @@
     privateRemaining: number;
     effectivePublicMax: number;
     privateMax: number;
-    byokFeeChargedCents: number;
     ownerIngestionUnlimited?: boolean;
   }
 
   interface BillingProfile {
-    tier: 'free' | 'pro' | 'premium';
+    tier: 'free' | 'premium';
     status: 'active' | 'trialing' | 'past_due' | 'canceled' | 'inactive';
     currency: 'GBP' | 'USD';
     paddle_customer_id?: string | null;
     paddle_subscription_id?: string | null;
     period_end_at?: string | null;
-  }
-
-  interface BillingWallet {
-    availableCents: number;
-    currency: 'GBP' | 'USD';
   }
 
   interface CheckoutPresentation {
@@ -104,13 +98,12 @@
   let billingMessage = $state('');
   let billingProfile = $state<BillingProfile | null>(null);
   let billingEntitlements = $state<BillingEntitlements | null>(null);
-  let billingWallet = $state<BillingWallet | null>(null);
   let founderOffer = $state<FounderOfferSummary | null>(null);
   let billingCheckoutPresentation = $state<CheckoutPresentation | null>(null);
   let billingSyncing = $state(false);
   let hasBillingCustomer = $derived(Boolean(billingProfile?.paddle_customer_id?.trim()));
   let hasPaddleSubscription = $derived(Boolean(billingProfile?.paddle_subscription_id?.trim()));
-  let currentTier = $derived((billingProfile?.tier ?? 'free') as 'free' | 'pro' | 'premium');
+  let currentTier = $derived((billingProfile?.tier ?? 'free') as 'free' | 'premium');
   let isPaidTier = $derived(currentTier !== 'free');
   let showBillingCustomerMappingWarning = $derived(
     isPaidTier && hasPaddleSubscription && !hasBillingCustomer
@@ -350,7 +343,6 @@
     if (!currentUser) {
       billingProfile = null;
       billingEntitlements = null;
-      billingWallet = null;
       founderOffer = null;
       billingCheckoutPresentation = null;
       billingError = '';
@@ -368,20 +360,6 @@
       billingProfile = (body.profile ?? null) as BillingProfile | null;
       billingEntitlements = (body.entitlements ?? null) as BillingEntitlements | null;
       founderOffer = (body.founder_offer ?? null) as FounderOfferSummary | null;
-      const walletRaw = (body.wallet ?? null) as
-        | {
-            available_cents?: number;
-            currency?: 'GBP' | 'USD';
-          }
-        | null;
-      billingWallet = walletRaw
-        ? {
-            availableCents: Number.isFinite(walletRaw.available_cents)
-              ? Number(walletRaw.available_cents)
-              : 0,
-            currency: walletRaw.currency === 'USD' ? 'USD' : 'GBP'
-          }
-        : null;
       const checkoutPresentationRaw = (body.checkout_presentation ?? null) as
         | {
             mode?: 'redirect' | 'overlay' | 'inline';
@@ -416,23 +394,13 @@
   }
 
 
-  async function beginSubscriptionCheckout(tier: 'pro' | 'premium'): Promise<void> {
+  async function beginSubscriptionCheckout(tier: 'premium'): Promise<void> {
     billingError = '';
     billingMessage = '';
     if (!browser) return;
     const destination = new URL('/pricing', window.location.origin);
     destination.searchParams.set('sophia_kind', 'subscription');
     destination.searchParams.set('sophia_plan', tier);
-    await goto(destination.toString());
-  }
-
-  async function beginTopup(pack: 'small' | 'large'): Promise<void> {
-    billingError = '';
-    billingMessage = '';
-    if (!browser) return;
-    const destination = new URL('/pricing', window.location.origin);
-    destination.searchParams.set('sophia_kind', 'topup');
-    destination.searchParams.set('sophia_pack', pack);
     await goto(destination.toString());
   }
 
@@ -680,17 +648,12 @@
       <ol>
         <li>Add or remove provider keys in the Restormel Key Manager.</li>
         <li>Review status badges, validation timestamps, and inline errors directly in the key detail view.</li>
-        <li>Keep wallet balance above £0 in Payments for BYOK handling charges.</li>
+        <li>Use your own provider account through BYOK with no SOPHIA metered surcharge.</li>
       </ol>
       <p>
         BYOK lets you route runs through your own provider account while SOPHIA manages reasoning
-        flow, metering, and orchestration.
+        flow and orchestration.
       </p>
-      <div class="byok-journey-actions">
-        <button class="byok-btn secondary" type="button" onclick={() => setActiveSettingsTab('payments')}>
-          Open wallet and top-ups
-        </button>
-      </div>
     </div>
 
     {#if !currentUser}
@@ -821,23 +784,18 @@
   {:else if activeSettingsTab === 'payments'}
     <p class="settings-section-label">Payments</p>
     <div class="byok-journey">
-      <p class="byok-journey-title">Wallet and BYOK</p>
+      <p class="byok-journey-title">Simple Subscription</p>
       <p>
-        To run BYOK models you need both an active BYOK key and available wallet credit for
-        handling charges.
+        SOPHIA billing now has two tiers only: Free and Premium. BYOK usage does not require wallet
+        top-ups or metered handling fees.
       </p>
-      <div class="byok-journey-actions">
-        <button class="byok-btn secondary" type="button" onclick={() => setActiveSettingsTab('byok')}>
-          Open BYOK key setup
-        </button>
-      </div>
     </div>
 
     {#if !currentUser}
       <div class="setting-row">
         <div class="setting-info">
           <span class="setting-name">Sign in required</span>
-          <span class="setting-desc">Sign in to manage subscriptions and BYOK wallet top-ups.</span>
+          <span class="setting-desc">Sign in to manage your subscription.</span>
         </div>
       </div>
     {:else if billingLoading && !billingProfile}
@@ -860,14 +818,11 @@
                 : `Founder access ended ${formatDate(founderOffer.expiresAt)}`}
             </span>
             <span class="setting-desc founder-status">
-              Included wallet credit: {formatMoneyFromCents(founderOffer.bonusWalletCents, 'GBP')}
+              Bonus credit: {formatMoneyFromCents(founderOffer.bonusWalletCents, 'GBP')}
             </span>
           {/if}
-          <span class="setting-desc">
-            Wallet: {formatMoneyFromCents(billingWallet?.availableCents ?? 0, billingWallet?.currency ?? (billingProfile?.currency ?? 'GBP'))}
-          </span>
           <span class="setting-desc billing-purpose">
-            Wallet funds BYOK handling fees and private source ingestion.
+            Free and Premium tiers include source ingestion limits. BYOK keys are managed separately.
           </span>
           {#if billingEntitlements}
             <span class="setting-desc">
@@ -881,9 +836,6 @@
         </div>
 
         <div class="billing-actions">
-          <p class="billing-actions-note">
-            Top up wallet for BYOK and private-ingestion charges.
-          </p>
           {#if founderOffer?.active}
             <button
               class="byok-btn"
@@ -895,33 +847,12 @@
           {:else if !isPaidTier}
             <button
               class="byok-btn"
-              onclick={() => beginSubscriptionCheckout('pro')}
-              disabled={billingBusyAction !== '' || currentTier === 'pro'}
-            >
-              {billingBusyAction === 'checkout:pro' ? 'Opening...' : 'Upgrade to Pro'}
-            </button>
-            <button
-              class="byok-btn"
               onclick={() => beginSubscriptionCheckout('premium')}
               disabled={billingBusyAction !== '' || currentTier === 'premium'}
             >
               {billingBusyAction === 'checkout:premium' ? 'Opening...' : 'Upgrade to Premium'}
             </button>
           {/if}
-          <button
-            class="byok-btn secondary"
-            onclick={() => beginTopup('small')}
-            disabled={billingBusyAction !== ''}
-          >
-            {billingBusyAction === 'topup:small' ? 'Opening...' : 'Top up wallet (small)'}
-          </button>
-          <button
-            class="byok-btn secondary"
-            onclick={() => beginTopup('large')}
-            disabled={billingBusyAction !== ''}
-          >
-            {billingBusyAction === 'topup:large' ? 'Opening...' : 'Top up wallet (large)'}
-          </button>
           {#if founderOffer?.active}
             <button
               class="byok-btn secondary"

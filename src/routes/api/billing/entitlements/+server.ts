@@ -28,7 +28,6 @@ export const GET: RequestHandler = async ({ locals }) => {
     founder_offer: founderOfferSummaryFromProfile(state.profile),
     entitlements: summary,
     learn_entitlements: learnSummary,
-    wallet: state.wallet,
     checkout_presentation: getCheckoutPresentation()
   });
 };

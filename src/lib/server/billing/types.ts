@@ -1,4 +1,4 @@
-export type BillingTier = 'free' | 'pro' | 'premium';
+export type BillingTier = 'free' | 'premium';
 
 export type BillingStatus =
   | 'active'
@@ -33,11 +33,6 @@ export const TIER_INGESTION_RULES: Record<BillingTier, TierIngestionRules> = {
     privateMax: 0,
     publicMaxWhenPrivateUsed: 0
   },
-  pro: {
-    publicMax: 3,
-    privateMax: 1,
-    publicMaxWhenPrivateUsed: 2
-  },
   premium: {
     publicMax: 5,
     privateMax: 1,
@@ -45,7 +40,8 @@ export const TIER_INGESTION_RULES: Record<BillingTier, TierIngestionRules> = {
   }
 };
 
-export const BYOK_HANDLING_FEE_RATE = 0.10;
+// Legacy constant retained for compatibility; BYOK usage fees are no longer charged.
+export const BYOK_HANDLING_FEE_RATE = 0;
 
 export type IngestionEntitlementDenyReason =
   | 'private_not_allowed'
@@ -72,7 +68,6 @@ export interface EntitlementState {
   month_key: string;
   public_ingest_used: number;
   private_ingest_used: number;
-  byok_fee_charged_cents: number;
   updated_at?: string | null;
 }
 
@@ -95,7 +90,6 @@ export interface EntitlementSummary {
   privateRemaining: number;
   effectivePublicMax: number;
   privateMax: number;
-  byokFeeChargedCents: number;
   /** True for app owners: ingestion limits are not enforced (see bypassQuota on consume). */
   ownerIngestionUnlimited?: boolean;
 }
@@ -153,7 +147,8 @@ export function normalizeCurrency(value: unknown): CurrencyCode {
 export function normalizeTier(value: unknown): BillingTier {
   if (typeof value !== 'string') return 'free';
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'pro' || normalized === 'premium') return normalized;
+  // Legacy "pro" users are treated as premium after tier simplification.
+  if (normalized === 'pro' || normalized === 'premium') return 'premium';
   return 'free';
 }
 
@@ -230,7 +225,6 @@ export function summarizeEntitlements(
     publicRemaining: Math.max(0, effectivePublicMax - entitlements.public_ingest_used),
     privateRemaining: Math.max(0, rules.privateMax - entitlements.private_ingest_used),
     effectivePublicMax,
-    privateMax: rules.privateMax,
-    byokFeeChargedCents: entitlements.byok_fee_charged_cents
+    privateMax: rules.privateMax
   };
 }

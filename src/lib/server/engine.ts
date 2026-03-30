@@ -163,6 +163,7 @@ interface EngineOptions {
     synthesis?: string;
   };
   providerApiKeys?: ProviderApiKeys;
+  platformMaxCostUsd?: number;
 }
 
 const PASS_HARD_TIMEOUT_ENABLED =
@@ -419,7 +420,15 @@ export async function runDialecticalEngine(
     routeId,
     requestedProvider: modelProvider,
     requestedModelId: modelId,
-    providerApiKeys: options?.providerApiKeys
+    providerApiKeys: options?.providerApiKeys,
+    restormelContext: {
+      workload: 'interactive',
+      stage: 'analysis',
+      task: 'analysis',
+      ...(typeof options?.platformMaxCostUsd === 'number'
+        ? { constraints: { maxCost: options.platformMaxCostUsd } }
+        : {})
+    }
   });
   const critiqueModelRoute = await resolveReasoningModelRoute({
     depthMode,
@@ -427,7 +436,15 @@ export async function runDialecticalEngine(
     routeId,
     requestedProvider: modelProvider,
     requestedModelId: modelId,
-    providerApiKeys: options?.providerApiKeys
+    providerApiKeys: options?.providerApiKeys,
+    restormelContext: {
+      workload: 'interactive',
+      stage: 'critique',
+      task: 'critique',
+      ...(typeof options?.platformMaxCostUsd === 'number'
+        ? { constraints: { maxCost: options.platformMaxCostUsd } }
+        : {})
+    }
   });
   const synthesisModelRoute = await resolveReasoningModelRoute({
     depthMode,
@@ -435,7 +452,15 @@ export async function runDialecticalEngine(
     routeId,
     requestedProvider: modelProvider,
     requestedModelId: modelId,
-    providerApiKeys: options?.providerApiKeys
+    providerApiKeys: options?.providerApiKeys,
+    restormelContext: {
+      workload: 'interactive',
+      stage: 'synthesis',
+      task: 'synthesis',
+      ...(typeof options?.platformMaxCostUsd === 'number'
+        ? { constraints: { maxCost: options.platformMaxCostUsd } }
+        : {})
+    }
   });
   const allowParallelCritique =
     analysisModelRoute.provider === 'vertex' && critiqueModelRoute.provider === 'vertex';

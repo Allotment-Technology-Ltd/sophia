@@ -4,6 +4,7 @@
   import { auth, getIdToken, onAuthChange } from '$lib/authClient';
   import { LEGAL_CHANGELOG_PATH, LEGAL_EFFECTIVE_DATE, LEGAL_VERSION } from '$lib/constants/legal';
   import PublicHeader from '$lib/components/shell/PublicHeader.svelte';
+  import { trackEvent } from '$lib/utils/analytics';
 
   let {
     data
@@ -11,6 +12,10 @@
     data: {
       paddleRuntime: 'sandbox' | 'production';
       paddleClientToken: string | null;
+      proMonthlyPriceIds: {
+        GBP: string | null;
+        USD: string | null;
+      };
       isAuthenticated: boolean;
       checkoutSettings: {
         locale: string | null;
@@ -35,10 +40,10 @@
   }
   let hasPtxn = $state(false);
   let checkoutTransactionId = $state<string | null>(null);
-  let checkoutIntent = $state<'subscription' | 'topup' | null>(null);
-  let checkoutPlan = $state<'pro' | 'premium' | null>(null);
-  let checkoutPack = $state<'small' | 'large' | null>(null);
-  let selectedCheckoutCard = $state<'pro' | 'premium' | 'topup_small' | 'topup_large' | null>(null);
+  let checkoutIntent = $state<'subscription' | null>(null);
+  let checkoutPlan = $state<'premium' | null>(null);
+  let selectedCheckoutCard = $state<'premium' | null>(null);
+  let selectedCurrency = $state<'GBP' | 'USD'>('GBP');
   let checkoutReady = $state(false);
   let checkoutOpening = $state(false);
   let autoCheckoutAttempted = $state(false);
@@ -62,12 +67,12 @@
     return new Date(founderOffer.expiresAt).toLocaleDateString('en-GB');
   });
 
-  type CheckoutCard = 'pro' | 'premium' | 'topup_small' | 'topup_large';
+  type CheckoutCard = 'premium';
 
   function canSelectCard(card: CheckoutCard): boolean {
     if (!showCheckoutFlow) return false;
-    if (founderSubscriptionLocked && (card === 'pro' || card === 'premium')) return false;
-    return card === 'pro' || card === 'premium' || card === 'topup_small' || card === 'topup_large';
+    if (founderSubscriptionLocked && card === 'premium') return false;
+    return card === 'premium';
   }
 
   function selectCard(card: CheckoutCard): void {
@@ -77,17 +82,23 @@
 
   function selectionMatchesCurrentTransaction(selected: CheckoutCard | null): boolean {
     if (!selected) return false;
-    if (selected === 'pro' || selected === 'premium') {
-      return checkoutIntent === 'subscription' && checkoutPlan === selected;
-    }
-    const selectedPack = selected === 'topup_small' ? 'small' : 'large';
-    return checkoutIntent === 'topup' && checkoutPack === selectedPack;
+    return checkoutIntent === 'subscription' && checkoutPlan === selected;
   }
 
   let canResumeExistingTransaction = $derived.by(() =>
     Boolean(checkoutTransactionId && selectionMatchesCurrentTransaction(selectedCheckoutCard))
   );
   let legalAcceptanceRequired = $derived(isAuthenticated && !canResumeExistingTransaction);
+  let currencyOptionAvailability = $derived.by(() => ({
+    GBP: Boolean(data.proMonthlyPriceIds.GBP),
+    USD: Boolean(data.proMonthlyPriceIds.USD)
+  }));
+  let canCheckoutSelectedCurrency = $derived.by(
+    () => currencyOptionAvailability[selectedCurrency]
+  );
+  let selectedCurrencyLabel = $derived.by(() =>
+    selectedCurrency === 'GBP' ? 'GBP £5/month' : 'USD $6.35/month'
+  );
 
   function normalizeLocalCheckoutUrl(rawUrl: string): string {
     if (!browser) return rawUrl;
@@ -248,17 +259,16 @@
       hasPtxn = Boolean(transactionId);
       checkoutTransactionId = transactionId;
       const kind = url.searchParams.get('sophia_kind');
-      checkoutIntent = kind === 'subscription' || kind === 'topup' ? kind : null;
+      checkoutIntent = kind === 'subscription' ? kind : null;
       const plan = url.searchParams.get('sophia_plan');
-      checkoutPlan = plan === 'pro' || plan === 'premium' ? plan : null;
-      const pack = url.searchParams.get('sophia_pack');
-      checkoutPack = pack === 'small' || pack === 'large' ? pack : null;
+      checkoutPlan = plan === 'premium' ? plan : null;
       if (checkoutIntent === 'subscription' && checkoutPlan) {
         selectedCheckoutCard = checkoutPlan;
-      } else if (checkoutIntent === 'topup' && checkoutPack) {
-        selectedCheckoutCard = checkoutPack === 'small' ? 'topup_small' : 'topup_large';
       } else if (isAuthenticated) {
-        selectedCheckoutCard = 'pro';
+        selectedCheckoutCard = 'premium';
+      }
+      if (!currencyOptionAvailability.GBP && currencyOptionAvailability.USD) {
+        selectedCurrency = 'USD';
       }
       if (!transactionId) return;
       try {
@@ -281,7 +291,7 @@
     try {
       const selected = selectedCheckoutCard;
       if (!selected) return;
-      if (founderSubscriptionLocked && (selected === 'pro' || selected === 'premium')) {
+      if (founderSubscriptionLocked && selected === 'premium') {
         throw new Error(
           `Founder access already includes Premium until ${founderExpiryLabel}.`
         );
@@ -306,27 +316,20 @@
         throw new Error('Sign in required to start checkout.');
       }
 
-      const endpoint = selected === 'pro' || selected === 'premium'
-        ? '/api/billing/checkout'
-        : '/api/billing/topups';
-      const body =
-        selected === 'pro' || selected === 'premium'
-          ? {
-              tier: selected,
-              currency: 'GBP',
-              accept_terms: acceptTerms,
-              accept_privacy: acceptPrivacy,
-              legal_terms_version: LEGAL_VERSION,
-              legal_privacy_version: LEGAL_VERSION
-            }
-          : {
-              pack: selected === 'topup_small' ? 'small' : 'large',
-              currency: 'GBP',
-              accept_terms: acceptTerms,
-              accept_privacy: acceptPrivacy,
-              legal_terms_version: LEGAL_VERSION,
-              legal_privacy_version: LEGAL_VERSION
-            };
+      const endpoint = '/api/billing/checkout';
+      const body = {
+        tier: 'pro',
+        currency: selectedCurrency,
+        accept_terms: acceptTerms,
+        accept_privacy: acceptPrivacy,
+        legal_terms_version: LEGAL_VERSION,
+        legal_privacy_version: LEGAL_VERSION
+      };
+
+      trackEvent('pricing_upgrade_clicked', {
+        tier: 'pro',
+        currency: selectedCurrency
+      });
 
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -347,15 +350,8 @@
       }
 
       const checkoutUrl = new URL(checkoutUrlRaw);
-      checkoutUrl.searchParams.set(
-        'sophia_kind',
-        selected === 'pro' || selected === 'premium' ? 'subscription' : 'topup'
-      );
-      if (selected === 'pro' || selected === 'premium') {
-        checkoutUrl.searchParams.set('sophia_plan', selected);
-      } else {
-        checkoutUrl.searchParams.set('sophia_pack', selected === 'topup_small' ? 'small' : 'large');
-      }
+      checkoutUrl.searchParams.set('sophia_kind', 'subscription');
+      checkoutUrl.searchParams.set('sophia_plan', selected);
       window.location.href = normalizeLocalCheckoutUrl(checkoutUrl.toString());
     } catch (err) {
       ptxnCheckoutError = err instanceof Error ? err.message : 'Unable to open checkout.';
@@ -375,8 +371,8 @@
 
   $effect(() => {
     if (!founderSubscriptionLocked) return;
-    if (selectedCheckoutCard === 'pro' || selectedCheckoutCard === 'premium') {
-      selectedCheckoutCard = 'topup_small';
+    if (selectedCheckoutCard === 'premium') {
+      selectedCheckoutCard = null;
     }
   });
 </script>
@@ -385,7 +381,7 @@
   <title>SOPHIA Pricing</title>
   <meta
     name="description"
-    content="SOPHIA pricing for Free, Pro, and Premium plans, with Learn quotas and Scholar Credits for in-depth essay feedback."
+    content="SOPHIA pricing for Free and Premium plans, with simple subscription billing."
   />
 </svelte:head>
 
@@ -410,17 +406,17 @@
         Payments and taxes are managed securely through Paddle.
       </p>
       <p class="resource-note">
-        Platform-funded daily inquiry allowances (without BYOK): Free 5 standard; Founder/Pro 10
-        standard + 3 deep + 1 premium; Premium 20 standard + 3 deep + 1 premium.
+        Platform-funded daily inquiry allowances (without BYOK): Free 5 standard; Premium 20
+        standard + 3 deep + 1 premium.
       </p>
       {#if founderOffer?.active}
         <p class="founder-callout">
           Founder access active: Premium included until {founderExpiryLabel} with
-          {` £${(founderOffer.bonusWalletCents / 100).toFixed(2)}`} starter wallet credit.
+          {` £${(founderOffer.bonusWalletCents / 100).toFixed(2)}`} starter bonus credit.
         </p>
       {:else}
         <p class="founder-callout">
-          Founder offer: first 50 users receive 12 months of Premium plus £10 wallet credit.
+          Founder offer: first 50 users receive 12 months of Premium access.
         </p>
       {/if}
     </header>
@@ -434,34 +430,8 @@
         <li>Daily platform inquiries: 5 standard runs (quick/standard)</li>
         <li>Monthly source additions: 2 shared references</li>
         <li>Learn quota: 2 micro-lessons + 1 short-answer review / month</li>
-        <li>Bring your own API key (BYOK) available with wallet limits</li>
+        <li>Bring your own API key (BYOK) supported without SOPHIA usage surcharges</li>
       </ul>
-    </article>
-    <article
-      class="plan"
-      class:is-selected={selectedCheckoutCard === 'pro'}
-      class:is-disabled={
-        !canSelectCard('pro')
-      }
-    >
-      <button
-        class="plan-select"
-        type="button"
-        disabled={!canSelectCard('pro')}
-        onclick={() => selectCard('pro')}
-      >
-        <h2>Deep Inquirer</h2>
-        <p class="price">from £6.99 / month</p>
-        {#if founderSubscriptionLocked}
-          <p class="founder-tag">Included with Founder access</p>
-        {/if}
-        <ul>
-          <li>Daily platform inquiries: 10 standard + 3 deep + 1 premium (no BYOK required)</li>
-          <li>Monthly source additions: 3 shared, or 1 private + 2 shared</li>
-          <li>Learn quota: 50 micro-lessons + 3 essay reviews / month</li>
-          <li>API wallet with transparent 10% handling fee</li>
-        </ul>
-      </button>
     </article>
     <article
       class="plan"
@@ -477,68 +447,35 @@
         onclick={() => selectCard('premium')}
       >
         <h2>Philosopher's Desk</h2>
-        <p class="price">from £11.99 / month</p>
+        <p class="price">{selectedCurrency === 'GBP' ? '£5 / month' : '$6.35 / month'}</p>
         {#if founderSubscriptionLocked}
           <p class="founder-tag">Included with Founder access</p>
         {/if}
         <ul>
           <li>Daily platform inquiries: 20 standard + 3 deep + 1 premium (no BYOK required)</li>
           <li>Monthly source additions: 5 shared, or 1 private + 3 shared</li>
-          <li>Learn quota: unlimited lessons + 10 essay reviews / month</li>
+          <li>Learn quota: unlimited micro/short lessons + 10 essay reviews / month</li>
           <li>Priority access to premium capabilities</li>
         </ul>
       </button>
+      <div class="currency-controls">
+        <label for="pro-currency-select">Checkout currency</label>
+        <select
+          id="pro-currency-select"
+          bind:value={selectedCurrency}
+          disabled={founderSubscriptionLocked}
+        >
+          <option value="GBP" disabled={!currencyOptionAvailability.GBP}>GBP (£)</option>
+          <option value="USD" disabled={!currencyOptionAvailability.USD}>USD ($)</option>
+        </select>
+        {#if !canCheckoutSelectedCurrency}
+          <p class="currency-hint">Selected currency is not configured for checkout.</p>
+        {:else}
+          <p class="currency-hint">You are upgrading on {selectedCurrencyLabel} pricing.</p>
+        {/if}
+      </div>
     </article>
     </section>
-
-    <section class="plans topups">
-    <article
-      class="plan"
-      class:is-selected={selectedCheckoutCard === 'topup_small'}
-      class:is-disabled={!canSelectCard('topup_small')}
-    >
-      <button
-        class="plan-select"
-        type="button"
-        disabled={!canSelectCard('topup_small')}
-        onclick={() => selectCard('topup_small')}
-      >
-        <h2>Scholar Credits (Small)</h2>
-        <p class="price">£5.00</p>
-        <ul>
-          <li>Prepaid wallet credit</li>
-          <li>Used for API handling fees</li>
-          <li>Convert inside Learn to Scholar Credits for extra essay reviews</li>
-        </ul>
-      </button>
-    </article>
-    <article
-      class="plan"
-      class:is-selected={selectedCheckoutCard === 'topup_large'}
-      class:is-disabled={!canSelectCard('topup_large')}
-    >
-      <button
-        class="plan-select"
-        type="button"
-        disabled={!canSelectCard('topup_large')}
-        onclick={() => selectCard('topup_large')}
-      >
-        <h2>Scholar Credits (Large)</h2>
-        <p class="price">£15.00</p>
-        <ul>
-          <li>Prepaid wallet credit</li>
-          <li>Used for API handling fees</li>
-          <li>Convert inside Learn to Scholar Credits for extra essay reviews</li>
-        </ul>
-      </button>
-    </article>
-    </section>
-
-    <section class="notes">
-    <p class="resource-note">
-      Scholar Credits are pre-paid tokens for in-depth essay feedback.
-    </p>
-  </section>
 
   <section class="notes">
     {#if showCheckoutFlow}
@@ -573,11 +510,14 @@
             !selectedCheckoutCard
             || checkoutOpening
             || (legalAcceptanceRequired && (!acceptTerms || !acceptPrivacy))
-            || (founderSubscriptionLocked && (selectedCheckoutCard === 'pro' || selectedCheckoutCard === 'premium'))
+            || !canCheckoutSelectedCurrency
+            || (founderSubscriptionLocked && selectedCheckoutCard === 'premium')
           }
           onclick={openCheckoutFromSelection}
         >
-          {checkoutOpening ? 'Opening checkout…' : 'Proceed Securely →'}
+          {checkoutOpening
+            ? 'Opening checkout…'
+            : `Upgrade to Pro (${selectedCurrency}) →`}
         </button>
       </div>
     {/if}
@@ -593,10 +533,10 @@
     {#if ptxnCheckoutError}
       <p class="error-note">{ptxnCheckoutError}</p>
     {/if}
-    <h2>Insight Credits and Billing Notes</h2>
+    <h2>Billing Notes</h2>
     <ul>
-      <li>Insight credits cover deeper reasoning or API usage. They never expire.</li>
-      <li>Top-ups are pre-paid and used for deeper runs. Refunds are only provided where the law requires.</li>
+      <li>Billing is subscription-only with Free and Premium tiers.</li>
+      <li>BYOK usage does not incur SOPHIA wallet fees or metered top-ups.</li>
       <li>Taxes and payment administration are handled by Paddle as Merchant of Record.</li>
     </ul>
     <p>
@@ -727,6 +667,36 @@
     color: var(--color-sage);
   }
 
+  .currency-controls {
+    margin-top: 12px;
+    display: grid;
+    gap: 8px;
+  }
+
+  .currency-controls label {
+    font-family: var(--font-ui);
+    font-size: 0.82rem;
+    color: var(--color-muted);
+  }
+
+  .currency-controls select {
+    min-height: 36px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-surface-2, var(--color-surface));
+    color: var(--color-text);
+    font-family: var(--font-ui);
+    font-size: 0.9rem;
+    padding: 8px 12px;
+  }
+
+  .currency-hint {
+    margin: 0;
+    font-family: var(--font-ui);
+    font-size: 0.8rem;
+    color: var(--color-dim);
+  }
+
   .plan ul {
     margin: 0;
     padding-left: 18px;
@@ -825,7 +795,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 40px;
+    min-height: 44px;
     padding: 0 16px;
     border-radius: 8px;
     text-decoration: none;

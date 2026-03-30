@@ -86,16 +86,15 @@
 
       <h3>Billing and Payments (Paddle as Merchant of Record)</h3>
       <p>
-        Paddle processes subscription and top-up payments as Merchant of Record. We do not store
+        Paddle processes subscription payments as Merchant of Record. We do not store
         your full card details. We store billing profile metadata such as tier, subscription status,
         currency, provider customer/subscription IDs, and legal acceptance version records.
       </p>
 
-      <h3>BYOK Wallet and Handling-Fee Metering</h3>
+      <h3>BYOK and Usage Metering</h3>
       <p>
-        For BYOK usage, we maintain a prepaid wallet and billing ledger entries. On eligible
-        non-cached BYOK runs, we may compute and charge a handling fee based on estimated model cost.
-        We store idempotent run-linked ledger events for audit and dispute handling.
+        BYOK usage does not require prepaid wallet balances or top-up purchases. We store only the
+        minimum billing and subscription records needed for audit, entitlement checks, and dispute handling.
       </p>
 
       <h3>Queries, Sources, and Ingestion Preferences</h3>
@@ -116,7 +115,7 @@
     <section>
       <h2>3. Why We Process Data (Legal Bases)</h2>
       <ul>
-        <li><strong>Contract</strong>: provide the app, subscriptions, top-ups, and account features.</li>
+        <li><strong>Contract</strong>: provide the app, subscriptions, and account features.</li>
         <li><strong>Legitimate interests</strong>: service security, abuse prevention, diagnostics, and product improvement.</li>
         <li><strong>Legal obligation</strong>: tax/accounting records, law enforcement requests, and consumer law compliance.</li>
         <li><strong>Consent</strong>: explicit confirmations for public source sharing and legal-acceptance flows.</li>

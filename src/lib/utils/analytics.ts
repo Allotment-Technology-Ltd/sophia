@@ -43,6 +43,7 @@ type AnalyticsEvent =
   | { name: 'map_share_link_copied'; params: { safe_mode: boolean } }
   | { name: 'map_degraded_state'; params: { reason: string } }
   | { name: 'onboarding_layer_viewed'; params: { layer: 'input' | 'synthesis' | 'scholar' } }
+  | { name: 'pricing_upgrade_clicked'; params: { tier: 'pro'; currency: 'GBP' | 'USD' } }
   | { name: 'quote_card_downloaded' }
   | { name: 'quote_card_copied'; params: { success: boolean } };
 

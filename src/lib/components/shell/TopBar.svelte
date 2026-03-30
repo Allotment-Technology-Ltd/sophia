@@ -20,7 +20,7 @@
   let { contextQuery, streamingPass, streamingModel, menuDotVisible, panelOpen = false, onMenuToggle, onNew }: Props = $props();
 
   let currentUser = $state(browser ? auth?.currentUser ?? null : null);
-  let billingTier = $state<'free' | 'pro' | 'premium' | null>(null);
+  let billingTier = $state<'free' | 'premium' | null>(null);
   let founderActive = $state(false);
   let showAdminNav = $state(false);
   let userMenuOpen = $state(false);
@@ -49,12 +49,12 @@
         return;
       }
       const body = (await response.json()) as {
-        profile?: { tier?: 'free' | 'pro' | 'premium' };
-        effective_tier?: 'free' | 'pro' | 'premium';
+        profile?: { tier?: 'free' | 'premium' };
+        effective_tier?: 'free' | 'premium';
         founder_offer?: { active?: boolean } | null;
       };
       const tier = body.effective_tier ?? body?.profile?.tier;
-      billingTier = tier === 'pro' || tier === 'premium' || tier === 'free' ? tier : 'free';
+      billingTier = tier === 'premium' || tier === 'free' ? tier : 'free';
       founderActive = body?.founder_offer?.active === true;
     } catch {
       billingTier = null;

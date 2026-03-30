@@ -57,8 +57,7 @@ export function defaultEntitlements(): EntitlementState {
   return {
     month_key: currentMonthKeyUtc(),
     public_ingest_used: 0,
-    private_ingest_used: 0,
-    byok_fee_charged_cents: 0
+    private_ingest_used: 0
   };
 }
 
@@ -95,10 +94,7 @@ function normalizeEntitlements(input: unknown): EntitlementState {
   return {
     month_key: typeof obj.month_key === 'string' ? obj.month_key : currentMonth,
     public_ingest_used: Number.isFinite(obj.public_ingest_used) ? Number(obj.public_ingest_used) : 0,
-    private_ingest_used: Number.isFinite(obj.private_ingest_used) ? Number(obj.private_ingest_used) : 0,
-    byok_fee_charged_cents: Number.isFinite(obj.byok_fee_charged_cents)
-      ? Number(obj.byok_fee_charged_cents)
-      : 0
+    private_ingest_used: Number.isFinite(obj.private_ingest_used) ? Number(obj.private_ingest_used) : 0
   };
 }
 

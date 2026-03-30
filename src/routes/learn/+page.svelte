@@ -57,7 +57,7 @@
   let progressEssayCount = $state(0);
   let progressTrajectory = $state(0);
   let learnEntitlements = $state<{
-    tier: 'free' | 'pro' | 'premium';
+    tier: 'free' | 'premium';
     monthKey: string;
     microLessonsUsed: number;
     shortReviewsUsed: number;
@@ -65,8 +65,6 @@
     microLessonsRemaining: number | null;
     shortReviewsRemaining: number | null;
     essayReviewsRemaining: number | null;
-    scholarCreditsBalance: number;
-    scholarCreditsSpent: number;
   } | null>(null);
 
   const sectionLabels: Record<Section, string> = {
@@ -660,8 +658,7 @@
         <strong>{learnEntitlements.tier.toUpperCase()}</strong> ·
         Lessons {learnEntitlements.microLessonsUsed}/{learnEntitlements.microLessonsRemaining === null ? '∞' : learnEntitlements.microLessonsUsed + learnEntitlements.microLessonsRemaining} ·
         Short reviews {learnEntitlements.shortReviewsUsed}/{learnEntitlements.shortReviewsRemaining === null ? '∞' : learnEntitlements.shortReviewsUsed + learnEntitlements.shortReviewsRemaining} ·
-        Essay reviews {learnEntitlements.essayReviewsUsed}/{learnEntitlements.essayReviewsRemaining === null ? '∞' : learnEntitlements.essayReviewsUsed + learnEntitlements.essayReviewsRemaining} ·
-        Scholar credits {learnEntitlements.scholarCreditsBalance}
+        Essay reviews {learnEntitlements.essayReviewsUsed}/{learnEntitlements.essayReviewsRemaining === null ? '∞' : learnEntitlements.essayReviewsUsed + learnEntitlements.essayReviewsRemaining}
       </p>
     </section>
   {/if}

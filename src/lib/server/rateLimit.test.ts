@@ -39,10 +39,6 @@ describe('resolvePlatformStandardSearchLimit', () => {
     expect(resolvePlatformStandardSearchLimit('founder')).toBe(10);
   });
 
-  it('returns 10 for pro users', () => {
-    expect(resolvePlatformStandardSearchLimit('pro')).toBe(10);
-  });
-
   it('returns 20 for premium users', () => {
     expect(resolvePlatformStandardSearchLimit('premium')).toBe(20);
   });
@@ -53,9 +49,8 @@ describe('resolvePlatformDeepSearchLimit', () => {
     expect(resolvePlatformDeepSearchLimit('free')).toBe(0);
   });
 
-  it('returns 3 for founder/pro/premium users', () => {
+  it('returns 3 for founder/premium users', () => {
     expect(resolvePlatformDeepSearchLimit('founder')).toBe(3);
-    expect(resolvePlatformDeepSearchLimit('pro')).toBe(3);
     expect(resolvePlatformDeepSearchLimit('premium')).toBe(3);
   });
 });
@@ -65,9 +60,8 @@ describe('resolvePlatformPremiumSearchLimit', () => {
     expect(resolvePlatformPremiumSearchLimit('free')).toBe(0);
   });
 
-  it('returns 1 for founder/pro/premium users', () => {
+  it('returns 1 for founder/premium users', () => {
     expect(resolvePlatformPremiumSearchLimit('founder')).toBe(1);
-    expect(resolvePlatformPremiumSearchLimit('pro')).toBe(1);
     expect(resolvePlatformPremiumSearchLimit('premium')).toBe(1);
   });
 });

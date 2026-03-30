@@ -2942,6 +2942,25 @@
     })();
 
     const params = new URLSearchParams(window.location.search);
+    const prefillSourceUrl = params.get('sourceUrl')?.trim() ?? '';
+    const prefillSourceType = params.get('sourceType')?.trim() ?? '';
+    const autoInspect = params.get('inspect') === '1';
+    if (prefillSourceUrl) {
+      sourceUrl = prefillSourceUrl;
+      if (
+        prefillSourceType === 'sep_entry' ||
+        prefillSourceType === 'iep_entry' ||
+        prefillSourceType === 'journal_article' ||
+        prefillSourceType === 'book' ||
+        prefillSourceType === 'web_article'
+      ) {
+        sourceType = prefillSourceType;
+      }
+      if (autoInspect) {
+        void preScanSource();
+      }
+    }
+
     const reportRunId = params.get('reportRunId')?.trim();
     if (reportRunId) {
       void (async () => {

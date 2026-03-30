@@ -78,6 +78,30 @@ function requireRuntimeEnv(base: string, runtime = resolvePaddleRuntime()): stri
   );
 }
 
+function requireRuntimeEnvAny(bases: string[], runtime = resolvePaddleRuntime()): string {
+  for (const base of bases) {
+    for (const key of runtimeEnvCandidates(base, runtime)) {
+      const value = process.env[key]?.trim();
+      if (value) {
+        assertRuntimeCompatibleValue(base, runtime, value);
+        return value;
+      }
+    }
+  }
+  const tried = bases.flatMap((base) => runtimeEnvCandidates(base, runtime));
+  throw new Error(`${tried.join(' or ')} is not configured for ${runtime} runtime`);
+}
+
+function optionalRuntimeEnvAny(bases: string[], runtime = resolvePaddleRuntime()): string | null {
+  for (const base of bases) {
+    for (const key of runtimeEnvCandidates(base, runtime)) {
+      const value = process.env[key]?.trim();
+      if (value) return value;
+    }
+  }
+  return null;
+}
+
 function optionalRuntimeEnv(base: string, runtime = resolvePaddleRuntime()): string | null {
   for (const key of runtimeEnvCandidates(base, runtime)) {
     const value = process.env[key]?.trim();
@@ -101,8 +125,7 @@ function paddleAuthHeaders(runtime = resolvePaddleRuntime()): Record<string, str
 
 function tierPriceEnvKey(tier: BillingTier, currency: CurrencyCode): string {
   const suffix = currency === 'USD' ? 'USD' : 'GBP';
-  if (tier === 'pro') return `PADDLE_PRICE_PRO_${suffix}`;
-  if (tier === 'premium') return `PADDLE_PRICE_PREMIUM_${suffix}`;
+  if (tier === 'premium') return `PADDLE_PRICE_KEYS_PRO_MONTHLY_${suffix}`;
   throw new Error(`Tier ${tier} does not have a subscription price`);
 }
 
@@ -158,13 +181,15 @@ async function paddleGet<T>(
 
 export async function createSubscriptionCheckout(params: {
   uid: string;
+  workspaceId: string;
   email?: string | null;
-  tier: Extract<BillingTier, 'pro' | 'premium'>;
+  tier: Extract<BillingTier, 'premium'>;
   currency: CurrencyCode;
+  billingPeriod?: 'monthly';
   appUrl?: string | null;
   legalTermsVersion?: string;
   legalPrivacyVersion?: string;
-}): Promise<{ checkoutUrl: string; priceId: string }> {
+}): Promise<{ checkoutUrl: string; priceId: string; transactionId: string }> {
   const appUrl =
     params.appUrl?.trim() ||
     process.env.PUBLIC_APP_URL?.trim() ||
@@ -175,15 +200,21 @@ export async function createSubscriptionCheckout(params: {
   const checkoutPageUrl =
     appUrl && !isLocalhostAppUrl(appUrl) ? `${appUrl.replace(/\/+$/, '')}/pricing` : undefined;
   const runtime = resolvePaddleRuntime({ requestUrl: appUrl || undefined });
-  const priceId = requireRuntimeEnv(tierPriceEnvKey(params.tier, params.currency), runtime);
+  const suffix = params.currency === 'USD' ? 'USD' : 'GBP';
+  const primaryPriceKey = tierPriceEnvKey(params.tier, params.currency);
+  // Backward-compatible fallback while migrating env keys.
+  const fallbackPriceKey = `PADDLE_PRICE_PREMIUM_${suffix}`;
+  const priceId = requireRuntimeEnvAny([primaryPriceKey, fallbackPriceKey], runtime);
 
   const payload = await paddlePost<PaddleTransaction>('/transactions', {
     items: [{ price_id: priceId, quantity: 1 }],
     customer_email: params.email ?? undefined,
     custom_data: {
       uid: params.uid,
+      workspaceId: params.workspaceId,
       purchase_kind: 'subscription',
-      tier: params.tier,
+      tier: 'pro',
+      billingPeriod: params.billingPeriod ?? 'monthly',
       currency: params.currency,
       legal_terms_version: params.legalTermsVersion ?? null,
       legal_privacy_version: params.legalPrivacyVersion ?? null
@@ -194,10 +225,15 @@ export async function createSubscriptionCheckout(params: {
       cancel_url: cancelUrl
     }
   }, runtime);
+  const transactionId = payload.data?.id;
+  if (!transactionId) {
+    throw new Error('Paddle transaction id missing from checkout response');
+  }
 
   return {
     checkoutUrl: parseCheckoutUrl(payload),
-    priceId
+    priceId,
+    transactionId
   };
 }
 
@@ -289,7 +325,10 @@ function parsePaddleSignatureHeader(signatureHeader: string): { ts: string; h1: 
 
 export function verifyPaddleWebhookSignature(rawBody: string, signatureHeader: string | null): boolean {
   const runtime = resolvePaddleRuntime();
-  const secret = optionalRuntimeEnv('PADDLE_WEBHOOK_SECRET', runtime);
+  const secret = optionalRuntimeEnvAny(
+    ['PADDLE_WEBHOOK_SECRET', 'PADDLE_NOTIFICATION_WEBHOOK_SECRET'],
+    runtime
+  );
   if (!secret) {
     return (process.env.PADDLE_ALLOW_UNSIGNED_WEBHOOKS ?? 'false').toLowerCase() === 'true';
   }

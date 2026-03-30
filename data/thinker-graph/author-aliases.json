@@ -1,0 +1,209 @@
+{
+  "version": 1,
+  "aliases": {
+    "thomas nagel": {
+      "wikidata_id": "Q350239",
+      "label": "Thomas Nagel",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:08.932Z"
+    },
+    "jeremy bentham": {
+      "wikidata_id": "Q60887",
+      "label": "Jeremy Bentham Rollweiser",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:14.943Z"
+    },
+    "sara ruddick": {
+      "wikidata_id": "Q7421755",
+      "label": "Sara Ruddick",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:15.503Z"
+    },
+    "hauerwas": {
+      "wikidata_id": "Q1328650",
+      "label": "Stanley Hauerwas",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:18.807Z"
+    },
+    "william kingdon clifford": {
+      "wikidata_id": "Q323228",
+      "label": "William Kingdon Clifford",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:19.960Z"
+    },
+    "william k clifford": {
+      "wikidata_id": "Q323228",
+      "label": "William Kingdon Clifford",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:20.614Z"
+    },
+    "william clifford": {
+      "wikidata_id": "Q323228",
+      "label": "William Kingdon Clifford",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:21.289Z"
+    },
+    "kathryn norlock": {
+      "wikidata_id": "Q16206368",
+      "label": "Kathryn Norlock",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:21.862Z"
+    },
+    "rosalind hursthouse": {
+      "wikidata_id": "Q3480230",
+      "label": "Rosalind Hursthouse",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:25.949Z"
+    },
+    "ernest renan": {
+      "wikidata_id": "Q157155",
+      "label": "Ernest Renan",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:29.037Z"
+    },
+    "johann wolfgang von goethe": {
+      "wikidata_id": "Q5879",
+      "label": "Johann Wolfgang von Goethe",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:30.054Z"
+    },
+    "selmer bringsjord": {
+      "wikidata_id": "Q16192619",
+      "label": "Selmer Bringsjord",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:32.345Z"
+    },
+    "vincent c muller": {
+      "wikidata_id": "Q23881777",
+      "label": "Vincent C. Müller",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:33.024Z"
+    },
+    "david robb": {
+      "wikidata_id": "Q112517296",
+      "label": "David Robb",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:34.818Z"
+    },
+    "j j c smart": {
+      "wikidata_id": "Q600759",
+      "label": "J. J. C. Smart",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:37.731Z"
+    },
+    "lawrence shapiro": {
+      "wikidata_id": "Q6504584",
+      "label": "Lawrence Shapiro",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:39.630Z"
+    },
+    "richard joyce": {
+      "wikidata_id": "Q2149904",
+      "label": "Richard Joyce",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:40.539Z"
+    },
+    "eric t olson": {
+      "wikidata_id": "Q5387601",
+      "label": "Eric T. Olson",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:41.319Z"
+    },
+    "alison mcintyre": {
+      "wikidata_id": "Q16002529",
+      "label": "Alison McIntyre",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:42.732Z"
+    },
+    "daniel stoljar": {
+      "wikidata_id": "Q56043537",
+      "label": "Daniel Stoljar",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:43.509Z"
+    },
+    "mark rowlands": {
+      "wikidata_id": "Q1257097",
+      "label": "Mark Rowlands",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:44.278Z"
+    },
+    "julia driver": {
+      "wikidata_id": "Q20829630",
+      "label": "Julia Driver",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:46.260Z"
+    },
+    "graham oppy": {
+      "wikidata_id": "Q5593123",
+      "label": "Graham Oppy",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:47.282Z"
+    },
+    "robert van gulick": {
+      "wikidata_id": "Q93226438",
+      "label": "Robert Van Gulick",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:48.949Z"
+    },
+    "carla bagnoli": {
+      "wikidata_id": "Q93221409",
+      "label": "Carla Bagnoli",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:49.707Z"
+    },
+    "luciano floridi": {
+      "wikidata_id": "Q214119",
+      "label": "Luciano Floridi",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:50.579Z"
+    },
+    "carsten held": {
+      "wikidata_id": "Q45759937",
+      "label": "Carsten Held",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:51.579Z"
+    },
+    "peter singer": {
+      "wikidata_id": "Q211539",
+      "label": "Peter Singer",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:55.310Z"
+    },
+    "michael tye": {
+      "wikidata_id": "Q708836",
+      "label": "Michael Tye",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:20:56.046Z"
+    },
+    "andrew fiala": {
+      "wikidata_id": "Q93234385",
+      "label": "Andrew Fiala",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:32:52.750Z"
+    },
+    "cheyney ryan": {
+      "wikidata_id": "Q131466034",
+      "label": "Cheyney Ryan",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:32:55.459Z"
+    },
+    "david shoemaker": {
+      "wikidata_id": "Q112487569",
+      "label": "David Shoemaker",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:33:03.998Z"
+    },
+    "nir eyal": {
+      "wikidata_id": "Q56808752",
+      "label": "Nir Eyal",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:33:06.855Z"
+    },
+    "jeroen van den hoven": {
+      "wikidata_id": "Q16902159",
+      "label": "Jeroen van den Hoven",
+      "confidence": 0.95,
+      "resolved_at": "2026-03-30T10:33:08.749Z"
+    }
+  }
+}

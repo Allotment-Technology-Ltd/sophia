@@ -29,6 +29,13 @@
       emphasis: false
     },
     {
+      href: '/admin/thinker-links',
+      title: 'Thinker link review',
+      description:
+        'Review unresolved author names from thinker import, resolve to Wikidata QIDs, and backfill thinker→authored→source links via an operator queue.',
+      emphasis: false
+    },
+    {
       href: '/admin/users',
       title: 'User management',
       description:
