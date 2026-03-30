@@ -132,6 +132,7 @@ export interface SessionState {
 export type DialogueStreamEventType =
   | 'start'
   | 'delta'
+  | 'stance'
   | 'metadata'
   | 'escalation_started'
   | 'escalation_result'

@@ -88,7 +88,9 @@ function createStoaConversationStore() {
 
   async function loadBootstrap(): Promise<void> {
     const token = await getIdToken();
-    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const headers: HeadersInit | undefined = token
+      ? { Authorization: `Bearer ${token}` }
+      : undefined;
     const [onboardingRes, curriculumRes, journalRes, incompleteRes] = await Promise.all([
       fetch('/api/stoa/onboarding/status', { headers }),
       fetch('/api/stoa/curriculum', { headers }),
