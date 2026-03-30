@@ -1,17 +1,16 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-
   import { getAudioEngine } from '$lib/stoa-audio';
+  import { stoaSessionStore } from '$lib/stores/stoa-session.svelte';
   import type {
     ThinkerProfile,
     StanceType,
+    StoaProfile,
     StoaProgressState,
     StoaZone,
     WorldMapNode,
     WorldMapResponse
   } from '$lib/types/stoa';
-  import { stoaSessionStore } from '$lib/stores/stoa-session.svelte';
-
   import AudioControls from './AudioControls.svelte';
   import DialogueOverlay from './DialogueOverlay.svelte';
   import ProgressHUD from './ProgressHUD.svelte';
@@ -20,6 +19,8 @@
   import StanceIndicator from './StanceIndicator.svelte';
   import ThinkerUnlockNotification from './ThinkerUnlockNotification.svelte';
   import WorldMapOverlay from './WorldMapOverlay.svelte';
+  import StoaSetupContainer from './setup/StoaSetupContainer.svelte';
+  import PrologueDialogue from './prologue/PrologueDialogue.svelte';
 
   interface Props {
     userId: string;
@@ -29,6 +30,19 @@
   let { userId, sessionId }: Props = $props();
 
   const audioEngine = getAudioEngine();
+
+  let profileLoading = $state(true);
+  let profile = $state<StoaProfile | null>(null);
+  let isNewStudent = $state(false);
+  let isReturningStudent = $state(false);
+  let returningLines = $state<string[]>([]);
+  let prologueComplete = $state(false);
+  let hudVisible = $state(false);
+  let hudStanceVisible = $state(false);
+  let hudJournalVisible = $state(false);
+  let hudAudioVisible = $state(false);
+  let hudProgressVisible = $state(false);
+  let setupError = $state<string | null>(null);
 
   let currentZone = $state<StoaZone>('colonnade');
   let currentStance = $state<StanceType>('hold');
@@ -100,6 +114,58 @@
       voiceSignature: 'foundational-calm'
     }
   };
+
+  function startingPathToZone(path: StoaProfile['startingPath']): StoaZone {
+    if (path === 'garden') return 'garden';
+    if (path === 'sea_terrace') return 'sea-terrace';
+    return 'colonnade';
+  }
+
+  async function bootstrapProfile(): Promise<void> {
+    profileLoading = true;
+    setupError = null;
+    try {
+      const response = await fetch('/api/stoa/profile');
+      if (!response.ok) {
+        if (response.status === 401) {
+          setupError = 'Sign in to begin your Stoa arc.';
+          isNewStudent = false;
+          profile = null;
+          profileLoading = false;
+          return;
+        }
+        throw new Error('Failed to load profile');
+      }
+      const payload = (await response.json()) as StoaProfile | null;
+      if (!payload) {
+        isNewStudent = true;
+        isReturningStudent = false;
+        profile = null;
+        profileLoading = false;
+        return;
+      }
+
+      profile = payload;
+      currentZone = startingPathToZone(payload.startingPath);
+      isNewStudent = false;
+      isReturningStudent = Boolean(payload.philosophyLevel);
+
+      if (isReturningStudent) {
+        const greetRes = await fetch('/api/stoa/prologue/returning-greeting');
+        if (greetRes.ok) {
+          const greet = (await greetRes.json()) as { lines?: string[]; startingPath?: StoaProfile['startingPath'] };
+          returningLines = Array.isArray(greet.lines) ? greet.lines : [];
+          if (greet.startingPath) {
+            currentZone = startingPathToZone(greet.startingPath);
+          }
+        }
+      }
+    } catch {
+      setupError = 'Unable to load profile.';
+    } finally {
+      profileLoading = false;
+    }
+  }
 
   async function initializeAudio(): Promise<void> {
     if (hasInitializedAudio) return;
@@ -272,6 +338,32 @@
     questJournalOpen = true;
   }
 
+  async function revealHudSequentially(): Promise<void> {
+    hudVisible = true;
+    hudStanceVisible = true;
+    await new Promise<void>((resolve) => setTimeout(resolve, 700));
+    hudJournalVisible = true;
+    await new Promise<void>((resolve) => setTimeout(resolve, 700));
+    hudAudioVisible = true;
+    await new Promise<void>((resolve) => setTimeout(resolve, 700));
+    hudProgressVisible = true;
+  }
+
+  function handleSetupComplete(event: CustomEvent<{ profile: StoaProfile }>): void {
+    profile = event.detail.profile;
+    currentZone = startingPathToZone(event.detail.profile.startingPath);
+    isNewStudent = false;
+    isReturningStudent = false;
+    prologueComplete = false;
+    returningLines = [];
+  }
+
+  function handlePrologueComplete(): void {
+    prologueComplete = true;
+    void revealHudSequentially();
+    void refreshProgress();
+  }
+
   onMount(() => {
     stoaSessionStore.hydrate();
     if (sessionId && sessionId !== stoaSessionStore.sessionId) {
@@ -279,7 +371,7 @@
     }
     stoaSessionStore.setZone(currentZone);
     stoaSessionStore.setStance(currentStance);
-    void refreshProgress();
+    void bootstrapProfile();
 
     if (typeof window !== 'undefined') {
       window.addEventListener('stoa:progress-update', handleProgressUpdate);
@@ -305,34 +397,70 @@
 <svelte:window onpointerdown={initializeAudio} onkeydown={handleWindowKeydown} />
 
 <div class="stoa-app" data-user={userId}>
-  <SceneCanvas
-    zone={currentZone}
-    {unlockedThinkers}
-    {shrineIlluminateThinkerId}
-    {worldMapData}
-    {selectedWorldMapNodeId}
-    on:sceneReady={handleSceneReady}
-    on:thinkerSelected={handleThinkerSelected}
-    on:worldMapNodeSelected={handleWorldMapNodeSelected}
-  />
-  <DialogueOverlay stance={currentStance} sessionId={stoaSessionStore.sessionId} on:stanceChange={handleStanceChange} />
-  <StanceIndicator stance={currentStance} />
-  <ProgressHUD {progress} on:openJournal={openQuestJournal} />
-  <QuestJournal bind:open={questJournalOpen} {userId} />
-  <AudioControls {audioReady} />
-  <ThinkerUnlockNotification thinker={activeUnlockNotification} on:dismissed={handleUnlockNotificationDismissed} />
-  <WorldMapOverlay
-    open={worldMapOpen}
-    data={worldMapData}
-    selectedNodeId={selectedWorldMapNodeId}
-    on:close={closeWorldMap}
-    on:explore={handleExploreWithStoa}
-  />
+  {#if profile}
+    <SceneCanvas
+      zone={currentZone}
+      {unlockedThinkers}
+      {shrineIlluminateThinkerId}
+      {worldMapData}
+      {selectedWorldMapNodeId}
+      on:sceneReady={handleSceneReady}
+      on:thinkerSelected={handleThinkerSelected}
+      on:worldMapNodeSelected={handleWorldMapNodeSelected}
+    />
+  {/if}
 
-  {#if !audioReady}
+  {#if profile && !prologueComplete}
+    <PrologueDialogue
+      {profile}
+      {isReturningStudent}
+      {returningLines}
+      onPrologueComplete={handlePrologueComplete}
+    />
+  {/if}
+
+  {#if profile && prologueComplete}
+    <DialogueOverlay
+      stance={currentStance}
+      sessionId={stoaSessionStore.sessionId}
+      on:stanceChange={handleStanceChange}
+    />
+    {#if hudStanceVisible}
+      <div class="hud-layer"><StanceIndicator stance={currentStance} /></div>
+    {/if}
+    {#if hudProgressVisible}
+      <div class="hud-layer"><ProgressHUD {progress} on:openJournal={openQuestJournal} /></div>
+    {/if}
+    {#if hudJournalVisible}
+      <QuestJournal bind:open={questJournalOpen} {userId} />
+    {/if}
+    {#if hudAudioVisible}
+      <div class="hud-layer"><AudioControls {audioReady} /></div>
+    {/if}
+    <ThinkerUnlockNotification thinker={activeUnlockNotification} on:dismissed={handleUnlockNotificationDismissed} />
+    <WorldMapOverlay
+      open={worldMapOpen}
+      data={worldMapData}
+      selectedNodeId={selectedWorldMapNodeId}
+      on:close={closeWorldMap}
+      on:explore={handleExploreWithStoa}
+    />
+  {/if}
+
+  {#if isNewStudent && !profile}
+    <StoaSetupContainer on:setupComplete={handleSetupComplete} />
+  {/if}
+
+  {#if setupError}
+    <div class="scene-status">{setupError}</div>
+  {:else if profileLoading}
+    <div class="scene-status">Preparing your arrival…</div>
+  {/if}
+
+  {#if profile && !audioReady}
     <div class="audio-hint">Tap anywhere to begin soundscape</div>
   {/if}
-  {#if !sceneReady}
+  {#if profile && !sceneReady}
     <div class="scene-status">Entering the academy...</div>
   {/if}
 </div>
@@ -340,10 +468,14 @@
 <style>
   .stoa-app {
     position: relative;
-    width: 100%;
-    min-height: 100dvh;
-    background: #1a1917;
+    width: 100vw;
+    height: 100vh;
+    background: #030205;
     overflow: hidden;
+  }
+
+  .hud-layer {
+    animation: hud-fade 700ms ease both;
   }
 
   .audio-hint,
@@ -369,5 +501,16 @@
 
   .scene-status {
     bottom: 32px;
+  }
+
+  @keyframes hud-fade {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 </style>
