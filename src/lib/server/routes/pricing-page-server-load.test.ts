@@ -16,7 +16,7 @@ vi.mock('$env/dynamic/public', () => ({
   }
 }));
 
-import { load } from './+page.server';
+import { load } from '../../../routes/pricing/+page.server';
 
 describe('pricing page server load', () => {
   it('exposes pro monthly price ids with backward-compatible fallback', async () => {
@@ -24,10 +24,12 @@ describe('pricing page server load', () => {
     process.env.PADDLE_PRICE_PREMIUM_USD_PRODUCTION = 'pri_fallback_usd';
     delete process.env.PADDLE_PRICE_KEYS_PRO_MONTHLY_USD_PRODUCTION;
 
-    const data = await load({
+    const data = (await load({
       locals: { user: { uid: 'u1' } },
       url: new URL('https://example.com/pricing')
-    } as never);
+    } as never)) as {
+      proMonthlyPriceIds: { GBP: string | null; USD: string | null };
+    };
 
     expect(data.proMonthlyPriceIds.GBP).toBe('pri_pro_gbp');
     expect(data.proMonthlyPriceIds.USD).toBe('pri_fallback_usd');

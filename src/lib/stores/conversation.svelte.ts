@@ -72,6 +72,13 @@ interface CachedPassClaims {
   claims: Claim[];
 }
 
+function normalizeBillingTierValue(
+  value: 'free' | 'premium' | 'pro' | undefined
+): 'free' | 'premium' | undefined {
+  if (value === 'pro') return 'premium';
+  return value;
+}
+
 interface CachedPassRelations {
   pass: AnalysisPhase;
   relations: RelationBundle[];
@@ -757,7 +764,7 @@ function createConversationStore() {
                     user_links_count: event.user_links_count,
                     runtime_links_processed: event.runtime_links_processed,
                     nightly_queue_enqueued: event.nightly_queue_enqueued,
-                    billing_tier: event.billing_tier,
+                    billing_tier: normalizeBillingTierValue(event.billing_tier),
                     billing_status: event.billing_status,
                     billing_currency: event.billing_currency,
                     entitlement_month_key: event.entitlement_month_key,
@@ -794,7 +801,7 @@ function createConversationStore() {
                     user_links_count: event.user_links_count,
                     runtime_links_processed: event.runtime_links_processed,
                     nightly_queue_enqueued: event.nightly_queue_enqueued,
-                    billing_tier: event.billing_tier,
+                    billing_tier: normalizeBillingTierValue(event.billing_tier),
                     billing_status: event.billing_status,
                     billing_currency: event.billing_currency,
                     entitlement_month_key: event.entitlement_month_key,
