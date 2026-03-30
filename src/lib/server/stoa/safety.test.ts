@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest';
 import { buildCrisisSupportMessage, detectCrisisRisk, detectSuppressionMisuse } from './safety';
 
 describe('safety helpers', () => {

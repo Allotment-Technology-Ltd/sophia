@@ -14,6 +14,17 @@ type AuthLikeUser = {
   roles?: string[] | null;
 };
 
+function toOwnerRoleInput(
+  user: AuthLikeUser | null | undefined
+): { uid?: string; role?: string | null; roles?: string[] | null } | null | undefined {
+  if (!user) return user;
+  return {
+    uid: user.uid ?? undefined,
+    role: user.role,
+    roles: user.roles
+  };
+}
+
 function hasAnyProviderKey(keys: ProviderApiKeys): boolean {
   return Object.keys(keys).length > 0;
 }
@@ -51,7 +62,7 @@ export async function loadInquiryEffectiveProviderApiKeys(
   }
   if (hasAnyProviderKey(userKeys)) return userKeys;
 
-  if (!hasOwnerRole(user)) {
+  if (!hasOwnerRole(toOwnerRoleInput(user))) {
     return userKeys;
   }
 

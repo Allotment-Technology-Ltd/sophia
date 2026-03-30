@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest';
 import { detectStance } from './stance';
 
 describe('detectStance', () => {
