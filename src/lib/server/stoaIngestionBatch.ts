@@ -732,6 +732,13 @@ function normalizeRecordId(value: unknown): string | null {
 	return null;
 }
 
+function queueRecordIdPart(value: unknown): string | null {
+	const normalized = normalizeRecordId(value);
+	if (!normalized) return null;
+	const separator = normalized.indexOf(':');
+	return separator >= 0 ? normalized.slice(separator + 1) : normalized;
+}
+
 function parseQueueRows(rows: unknown): QueueRow[] {
 	if (!Array.isArray(rows)) return [];
 	return rows.filter((row): row is QueueRow => !!row && typeof row === 'object') as QueueRow[];
@@ -872,10 +879,12 @@ async function upsertQueueRowForStoa(decision: StoaLicenseDecision, actorUid: st
 	if (existing?.id) {
 		const rowId = normalizeRecordId(existing.id);
 		if (!rowId) throw new Error('Invalid queue row id');
+		const rowIdPart = queueRecordIdPart(rowId);
+		if (!rowIdPart) throw new Error('Invalid queue row id');
 		const nextStatus: QueueStatus =
 			existing.status === 'ingesting' || existing.status === 'queued' ? existing.status : initialStatus;
 		await dbQuery(
-			`UPDATE type::thing($id) MERGE {
+			`UPDATE type::record('link_ingestion_queue', $id_part) MERGE {
 				 status: $status,
 				 source_kinds: $source_kinds,
 				 pass_hints: $pass_hints,
@@ -888,7 +897,7 @@ async function upsertQueueRowForStoa(decision: StoaLicenseDecision, actorUid: st
 				 approved_at: if $status = 'approved' then time::now() else approved_at end
 			 }`,
 			{
-				id: rowId,
+				id_part: rowIdPart,
 				status: nextStatus,
 				source_kinds: mergeUnique(existing.source_kinds, ['stoa', 'stoa_batch']),
 				pass_hints: mergeUnique(existing.pass_hints, passHints),
@@ -1011,14 +1020,16 @@ async function saveBatchRun(batch: StoaBatchRunView): Promise<void> {
 }
 
 async function reserveQueueRow(queueRecordId: string): Promise<boolean> {
+	const idPart = queueRecordIdPart(queueRecordId);
+	if (!idPart) return false;
 	const result = await dbQuery<Array<{ id: string }>>(
-		`UPDATE type::thing($id) SET
+		`UPDATE type::record('link_ingestion_queue', $id_part) SET
 			 status = 'queued',
 			 updated_at = time::now(),
 			 last_error = NONE
 		 WHERE status = 'approved'
 		 RETURN AFTER`,
-		{ id: queueRecordId }
+		{ id_part: idPart }
 	);
 	return Array.isArray(result) && result.length > 0;
 }
@@ -1172,16 +1183,16 @@ export async function bulkSetQueueStatus(args: {
 }): Promise<{ updated: number }> {
 	let updated = 0;
 	for (const recordId of args.recordIds) {
-		const id = normalizeRecordId(recordId);
-		if (!id) continue;
+		const idPart = queueRecordIdPart(recordId);
+		if (!idPart) continue;
 		await dbQuery(
-			`UPDATE type::thing($id) MERGE {
+			`UPDATE type::record('link_ingestion_queue', $id_part) MERGE {
 				 status: $status,
 				 updated_at: time::now(),
 				 approved_at: if $status = 'approved' then time::now() else approved_at end,
 				 last_error: if $status = 'rejected' then $last_error else NONE end
 			 }`,
-			{ id, status: args.status, last_error: args.reason ?? 'manually_rejected' }
+			{ id_part: idPart, status: args.status, last_error: args.reason ?? 'manually_rejected' }
 		);
 		updated += 1;
 	}

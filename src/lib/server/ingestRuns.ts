@@ -343,25 +343,37 @@ type LinkQueuePromotionRow = {
   attempt_count?: number;
 };
 
+function queueRecordIdPart(recordId: string): string {
+  const trimmed = recordId.trim();
+  const separator = trimmed.indexOf(':');
+  return separator >= 0 ? trimmed.slice(separator + 1) : trimmed;
+}
+
 async function markLinkedQueueStatus(
   queueRecordId: string,
   status: 'queued' | 'approved' | 'ingesting' | 'ingested' | 'failed',
   opts?: { lastError?: string | null; ingested?: boolean; attemptCount?: number }
 ): Promise<void> {
+  const idPart = queueRecordIdPart(queueRecordId);
+  const hasAttemptCount = typeof opts?.attemptCount === 'number' && Number.isFinite(opts.attemptCount);
+  const attemptCount = hasAttemptCount ? Math.max(0, Math.trunc(opts!.attemptCount!)) : 0;
+  const hasLastError = typeof opts?.lastError === 'string' && opts.lastError.length > 0;
   await dbQuery(
-    `UPDATE type::thing($id) MERGE {
+    `UPDATE type::record('link_ingestion_queue', $id_part) MERGE {
        status: $status,
        updated_at: time::now(),
-       attempt_count: $attempt_count,
-       last_error: $last_error,
+       attempt_count: if $has_attempt_count then $attempt_count else attempt_count end,
+       last_error: if $has_last_error then $last_error else NONE end,
        ingested_at: if $mark_ingested then time::now() else ingested_at end
      }
      RETURN AFTER`,
     {
-      id: queueRecordId,
+      id_part: idPart,
       status,
-      attempt_count: opts?.attemptCount ?? null,
-      last_error: opts?.lastError ?? null,
+      has_attempt_count: hasAttemptCount,
+      attempt_count: attemptCount,
+      has_last_error: hasLastError,
+      last_error: hasLastError ? opts?.lastError : 'none',
       mark_ingested: opts?.ingested === true
     }
   );
@@ -514,14 +526,15 @@ class IngestRunManager extends EventEmitter {
 
       for (const row of rows) {
         if (!row?.id || !row?.canonical_url) continue;
+        const idPart = queueRecordIdPart(row.id);
         const reserve = await dbQuery<Array<{ id: string }>>(
-          `UPDATE type::thing($id) SET
+          `UPDATE type::record('link_ingestion_queue', $id_part) SET
              status = 'queued',
              updated_at = time::now(),
              last_error = NONE
            WHERE status = 'approved'
            RETURN AFTER`,
-          { id: row.id }
+          { id_part: idPart }
         );
         if (!Array.isArray(reserve) || reserve.length === 0) continue;
 
