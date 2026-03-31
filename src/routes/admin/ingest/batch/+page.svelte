@@ -61,7 +61,7 @@
 		currentStageKey: string | null;
 		currentAction: string | null;
 		lastFailureStageKey: string | null;
-	resumable: boolean;
+		resumable: boolean;
 		error: string | null;
 		issueCount: number;
 		processAlive: boolean;
@@ -307,10 +307,10 @@
 		return `${min}m ${rem}s`;
 	}
 
-function itemResumeReadiness(item: BatchItem, snapshot: ChildRunStatusSnapshot | undefined): 'checkpoint' | 'fallback' | null {
-	if (item.status !== 'cancelled' && item.status !== 'error') return null;
-	return snapshot?.resumable === true ? 'checkpoint' : 'fallback';
-}
+	function itemResumeReadiness(item: BatchItem, snapshot: ChildRunStatusSnapshot | undefined): 'checkpoint' | 'fallback' | null {
+		if (item.status !== 'cancelled' && item.status !== 'error') return null;
+		return snapshot?.resumable === true ? 'checkpoint' : 'fallback';
+	}
 
 	function openChildRunInExpand(runId: string): void {
 		const params = new URLSearchParams();

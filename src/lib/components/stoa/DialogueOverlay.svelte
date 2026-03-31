@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+  import { fetchWithAuth } from '$lib/stoa/fetchWithAuth';
 
   import type { ReasoningAssessment, StanceType } from '$lib/types/stoa';
   import { stoaSessionStore } from '$lib/stores/stoa-session.svelte';
@@ -55,6 +56,7 @@
   let history = $state<ConversationTurn[]>([]);
   let latestAssessment = $state<ReasoningAssessment | null>(null);
   let composerElement = $state<HTMLTextAreaElement | null>(null);
+  let renderedText = $derived.by(() => normalizeAgentText(displayText));
 
   function isStanceType(value: unknown): value is StanceType {
     return (
@@ -94,10 +96,34 @@
   }
 
   function toCitations(sourceClaims: ClaimReference[]): Citation[] {
-    return sourceClaims.map((claim) => ({
-      id: claim.claimId,
-      label: `${claim.sourceAuthor} — ${claim.sourceWork}`
-    }));
+    return sourceClaims
+      .map((claim) => {
+        const author = normalizeCitationPart(claim.sourceAuthor);
+        const work = normalizeCitationPart(claim.sourceWork);
+        if (!author && !work) return null;
+        const label = author && work ? `${author} — ${work}` : (author ?? work ?? '');
+        return {
+          id: claim.claimId,
+          label
+        };
+      })
+      .filter((citation): citation is Citation => Boolean(citation));
+  }
+
+  function normalizeCitationPart(value: string | null | undefined): string | null {
+    const normalized = (value ?? '').trim();
+    if (!normalized) return null;
+    const lower = normalized.toLowerCase();
+    if (lower === 'unknown' || lower === 'unknown source') return null;
+    return normalized;
+  }
+
+  function normalizeAgentText(value: string): string {
+    return value
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/__(.*?)__/g, '$1')
+      .replace(/^\s*[*-]\s+/gm, '• ')
+      .trim();
   }
 
   async function send(): Promise<void> {
@@ -124,7 +150,7 @@
     let resolvedClaims: ClaimReference[] = [];
 
     try {
-      const response = await fetch('/api/stoa/dialogue', {
+      const response = await fetchWithAuth('/api/stoa/dialogue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -272,7 +298,7 @@
     <span class="stance">{stance.replace('_', ' ')}</span>
   </div>
 
-  <p class="stoa-words">{displayText || 'Speak when ready. I will respond in measured company.'}</p>
+  <p class="stoa-words">{renderedText || 'Speak when ready. I will respond in measured company.'}</p>
 
   {#if citations.length > 0}
     <ol class="citations" aria-label="Source citations">
@@ -304,7 +330,7 @@
     left: 50%;
     bottom: 120px;
     transform: translateX(-50%);
-    width: min(60vw, 860px);
+    width: min(64vw, 900px);
     border-radius: 12px;
     border: 1px solid rgba(180, 150, 100, 0.3);
     background: rgba(26, 25, 23, 0.85);
@@ -334,10 +360,10 @@
   .stoa-words {
     margin: 0;
     color: rgba(244, 238, 224, 0.95);
-    font-family: var(--font-display);
-    font-size: 18px;
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-size: clamp(19px, 2.1vw, 28px);
     font-style: italic;
-    line-height: 1.7;
+    line-height: 1.52;
     min-height: 88px;
     white-space: pre-wrap;
   }
@@ -354,20 +380,20 @@
 
   .composer {
     display: grid;
-    gap: 12px;
+    gap: 16px;
   }
 
   textarea {
     width: 100%;
-    min-height: 44px;
+    min-height: 84px;
     max-height: 180px;
     resize: vertical;
     border-radius: 10px;
     border: 1px solid rgba(191, 167, 126, 0.36);
-    background: rgba(40, 35, 29, 0.62);
+    background: rgba(33, 29, 25, 0.78);
     padding: 12px 16px;
-    font-size: 15px;
-    line-height: 1.5;
+    font-size: 17px;
+    line-height: 1.6;
     color: rgba(241, 235, 225, 0.96);
   }
 
@@ -377,8 +403,8 @@
 
   button {
     justify-self: end;
-    min-height: 40px;
-    padding: 8px 20px;
+    min-height: 44px;
+    padding: 12px 20px;
     border-radius: 10px;
     border: 1px solid rgba(185, 145, 91, 0.5);
     background: rgba(124, 84, 51, 0.26);
@@ -393,6 +419,12 @@
   button:disabled {
     opacity: 0.56;
     cursor: not-allowed;
+  }
+
+  button:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid rgba(212, 176, 122, 0.85);
+    outline-offset: 3px;
   }
 
   @media (max-width: 1024px) {

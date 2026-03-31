@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import { fetchWithAuth } from '$lib/stoa/fetchWithAuth';
   import type { ArrivalReason, StartingPath, StoaProfile } from '$lib/types/stoa';
   import StoaReasonScreen from './StoaReasonScreen.svelte';
   import StoaStruggleScreen from './StoaStruggleScreen.svelte';
@@ -11,6 +12,8 @@
   let arrivalReason = $state<ArrivalReason | null>(null);
   let startingPath = $state<StartingPath>('colonnade');
   let errorText = $state<string | null>(null);
+  let authRequired = $state(false);
+  let struggleScreenVersion = $state(0);
 
   async function crossfade(toStep: 'reason' | 'struggle' | 'complete'): Promise<void> {
     transitionOpacity = 1;
@@ -23,14 +26,17 @@
   async function handleReasonComplete(event: CustomEvent<{ reason: ArrivalReason; startingPath: StartingPath }>) {
     arrivalReason = event.detail.reason;
     startingPath = event.detail.startingPath;
+    authRequired = false;
+    errorText = null;
     await crossfade('struggle');
   }
 
   async function handleStruggleComplete(event: CustomEvent<{ struggle: string | null }>) {
     if (!arrivalReason) return;
     errorText = null;
+    authRequired = false;
     try {
-      const response = await fetch('/api/stoa/profile', {
+      const response = await fetchWithAuth('/api/stoa/profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -41,7 +47,9 @@
       });
       if (!response.ok) {
         if (response.status === 401) {
-          errorText = 'Sign in to save your Stoa profile and continue.';
+          authRequired = true;
+          errorText = 'Sign in is required to continue your STOA session.';
+          struggleScreenVersion += 1;
           return;
         }
         throw new Error('Profile setup request failed');
@@ -54,6 +62,7 @@
       dispatch('setupComplete', { profile: payload.profile });
     } catch {
       errorText = 'Unable to complete setup. Please try again.';
+      struggleScreenVersion += 1;
     }
   }
 </script>
@@ -62,13 +71,18 @@
   {#if step === 'reason'}
     <StoaReasonScreen on:complete={handleReasonComplete} />
   {:else if step === 'struggle'}
-    <StoaStruggleScreen {startingPath} on:complete={handleStruggleComplete} />
+    {#key struggleScreenVersion}
+      <StoaStruggleScreen {startingPath} on:complete={handleStruggleComplete} />
+    {/key}
   {/if}
 
   <div class="transition" style:opacity={transitionOpacity} aria-hidden="true"></div>
 
   {#if errorText}
     <div class="error">{errorText}</div>
+  {/if}
+  {#if authRequired}
+    <a class="auth-cta" href="/auth?next=/stoa">Sign in with Google</a>
   {/if}
 </div>
 
@@ -91,7 +105,7 @@
 
   .error {
     position: absolute;
-    bottom: 24px;
+    bottom: 84px;
     left: 50%;
     transform: translateX(-50%);
     color: #e8dcc8;
@@ -99,5 +113,45 @@
     font-style: italic;
     font-size: 20px;
     z-index: 30;
+    text-align: center;
+    max-width: min(90vw, 720px);
+    padding: 0 16px;
+  }
+
+  .auth-cta {
+    position: absolute;
+    left: 50%;
+    bottom: 28px;
+    transform: translateX(-50%);
+    z-index: 31;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 12px 20px;
+    border-radius: 999px;
+    border: 1px solid rgba(232, 220, 200, 0.5);
+    background: rgba(122, 92, 54, 0.32);
+    color: #e8dcc8;
+    text-decoration: none;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    transition:
+      background 180ms ease,
+      border-color 180ms ease,
+      transform 180ms ease;
+  }
+
+  .auth-cta:hover {
+    background: rgba(122, 92, 54, 0.52);
+    border-color: rgba(232, 220, 200, 0.75);
+    transform: translate(-50%, -1px);
+  }
+
+  .auth-cta:focus-visible {
+    outline: 2px solid rgba(232, 220, 200, 0.92);
+    outline-offset: 4px;
   }
 </style>
