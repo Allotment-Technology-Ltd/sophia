@@ -292,6 +292,12 @@
 		window.location.href = `/admin/ingest?${params.toString()}`;
 	}
 
+	function viewChildRunReport(runId: string): void {
+		const params = new URLSearchParams();
+		params.set('reportRunId', runId);
+		window.location.href = `/admin/ingest?${params.toString()}`;
+	}
+
 	async function refreshChildRunSnapshots(): Promise<void> {
 		try {
 			if (!activeRun) return;
@@ -312,17 +318,48 @@
 					try {
 						const res = await fetch(`/api/admin/ingest/run/${id}/status`, { headers });
 						const body = await res.json().catch(() => ({}));
-						if (!res.ok) {
+						if (res.ok) {
 							return [
 								id,
 								{
 									runId: id,
-									status: 'error',
-									currentStageKey: null,
-									currentAction: null,
-									lastFailureStageKey: null,
-									error: typeof body?.error === 'string' ? body.error : 'Failed to load child run status',
-									issueCount: 0,
+									status: typeof body?.status === 'string' ? body.status : 'running',
+									currentStageKey: typeof body?.currentStageKey === 'string' ? body.currentStageKey : null,
+									currentAction: typeof body?.currentAction === 'string' ? body.currentAction : null,
+									lastFailureStageKey:
+										typeof body?.lastFailureStageKey === 'string' ? body.lastFailureStageKey : null,
+									error: typeof body?.error === 'string' ? body.error : null,
+									issueCount: typeof body?.issueCount === 'number' ? body.issueCount : 0,
+									processAlive: Boolean(body?.processAlive),
+									idleForMs: typeof body?.idleForMs === 'number' ? body.idleForMs : null,
+									stages:
+										body?.stages && typeof body.stages === 'object'
+											? (body.stages as ChildRunStatusSnapshot['stages'])
+											: {}
+								} satisfies ChildRunStatusSnapshot
+							] as const;
+						}
+						// Not in-memory on this instance; fall back to durable Firestore/Neon report.
+						const reportRes = await fetch(`/api/admin/ingest/reports/${id}`, { headers });
+						const reportBody = await reportRes.json().catch(() => ({}));
+						if (reportRes.ok) {
+							const reportStatus = typeof reportBody?.status === 'string' ? reportBody.status : 'done';
+							const lastFailureStageKey =
+								typeof reportBody?.lastFailureStageKey === 'string' ? reportBody.lastFailureStageKey : null;
+							const terminalError =
+								typeof reportBody?.terminalError === 'string' ? reportBody.terminalError : null;
+							const completedStage =
+								reportStatus === 'done' ? 'store' : lastFailureStageKey ?? null;
+							return [
+								id,
+								{
+									runId: id,
+									status: reportStatus,
+									currentStageKey: completedStage,
+									currentAction: reportStatus === 'done' ? 'Completed (durable report)' : 'Completed with issues (durable report)',
+									lastFailureStageKey,
+									error: terminalError,
+									issueCount: typeof reportBody?.issueCount === 'number' ? reportBody.issueCount : 0,
 									processAlive: false,
 									idleForMs: null,
 									stages: {}
@@ -333,19 +370,20 @@
 							id,
 							{
 								runId: id,
-								status: typeof body?.status === 'string' ? body.status : 'running',
-								currentStageKey: typeof body?.currentStageKey === 'string' ? body.currentStageKey : null,
-								currentAction: typeof body?.currentAction === 'string' ? body.currentAction : null,
-								lastFailureStageKey:
-									typeof body?.lastFailureStageKey === 'string' ? body.lastFailureStageKey : null,
-								error: typeof body?.error === 'string' ? body.error : null,
-								issueCount: typeof body?.issueCount === 'number' ? body.issueCount : 0,
-								processAlive: Boolean(body?.processAlive),
-								idleForMs: typeof body?.idleForMs === 'number' ? body.idleForMs : null,
-								stages:
-									body?.stages && typeof body.stages === 'object'
-										? (body.stages as ChildRunStatusSnapshot['stages'])
-										: {}
+								status: 'error',
+								currentStageKey: null,
+								currentAction: null,
+								lastFailureStageKey: null,
+								error:
+									typeof body?.error === 'string'
+										? body.error
+										: typeof reportBody?.error === 'string'
+											? reportBody.error
+											: 'Failed to load child run status',
+								issueCount: 0,
+								processAlive: false,
+								idleForMs: null,
+								stages: {}
 							} satisfies ChildRunStatusSnapshot
 						] as const;
 					} catch (error) {
@@ -487,6 +525,17 @@
 	onMount(async () => {
 		try {
 			await Promise.all([loadPacks(), loadWizardOptions(), loadQueue(), loadRuns()]);
+			const params = new URLSearchParams(window.location.search);
+			const initialRunId = params.get('runId')?.trim() ?? '';
+			if (initialRunId) {
+				const existing = batchRuns.find((run) => run.id === initialRunId) ?? null;
+				if (existing) {
+					selectRun(existing);
+				} else {
+					activeRunId = initialRunId;
+					startPolling();
+				}
+			}
 		} catch (error) {
 			runError = error instanceof Error ? error.message : 'Failed to initialize';
 		}
@@ -703,7 +752,10 @@
 										<td class="px-2 py-2">
 											{#if childRunId}
 												<div>{childRunId}</div>
-												<button type="button" class="mt-1 text-[0.65rem] text-sophia-dark-sage underline" onclick={() => openChildRunInExpand(childRunId)}>Open in Expand</button>
+												<div class="mt-1 flex flex-wrap gap-2">
+													<button type="button" class="text-[0.65rem] text-sophia-dark-sage underline" onclick={() => openChildRunInExpand(childRunId)}>Open in Expand</button>
+													<button type="button" class="text-[0.65rem] text-sophia-dark-muted underline" onclick={() => viewChildRunReport(childRunId)}>View report</button>
+												</div>
 											{:else}
 												—
 											{/if}

@@ -951,6 +951,10 @@ class IngestRunManager extends EventEmitter {
       runId,
       '[RESUME] Restarting ingest.ts from checkpoint. The pipeline will continue from the last completed stage.'
     );
+    if (state.payload.queue_record_id) {
+      // Keep queue state aligned with checkpoint-resumed runs so operators can see retries in progress.
+      void markLinkedQueueStatus(state.payload.queue_record_id, 'ingesting');
+    }
     void this.execStartIngestChild(runId, state.payload, state.sourceFilePath, {
       forSyncOnly: false,
       resumeFromFailure: true

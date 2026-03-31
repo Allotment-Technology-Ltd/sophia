@@ -24,8 +24,27 @@
     lastFailureStageKey: string | null;
   };
 
+  type BatchRunRow = {
+    id: string;
+    status: 'running' | 'paused' | 'done' | 'error' | 'cancelled';
+    createdAtMs: number;
+    updatedAtMs: number;
+    sourcePackId: string | null;
+    requestedByEmail: string | null;
+    summary: {
+      total: number;
+      pending: number;
+      running: number;
+      done: number;
+      error: number;
+      cancelled: number;
+      skipped: number;
+    };
+  };
+
   let runs = $state<RunRow[]>([]);
   let recentReports = $state<ReportRow[]>([]);
+  let batchRuns = $state<BatchRunRow[]>([]);
   let loadError = $state('');
   let loading = $state(true);
 
@@ -46,10 +65,12 @@
       }
       runs = Array.isArray(body?.runs) ? (body.runs as RunRow[]) : [];
       recentReports = Array.isArray(body?.recentReports) ? (body.recentReports as ReportRow[]) : [];
+      batchRuns = Array.isArray(body?.batchRuns) ? (body.batchRuns as BatchRunRow[]) : [];
     } catch (e) {
       loadError = e instanceof Error ? e.message : 'Failed to load runs.';
       runs = [];
       recentReports = [];
+      batchRuns = [];
     } finally {
       loading = false;
     }
@@ -66,6 +87,12 @@
     const params = new URLSearchParams();
     params.set('reportRunId', runId);
     window.location.href = `/admin/ingest?${params.toString()}`;
+  }
+
+  function openBatchRun(runId: string): void {
+    const params = new URLSearchParams();
+    params.set('runId', runId);
+    window.location.href = `/admin/ingest/batch?${params.toString()}`;
   }
 
   async function copyRunId(runId: string): Promise<void> {
@@ -216,6 +243,45 @@
                         type="button"
                         class="rounded border border-sophia-dark-border px-3 py-1.5 font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-sage hover:bg-sophia-dark-surface-raised"
                         onclick={() => openRun(run.id)}>Open</button
+                      >
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+
+        {#if !loadError && batchRuns.length > 0}
+          <h2 class="mt-8 font-mono text-[0.65rem] uppercase tracking-[0.12em] text-sophia-dark-dim">
+            STOA batch runs
+          </h2>
+          <div class="mt-2 overflow-auto rounded border border-sophia-dark-border">
+            <table class="min-w-full text-left font-mono text-xs text-sophia-dark-muted">
+              <thead class="border-b border-sophia-dark-border bg-sophia-dark-bg/50 text-sophia-dark-dim">
+                <tr>
+                  <th class="px-3 py-2 font-medium uppercase tracking-[0.08em]">Status</th>
+                  <th class="px-3 py-2 font-medium uppercase tracking-[0.08em]">Started</th>
+                  <th class="px-3 py-2 font-medium uppercase tracking-[0.08em]">Summary</th>
+                  <th class="px-3 py-2 font-medium uppercase tracking-[0.08em]">Batch ID</th>
+                  <th class="px-3 py-2 font-medium uppercase tracking-[0.08em]"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each batchRuns as batch}
+                  <tr class="border-b border-sophia-dark-border/60 last:border-b-0">
+                    <td class="px-3 py-2 align-top text-sophia-dark-text">{batch.status}</td>
+                    <td class="px-3 py-2 align-top text-sophia-dark-text">{formatWhen(batch.createdAtMs)}</td>
+                    <td class="px-3 py-2 align-top text-sophia-dark-dim">
+                      t:{batch.summary.total} p:{batch.summary.pending} r:{batch.summary.running} d:{batch.summary.done}
+                      e:{batch.summary.error} c:{batch.summary.cancelled}
+                    </td>
+                    <td class="px-3 py-2 align-top font-mono text-[0.65rem] text-sophia-dark-dim">{batch.id}</td>
+                    <td class="px-3 py-2 align-top text-right">
+                      <button
+                        type="button"
+                        class="rounded border border-sophia-dark-border px-3 py-1.5 font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-sage hover:bg-sophia-dark-surface-raised"
+                        onclick={() => openBatchRun(batch.id)}>Open</button
                       >
                     </td>
                   </tr>
