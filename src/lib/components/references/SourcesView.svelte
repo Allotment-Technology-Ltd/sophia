@@ -222,10 +222,10 @@
   }
 
   .empty-text {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-style: italic;
     font-size: var(--text-body);
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-align: center;
     margin: 0;
     max-width: 280px;
@@ -258,7 +258,7 @@
   .section-count {
     font-family: var(--font-ui);
     font-size: var(--text-meta);
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   /* Cited works (from LLM claims) */
@@ -303,7 +303,7 @@
   }
 
   .cited-title {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 0.85rem;
     color: var(--color-text);
     overflow: hidden;
@@ -315,7 +315,7 @@
   .cited-tradition {
     font-family: var(--font-ui);
     font-size: var(--text-meta);
-    color: var(--color-dim);
+    color: var(--color-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -367,7 +367,7 @@
   }
 
   .kb-title {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 0.85rem;
     color: var(--color-text);
     overflow: hidden;
@@ -379,7 +379,7 @@
   .kb-author {
     font-family: var(--font-ui);
     font-size: var(--text-meta);
-    color: var(--color-dim);
+    color: var(--color-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -445,7 +445,7 @@
   .source-count {
     font-family: var(--font-ui);
     font-size: var(--text-meta);
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   /* Individual web source cards */
@@ -464,7 +464,7 @@
 
   .source-card:hover {
     background: var(--color-surface-raised);
-    border-color: var(--color-dim);
+    border-color: var(--color-muted);
   }
 
   .source-favicon {
@@ -491,7 +491,7 @@
   }
 
   .source-title {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 0.85rem;
     color: var(--color-text);
     overflow: hidden;
@@ -503,7 +503,7 @@
   .source-url {
     font-family: var(--font-ui);
     font-size: var(--text-meta);
-    color: var(--color-dim);
+    color: var(--color-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -514,7 +514,7 @@
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    color: var(--color-dim);
+    color: var(--color-muted);
     transition: color var(--transition-fast);
   }
 

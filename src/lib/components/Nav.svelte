@@ -52,7 +52,7 @@
   }
 
   .brand-name {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-weight: 500;
     font-size: 1.1rem;
     letter-spacing: 0.08em;

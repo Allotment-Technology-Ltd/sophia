@@ -1007,7 +1007,7 @@
     font-size: var(--text-label);
     letter-spacing: 0.18em;
     text-transform: uppercase;
-    color: var(--color-dim);
+    color: var(--color-muted);
     margin: 0 0 var(--space-2);
     padding-top: var(--space-4);
   }
@@ -1138,7 +1138,7 @@
     gap: 4px;
     font-family: var(--font-ui);
     font-size: 0.66rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .byok-provider-actions {
@@ -1195,7 +1195,7 @@
     width: 100%;
     margin: 2px 0 4px;
     font-size: 0.72rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     line-height: 1.35;
   }
 
@@ -1359,7 +1359,7 @@
   }
 
   .setting-name {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: var(--text-body);
     color: var(--color-text);
   }
@@ -1367,7 +1367,7 @@
   .setting-desc {
     font-family: var(--font-ui);
     font-size: var(--text-meta);
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   /* Toggle switch */

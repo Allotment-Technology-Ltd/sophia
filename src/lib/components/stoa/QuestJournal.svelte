@@ -288,7 +288,7 @@
 
 	.journal-title {
 		margin: 0;
-		font-family: var(--font-display);
+		font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
 		font-size: 22px;
 		font-weight: 500;
 		color: rgba(239, 229, 208, 0.95);

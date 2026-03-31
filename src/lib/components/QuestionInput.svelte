@@ -49,7 +49,7 @@
     border: 1px solid var(--color-border);
     border-radius: 3px;
     padding: 16px 20px;
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-size: 1rem;
     font-weight: 400;
     color: var(--color-text);

@@ -71,7 +71,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 12px 16px;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 0.9rem;
     font-weight: 400;
     color: var(--color-muted);
@@ -122,7 +122,7 @@
   .check {
     font-family: var(--font-ui);
     font-size: 0.6rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     margin-left: var(--space-2);
   }
 

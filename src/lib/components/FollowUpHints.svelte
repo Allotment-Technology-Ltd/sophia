@@ -37,7 +37,7 @@
     font-size: 0.6rem;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .hints-list {
@@ -57,7 +57,7 @@
     border-radius: 2px;
     cursor: pointer;
     text-align: left;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 0.9rem;
     font-style: italic;
     font-weight: 400;
@@ -86,7 +86,7 @@
     font-family: var(--font-ui);
     font-style: normal;
     font-size: 0.75rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     flex-shrink: 0;
     transition: color var(--transition-fast);
   }

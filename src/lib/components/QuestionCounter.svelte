@@ -82,7 +82,7 @@
     font-size: 0.62rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   @keyframes dotFill {

@@ -100,7 +100,7 @@
   .chip small {
     font-family: var(--font-ui);
     font-size: 0.68rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .chip.active {

@@ -70,7 +70,7 @@
     gap: 6px;
     font-family: var(--font-ui);
     font-size: 0.68rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     letter-spacing: 0.05em;
     text-transform: uppercase;
   }

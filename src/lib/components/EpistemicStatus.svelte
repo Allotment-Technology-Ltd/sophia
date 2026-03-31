@@ -29,7 +29,7 @@
   }
 
   .content {
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-style: italic;
     font-size: 1rem;
     color: var(--color-muted);

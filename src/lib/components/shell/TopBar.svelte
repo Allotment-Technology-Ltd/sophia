@@ -315,10 +315,10 @@
   }
 
   .context-query {
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-style: italic;
     font-size: 0.85rem;
-    color: var(--color-muted);
+    color: var(--color-text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -476,7 +476,7 @@
   }
 
   .user-name {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 0.9rem;
     font-weight: 400;
     color: var(--color-text);

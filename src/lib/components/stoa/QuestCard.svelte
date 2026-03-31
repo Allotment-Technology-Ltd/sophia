@@ -117,7 +117,7 @@
 
 	.quest-title {
 		margin: 0;
-		font-family: var(--font-display);
+		font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
 		font-size: 16px;
 		font-weight: 500;
 		color: rgba(239, 229, 208, 0.95);
@@ -167,7 +167,7 @@
 		margin: 0;
 		padding: 10px 14px;
 		border-left: 2px solid rgba(140, 130, 120, 0.5);
-		font-family: var(--font-display);
+		font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
 		font-size: 14px;
 		font-style: italic;
 		line-height: 1.5;

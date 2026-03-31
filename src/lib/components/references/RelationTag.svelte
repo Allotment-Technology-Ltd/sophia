@@ -47,7 +47,7 @@
   }
 
   .depends-on {
-    color: var(--color-dim);
+    color: var(--color-muted);
     background: var(--color-surface-raised);
   }
 

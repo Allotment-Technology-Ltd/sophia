@@ -93,7 +93,7 @@
   }
 
   .title {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 20px;
     line-height: 1.2;
     color: rgba(247, 238, 223, 0.94);

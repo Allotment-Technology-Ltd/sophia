@@ -81,7 +81,7 @@
   }
 
   .brand span {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1.1rem;
     letter-spacing: 0.08em;
     color: var(--color-text);

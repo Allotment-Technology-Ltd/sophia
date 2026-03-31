@@ -124,7 +124,7 @@
     margin: 4px 0 0;
     font-family: var(--font-ui);
     font-size: 0.75rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .toggle {

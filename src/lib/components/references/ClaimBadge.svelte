@@ -51,7 +51,7 @@
 
   .definition {
     background: transparent;
-    color: var(--color-dim);
+    color: var(--color-muted);
     border-color: var(--color-border);
   }
 

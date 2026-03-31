@@ -196,12 +196,12 @@
 
   .restormel-model-summary {
     font-size: 0.72rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .restormel-model-state {
     font-size: 0.72rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .restormel-model-state.warning {

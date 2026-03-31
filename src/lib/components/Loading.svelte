@@ -69,7 +69,7 @@
 
   .status-text {
     margin-top: 32px;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-style: italic;
     font-size: 1rem;
     color: var(--color-muted);
@@ -88,7 +88,7 @@
     font-family: var(--font-ui);
     font-size: 0.7rem;
     letter-spacing: 0.04em;
-    color: var(--color-dim);
+    color: var(--color-muted);
     border: 1px solid var(--color-border);
     background: var(--color-surface);
     border-radius: 999px;
@@ -116,7 +116,7 @@
     font-family: var(--font-ui);
     font-size: 0.75rem;
     letter-spacing: 0.02em;
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-align: center;
   }
 </style>

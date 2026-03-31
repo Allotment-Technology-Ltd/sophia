@@ -79,10 +79,10 @@
   }
 
   .claims-notice {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 0.8rem;
     line-height: 1.55;
-    color: var(--color-dim);
+    color: var(--color-muted);
     padding: var(--space-2) var(--space-3);
     border: 1px solid var(--color-border);
     border-radius: 2px;
@@ -104,12 +104,12 @@
   }
 
   .empty-text {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-style: normal;
     font-size: var(--text-body);
     line-height: var(--leading-body);
     letter-spacing: var(--tracking-body);
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-align: center;
     margin: 0;
   }
@@ -125,7 +125,7 @@
     font-size: var(--text-label);
     letter-spacing: 0.18em;
     text-transform: uppercase;
-    color: var(--color-dim);
+    color: var(--color-muted);
     margin: 0;
   }
 

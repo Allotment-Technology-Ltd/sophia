@@ -52,7 +52,7 @@
     font-size: var(--text-label);
     letter-spacing: 0.10em;
     text-transform: uppercase;
-    color: var(--color-dim);
+    color: var(--color-muted);
     transition: color var(--transition-base), border-color var(--transition-base);
   }
 

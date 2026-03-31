@@ -281,7 +281,7 @@
   .stoa-words {
     margin: 0;
     color: rgba(244, 238, 224, 0.95);
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-size: 18px;
     font-style: italic;
     line-height: 1.7;

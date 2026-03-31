@@ -39,7 +39,7 @@
   }
 
   .claim-text {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-weight: 400;
     font-size: var(--text-body);
     line-height: var(--leading-body);

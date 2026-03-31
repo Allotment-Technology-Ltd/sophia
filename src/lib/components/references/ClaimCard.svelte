@@ -143,7 +143,7 @@
   .source-line {
     font-family: var(--font-ui);
     font-size: var(--text-meta);
-    color: var(--color-dim);
+    color: var(--color-muted);
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -185,7 +185,7 @@
   }
 
   .card-body {
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-weight: 400;
     font-size: var(--text-body);
     line-height: var(--leading-body);
@@ -205,11 +205,11 @@
   }
 
   .detail-text {
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-size: 0.95rem;
-    line-height: 1.6;
+    line-height: 1.65;
     letter-spacing: var(--tracking-body);
-    color: var(--color-muted);
+    color: var(--color-text);
     margin: 0 0 var(--space-2);
   }
 
@@ -223,7 +223,7 @@
   .detail-source {
     font-family: var(--font-ui);
     font-size: var(--text-meta);
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .detail-source-link {

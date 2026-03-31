@@ -52,7 +52,7 @@
   }
 
   .label {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-style: italic;
     font-size: 1rem;
     color: var(--color-muted);
@@ -65,7 +65,7 @@
     border: 1px solid var(--color-border);
     border-radius: 3px;
     padding: 12px 16px;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1rem;
     font-weight: 400;
     color: var(--color-text);
@@ -76,7 +76,7 @@
   }
 
   .textarea::placeholder {
-    color: var(--color-dim);
+    color: var(--color-muted);
     font-style: italic;
   }
 

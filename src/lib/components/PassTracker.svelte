@@ -117,7 +117,7 @@
     font-size: 0.6rem;
     letter-spacing: 0.10em;
     text-transform: uppercase;
-    color: var(--color-dim);
+    color: var(--color-muted);
     white-space: nowrap;
     transition: color var(--transition-fast);
   }
@@ -133,7 +133,7 @@
   .pass-status {
     font-family: var(--font-ui);
     font-size: 0.55rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     white-space: nowrap;
     transition: color var(--transition-fast);
   }
@@ -143,7 +143,7 @@
   }
 
   .pass-node.complete .pass-status {
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   @keyframes nodeEnter {

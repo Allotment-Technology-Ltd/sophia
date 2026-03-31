@@ -431,7 +431,7 @@
     font-size: 0.62rem;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: var(--color-dim);
+    color: var(--color-muted);
     margin: 0;
     cursor: pointer;
     animation: fadeInUp 0.6s 0.5s ease both;

@@ -99,7 +99,7 @@
     text-transform: none;
     letter-spacing: 0;
     font-size: 0.72rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   @media (max-width: 720px) {

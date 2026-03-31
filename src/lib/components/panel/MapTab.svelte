@@ -218,7 +218,7 @@
 
   .map-tab-header h2 {
     margin: 0;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1.45rem;
   }
 

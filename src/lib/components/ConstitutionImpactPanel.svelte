@@ -64,7 +64,7 @@
     margin: 4px 0 0;
     font-family: var(--font-ui);
     font-size: 0.74rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .rows {

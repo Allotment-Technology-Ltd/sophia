@@ -34,7 +34,7 @@
   .btn-primary {
     background: var(--color-sage);
     color: var(--color-bg);
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1.05rem;
     font-weight: 400;
     padding: 12px 28px;
@@ -75,7 +75,7 @@
     background: none;
     border: none;
     color: var(--color-blue);
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1rem;
     padding: 0;
     text-decoration: underline;
