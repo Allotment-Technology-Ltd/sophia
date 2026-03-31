@@ -48,6 +48,7 @@
   let currentStance = $state<StanceType>('hold');
   let unlockedThinkers = $state<string[]>(['marcus']);
   let audioReady = $state(false);
+  let syncedZone: StoaZone | null = null;
   let sceneReady = $state(false);
   let hasInitializedAudio = $state(false);
   let questJournalOpen = $state(false);
@@ -121,11 +122,28 @@
     return 'colonnade';
   }
 
+  async function fetchWithTimeout(input: RequestInfo | URL, timeoutMs = 12000): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(input, { signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function bootstrapProfile(): Promise<void> {
     profileLoading = true;
     setupError = null;
     try {
-      const response = await fetch('/api/stoa/profile');
+      const response = await fetchWithTimeout('/api/stoa/profile');
+      if (response.status === 401) {
+        isNewStudent = true;
+        isReturningStudent = false;
+        profile = null;
+        returningLines = [];
+        return;
+      }
       if (!response.ok) {
         throw new Error('Failed to load profile');
       }
@@ -153,8 +171,11 @@
           }
         }
       }
-    } catch {
-      setupError = 'Unable to load profile.';
+    } catch (error) {
+      setupError =
+        error instanceof Error && error.name === 'AbortError'
+          ? 'Profile load timed out. Please refresh to try again.'
+          : 'Unable to load profile.';
     } finally {
       profileLoading = false;
     }
@@ -378,8 +399,14 @@
   });
 
   $effect(() => {
-    stoaSessionStore.setZone(currentZone);
-    if (audioReady) audioEngine.setZone(currentZone);
+    const zone = currentZone;
+    if (syncedZone !== zone) {
+      syncedZone = zone;
+      stoaSessionStore.setZone(zone);
+    }
+    if (audioReady) {
+      audioEngine.setZone(zone);
+    }
   });
 
   onDestroy(() => {
