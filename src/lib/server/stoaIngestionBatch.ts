@@ -2,7 +2,9 @@ import { randomBytes, createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { Timestamp } from '$lib/server/fsCompat';
 import { query as dbQuery } from '$lib/server/db';
+import { neonGetReportEnvelope } from '$lib/server/db/ingestRunRepository';
 import { ingestRunManager, type IngestRunPayload } from '$lib/server/ingestRuns';
+import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 
 type QueueStatus = 'queued' | 'pending_review' | 'approved' | 'ingesting' | 'ingested' | 'failed' | 'rejected';
@@ -975,6 +977,24 @@ function summarize(items: BatchItem[]) {
 	};
 }
 
+function logBatch(
+	level: 'info' | 'warn' | 'error',
+	event: string,
+	details: Record<string, unknown>
+): void {
+	const payload = { event, ts: new Date().toISOString(), ...details };
+	const prefix = '[stoa-batch]';
+	if (level === 'error') {
+		console.error(prefix, payload);
+		return;
+	}
+	if (level === 'warn') {
+		console.warn(prefix, payload);
+		return;
+	}
+	console.info(prefix, payload);
+}
+
 function buildBatchId(): string {
 	return `stoa_batch_${Date.now()}_${randomBytes(4).toString('hex')}`;
 }
@@ -1048,6 +1068,21 @@ async function reserveQueueRow(queueRecordId: string): Promise<boolean> {
 	return Array.isArray(result) && result.length > 0;
 }
 
+async function reopenQueueRowForRetry(queueRecordId: string): Promise<boolean> {
+	const idPart = queueRecordIdPart(queueRecordId);
+	if (!idPart) return false;
+	const result = await dbQuery<Array<{ id: string }>>(
+		`UPDATE type::record('link_ingestion_queue', $id_part) SET
+			 status = 'approved',
+			 updated_at = time::now(),
+			 last_error = NONE
+		 WHERE status = 'failed' OR status = 'cancelled' OR status = 'ingesting' OR status = 'queued' OR status = 'approved'
+		 RETURN AFTER`,
+		{ id_part: idPart }
+	);
+	return Array.isArray(result) && result.length > 0;
+}
+
 async function maybeLaunchQueuedItems(batch: StoaBatchRunView): Promise<StoaBatchRunView> {
 	if (batch.status !== 'running') return batch;
 	const runningCount = batch.items.filter((i) => i.status === 'running' || i.status === 'launching').length;
@@ -1064,6 +1099,12 @@ async function maybeLaunchQueuedItems(batch: StoaBatchRunView): Promise<StoaBatc
 				item.status = 'skipped';
 				item.error = 'Queue row no longer approved (already claimed or status changed).';
 				item.lastUpdatedAtMs = nowMs();
+				logBatch('warn', 'queue_reserve_failed', {
+					batchId: batch.id,
+					queueRecordId: item.queueRecordId,
+					url: item.url,
+					reason: item.error
+				});
 				continue;
 			}
 			const payload: IngestRunPayload = {
@@ -1080,32 +1121,110 @@ async function maybeLaunchQueuedItems(batch: StoaBatchRunView): Promise<StoaBatc
 			item.attempts += 1;
 			item.error = null;
 			item.lastUpdatedAtMs = nowMs();
+			logBatch('info', 'child_run_started', {
+				batchId: batch.id,
+				queueRecordId: item.queueRecordId,
+				url: item.url,
+				childRunId,
+				attempts: item.attempts
+			});
 		} catch (error) {
 			item.status = 'error';
 			item.error = error instanceof Error ? error.message : String(error);
 			item.lastUpdatedAtMs = nowMs();
+			logBatch('error', 'child_run_start_error', {
+				batchId: batch.id,
+				queueRecordId: item.queueRecordId,
+				url: item.url,
+				error: item.error
+			});
 		}
 	}
 	return batch;
 }
 
 async function refreshChildStates(batch: StoaBatchRunView): Promise<StoaBatchRunView> {
+	const durableOutcomeCache = new Map<string, { status: 'done' | 'error' | 'cancelled'; error: string | null } | null>();
 	for (const item of batch.items) {
 		if (!item.childRunId) continue;
 		if (item.status !== 'running') continue;
 		const state = await ingestRunManager.getStateAsync(item.childRunId);
-		if (!state) continue;
-		if (state.status === 'done') {
+		if (state?.status === 'done') {
 			item.status = 'done';
 			item.error = null;
 			item.lastUpdatedAtMs = nowMs();
-		} else if (state.status === 'error') {
+			logBatch('info', 'child_run_done', {
+				batchId: batch.id,
+				queueRecordId: item.queueRecordId,
+				childRunId: item.childRunId
+			});
+			continue;
+		}
+		if (state?.status === 'error') {
 			item.status = 'error';
 			item.error = state.error ?? 'Run failed';
 			item.lastUpdatedAtMs = nowMs();
+			logBatch('warn', 'child_run_error', {
+				batchId: batch.id,
+				queueRecordId: item.queueRecordId,
+				childRunId: item.childRunId,
+				error: item.error,
+				resumable: state.resumable === true
+			});
+			continue;
+		}
+		// Cross-instance recovery: if this process does not hold the child run state,
+		// use durable run reports so batch monitors don't stall forever at "running".
+		if (!state) {
+			if (!durableOutcomeCache.has(item.childRunId)) {
+				durableOutcomeCache.set(item.childRunId, await getDurableChildRunOutcome(item.childRunId));
+			}
+			const durable = durableOutcomeCache.get(item.childRunId) ?? null;
+			if (!durable) continue;
+			item.status = durable.status === 'cancelled' ? 'cancelled' : durable.status;
+			item.error = durable.error;
+			item.lastUpdatedAtMs = nowMs();
+			logBatch('info', 'child_run_recovered_from_durable', {
+				batchId: batch.id,
+				queueRecordId: item.queueRecordId,
+				childRunId: item.childRunId,
+				status: item.status,
+				error: item.error
+			});
 		}
 	}
 	return batch;
+}
+
+async function getDurableChildRunOutcome(
+	runId: string
+): Promise<{ status: 'done' | 'error' | 'cancelled'; error: string | null } | null> {
+	try {
+		let envelope: Record<string, unknown> | null = null;
+		if (isNeonIngestPersistenceEnabled()) {
+			envelope = await neonGetReportEnvelope(runId);
+		} else {
+			const snap = await sophiaDocumentsDb.collection('ingestion_run_reports').doc(runId).get();
+			if (!snap.exists) return null;
+			const data = snap.data() ?? {};
+			envelope =
+				data && typeof data === 'object' && !Array.isArray(data)
+					? (data as Record<string, unknown>)
+					: null;
+		}
+		if (!envelope) return null;
+		const status = typeof envelope.status === 'string' ? envelope.status : null;
+		const terminalError = typeof envelope.terminalError === 'string' ? envelope.terminalError : null;
+		const cancelledByUser = envelope.cancelledByUser === true;
+		if (cancelledByUser) {
+			return { status: 'cancelled', error: terminalError ?? 'Run cancelled by operator' };
+		}
+		if (status === 'done') return { status: 'done', error: null };
+		if (status === 'error') return { status: 'error', error: terminalError ?? 'Run failed' };
+		return null;
+	} catch {
+		return null;
+	}
 }
 
 function finalizeBatchStatus(batch: StoaBatchRunView): StoaBatchRunView {
@@ -1311,12 +1430,61 @@ export async function resumeBatchRun(batchId: string): Promise<StoaBatchRunView 
 	const batch = await getBatchRun(batchId);
 	if (!batch) return null;
 	batch.status = 'running';
+	logBatch('info', 'batch_resume_requested', {
+		batchId,
+		itemCount: batch.items.length
+	});
 	for (const item of batch.items) {
-		if (item.status === 'cancelled' || item.status === 'error') {
-			item.status = 'pending';
-			item.error = null;
-			item.lastUpdatedAtMs = nowMs();
+		if (item.status !== 'cancelled' && item.status !== 'error') continue;
+
+		// Closest-to-failure recovery: resume the existing child run from its checkpoint when possible.
+		if (item.status === 'error' && item.childRunId) {
+			const childState = await ingestRunManager.getStateAsync(item.childRunId);
+			if (childState?.status === 'error' && childState.resumable === true) {
+				const resumed = await ingestRunManager.resumeFromFailure(item.childRunId);
+				if (resumed.ok) {
+					item.status = 'running';
+					item.error = null;
+					item.attempts += 1;
+					item.lastUpdatedAtMs = nowMs();
+					logBatch('info', 'child_run_resumed_from_checkpoint', {
+						batchId,
+						queueRecordId: item.queueRecordId,
+						childRunId: item.childRunId,
+						attempts: item.attempts
+					});
+					continue;
+				}
+				logBatch('warn', 'child_run_checkpoint_resume_failed', {
+					batchId,
+					queueRecordId: item.queueRecordId,
+					childRunId: item.childRunId,
+					error: resumed.error
+				});
+			}
 		}
+
+		// Fallback: re-approve queue row and relaunch as a fresh child run.
+		const reopened = await reopenQueueRowForRetry(item.queueRecordId);
+		if (!reopened) {
+			item.status = 'error';
+			item.error = 'Unable to reopen queue row for retry.';
+			item.lastUpdatedAtMs = nowMs();
+			logBatch('error', 'queue_reopen_for_retry_failed', {
+				batchId,
+				queueRecordId: item.queueRecordId,
+				childRunId: item.childRunId
+			});
+			continue;
+		}
+		item.status = 'pending';
+		item.error = null;
+		item.childRunId = null;
+		item.lastUpdatedAtMs = nowMs();
+		logBatch('info', 'queue_reopened_for_retry', {
+			batchId,
+			queueRecordId: item.queueRecordId
+		});
 	}
 	await saveBatchRun(batch);
 	return refreshBatchRunStatus(batchId);
