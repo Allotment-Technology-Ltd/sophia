@@ -40,7 +40,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		const statusFilter =
 			payload.status_filter === 'approved' ||
 			payload.status_filter === 'pending_review' ||
-			payload.status_filter === 'queued'
+			payload.status_filter === 'queued' ||
+			payload.status_filter === 'failed'
 				? payload.status_filter
 				: 'approved';
 		const run = await createStoaBatchRun({

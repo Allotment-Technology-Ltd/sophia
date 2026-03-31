@@ -3,7 +3,7 @@ import { defaultProviders, estimateCost } from '@restormel/keys';
 import type { AAIFLatency, AAIFRequest, AAIFResponse } from '@restormel/aaif';
 import type { ModelProvider } from '@restormel/contracts/providers';
 import type { ProviderApiKeys } from '$lib/server/byok/types';
-import { EMBEDDING_MODEL, embedQuery } from '$lib/server/embeddings';
+import { EMBEDDING_MODEL, embedQuery, getEmbeddingProvider } from '$lib/server/embeddings';
 import { resolveReasoningModelRoute, trackTokens, type ReasoningModelRoute } from '$lib/server/vertex';
 
 const DEFAULT_REASONING_OUTPUT_TOKENS: Record<'low' | 'balanced' | 'high', number> = {
@@ -97,17 +97,18 @@ export async function executeAAIFRequest(
   const task = request.task ?? 'chat';
 
   if (task === 'embedding') {
+    const embeddingProvider = getEmbeddingProvider();
     const estimatedCostUsd = estimateEmbeddingCostUsd(request.input);
     enforceMaxCost(request.constraints?.maxCost, estimatedCostUsd);
     const embedding = await embedQuery(request.input);
     return {
       output: JSON.stringify(embedding),
-      provider: 'vertex',
+      provider: embeddingProvider.name,
       model: EMBEDDING_MODEL,
       cost: estimatedCostUsd,
       routing: {
         reason:
-          'Sophia currently executes AAIF embedding requests on the Vertex embedding pipeline because Restormel AAIF runtime routing is not yet published.'
+          `Sophia currently executes AAIF embedding requests on the configured ${embeddingProvider.name} embedding pipeline because Restormel AAIF runtime routing is not yet published.`
       }
     };
   }
