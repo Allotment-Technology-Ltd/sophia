@@ -1,3 +1,4 @@
-Ambient MP3 files in this directory are byte-for-byte copies of the 72-byte minimal sample
-`mp3.mp3` from https://github.com/mathiasbynens/small (MIT) and are placeholders until
-real licensed ambient loops are added per docs/stoa/asset-guide.md.
+`recognition-theme.mp3` is an original user-provided composition and may be used in STOA.
+
+Any additional ambient files in this directory should remain properly licensed before use in
+production, per docs/stoa/asset-guide.md.

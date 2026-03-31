@@ -7,7 +7,7 @@ import { SOUND_MANIFEST } from './sound-manifest';
 
 type LoopSoundKey = 'waves' | 'wind' | 'torchCrackle';
 
-const LOOP_SOUND_KEYS: LoopSoundKey[] = ['waves', 'wind', 'torchCrackle'];
+const LOOP_SOUND_KEYS: LoopSoundKey[] = ['waves'];
 
 const ZONE_POSITIONS: Record<StoaZone, { wavesX: number; torchX: number }> = {
   colonnade: { wavesX: -0.3, torchX: 0.35 },
@@ -33,8 +33,6 @@ export class HowlerManager {
 
     await Promise.all([
       this.loadLoop('waves'),
-      this.loadLoop('wind'),
-      this.loadLoop('torchCrackle'),
       ...SOUND_MANIFEST.birdsong.src.map(async (src) => this.loadBirdsong(src))
     ]);
 
