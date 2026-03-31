@@ -68,7 +68,7 @@ function inferStageFromLine(line: string): string | null {
     if (s.startsWith('group')) return 'group';
     if (s.startsWith('validat')) return 'validate';
     if (s.startsWith('embed')) return 'embed';
-    if (s.includes('json') || s.includes('repair')) return 'extract';
+    if (s.includes('json') || s.includes('repair')) return 'json_repair';
     return s;
   }
   return null;
@@ -138,7 +138,7 @@ export function classifyIngestLogLine(line: string, seq: number): IngestIssueRec
       ts: Date.now(),
       kind: 'json_repair',
       severity: 'medium',
-      stageHint: stageHint ?? 'extract',
+      stageHint: stageHint ?? 'json_repair',
       message: 'JSON repair or fix path engaged (malformed model output).',
       rawLine
     };
@@ -262,6 +262,16 @@ export function appendIssueFromLogLine(
   const nextSeq = state.issues.length;
   const issue = classifyIngestLogLine(line, nextSeq);
   if (!issue) return;
+  const last = state.issues[state.issues.length - 1];
+  if (
+    last &&
+    last.kind === issue.kind &&
+    last.message === issue.message &&
+    last.stageHint === issue.stageHint &&
+    issue.ts - last.ts < 30_000
+  ) {
+    return;
+  }
   if (state.issues.length >= MAX_ISSUES_PER_RUN) {
     state.issues.shift();
   }

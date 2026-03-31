@@ -61,6 +61,7 @@
 		currentStageKey: string | null;
 		currentAction: string | null;
 		lastFailureStageKey: string | null;
+	resumable: boolean;
 		error: string | null;
 		issueCount: number;
 		processAlive: boolean;
@@ -82,6 +83,7 @@
 	let queueRows = $state<QueueRow[]>([]);
 	let queueStatusFilter = $state('all');
 	let queueError = $state('');
+	let queueOpsMessage = $state('');
 	let queueLoading = $state(false);
 	let selectedRows = $state<Record<string, boolean>>({});
 
@@ -101,6 +103,7 @@
 
 	let runLimit = $state(30);
 	let runConcurrency = $state(2);
+	let runStatusFilter = $state<'approved' | 'pending_review' | 'queued' | 'failed'>('approved');
 	let batchRuns = $state<BatchRun[]>([]);
 	let runError = $state('');
 	let activeRunId = $state('');
@@ -201,6 +204,25 @@
 		}
 	}
 
+	async function resetHistoricFailedQueue(): Promise<void> {
+		queueOpsMessage = '';
+		queueError = '';
+		try {
+			const res = await fetch('/api/admin/ingest/batch/queue/reset-failed', {
+				method: 'POST',
+				headers: await authHeaders(),
+				body: JSON.stringify({ limit: 5000 })
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(typeof body?.error === 'string' ? body.error : 'Failed to reset failed rows');
+			const updated = typeof body?.updated === 'number' ? body.updated : 0;
+			queueOpsMessage = `Reset ${updated} failed queue rows back to approved.`;
+			await loadQueue();
+		} catch (error) {
+			queueError = error instanceof Error ? error.message : 'Failed to reset failed rows';
+		}
+	}
+
 	async function previewPolicies(): Promise<void> {
 		previewError = '';
 		preview = null;
@@ -285,6 +307,11 @@
 		return `${min}m ${rem}s`;
 	}
 
+function itemResumeReadiness(item: BatchItem, snapshot: ChildRunStatusSnapshot | undefined): 'checkpoint' | 'fallback' | null {
+	if (item.status !== 'cancelled' && item.status !== 'error') return null;
+	return snapshot?.resumable === true ? 'checkpoint' : 'fallback';
+}
+
 	function openChildRunInExpand(runId: string): void {
 		const params = new URLSearchParams();
 		params.set('runId', runId);
@@ -296,6 +323,45 @@
 		const params = new URLSearchParams();
 		params.set('reportRunId', runId);
 		window.location.href = `/admin/ingest?${params.toString()}`;
+	}
+
+	async function cancelBatchItemRun(queueRecordId: string): Promise<void> {
+		if (!activeRunId) return;
+		runError = '';
+		try {
+			const res = await fetch(`/api/admin/ingest/batch/run/${activeRunId}/item/cancel`, {
+				method: 'POST',
+				headers: await authHeaders(),
+				body: JSON.stringify({ queue_record_id: queueRecordId })
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(typeof body?.error === 'string' ? body.error : 'Cancel item failed');
+			activeRun = body.run as BatchRun;
+			await refreshChildRunSnapshots();
+			await loadRuns();
+		} catch (error) {
+			runError = error instanceof Error ? error.message : 'Cancel item failed';
+		}
+	}
+
+	async function resumeBatchItemRun(queueRecordId: string): Promise<void> {
+		if (!activeRunId) return;
+		runError = '';
+		try {
+			const res = await fetch(`/api/admin/ingest/batch/run/${activeRunId}/item/resume`, {
+				method: 'POST',
+				headers: await authHeaders(),
+				body: JSON.stringify({ queue_record_id: queueRecordId })
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) throw new Error(typeof body?.error === 'string' ? body.error : 'Resume item failed');
+			activeRun = body.run as BatchRun;
+			startPolling();
+			await refreshChildRunSnapshots();
+			await loadRuns();
+		} catch (error) {
+			runError = error instanceof Error ? error.message : 'Resume item failed';
+		}
 	}
 
 	async function refreshChildRunSnapshots(): Promise<void> {
@@ -328,6 +394,7 @@
 									currentAction: typeof body?.currentAction === 'string' ? body.currentAction : null,
 									lastFailureStageKey:
 										typeof body?.lastFailureStageKey === 'string' ? body.lastFailureStageKey : null,
+									resumable: body?.resumable === true,
 									error: typeof body?.error === 'string' ? body.error : null,
 									issueCount: typeof body?.issueCount === 'number' ? body.issueCount : 0,
 									processAlive: Boolean(body?.processAlive),
@@ -358,6 +425,7 @@
 									currentStageKey: completedStage,
 									currentAction: reportStatus === 'done' ? 'Completed (durable report)' : 'Completed with issues (durable report)',
 									lastFailureStageKey,
+									resumable: false,
 									error: terminalError,
 									issueCount: typeof reportBody?.issueCount === 'number' ? reportBody.issueCount : 0,
 									processAlive: false,
@@ -374,6 +442,7 @@
 								currentStageKey: null,
 								currentAction: null,
 								lastFailureStageKey: null,
+								resumable: false,
 								error:
 									typeof body?.error === 'string'
 										? body.error
@@ -395,6 +464,7 @@
 								currentStageKey: null,
 								currentAction: null,
 								lastFailureStageKey: null,
+								resumable: false,
 								error: error instanceof Error ? error.message : 'Failed to load child run status',
 								issueCount: 0,
 								processAlive: false,
@@ -445,7 +515,7 @@
 				body: JSON.stringify({
 					concurrency: runConcurrency,
 					limit: runLimit,
-					status_filter: 'approved',
+					status_filter: runStatusFilter,
 					source_pack_id: selectedPackId
 				})
 			});
@@ -664,8 +734,12 @@
 					</select>
 					<button type="button" class="admin-hub-action" onclick={() => void bulkAction('approve')}>Approve selected</button>
 					<button type="button" class="admin-hub-action" onclick={() => void bulkAction('reject')}>Reject selected</button>
+					<button type="button" class="admin-hub-action" onclick={() => void resetHistoricFailedQueue()}>
+						Reset historic failed
+					</button>
 				</div>
 				{#if queueError}<p class="mt-2 font-mono text-xs text-sophia-dark-copper">{queueError}</p>{/if}
+				{#if queueOpsMessage}<p class="mt-2 font-mono text-xs text-sophia-dark-muted">{queueOpsMessage}</p>{/if}
 				<div class="mt-3 max-h-[18rem] overflow-auto rounded border border-sophia-dark-border">
 					<table class="min-w-full text-left font-mono text-xs text-sophia-dark-muted">
 						<thead class="border-b border-sophia-dark-border bg-sophia-dark-bg/50 text-sophia-dark-dim">
@@ -699,6 +773,15 @@
 					<label class="font-mono text-xs text-sophia-dark-muted">Concurrency <input class="mt-1 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg p-2" type="number" min="1" max="8" bind:value={runConcurrency} /></label>
 					<label class="font-mono text-xs text-sophia-dark-muted">Limit <input class="mt-1 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg p-2" type="number" min="1" max="200" bind:value={runLimit} /></label>
 				</div>
+				<label class="mt-3 block font-mono text-xs text-sophia-dark-muted">
+					Source status
+					<select bind:value={runStatusFilter} class="mt-1 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg p-2">
+						<option value="approved">approved</option>
+						<option value="failed">failed (retry historic)</option>
+						<option value="pending_review">pending_review</option>
+						<option value="queued">queued</option>
+					</select>
+				</label>
 				<div class="mt-3 flex flex-wrap gap-2">
 					<button type="button" class="admin-hub-action" onclick={() => void startBatchRun()}>Start batch run</button>
 					<button type="button" class="admin-hub-action" onclick={() => void cancelActiveRun()} disabled={!activeRunId}>Cancel active</button>
@@ -741,13 +824,29 @@
 									<th class="px-2 py-2">URL</th>
 									<th class="px-2 py-2">Run</th>
 									<th class="px-2 py-2">Pipeline</th>
+									<th class="px-2 py-2">Actions</th>
 								</tr>
 							</thead>
 							<tbody>
 								{#each activeRun.items as item}
 									{@const childRunId = item.childRunId}
+									{@const resumeReadiness = itemResumeReadiness(item, childRunId ? childRunSnapshots[childRunId] : undefined)}
 									<tr class="border-b border-sophia-dark-border/60 last:border-b-0">
-										<td class="px-2 py-2">{item.status}</td>
+										<td class="px-2 py-2">
+											<div>{item.status}</div>
+											{#if resumeReadiness}
+												<span
+													class="resume-readiness-badge {resumeReadiness === 'checkpoint'
+														? 'resume-readiness-badge--checkpoint'
+														: 'resume-readiness-badge--fallback'}"
+													title={resumeReadiness === 'checkpoint'
+														? 'Resume item will continue from checkpoint.'
+														: 'Resume item will relaunch from queue.'}
+												>
+													{resumeReadiness === 'checkpoint' ? 'checkpoint-resume' : 'fallback-relaunch'}
+												</span>
+											{/if}
+										</td>
 										<td class="px-2 py-2 break-all">{item.url}</td>
 										<td class="px-2 py-2">
 											{#if childRunId}
@@ -794,9 +893,31 @@
 												<span class="text-sophia-dark-dim">No child run yet.</span>
 											{/if}
 										</td>
+										<td class="px-2 py-2">
+											<div class="flex flex-wrap gap-2">
+												{#if item.status === 'running' || item.status === 'launching' || item.status === 'pending'}
+													<button
+														type="button"
+														class="text-[0.65rem] text-sophia-dark-copper underline"
+														onclick={() => void cancelBatchItemRun(item.queueRecordId)}
+													>
+														Cancel item
+													</button>
+												{/if}
+												{#if item.status === 'cancelled' || item.status === 'error'}
+													<button
+														type="button"
+														class="text-[0.65rem] text-sophia-dark-amber underline"
+														onclick={() => void resumeBatchItemRun(item.queueRecordId)}
+													>
+														Resume item
+													</button>
+												{/if}
+											</div>
+										</td>
 									</tr>
 									{#if item.error}
-										<tr class="border-b border-sophia-dark-border/30 last:border-b-0"><td class="px-2 py-1 text-sophia-dark-copper" colspan="4">{item.error}</td></tr>
+										<tr class="border-b border-sophia-dark-border/30 last:border-b-0"><td class="px-2 py-1 text-sophia-dark-copper" colspan="5">{item.error}</td></tr>
 									{/if}
 								{/each}
 							</tbody>
@@ -814,6 +935,29 @@
 	.batch-grid { margin-top: 24px; display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 	.expand-card { border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-surface); }
 	.expand-card-inner { padding: 20px; }
+	.resume-readiness-badge {
+		display: inline-flex;
+		align-items: center;
+		margin-top: 4px;
+		padding: 1px 6px;
+		border-radius: 999px;
+		border: 1px solid var(--color-border);
+		font-size: 0.58rem;
+		line-height: 1.15;
+		letter-spacing: 0.02em;
+		text-transform: lowercase;
+		white-space: nowrap;
+	}
+	.resume-readiness-badge--checkpoint {
+		color: var(--color-sage, #7fa383);
+		background: color-mix(in srgb, var(--color-sage, #7fa383) 13%, transparent);
+		border-color: color-mix(in srgb, var(--color-sage, #7fa383) 35%, var(--color-border));
+	}
+	.resume-readiness-badge--fallback {
+		color: var(--color-copper, #b87333);
+		background: color-mix(in srgb, var(--color-copper, #b87333) 12%, transparent);
+		border-color: color-mix(in srgb, var(--color-copper, #b87333) 35%, var(--color-border));
+	}
 	@media (max-width: 980px) { .batch-grid { grid-template-columns: 1fr; } }
 </style>
 

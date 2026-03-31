@@ -168,6 +168,22 @@ function normalizePinProvider(slug: string): string | null {
   return null;
 }
 
+function normalizeEmbeddingProvider(slug: string): 'vertex' | 'voyage' | null {
+  const s = slug.toLowerCase().trim();
+  if (s === 'google') return 'vertex';
+  if (s === 'vertex' || s === 'voyage') return s;
+  return null;
+}
+
+function normalizePinnedModelId(provider: string, modelId: string): string {
+  const p = provider.toLowerCase().trim();
+  const m = modelId.trim();
+  // Vertex/Google 1.5 IDs are retired in several environments; pin modern equivalents.
+  if ((p === 'vertex' || p === 'google') && m === 'gemini-1.5-pro') return 'gemini-2.5-pro';
+  if ((p === 'vertex' || p === 'google') && m === 'gemini-1.5-flash') return 'gemini-2.5-flash';
+  return m;
+}
+
 /**
  * Parses one Expand pipeline value: either `provider · modelId` (display) or
  * `provider__modelId` (stable catalog id from admin `stableModelId()`).
@@ -207,12 +223,36 @@ export function modelChainLabelsToEnv(chain: IngestRunPayload['model_chain']): R
     const provider = normalizePinProvider(parsed.providerRaw);
     if (!provider) return;
     out[`INGEST_PIN_PROVIDER_${suffix}`] = provider;
-    out[`INGEST_PIN_MODEL_${suffix}`] = parsed.modelId;
+    out[`INGEST_PIN_MODEL_${suffix}`] = normalizePinnedModelId(provider, parsed.modelId);
   };
   apply(chain.extract, 'EXTRACTION');
   apply(chain.relate, 'RELATIONS');
   apply(chain.group, 'GROUPING');
   apply(chain.validate, 'VALIDATION');
+  return out;
+}
+
+function embeddingPreferenceToEnv(embeddingModel: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  const raw = embeddingModel?.trim();
+  if (!raw) return out;
+  const parsed = parseModelChainLabel(raw);
+  if (!parsed) return out;
+  const provider = normalizeEmbeddingProvider(parsed.providerRaw);
+  if (!provider) return out;
+  const modelId = normalizePinnedModelId(provider, parsed.modelId);
+
+  if (provider === 'voyage') {
+    out.EMBEDDING_PROVIDER = 'voyage';
+    out.VOYAGE_DOCUMENT_MODEL = modelId;
+    return out;
+  }
+
+  if (provider === 'vertex') {
+    out.EMBEDDING_PROVIDER = 'vertex';
+    return out;
+  }
+
   return out;
 }
 
@@ -828,7 +868,9 @@ class IngestRunManager extends EventEmitter {
     state.completedAt = Date.now();
     state.currentAction = 'Cancelled by operator';
     state.process = undefined;
-    state.resumable = false;
+    // Keep cancellation resumable when a checkpoint source file exists so operators can stop
+    // noisy runs and restart from the closest completed stage.
+    state.resumable = Boolean(state.sourceFilePath);
 
     for (const key of Object.keys(state.stages)) {
       const st = state.stages[key];
@@ -1110,8 +1152,10 @@ class IngestRunManager extends EventEmitter {
     }
 
     const pinEnvFlat = modelChainLabelsToEnv(payload.model_chain);
+    const embeddingEnvOverrides = embeddingPreferenceToEnv(payload.embedding_model);
     const batchEnvOverrides = {
       ...batchOverridesToEnv(payload.batch_overrides),
+      ...embeddingEnvOverrides,
       ...pinEnvFlat
     };
     const ingestPinsJsonCli = encodeIngestPinsJsonCliArg(pinEnvFlat);
@@ -1122,6 +1166,14 @@ class IngestRunManager extends EventEmitter {
       this.addLog(
         runId,
         `[ingest] operator BYOK: merged ${Object.keys(operatorByokEnv).join(', ')} into worker env (same bucket as Admin → Operator BYOK)`
+      );
+    }
+    if (Object.keys(embeddingEnvOverrides).length > 0) {
+      const provider = embeddingEnvOverrides.EMBEDDING_PROVIDER ?? 'unknown';
+      const docModel = embeddingEnvOverrides.VOYAGE_DOCUMENT_MODEL;
+      this.addLog(
+        runId,
+        `[ingest] embedding preference applied: ${provider}${docModel ? `/${docModel}` : ''}`
       );
     }
 

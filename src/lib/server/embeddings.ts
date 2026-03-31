@@ -2,7 +2,7 @@
  * SOPHIA — Embeddings (Provider-Abstracted)
  *
  * Supports multiple embedding providers behind a unified interface.
- * Provider selection: EMBEDDING_PROVIDER env var (default: 'vertex')
+ * Provider selection: EMBEDDING_PROVIDER env var (default: 'voyage')
  *
  * Providers:
  * - vertex: Google Vertex AI text-embedding-005 (768-dim, GCP ADC auth)
@@ -230,7 +230,7 @@ function resolveProvider(): EmbeddingProvider {
 	if (activeProvider) return activeProvider;
 
 	loadServerEnv();
-	const providerName = (process.env.EMBEDDING_PROVIDER || 'vertex').toLowerCase().trim();
+	const providerName = (process.env.EMBEDDING_PROVIDER || 'voyage').toLowerCase().trim();
 
 	switch (providerName) {
 		case 'voyage':
@@ -254,13 +254,13 @@ export function getEmbeddingModel(): string {
 	return resolveProvider().documentModel;
 }
 
-export const EMBEDDING_MODEL = 'text-embedding-005';
+export const EMBEDDING_MODEL = getEmbeddingModel();
 
 export function getEmbeddingDimensions(): number {
 	return resolveProvider().dimensions;
 }
 
-export const EMBEDDING_DIMENSIONS = 768;
+export const EMBEDDING_DIMENSIONS = getEmbeddingDimensions();
 
 let totalTokensUsed = 0;
 

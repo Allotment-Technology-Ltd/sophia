@@ -397,7 +397,20 @@
     projectIdConfigured: boolean;
     gatewayKeyConfigured: boolean;
   };
+  type EmbeddingHealthSnapshot = {
+    activeProvider: string | null;
+    activeModel: string | null;
+    expectedDimensions: number | null;
+    detectedDbVectorDimension: number | null;
+    detectedDbDimensions: number[];
+    sampledVectors: number;
+    drift: boolean | null;
+  };
   let ingestWorkerDiagnostics = $state<IngestWorkerDiagnostics | null>(null);
+  let embeddingHealth = $state<EmbeddingHealthSnapshot | null>(null);
+  let embeddingHealthWarnings = $state<string[]>([]);
+  let embeddingHealthBusy = $state(false);
+  let embeddingHealthError = $state('');
   let batchOverridesError = $state('');
   const INGEST_SETTINGS_STORAGE_KEY = 'sophia.admin.ingestSettings.v1';
   type IngestionAdvisorModeUi = 'off' | 'shadow' | 'auto';
@@ -1154,10 +1167,12 @@
     primaryOpt: CatalogEntry,
     fallbackOpt: CatalogEntry | undefined
   ): Record<string, unknown>[] {
-    const primaryExisting =
-      existing.find((s) => Number(s.orderIndex) === 0) ?? existing[0];
-    const fallbackExisting =
-      existing.find((s) => Number(s.orderIndex) === 1) ?? existing[1];
+    const sortedEnabled = [...existing]
+      .filter((s) => s.enabled !== false)
+      .sort((a, b) => (Number(a.orderIndex) || 0) - (Number(b.orderIndex) || 0));
+    const managedExisting = sortedEnabled.slice(0, 2);
+    const primaryExisting = managedExisting[0] ?? existing.find((s) => Number(s.orderIndex) === 0) ?? {};
+    const fallbackExisting = managedExisting[1] ?? existing.find((s) => Number(s.orderIndex) === 1) ?? {};
 
     const primary: Record<string, unknown> = {
       ...(primaryExisting ?? {}),
@@ -1179,7 +1194,10 @@
       modelId: fallbackOpt.modelId
     };
 
-    return [primary, fallback];
+    // Preserve all unmanaged route rules from Restormel so Sophia ↔ Restormel stays bidirectional.
+    const managedSet = new Set(managedExisting);
+    const preserved = existing.filter((step) => !managedSet.has(step));
+    return [primary, fallback, ...preserved];
   }
 
   function comparableStepChain(
@@ -1188,8 +1206,9 @@
     const sorted = [...steps].sort((a, b) => (Number(a.orderIndex) || 0) - (Number(b.orderIndex) || 0));
     return sorted
       .filter((s) => s.enabled !== false)
+      .slice(0, 2)
       .map((s, idx) => ({
-        orderIndex: Number(s.orderIndex) ?? idx,
+        orderIndex: idx,
         provider: String(s.providerPreference ?? '').trim().toLowerCase(),
         model: String(s.modelId ?? '').trim()
       }))
@@ -1336,11 +1355,13 @@
       try {
         const body = await authorizedJson(`/api/admin/ingestion-routing/routes/${route.id}/steps`);
         const steps = Array.isArray(body.steps) ? body.steps : [];
-        const ordered = [...steps].sort(
+        const orderedEnabled = [...steps]
+          .filter((s) => (s as { enabled?: boolean | null }).enabled !== false)
+          .sort(
           (a, b) => (Number((a as { orderIndex?: number }).orderIndex) || 0) - (Number((b as { orderIndex?: number }).orderIndex) || 0)
         );
-        const primaryStep = ordered.find((s) => (s as { orderIndex?: number | null }).orderIndex === 0) ?? ordered[0];
-        const fallbackStep = ordered.find((s) => (s as { orderIndex?: number | null }).orderIndex === 1) ?? ordered[1];
+        const primaryStep = orderedEnabled[0];
+        const fallbackStep = orderedEnabled[1];
 
         const primaryPid = (primaryStep as { providerPreference?: string | null } | undefined)?.providerPreference
           ?.trim() ?? '';
@@ -1397,6 +1418,27 @@
     await loadModelCatalog();
     await loadRoutingContext();
     await hydrateSelectionsFromRoutes();
+    await loadEmbeddingHealth();
+  }
+
+  async function loadEmbeddingHealth(): Promise<void> {
+    embeddingHealthBusy = true;
+    embeddingHealthError = '';
+    try {
+      const body = await authorizedJson('/api/admin/ingest/embedding-health');
+      const snapshot = body.embeddingHealth as EmbeddingHealthSnapshot | undefined;
+      embeddingHealth = snapshot ?? null;
+      embeddingHealthWarnings = Array.isArray(body.warnings)
+        ? body.warnings.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+        : [];
+    } catch (error) {
+      embeddingHealth = null;
+      embeddingHealthWarnings = [];
+      embeddingHealthError =
+        error instanceof Error ? error.message : 'Failed to load embedding health.';
+    } finally {
+      embeddingHealthBusy = false;
+    }
   }
 
   async function applyStageRouting(): Promise<void> {
@@ -1654,6 +1696,63 @@
     jsonrepair: 'ingestion_json_repair',
     repair: 'ingestion_json_repair'
   };
+
+  const RUN_STAGE_TO_COST_KEY: Record<string, string> = {
+    fetch: 'ingestion_fetch',
+    extract: 'ingestion_extraction',
+    relate: 'ingestion_relations',
+    group: 'ingestion_grouping',
+    embed: 'ingestion_embedding',
+    validate: 'ingestion_validation',
+    store: 'ingestion_json_repair'
+  };
+
+  function runStageToCostKey(stageKey: string | null | undefined): string | null {
+    const key = (stageKey ?? '').trim().toLowerCase();
+    if (!key) return null;
+    return RUN_STAGE_TO_COST_KEY[key] ?? null;
+  }
+
+  function parseRunStageFromLogLine(line: string): string | null {
+    const text = line.trim().toLowerCase();
+    if (!text) return null;
+    if (/\[stage\].*fetch/.test(text) || /stage\s+\d+:\s*fetch/.test(text)) return 'fetch';
+    if (/\[stage\].*extract/.test(text) || /stage\s+\d+:\s*extract/.test(text)) return 'extract';
+    if (/\[stage\].*relat/.test(text) || /stage\s+\d+:\s*relat/.test(text)) return 'relate';
+    if (/\[stage\].*group/.test(text) || /stage\s+\d+:\s*group/.test(text)) return 'group';
+    if (/\[stage\].*embed/.test(text) || /stage\s+\d+:\s*embed/.test(text)) return 'embed';
+    if (/\[stage\].*validat/.test(text) || /stage\s+\d+:\s*validat/.test(text)) return 'validate';
+    if (/\[stage\].*store/.test(text) || /stage\s+\d+:\s*store/.test(text)) return 'store';
+    return null;
+  }
+
+  function inferRunStageFromLogLines(lines: string[]): string | null {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const parsed = parseRunStageFromLogLine(lines[i] ?? '');
+      if (parsed) return parsed;
+    }
+    return null;
+  }
+
+  function harmonizePipelineStages(nextStages: Stage[], currentStageKey: string | null): Stage[] {
+    const current = (currentStageKey ?? '').trim().toLowerCase();
+    if (!current) return nextStages;
+    const currentIndex = STAGE_TEMPLATE.findIndex((stage) => stage.key === current);
+    if (currentIndex === -1) return nextStages;
+    const runIsActive = flowState === 'running' || flowState === 'awaiting_sync';
+    return nextStages.map((stage, idx) => {
+      if (idx < currentIndex && stage.status === 'idle') {
+        return { ...stage, status: 'done' };
+      }
+      if (idx === currentIndex && runIsActive && stage.status === 'idle') {
+        return { ...stage, status: 'running' };
+      }
+      if (idx > currentIndex && stage.status === 'running') {
+        return { ...stage, status: 'idle' };
+      }
+      return stage;
+    });
+  }
 
   function parseCostStageFromLine(line: string): string | null {
     const fromCostTag = line.match(/\[COST\]\s+([A-Z_]+)/i)?.[1] ?? '';
@@ -2522,7 +2621,7 @@
   async function cancelIngestion(): Promise<void> {
     if (!runId || cancelling) return;
     const ok = window.confirm(
-      'Stop this ingestion run? The worker will be stopped if it is still running. This run will be marked cancelled; you can start a new run when you are ready.'
+      'Stop this ingestion run? The worker will be stopped if it is still running. The run will be marked cancelled and can be resumed from checkpoint when available.'
     );
     if (!ok) return;
     cancelling = true;
@@ -2659,8 +2758,9 @@
   }
 
   function applyStatusBody(body: Record<string, unknown>): void {
+    let nextStages = stages;
     if (body?.stages && typeof body.stages === 'object') {
-      stages = STAGE_TEMPLATE.map((stage) => ({
+      nextStages = STAGE_TEMPLATE.map((stage) => ({
         ...stage,
         status: ((body.stages as Record<string, { status?: StageStatus }>)[stage.key]?.status ??
           stage.status) as StageStatus,
@@ -2669,10 +2769,13 @@
           : undefined
       }));
     }
+    let incomingLogLines: string[] = [];
     if (body?.logIncremental === true && Array.isArray(body?.logLines)) {
-      runLog = [...runLog, ...(body.logLines as string[])];
+      incomingLogLines = body.logLines as string[];
+      runLog = [...runLog, ...incomingLogLines];
     } else if (Array.isArray(body?.logLines)) {
-      runLog = body.logLines as string[];
+      incomingLogLines = body.logLines as string[];
+      runLog = incomingLogLines;
     }
     if (typeof body?.logLineTotal === 'number') {
       runLogCursor = body.logLineTotal as number;
@@ -2680,7 +2783,15 @@
       runLogCursor = runLog.length;
     }
     tryParseIngestTimingFromLog(runLog);
-    runCurrentStage = typeof body?.currentStageKey === 'string' ? body.currentStageKey : null;
+    const stageFromStatus =
+      typeof body?.currentStageKey === 'string' && body.currentStageKey.trim().length > 0
+        ? body.currentStageKey.trim().toLowerCase()
+        : null;
+    const stageFromLog =
+      inferRunStageFromLogLines(incomingLogLines) ??
+      inferRunStageFromLogLines(runLog.slice(Math.max(0, runLog.length - 40)));
+    runCurrentStage = stageFromStatus ?? stageFromLog ?? null;
+    stages = harmonizePipelineStages(nextStages, runCurrentStage);
     runCurrentAction = typeof body?.currentAction === 'string' ? body.currentAction : null;
     runLastFailureStage = typeof body?.lastFailureStageKey === 'string' ? body.lastFailureStageKey : null;
     runResumable = body?.resumable === true;
@@ -2813,8 +2924,8 @@
     const delay =
       runProcessAlive &&
       (lastAppliedRunStatus === 'running' || lastAppliedRunStatus === 'awaiting_sync')
-        ? 900
-        : 2600;
+        ? 550
+        : 1800;
     pollTimer = setTimeout(async () => {
       pollTimer = null;
       if (!runId) return;
@@ -2939,6 +3050,7 @@
       await loadModelCatalog();
       await loadRoutingContext();
       await hydrateSelectionsFromRoutes();
+      await loadEmbeddingHealth();
     })();
 
     const params = new URLSearchParams(window.location.search);
@@ -3023,6 +3135,64 @@
       </nav>
     </div>
   </header>
+
+  <section class="mt-4 rounded border border-sophia-dark-border bg-sophia-dark-bg/45 px-4 py-3" aria-label="Embedding health">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Embedding health</p>
+      {#if embeddingHealthBusy}
+        <span class="font-mono text-xs text-sophia-dark-muted">Checking…</span>
+      {/if}
+    </div>
+
+    {#if embeddingHealth}
+      <div class="mt-2 flex flex-wrap items-center gap-x-6 gap-y-1 font-mono text-xs text-sophia-dark-muted">
+        <p>
+          <span class="text-sophia-dark-dim">Provider:</span>
+          <span class="text-sophia-dark-text">{embeddingHealth.activeProvider ?? 'unknown'}</span>
+          {#if embeddingHealth.activeModel}
+            <span class="text-sophia-dark-dim"> · </span>
+            <span class="text-sophia-dark-text break-all">{embeddingHealth.activeModel}</span>
+          {/if}
+        </p>
+        <p>
+          <span class="text-sophia-dark-dim">Expected:</span>
+          <span class="text-sophia-dark-text">{embeddingHealth.expectedDimensions ?? 'unknown'} dims</span>
+        </p>
+        <p>
+          <span class="text-sophia-dark-dim">DB detected:</span>
+          <span
+            class={embeddingHealth.drift === true ? 'text-sophia-dark-copper' : 'text-sophia-dark-text'}
+          >
+            {embeddingHealth.detectedDbVectorDimension ?? 'unknown'} dims
+          </span>
+          {#if embeddingHealth.detectedDbDimensions.length > 1}
+            <span class="text-sophia-dark-dim">
+              (mixed: {embeddingHealth.detectedDbDimensions.join(', ')})
+            </span>
+          {/if}
+          {#if embeddingHealth.sampledVectors > 0}
+            <span class="text-sophia-dark-dim"> · sample {embeddingHealth.sampledVectors}</span>
+          {/if}
+        </p>
+      </div>
+
+      {#if embeddingHealth.drift === true}
+        <p class="mt-2 font-mono text-xs text-sophia-dark-copper">
+          Drift detected: expected and DB vector dimensions do not match.
+        </p>
+      {/if}
+    {:else if embeddingHealthError}
+      <p class="mt-2 font-mono text-xs text-sophia-dark-copper">{embeddingHealthError}</p>
+    {/if}
+
+    {#if embeddingHealthWarnings.length > 0}
+      <ul class="mt-2 space-y-1">
+        {#each embeddingHealthWarnings as warning (warning)}
+          <li class="font-mono text-xs text-sophia-dark-muted">{warning}</li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
 
   {#if monitorRunNotice}
     <div
@@ -3251,7 +3421,7 @@
                     onclick={() => void refreshModelsAndRoutes()}
                     class="shrink-0 rounded border border-sophia-dark-border/70 bg-transparent px-3 py-1.5 font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim hover:border-sophia-dark-border hover:bg-sophia-dark-surface-raised hover:text-sophia-dark-muted disabled:opacity-50"
                   >
-                    Refresh models
+                    Load from Restormel
                   </button>
                 </div>
 
@@ -3688,10 +3858,10 @@
                   <div>
                     <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Restormel routing steps</p>
                     <p class="mt-1 text-xs text-sophia-dark-muted">
-                      Save primary + fallback model steps per stage into Restormel Keys before running.
+                      Two-way sync: load stage routing from Restormel, or edit in Sophia and save back to Restormel.
                     </p>
                     <p class="mt-2 text-[0.65rem] leading-relaxed text-sophia-dark-dim">
-                      Route-step providers follow Keys OpenAPI 1.3.4+ ({ROUTE_STEP_PROVIDER_HINT}) — still narrower than the full merged catalog (e.g. xAI, Groq). Together models must use the catalog id (together-…) in steps. If Keys returns an error, it may include the current allowed list from the server.
+                      Sophia manages only primary/fallback slots and preserves additional Restormel route rules when saving. Route-step providers follow Keys OpenAPI 1.3.4+ ({ROUTE_STEP_PROVIDER_HINT}) — still narrower than the full merged catalog (e.g. xAI, Groq). Together models must use the catalog id (together-…) in steps. If Keys returns an error, it may include the current allowed list from the server.
                     </p>
                   </div>
                   <button
@@ -3700,7 +3870,7 @@
                     onclick={() => void applyStageRouting()}
                     class="shrink-0 rounded border border-sophia-dark-border/70 bg-transparent px-4 py-2.5 font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-dim hover:border-sophia-dark-border hover:bg-sophia-dark-surface-raised hover:text-sophia-dark-text disabled:opacity-50"
                   >
-                    {routingBusy ? 'Saving…' : 'Save routing'}
+                    {routingBusy ? 'Saving…' : 'Save to Restormel'}
                   </button>
                 </div>
                 {#if routingError}
@@ -4627,7 +4797,9 @@
                 </thead>
                 <tbody>
                   {#each runCostLedger.rows as row}
-                    <tr class="border-b border-sophia-dark-border/60 last:border-b-0">
+                    {@const activeCostStageKey = runStageToCostKey(runCurrentStage)}
+                    {@const rowTone = row.key === activeCostStageKey ? 'active' : typeof row.runningUsd === 'number' ? 'done' : 'idle'}
+                    <tr class="ledger-row ledger-row--{rowTone} border-b border-sophia-dark-border/60 last:border-b-0">
                       <td class="px-3 py-2 text-sophia-dark-text">{row.label}</td>
                       <td class="px-3 py-2 text-right">{formatUsd(row.estimatedUsd)}</td>
                       <td class="px-3 py-2 text-right {typeof row.runningUsd === 'number' ? 'text-sophia-dark-sage' : 'text-sophia-dark-dim'}">
@@ -4807,6 +4979,11 @@
     padding: 10px 8px;
     text-align: center;
     min-width: 96px;
+    transition:
+      border-color 180ms ease,
+      background-color 180ms ease,
+      transform 180ms ease,
+      box-shadow 180ms ease;
   }
   .run-stage-label {
     display: block;
@@ -4823,6 +5000,7 @@
     font-family: var(--font-ui);
     font-size: var(--text-meta);
     color: var(--color-dim);
+    transition: color 180ms ease;
   }
   .run-stage-node--done {
     border-color: var(--color-sage-border);
@@ -4832,6 +5010,8 @@
   .run-stage-node--running {
     border-color: var(--color-blue-border);
     background: var(--color-blue-bg);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-blue-border) 35%, transparent);
+    transform: translateY(-1px);
   }
   .run-stage-node--running .run-stage-glyph { color: var(--color-blue); }
   .run-stage-node--error {
@@ -4841,6 +5021,15 @@
   .run-stage-node--error .run-stage-glyph { color: var(--color-coral); }
   .run-stage-node--skipped {
     opacity: 0.7;
+  }
+  .ledger-row {
+    transition: background-color 180ms ease;
+  }
+  .ledger-row--active {
+    background: color-mix(in srgb, var(--color-blue-bg) 72%, transparent);
+  }
+  .ledger-row--done {
+    background: color-mix(in srgb, var(--color-sage-bg) 40%, transparent);
   }
   @media (min-width: 1160px) {
     .wizard-layout { grid-template-columns: minmax(0, 1fr) 320px; }

@@ -1094,7 +1094,19 @@ async function maybeLaunchQueuedItems(batch: StoaBatchRunView): Promise<StoaBatc
 		item.status = 'launching';
 		item.lastUpdatedAtMs = nowMs();
 		try {
-			const reserved = await reserveQueueRow(item.queueRecordId);
+			let reserved = await reserveQueueRow(item.queueRecordId);
+			// Queue rows may be left in failed/cancelled from prior attempts. Re-open once before skipping.
+			if (!reserved) {
+				const reopened = await reopenQueueRowForRetry(item.queueRecordId);
+				if (reopened) {
+					logBatch('info', 'queue_reopened_during_launch', {
+						batchId: batch.id,
+						queueRecordId: item.queueRecordId,
+						url: item.url
+					});
+					reserved = await reserveQueueRow(item.queueRecordId);
+				}
+			}
 			if (!reserved) {
 				item.status = 'skipped';
 				item.error = 'Queue row no longer approved (already claimed or status changed).';
@@ -1309,6 +1321,26 @@ export async function listStoaQueue(filters?: {
 	return rows.slice(0, limit);
 }
 
+export async function resetFailedStoaQueueRows(limit = 2000): Promise<{ updated: number }> {
+	const cap = Math.max(1, Math.min(10000, limit));
+	let updated = 0;
+	while (updated < cap) {
+		const remaining = cap - updated;
+		const chunk = Math.min(500, remaining);
+		const failedRows = await listStoaQueue({ status: 'failed', limit: chunk });
+		if (failedRows.length === 0) break;
+		const recordIds = failedRows
+			.map((row) => normalizeRecordId(row.id))
+			.filter((id): id is string => typeof id === 'string' && id.length > 0);
+		if (recordIds.length === 0) break;
+		const result = await bulkSetQueueStatus({ recordIds, status: 'approved' });
+		updated += result.updated;
+		if (result.updated === 0) break;
+	}
+	logBatch('info', 'queue_failed_reset', { updated, limit: cap });
+	return { updated };
+}
+
 export async function bulkSetQueueStatus(args: {
 	recordIds: string[];
 	status: Extract<QueueStatus, 'approved' | 'rejected' | 'pending_review'>;
@@ -1426,6 +1458,99 @@ export async function cancelBatchRun(batchId: string): Promise<StoaBatchRunView 
 	return batch;
 }
 
+function findBatchItemByQueueId(batch: StoaBatchRunView, queueRecordId: string): BatchItem | null {
+	const target = normalizeRecordId(queueRecordId) ?? queueRecordId.trim();
+	return (
+		batch.items.find((item) => {
+			const itemId = normalizeRecordId(item.queueRecordId) ?? item.queueRecordId;
+			return itemId === target;
+		}) ?? null
+	);
+}
+
+export async function cancelBatchItem(batchId: string, queueRecordId: string): Promise<StoaBatchRunView | null> {
+	const batch = await getBatchRun(batchId);
+	if (!batch) return null;
+	const item = findBatchItemByQueueId(batch, queueRecordId);
+	if (!item) throw new Error('Batch item not found');
+	if (item.status === 'done' || item.status === 'skipped') {
+		throw new Error('Batch item is already complete and cannot be cancelled');
+	}
+
+	if (item.childRunId && (item.status === 'running' || item.status === 'launching')) {
+		const result = ingestRunManager.cancelRun(item.childRunId);
+		if (!result.ok && !result.error.toLowerCase().includes('not found')) {
+			item.error = result.error;
+		}
+	}
+
+	item.status = 'cancelled';
+	item.error = item.error ?? 'Cancelled by operator.';
+	item.lastUpdatedAtMs = nowMs();
+	logBatch('info', 'batch_item_cancelled', {
+		batchId,
+		queueRecordId: item.queueRecordId,
+		childRunId: item.childRunId
+	});
+
+	await saveBatchRun(batch);
+	return refreshBatchRunStatus(batchId);
+}
+
+export async function resumeBatchItem(batchId: string, queueRecordId: string): Promise<StoaBatchRunView | null> {
+	const batch = await getBatchRun(batchId);
+	if (!batch) return null;
+	batch.status = 'running';
+	const item = findBatchItemByQueueId(batch, queueRecordId);
+	if (!item) throw new Error('Batch item not found');
+	if (item.status !== 'cancelled' && item.status !== 'error') {
+		throw new Error('Batch item is not in a resumable state');
+	}
+
+	if (item.childRunId) {
+		const childState = await ingestRunManager.getStateAsync(item.childRunId);
+		if (childState?.status === 'error' && childState.resumable === true) {
+			const resumed = await ingestRunManager.resumeFromFailure(item.childRunId);
+			if (resumed.ok) {
+				item.status = 'running';
+				item.error = null;
+				item.attempts += 1;
+				item.lastUpdatedAtMs = nowMs();
+				logBatch('info', 'batch_item_resumed_from_checkpoint', {
+					batchId,
+					queueRecordId: item.queueRecordId,
+					childRunId: item.childRunId,
+					attempts: item.attempts
+				});
+				await saveBatchRun(batch);
+				return refreshBatchRunStatus(batchId);
+			}
+			logBatch('warn', 'batch_item_checkpoint_resume_failed', {
+				batchId,
+				queueRecordId: item.queueRecordId,
+				childRunId: item.childRunId,
+				error: resumed.error
+			});
+		}
+	}
+
+	// Fallback: relaunch from queue when checkpoint resume is unavailable.
+	const reopened = await reopenQueueRowForRetry(item.queueRecordId);
+	if (!reopened) {
+		throw new Error('Unable to reopen queue row for retry');
+	}
+	item.status = 'pending';
+	item.error = null;
+	item.childRunId = null;
+	item.lastUpdatedAtMs = nowMs();
+	logBatch('info', 'batch_item_reopened_for_retry', {
+		batchId,
+		queueRecordId: item.queueRecordId
+	});
+	await saveBatchRun(batch);
+	return refreshBatchRunStatus(batchId);
+}
+
 export async function resumeBatchRun(batchId: string): Promise<StoaBatchRunView | null> {
 	const batch = await getBatchRun(batchId);
 	if (!batch) return null;
@@ -1438,7 +1563,7 @@ export async function resumeBatchRun(batchId: string): Promise<StoaBatchRunView 
 		if (item.status !== 'cancelled' && item.status !== 'error') continue;
 
 		// Closest-to-failure recovery: resume the existing child run from its checkpoint when possible.
-		if (item.status === 'error' && item.childRunId) {
+		if (item.childRunId) {
 			const childState = await ingestRunManager.getStateAsync(item.childRunId);
 			if (childState?.status === 'error' && childState.resumable === true) {
 				const resumed = await ingestRunManager.resumeFromFailure(item.childRunId);
