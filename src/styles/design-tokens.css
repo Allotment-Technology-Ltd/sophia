@@ -11,10 +11,16 @@
   --color-surface-raised: #201F1D;   /* Hover states, modals */
   --color-surface-sunken: #111110;   /* Code blocks, deep inset */
 
+  /*
+   * Text colour hierarchy — WCAG 2.1 AA required on #1A1917
+   * --color-text   : primary text — all body copy, headings, summaries, reasoning content. Must pass 4.5:1.
+   * --color-muted  : secondary text — supporting labels, timestamps, captions. Must pass 4.5:1.
+   * --color-dim    : decorative only — disabled states, ornamental borders, non-essential icons. Never use for text that carries meaning.
+   */
   /* ── Text ── */
   --color-text:           #E8E6E1;   /* Primary — headings, pass content */
-  --color-muted:          #D2CEC6;   /* Secondary — body copy, descriptions */
-  --color-dim:            #A8A29A;   /* Tertiary — labels, timestamps, inactive */
+  --color-muted:          #DCD8D0;   /* Secondary — was #D2CEC6; lightened for ≥4.5:1 vs #1A1917 (WCAG AA body) */
+  --color-dim:            #A8A29A;   /* Tertiary — decorative only; not for meaningful text */
 
   /* ── Borders ── */
   --color-border:         #2E2C29;   /* All borders and dividers, 1px */
@@ -55,8 +61,10 @@
   --color-amber-border:   rgba(196, 168, 130, 0.25);
 
   /* ── Typography ── */
-  --font-display: 'Cormorant Garamond', Georgia, serif;
-  --font-ui:      'JetBrains Mono', 'Courier New', monospace;
+  --font-display: 'Cormorant Garamond', 'Georgia', serif;   /* landing hero only — 32px+, weight 500+ */
+  --font-body:    'Inter', system-ui, -apple-system, sans-serif; /* body copy, prose, cards, descriptions */
+  --font-prose:   'Inter', system-ui, -apple-system, sans-serif; /* reasoning readouts and long-form content */
+  --font-ui:      'Inter', system-ui, -apple-system, sans-serif;   /* UI chrome, labels, controls */
 
   /* Size scale */
   --text-d1:    clamp(3rem, 5vw, 4.5rem);    /* Hero heading */
@@ -118,7 +126,7 @@
    
    --color-text on --color-bg:             14.09:1  ✓✓
    --color-text on --color-surface-raised: 13.20:1  ✓✓
-   --color-muted on --color-bg:             ~7.5:1  ✓✓ (tokens lightened 2026-03-24)
+   --color-muted on --color-bg:             ≥4.5:1  ✓  (was #D2CEC6; lightened to #DCD8D0 for AA body on #1A1917)
    --color-dim on --color-bg:               ~4.6:1  ✓  (normal text at ≥14px; else use muted)
    --color-sage on --color-bg:              6.25:1  ✓✓
    --color-copper on --color-bg:            6.86:1  ✓✓

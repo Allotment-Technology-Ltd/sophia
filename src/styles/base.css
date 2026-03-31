@@ -1,6 +1,9 @@
 /* ============================================================
    SOPHIA Base Styles — Design B
    src/styles/base.css
+   ============================================================
+   Text colour hierarchy and hex values: see design-tokens.css :root
+   (--color-text, --color-muted, --color-dim) and WCAG notes there.
    ============================================================ */
 
 /* Layered so @layer components / utilities can override (unlayered * wins over layered rules). */
@@ -15,7 +18,7 @@
 html {
   background: var(--color-bg);
   color: var(--color-text);
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-size: 16px;
   font-weight: 400;
   line-height: 1.85;
@@ -96,4 +99,125 @@ a:hover {
 
 .sophia-narrow-content {
   max-width: var(--page-content-max-width);
+}
+
+/*
+ * .reasoning-prose
+ * Applied to any container that renders markdown output from analysis, critique, or synthesis passes.
+ * Uses Inter for body text. Cormorant is not used here — it is not legible at body size on dark backgrounds.
+ * Do not apply to UI chrome, cards, or labels. Apply only to long-form reasoning content.
+ */
+@layer base {
+  .reasoning-prose {
+    font-family: var(--font-prose);
+    font-size: 1rem;
+    line-height: 1.75;
+    color: var(--color-text);
+    max-width: 72ch;
+  }
+
+  .reasoning-prose h2 {
+    font-family: var(--font-ui);
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: var(--color-text);
+    margin: 2rem 0 0.75rem;
+    letter-spacing: 0.01em;
+    line-height: 1.3;
+  }
+
+  .reasoning-prose h3 {
+    font-family: var(--font-ui);
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--color-text);
+    margin: 1.5rem 0 0.5rem;
+    line-height: 1.35;
+  }
+
+  .reasoning-prose h4 {
+    font-family: var(--font-ui);
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--color-text);
+    margin: 1.25rem 0 0.4rem;
+  }
+
+  .reasoning-prose p {
+    margin: 0 0 1.1em;
+    color: var(--color-text);
+  }
+
+  .reasoning-prose ol,
+  .reasoning-prose ul {
+    padding-left: 1.5rem;
+    margin: 0 0 1.1em;
+    color: var(--color-text);
+  }
+
+  .reasoning-prose li {
+    margin-bottom: 0.45em;
+    line-height: 1.65;
+  }
+
+  .reasoning-prose li + li {
+    margin-top: 0.1em;
+  }
+
+  .reasoning-prose strong {
+    font-weight: 600;
+    color: var(--color-text);
+  }
+
+  .reasoning-prose em {
+    font-style: italic;
+  }
+
+  .reasoning-prose blockquote {
+    border-left: 2px solid var(--color-sage-border, #4a5a4c);
+    padding: 0.5rem 0 0.5rem 1.25rem;
+    margin: 1.25rem 0;
+    color: var(--color-muted);
+    font-style: italic;
+  }
+
+  .reasoning-prose hr {
+    border: none;
+    border-top: 1px solid var(--color-border);
+    margin: 1.75rem 0;
+  }
+
+  .reasoning-prose code {
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+    font-size: 0.875em;
+    background: color-mix(in srgb, var(--color-surface-raised, #2a2927) 80%, transparent);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    padding: 0.1em 0.35em;
+    color: var(--color-text);
+  }
+
+  .reasoning-prose a {
+    color: var(--color-blue, #6fa3d4);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .reasoning-prose a:hover {
+    color: var(--color-text);
+  }
+
+  /* References section from Harvard referencing policy */
+  .reasoning-prose h2:last-of-type {
+    margin-top: 2.5rem;
+  }
+
+  .reasoning-prose h1 {
+    font-family: var(--font-ui);
+    font-size: 1.35rem;
+    font-weight: 600;
+    color: var(--color-text);
+    margin: 0 0 0.75rem;
+    line-height: 1.3;
+  }
 }

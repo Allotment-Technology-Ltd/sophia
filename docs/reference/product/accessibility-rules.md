@@ -27,3 +27,17 @@ last_reviewed: 2026-03-13
 
 1. `button`, `input`, `select`, and `textarea` must inherit app typography and text color from the design system unless explicitly overridden.
 2. Focus indicators must remain visible (`:focus-visible`) and not be removed.
+
+## Typography Rules
+
+1. The `--font-display` token (Cormorant Garamond) is restricted to public landing page hero and section headings at ≥32px and font-weight ≥500. It must not be used for body copy, application headings, card text, reasoning readouts, or any text below 32px.
+
+2. The `--font-prose` token (Inter) must be used for all reasoning readout containers (analysis, critique, synthesis pass text). Apply via the `.reasoning-prose` class.
+
+3. The `--font-body` and `--font-ui` tokens (Inter) must be used for all application body copy, card content, and UI controls.
+
+4. Minimum body text size is 1rem (16px). Text below 0.875rem (14px) must only be used for non-essential decorative labels.
+
+5. Minimum line-height for paragraph text is 1.65. Reasoning readouts use 1.75.
+
+6. `max-width: 72ch` must be applied to all long-form prose containers to prevent unreadably wide line lengths.
