@@ -111,7 +111,7 @@
 
 	.thinker-name {
 		margin: 0;
-		font-family: 'Cormorant Garamond', Georgia, serif;
+		font-family: var(--font-body);
 		font-size: 22px;
 		font-weight: 600;
 		color: rgba(60, 45, 30, 0.95);
@@ -120,7 +120,7 @@
 
 	.unlock-message {
 		margin: 0;
-		font-family: 'Cormorant Garamond', Georgia, serif;
+		font-family: var(--font-body);
 		font-size: 15px;
 		font-style: italic;
 		color: rgba(80, 65, 50, 0.85);

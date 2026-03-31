@@ -109,7 +109,7 @@
     left: 50%;
     transform: translateX(-50%);
     color: #e8dcc8;
-    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-family: var(--font-body);
     font-style: italic;
     font-size: 20px;
     z-index: 30;

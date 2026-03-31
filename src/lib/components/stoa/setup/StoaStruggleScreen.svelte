@@ -148,7 +148,7 @@
     padding: 32px;
     background: #000;
     color: #e8dcc8;
-    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-family: var(--font-body);
     font-style: italic;
     text-align: center;
   }

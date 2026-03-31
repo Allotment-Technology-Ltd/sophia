@@ -473,7 +473,7 @@
   .line {
     margin: 0 0 12px;
     color: #e8dcc8;
-    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-family: var(--font-body);
     font-style: italic;
     font-size: 20px;
     line-height: 1.35;
@@ -498,7 +498,7 @@
     border: 0;
     background: transparent;
     color: rgba(232, 220, 200, 0.75);
-    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-family: var(--font-body);
     font-style: italic;
     font-size: 22px;
     text-align: left;
@@ -525,7 +525,7 @@
     border-bottom: 1px solid rgba(232, 220, 200, 0.25);
     background: transparent;
     color: #e8dcc8;
-    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-family: var(--font-body);
     font-style: italic;
     font-size: 21px;
     padding: 8px 4px;
@@ -539,7 +539,7 @@
     border-radius: 10px;
     background: rgba(60, 49, 35, 0.4);
     color: #e8dcc8;
-    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-family: var(--font-body);
     font-size: 18px;
     font-style: italic;
     padding: 10px 16px;
