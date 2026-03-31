@@ -1,24 +1,10 @@
 import * as THREE from 'three';
 import type { StoaZone } from '$lib/types/stoa';
-import type { WorldMapNode, WorldMapEdge } from '$lib/types/stoa';
 import { CameraController } from '../camera/controller';
 import { buildColonnade } from './colonnade';
-import { buildShrines } from './shrines';
 import { buildSeaTerrace } from './sea-terrace';
-import { buildWorldMap } from './world-map';
 
-interface ZoneBuilderContext {
-  unlockedThinkers: string[];
-  scene: THREE.Scene;
-  worldMapData: {
-    nodes: WorldMapNode[];
-    edges: WorldMapEdge[];
-  };
-}
-
-type ZoneBuilder = (context: ZoneBuilderContext) => Promise<THREE.Group>;
-type ZoneUpdateFn = (delta: number, hour?: number, elapsed?: number) => void;
-type ZoneTimeSetterFn = (hour: number) => void;
+type ZoneBuilder = () => Promise<THREE.Group>;
 
 interface ZoneTransitionState {
   zone: StoaZone;
@@ -32,10 +18,8 @@ interface ZoneTransitionState {
 }
 
 const ZONE_BUILDERS: Partial<Record<StoaZone, ZoneBuilder>> = {
-  colonnade: async (context) => buildColonnade(context.scene),
-  'sea-terrace': async () => buildSeaTerrace(),
-  shrines: async (context) => buildShrines(context.unlockedThinkers),
-  'world-map': async (context) => buildWorldMap(context.worldMapData)
+  colonnade: buildColonnade,
+  'sea-terrace': buildSeaTerrace
 };
 
 const ZONE_CAMERA: Record<StoaZone, { position: THREE.Vector3; target: THREE.Vector3 }> = {
@@ -74,14 +58,6 @@ export class ZoneManager {
   private activeGroup: THREE.Group | null = null;
   private transitionState: ZoneTransitionState | null = null;
   private transitionQueue: Promise<void> = Promise.resolve();
-  private unlockedThinkers: string[] = ['marcus'];
-  private worldMapData: { nodes: WorldMapNode[]; edges: WorldMapEdge[] } = { nodes: [], edges: [] };
-  private shrinesVersion = 0;
-  private renderedShrinesVersion = -1;
-  private worldMapVersion = 0;
-  private renderedWorldMapVersion = -1;
-  private elapsed = 0;
-  private timeOfDayHour = 18;
 
   public constructor(scene: THREE.Scene, camera: THREE.PerspectiveCamera) {
     this.scene = scene;
@@ -99,49 +75,14 @@ export class ZoneManager {
     await this.transition(zone);
   }
 
-  public setUnlockedThinkers(unlockedThinkers: string[]): void {
-    const next = [...new Set(unlockedThinkers)];
-    const current = [...this.unlockedThinkers];
-    next.sort();
-    current.sort();
-
-    const changed =
-      next.length !== current.length || next.some((value, index) => value !== current[index]);
-    if (!changed) {
-      return;
-    }
-
-    this.unlockedThinkers = [...new Set(unlockedThinkers)];
-    this.shrinesVersion += 1;
-  }
-
-  public setWorldMapData(data: { nodes: WorldMapNode[]; edges: WorldMapEdge[] }): void {
-    const normalizedNodes = Array.isArray(data.nodes) ? data.nodes : [];
-    const normalizedEdges = Array.isArray(data.edges) ? data.edges : [];
-    this.worldMapData = {
-      nodes: normalizedNodes,
-      edges: normalizedEdges
-    };
-    this.worldMapVersion += 1;
-  }
-
   private async runTransition(zone: StoaZone): Promise<void> {
-    const shouldRebuildShrines =
-      zone === 'shrines' && this.renderedShrinesVersion !== this.shrinesVersion;
-    const shouldRebuildWorldMap =
-      zone === 'world-map' && this.renderedWorldMapVersion !== this.worldMapVersion;
-    if (this.activeZone === zone && !this.transitionState && !shouldRebuildShrines && !shouldRebuildWorldMap) {
+    if (this.activeZone === zone && !this.transitionState) {
       return;
     }
 
-    const builder = ZONE_BUILDERS[zone] ?? (async (context) => buildColonnade(context.scene));
-    const incomingGroup = await builder({
-      unlockedThinkers: this.unlockedThinkers,
-      scene: this.scene,
-      worldMapData: this.worldMapData
-    });
+    const builder = ZONE_BUILDERS[zone] ?? buildColonnade;
+    const incomingGroup = await builder();
     this.scene.add(incomingGroup);
-    this.applyTimeOfDay(incomingGroup);
 
     const incomingMaterials = this.collectMaterials(incomingGroup);
     const outgoingGroup = this.activeGroup ?? null;
@@ -153,12 +94,6 @@ export class ZoneManager {
       this.cameraController.setImmediate(cameraConfig.position, cameraConfig.target);
       this.activeZone = zone;
       this.activeGroup = incomingGroup;
-      if (zone === 'shrines') {
-        this.renderedShrinesVersion = this.shrinesVersion;
-      }
-      if (zone === 'world-map') {
-        this.renderedWorldMapVersion = this.worldMapVersion;
-      }
       return;
     }
 
@@ -182,14 +117,8 @@ export class ZoneManager {
 
   public update(): void {
     const delta = this.clock.getDelta();
-    this.elapsed += delta;
 
     if (this.transitionState) {
-      this.updateGroup(this.transitionState.incomingGroup, delta);
-      if (this.transitionState.outgoingGroup) {
-        this.updateGroup(this.transitionState.outgoingGroup, delta);
-      }
-
       this.transitionState.elapsed += delta;
       const rawT = Math.min(this.transitionState.elapsed / this.transitionState.duration, 1);
       const easedT = this.easeInOut(rawT);
@@ -205,40 +134,12 @@ export class ZoneManager {
 
         this.activeZone = this.transitionState.zone;
         this.activeGroup = this.transitionState.incomingGroup;
-        if (this.transitionState.zone === 'shrines') {
-          this.renderedShrinesVersion = this.shrinesVersion;
-        }
-        if (this.transitionState.zone === 'world-map') {
-          this.renderedWorldMapVersion = this.worldMapVersion;
-        }
         this.transitionState.resolve();
         this.transitionState = null;
       }
     }
-    if (!this.transitionState && this.activeGroup) {
-      this.updateGroup(this.activeGroup, delta);
-    }
 
-    const cameraOverride = Boolean(this.activeGroup?.userData?.cameraOverride);
-    if (!cameraOverride || this.transitionState) {
-      this.cameraController.update(delta);
-    }
-  }
-
-  public setTimeOfDay(hour: number): void {
-    if (!Number.isFinite(hour)) {
-      return;
-    }
-    this.timeOfDayHour = ((hour % 24) + 24) % 24;
-    if (this.activeGroup) {
-      this.applyTimeOfDay(this.activeGroup);
-    }
-    if (this.transitionState) {
-      this.applyTimeOfDay(this.transitionState.incomingGroup);
-      if (this.transitionState.outgoingGroup) {
-        this.applyTimeOfDay(this.transitionState.outgoingGroup);
-      }
-    }
+    this.cameraController.update(delta);
   }
 
   public dispose(): void {
@@ -263,115 +164,6 @@ export class ZoneManager {
     }
 
     this.activeZone = null;
-  }
-
-  public hover(pointerNdc: THREE.Vector2, camera: THREE.PerspectiveCamera): void {
-    if (!this.activeGroup) {
-      return;
-    }
-    const hover = this.activeGroup.userData.hover as
-      | ((pointerNdc: THREE.Vector2, camera: THREE.PerspectiveCamera) => void)
-      | undefined;
-    if (typeof hover === 'function') {
-      hover(pointerNdc, camera);
-    }
-  }
-
-  public pick(
-    pointerNdc: THREE.Vector2,
-    camera: THREE.PerspectiveCamera
-  ): { type: 'thinker'; thinkerId: string } | { type: 'world-map-node'; node: WorldMapNode } | null {
-    if (!this.activeGroup) {
-      return null;
-    }
-
-    const zonePick = this.activeGroup.userData.pick as
-      | ((pointerNdc: THREE.Vector2, camera: THREE.PerspectiveCamera) => {
-          node: WorldMapNode;
-          focus: { position: THREE.Vector3; target: THREE.Vector3 };
-        } | null)
-      | undefined;
-    if (typeof zonePick === 'function') {
-      const selected = zonePick(pointerNdc, camera);
-      if (selected) {
-        this.cameraController.transitionTo(selected.focus.position, selected.focus.target, 0.72);
-        return { type: 'world-map-node', node: selected.node };
-      }
-    }
-
-    if (this.activeZone !== 'shrines') {
-      return null;
-    }
-
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(pointerNdc, camera);
-    const intersections = raycaster.intersectObject(this.activeGroup, true);
-
-    for (const intersection of intersections) {
-      let current: THREE.Object3D | null = intersection.object;
-      while (current) {
-        const thinkerId = current.userData?.thinkerId;
-        const unlocked = current.userData?.unlocked;
-        if (typeof thinkerId === 'string' && unlocked === true) {
-          return { type: 'thinker', thinkerId };
-        }
-        current = current.parent;
-      }
-    }
-
-    return null;
-  }
-
-  public illuminateShrine(thinkerId: string): void {
-    if (!this.activeGroup || this.activeZone !== 'shrines') {
-      return;
-    }
-
-    this.activeGroup.traverse((object) => {
-      let current: THREE.Object3D | null = object;
-      let belongsToThinker = false;
-      while (current) {
-        if (current.userData?.thinkerId === thinkerId) {
-          belongsToThinker = true;
-          break;
-        }
-        current = current.parent;
-      }
-      if (!belongsToThinker) {
-        return;
-      }
-
-      if (object instanceof THREE.PointLight) {
-        object.intensity = Math.max(object.intensity, 0.95);
-        object.color.set('#ffad57');
-      }
-
-      if (!(object instanceof THREE.Mesh)) {
-        return;
-      }
-      if (object.userData?.shrineElement !== 'lamp-shell') {
-        return;
-      }
-
-      const material = object.material;
-      if (material instanceof THREE.MeshStandardMaterial) {
-        material.emissive.set('#9c6024');
-        material.emissiveIntensity = Math.max(material.emissiveIntensity, 1.2);
-        material.needsUpdate = true;
-      }
-    });
-  }
-
-  public setWorldMapSelection(nodeId: string | null): void {
-    if (!this.activeGroup || this.activeZone !== 'world-map') {
-      return;
-    }
-    const setSelection = this.activeGroup.userData.setSelection as
-      | ((selectedId: string | null) => void)
-      | undefined;
-    if (typeof setSelection === 'function') {
-      setSelection(nodeId);
-    }
   }
 
   private collectMaterials(group: THREE.Group): THREE.Material[] {
@@ -429,20 +221,6 @@ export class ZoneManager {
         }
       }
     });
-  }
-
-  private updateGroup(group: THREE.Group, delta: number): void {
-    const update = group.userData.update as ZoneUpdateFn | undefined;
-    if (typeof update === 'function') {
-      update(delta, this.timeOfDayHour, this.elapsed);
-    }
-  }
-
-  private applyTimeOfDay(group: THREE.Group): void {
-    const setTimeOfDay = group.userData.setTimeOfDay as ZoneTimeSetterFn | undefined;
-    if (typeof setTimeOfDay === 'function') {
-      setTimeOfDay(this.timeOfDayHour);
-    }
   }
 
   private easeInOut(t: number): number {

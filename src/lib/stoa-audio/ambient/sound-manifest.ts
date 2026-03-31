@@ -22,14 +22,18 @@ export interface BirdsongConfig {
 
 export const SOUND_MANIFEST = {
   waves: {
-    src: '/audio/ambient/recognition-theme.mp3',
+    src: '/audio/ambient/aegean-waves-loop.mp3',
     loop: true,
-    volume: 0.42,
+    volume: 0.4,
     spatial: true,
     pannerAttr: { rolloffFactor: 0.5 }
   },
   birdsong: {
-    src: [],
+    src: [
+      '/audio/ambient/swift-call-01.mp3',
+      '/audio/ambient/swift-call-02.mp3',
+      '/audio/ambient/swallow-loop.mp3'
+    ],
     loop: false,
     volume: 0.25,
     randomInterval: { min: 8000, max: 25000 }

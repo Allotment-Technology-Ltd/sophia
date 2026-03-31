@@ -1,11 +1,8 @@
 import * as THREE from 'three';
 import { createColumns } from '../objects/columns';
 import { createStoaSprite } from '../objects/stoa-sprite';
-import { DayCycle } from '../systems/day-cycle';
-import { TorchParticleSystem } from '../systems/particles';
 
 type DisposeFn = () => void;
-type UpdateFn = (delta: number, hour?: number) => void;
 
 function disposeMaterial(material: THREE.Material): void {
   const textureKeys = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'alphaMap', 'emissiveMap'] as const;
@@ -50,7 +47,7 @@ function disposeObject3D(root: THREE.Object3D): void {
   });
 }
 
-export async function buildColonnade(scene?: THREE.Scene): Promise<THREE.Group> {
+export async function buildColonnade(): Promise<THREE.Group> {
   const group = new THREE.Group();
   group.name = 'stoa-zone-colonnade';
 
@@ -92,32 +89,7 @@ export async function buildColonnade(scene?: THREE.Scene): Promise<THREE.Group> 
   torchRight.position.set(6.5, 3.2, -4.8);
   group.add(torchRight);
 
-  const torchParticles = new TorchParticleSystem([torchLeft.position, torchRight.position], {
-    perTorch: 20
-  });
-  const particlesGroup = torchParticles.getObject3D();
-  group.add(particlesGroup);
-
-  const dayCycle = scene ? new DayCycle(ambient, sun, scene, { defaultHour: 18 }) : null;
-  let currentHour = 18;
-  const update: UpdateFn = (delta, hour = 18) => {
-    torchParticles.update(delta);
-    if (dayCycle && Math.abs(hour - currentHour) > 0.001) {
-      currentHour = hour;
-      dayCycle.update(hour);
-    }
-  };
-  group.userData.update = update;
-  group.userData.setTimeOfDay = (hour: number) => {
-    if (dayCycle) {
-      currentHour = hour;
-      dayCycle.setHour(hour);
-    }
-  };
-
   const dispose: DisposeFn = () => {
-    group.remove(particlesGroup);
-    torchParticles.dispose();
     disposeObject3D(group);
   };
   group.userData.dispose = dispose;

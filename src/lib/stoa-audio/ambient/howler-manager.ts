@@ -1,13 +1,12 @@
 import { Howl } from 'howler';
 
 import type { StanceType, StoaZone } from '$lib/types/stoa';
-import { resolveAudioSrc } from '$lib/tauri/audio-resolver';
 
 import { SOUND_MANIFEST } from './sound-manifest';
 
 type LoopSoundKey = 'waves' | 'wind' | 'torchCrackle';
 
-const LOOP_SOUND_KEYS: LoopSoundKey[] = ['waves'];
+const LOOP_SOUND_KEYS: LoopSoundKey[] = ['waves', 'wind', 'torchCrackle'];
 
 const ZONE_POSITIONS: Record<StoaZone, { wavesX: number; torchX: number }> = {
   colonnade: { wavesX: -0.3, torchX: 0.35 },
@@ -33,6 +32,8 @@ export class HowlerManager {
 
     await Promise.all([
       this.loadLoop('waves'),
+      this.loadLoop('wind'),
+      this.loadLoop('torchCrackle'),
       ...SOUND_MANIFEST.birdsong.src.map(async (src) => this.loadBirdsong(src))
     ]);
 
@@ -106,9 +107,8 @@ export class HowlerManager {
 
   private async loadLoop(key: LoopSoundKey): Promise<void> {
     const config = SOUND_MANIFEST[key];
-    const resolvedSrc = await resolveAudioSrc(config.src);
     const howl = new Howl({
-      src: [resolvedSrc],
+      src: [config.src],
       loop: config.loop,
       volume: 0,
       preload: true,
@@ -126,9 +126,8 @@ export class HowlerManager {
   }
 
   private async loadBirdsong(src: string): Promise<void> {
-    const resolvedSrc = await resolveAudioSrc(src);
     const bird = new Howl({
-      src: [resolvedSrc],
+      src: [src],
       loop: false,
       volume: SOUND_MANIFEST.birdsong.volume,
       preload: true,

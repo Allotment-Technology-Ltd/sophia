@@ -1,10 +1,8 @@
 <script lang="ts">
-  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
-  import { fetchWithAuth } from '$lib/stoa/fetchWithAuth';
+  import { createEventDispatcher } from 'svelte';
 
-  import type { ReasoningAssessment, StanceType } from '$lib/types/stoa';
+  import type { StanceType } from '$lib/types/stoa';
   import { stoaSessionStore } from '$lib/stores/stoa-session.svelte';
-  import ReasoningAcknowledgement from './ReasoningAcknowledgement.svelte';
 
   interface Props {
     stance: StanceType;
@@ -38,11 +36,6 @@
     stance?: StanceType;
     frameworksReferenced?: string[];
     sourceClaims?: ClaimReference[];
-    xpGained?: number;
-    newUnlocks?: string[];
-    questsCompleted?: string[];
-    questsActivated?: string[];
-    assessment?: ReasoningAssessment;
   }
 
   const dispatch = createEventDispatcher<{ stanceChange: { stance: StanceType } }>();
@@ -54,9 +47,6 @@
   let displayText = $state('');
   let citations = $state<Citation[]>([]);
   let history = $state<ConversationTurn[]>([]);
-  let latestAssessment = $state<ReasoningAssessment | null>(null);
-  let composerElement = $state<HTMLTextAreaElement | null>(null);
-  let renderedText = $derived.by(() => normalizeAgentText(displayText));
 
   function isStanceType(value: unknown): value is StanceType {
     return (
@@ -96,34 +86,10 @@
   }
 
   function toCitations(sourceClaims: ClaimReference[]): Citation[] {
-    return sourceClaims
-      .map((claim) => {
-        const author = normalizeCitationPart(claim.sourceAuthor);
-        const work = normalizeCitationPart(claim.sourceWork);
-        if (!author && !work) return null;
-        const label = author && work ? `${author} — ${work}` : (author ?? work ?? '');
-        return {
-          id: claim.claimId,
-          label
-        };
-      })
-      .filter((citation): citation is Citation => Boolean(citation));
-  }
-
-  function normalizeCitationPart(value: string | null | undefined): string | null {
-    const normalized = (value ?? '').trim();
-    if (!normalized) return null;
-    const lower = normalized.toLowerCase();
-    if (lower === 'unknown' || lower === 'unknown source') return null;
-    return normalized;
-  }
-
-  function normalizeAgentText(value: string): string {
-    return value
-      .replace(/\*\*(.*?)\*\*/g, '$1')
-      .replace(/__(.*?)__/g, '$1')
-      .replace(/^\s*[*-]\s+/gm, '• ')
-      .trim();
+    return sourceClaims.map((claim) => ({
+      id: claim.claimId,
+      label: `${claim.sourceAuthor} — ${claim.sourceWork}`
+    }));
   }
 
   async function send(): Promise<void> {
@@ -150,7 +116,7 @@
     let resolvedClaims: ClaimReference[] = [];
 
     try {
-      const response = await fetchWithAuth('/api/stoa/dialogue', {
+      const response = await fetch('/api/stoa/dialogue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -216,27 +182,6 @@
           if (event.type === 'error') {
             throw new Error(event.message ?? 'Dialogue stream error');
           }
-
-          if (event.type === 'progress_update') {
-            if (typeof window !== 'undefined') {
-              window.dispatchEvent(
-                new CustomEvent('stoa:progress-update', {
-                  detail: {
-                    xpGained: typeof event.xpGained === 'number' ? event.xpGained : 0,
-                    newUnlocks: Array.isArray(event.newUnlocks) ? event.newUnlocks : [],
-                    questsCompleted: Array.isArray(event.questsCompleted) ? event.questsCompleted : [],
-                    questsActivated: Array.isArray(event.questsActivated) ? event.questsActivated : []
-                  }
-                })
-              );
-            }
-            continue;
-          }
-
-          if (event.type === 'reasoning_assessed') {
-            latestAssessment = event.assessment ?? null;
-            continue;
-          }
         }
       }
 
@@ -268,28 +213,6 @@
       void send();
     }
   }
-
-  function handleSeedTopic(event: Event): void {
-    if (!(event instanceof CustomEvent)) return;
-    const topic = (event.detail as { topic?: string } | undefined)?.topic?.trim();
-    if (!topic) return;
-    draft = topic;
-    queueMicrotask(() => {
-      composerElement?.focus();
-      const end = composerElement?.value.length ?? 0;
-      composerElement?.setSelectionRange(end, end);
-    });
-  }
-
-  onMount(() => {
-    if (typeof window === 'undefined') return;
-    window.addEventListener('stoa:seed-dialogue-topic', handleSeedTopic);
-  });
-
-  onDestroy(() => {
-    if (typeof window === 'undefined') return;
-    window.removeEventListener('stoa:seed-dialogue-topic', handleSeedTopic);
-  });
 </script>
 
 <section class="dialogue-overlay" aria-live="polite">
@@ -298,7 +221,7 @@
     <span class="stance">{stance.replace('_', ' ')}</span>
   </div>
 
-  <p class="stoa-words">{renderedText || 'Speak when ready. I will respond in measured company.'}</p>
+  <p class="stoa-words">{displayText || 'Speak when ready. I will respond in measured company.'}</p>
 
   {#if citations.length > 0}
     <ol class="citations" aria-label="Source citations">
@@ -310,7 +233,6 @@
 
   <div class="composer">
     <textarea
-      bind:this={composerElement}
       bind:value={draft}
       rows="2"
       placeholder="Describe what happened, then what you want to do next."
@@ -322,7 +244,6 @@
     </button>
   </div>
 </section>
-<ReasoningAcknowledgement assessment={latestAssessment} />
 
 <style>
   .dialogue-overlay {
@@ -330,7 +251,7 @@
     left: 50%;
     bottom: 120px;
     transform: translateX(-50%);
-    width: min(64vw, 900px);
+    width: min(60vw, 860px);
     border-radius: 12px;
     border: 1px solid rgba(180, 150, 100, 0.3);
     background: rgba(26, 25, 23, 0.85);
@@ -360,10 +281,10 @@
   .stoa-words {
     margin: 0;
     color: rgba(244, 238, 224, 0.95);
-    font-family: 'Cormorant Garamond', Georgia, serif;
-    font-size: clamp(19px, 2.1vw, 28px);
+    font-family: var(--font-display);
+    font-size: 18px;
     font-style: italic;
-    line-height: 1.52;
+    line-height: 1.7;
     min-height: 88px;
     white-space: pre-wrap;
   }
@@ -380,20 +301,20 @@
 
   .composer {
     display: grid;
-    gap: 16px;
+    gap: 12px;
   }
 
   textarea {
     width: 100%;
-    min-height: 84px;
+    min-height: 44px;
     max-height: 180px;
     resize: vertical;
     border-radius: 10px;
     border: 1px solid rgba(191, 167, 126, 0.36);
-    background: rgba(33, 29, 25, 0.78);
+    background: rgba(40, 35, 29, 0.62);
     padding: 12px 16px;
-    font-size: 17px;
-    line-height: 1.6;
+    font-size: 15px;
+    line-height: 1.5;
     color: rgba(241, 235, 225, 0.96);
   }
 
@@ -403,8 +324,8 @@
 
   button {
     justify-self: end;
-    min-height: 44px;
-    padding: 12px 20px;
+    min-height: 40px;
+    padding: 8px 20px;
     border-radius: 10px;
     border: 1px solid rgba(185, 145, 91, 0.5);
     background: rgba(124, 84, 51, 0.26);
@@ -419,12 +340,6 @@
   button:disabled {
     opacity: 0.56;
     cursor: not-allowed;
-  }
-
-  button:focus-visible,
-  textarea:focus-visible {
-    outline: 2px solid rgba(212, 176, 122, 0.85);
-    outline-offset: 3px;
   }
 
   @media (max-width: 1024px) {

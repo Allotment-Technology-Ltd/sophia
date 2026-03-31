@@ -1,5 +1,4 @@
 import type { StanceType, StoaSessionState, StoaZone } from '$lib/types/stoa';
-import { untrack } from 'svelte';
 
 const SESSION_STORAGE_KEY = 'stoa.session.id';
 
@@ -35,18 +34,15 @@ function createStoaSessionStore() {
   }
 
   function setSessionId(sessionId: string): void {
-    if (untrack(() => state.sessionId) === sessionId) return;
     state = { ...state, sessionId };
     persistSessionId(sessionId);
   }
 
   function setZone(zone: StoaZone): void {
-    if (untrack(() => state.zone) === zone) return;
     state = { ...state, zone };
   }
 
   function setStance(stance: StanceType): void {
-    if (untrack(() => state.stance) === stance) return;
     state = { ...state, stance };
   }
 
@@ -59,12 +55,10 @@ function createStoaSessionStore() {
   }
 
   function setAudioInitialized(audioInitialized: boolean): void {
-    if (untrack(() => state.audioInitialized) === audioInitialized) return;
     state = { ...state, audioInitialized };
   }
 
   function setSceneReady(sceneReady: boolean): void {
-    if (untrack(() => state.sceneReady) === sceneReady) return;
     state = { ...state, sceneReady };
   }
 
