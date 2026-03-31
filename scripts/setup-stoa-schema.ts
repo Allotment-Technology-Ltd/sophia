@@ -1,8 +1,5 @@
-import { config as loadEnv } from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import { Surreal } from 'surrealdb';
-
-loadEnv();
 
 /*
  * Stoa immersive schema extension. Run after setup-schema.ts. Do not merge into setup-schema.ts.
@@ -108,6 +105,41 @@ export async function setupStoaSchema(existingDb?: Surreal) {
 			DEFINE INDEX IF NOT EXISTS idx_framework_user ON stoa_framework_exposure COLUMNS user_id, framework_id UNIQUE;
 		`);
 		console.log('[STOA-SETUP] ✓ Table: stoa_framework_exposure');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS stoa_profile SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS user_id ON stoa_profile TYPE record<user>;
+			DEFINE FIELD IF NOT EXISTS arrival_reason ON stoa_profile TYPE string;
+			DEFINE FIELD IF NOT EXISTS starting_path ON stoa_profile TYPE string;
+			DEFINE FIELD IF NOT EXISTS beat3_choice ON stoa_profile TYPE string DEFAULT '';
+			DEFINE FIELD IF NOT EXISTS opening_struggle ON stoa_profile TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS opening_struggle_embedding ON stoa_profile TYPE option<array<float>>;
+			DEFINE FIELD IF NOT EXISTS philosophy_level ON stoa_profile TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS thinking_style ON stoa_profile TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS emotional_presence ON stoa_profile TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS primary_struggle_type ON stoa_profile TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS suggested_opening_stance ON stoa_profile TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS first_session_id ON stoa_profile TYPE string DEFAULT '';
+			DEFINE FIELD IF NOT EXISTS created_at ON stoa_profile TYPE datetime DEFAULT time::now();
+			DEFINE FIELD IF NOT EXISTS last_seen_at ON stoa_profile TYPE datetime DEFAULT time::now();
+			DEFINE FIELD IF NOT EXISTS total_sessions ON stoa_profile TYPE int DEFAULT 0;
+			DEFINE INDEX IF NOT EXISTS idx_stoa_profile_user ON stoa_profile COLUMNS user_id UNIQUE;
+		`);
+		console.log('[STOA-SETUP] ✓ Table: stoa_profile');
+
+		await db.query(`
+			DEFINE TABLE IF NOT EXISTS stoa_session SCHEMAFULL;
+			DEFINE FIELD IF NOT EXISTS user_id ON stoa_session TYPE record<user>;
+			DEFINE FIELD IF NOT EXISTS session_id ON stoa_session TYPE string;
+			DEFINE FIELD IF NOT EXISTS starting_path ON stoa_session TYPE string;
+			DEFINE FIELD IF NOT EXISTS dominant_stance ON stoa_session TYPE option<string>;
+			DEFINE FIELD IF NOT EXISTS turn_count ON stoa_session TYPE int DEFAULT 0;
+			DEFINE FIELD IF NOT EXISTS started_at ON stoa_session TYPE datetime DEFAULT time::now();
+			DEFINE FIELD IF NOT EXISTS last_active ON stoa_session TYPE datetime DEFAULT time::now();
+			DEFINE INDEX IF NOT EXISTS idx_stoa_session_user ON stoa_session COLUMNS user_id;
+			DEFINE INDEX IF NOT EXISTS idx_stoa_session_id ON stoa_session COLUMNS session_id UNIQUE;
+		`);
+		console.log('[STOA-SETUP] ✓ Table: stoa_session');
 
 		console.log('\n[STOA-SETUP] ✅ Stoa schema extension created successfully!\n');
 

@@ -1,21 +1,38 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
-import { loadStoaProfile, upsertStoaProfile } from '$lib/server/stoa/sessionStore';
+import { randomUUID } from 'node:crypto';
+import { embedText } from '$lib/server/embeddings';
+import type {
+  ArrivalReason,
+  StartingPath,
+  StoaProfile
+} from '$lib/types/stoa';
+import {
+  createStoaProfile,
+  getStoaProfile,
+  updateStoaProfile
+} from '$lib/server/stoa/profile-store';
+
+function isArrivalReason(value: unknown): value is ArrivalReason {
+  return (
+    value === 'seeking_peace' ||
+    value === 'seeking_direction' ||
+    value === 'carrying_burden' ||
+    value === 'uncertain'
+  );
+}
+
+function isStartingPath(value: unknown): value is StartingPath {
+  return value === 'garden' || value === 'colonnade' || value === 'sea_terrace';
+}
 
 export const GET: RequestHandler = async ({ locals }) => {
   const uid = locals.user?.uid;
+  // Anonymous visitors: treat as "no profile" so the client can show onboarding without a 401 loop.
   if (!uid) {
-    return json({ error: 'Authentication required' }, { status: 401 });
+    return json(null);
   }
-  const profile = await loadStoaProfile(uid);
-  return json({
-    goals: profile.goals,
-    triggers: profile.triggers,
-    practices: profile.practices,
-    stoicLevel: profile.stoicLevel ?? null,
-    primaryChallenge: profile.primaryChallenge ?? null,
-    intakeCompletedAt: profile.intakeCompletedAt ?? null,
-    updatedAt: profile.updatedAt ?? null
-  });
+  const profile = await getStoaProfile(uid);
+  return json(profile);
 };
 
 export const POST: RequestHandler = async ({ locals, request }) => {
@@ -23,43 +40,58 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   if (!uid) {
     return json({ error: 'Authentication required' }, { status: 401 });
   }
+
   const body = await request.json().catch(() => null);
   if (!body || typeof body !== 'object') {
     return json({ error: 'Invalid profile payload' }, { status: 400 });
   }
-  const coerce = (value: unknown): string[] =>
-    Array.isArray(value)
-      ? value.filter((item): item is string => typeof item === 'string').map((item) => item.trim())
-      : [];
-  const saved = await upsertStoaProfile({
-    userId: uid,
-    goals: coerce((body as Record<string, unknown>).goals),
-    triggers: coerce((body as Record<string, unknown>).triggers),
-    practices: coerce((body as Record<string, unknown>).practices),
-    stoicLevel:
-      (body as Record<string, unknown>).stoicLevel === 'some_exposure' ||
-      (body as Record<string, unknown>).stoicLevel === 'regular_practitioner'
-        ? ((body as Record<string, unknown>).stoicLevel as 'some_exposure' | 'regular_practitioner')
-        : (body as Record<string, unknown>).stoicLevel === 'new'
-          ? 'new'
-          : undefined,
-    primaryChallenge:
-      typeof (body as Record<string, unknown>).primaryChallenge === 'string'
-        ? String((body as Record<string, unknown>).primaryChallenge).trim()
-        : undefined,
-    intakeCompletedAt:
-      typeof (body as Record<string, unknown>).intakeCompletedAt === 'string'
-        ? String((body as Record<string, unknown>).intakeCompletedAt)
-        : undefined,
-    intakeVersion:
-      typeof (body as Record<string, unknown>).intakeVersion === 'number'
-        ? ((body as Record<string, unknown>).intakeVersion as number)
-        : undefined
+
+  const rawArrivalReason = (body as Record<string, unknown>).arrivalReason;
+  const rawStartingPath = (body as Record<string, unknown>).startingPath;
+  const rawOpeningStruggle = (body as Record<string, unknown>).openingStruggle;
+
+  if (!isArrivalReason(rawArrivalReason) || !isStartingPath(rawStartingPath)) {
+    return json({ error: 'Invalid arrival reason or starting path' }, { status: 400 });
+  }
+
+  const openingStruggle =
+    typeof rawOpeningStruggle === 'string' && rawOpeningStruggle.trim().length > 0
+      ? rawOpeningStruggle.trim()
+      : null;
+
+  let openingStruggleEmbedding: number[] | null = null;
+  if (openingStruggle) {
+    openingStruggleEmbedding = await embedText(openingStruggle).catch(() => null);
+  }
+
+  const profile = await createStoaProfile(uid, {
+    arrivalReason: rawArrivalReason,
+    startingPath: rawStartingPath,
+    openingStruggle,
+    openingStruggleEmbedding,
+    firstSessionId: randomUUID()
   });
-  return json({
-    goals: saved.goals,
-    triggers: saved.triggers,
-    practices: saved.practices
-  });
+
+  return json({ profile, isNewStudent: true });
+};
+
+export const PATCH: RequestHandler = async ({ locals, request }) => {
+  const uid = locals.user?.uid;
+  if (!uid) {
+    return json({ error: 'Authentication required' }, { status: 401 });
+  }
+
+  const body = await request.json().catch(() => null);
+  if (!body || typeof body !== 'object') {
+    return json({ error: 'Invalid profile payload' }, { status: 400 });
+  }
+
+  const unsafeKeys = new Set(['userId', 'createdAt']);
+  const updates = Object.fromEntries(
+    Object.entries(body as Record<string, unknown>).filter(([key]) => !unsafeKeys.has(key))
+  ) as Partial<StoaProfile>;
+
+  const profile = await updateStoaProfile(uid, updates);
+  return json(profile);
 };
 

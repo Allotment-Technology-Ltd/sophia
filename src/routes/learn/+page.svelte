@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { getIdToken } from '$lib/authClient';
   import { renderMarkdown } from '$lib/utils/markdown';
   import { formatWordRange, resolveShortReviewWordRange } from '$lib/utils/learnWordRange';
@@ -10,6 +11,8 @@
   const SUBMIT_ESSAYS_COMING_SOON = true;
 
   let activeSection = $state<Section>('daily');
+  let accessResolved = $state(false);
+  let accessAllowed = $state(false);
   let dailyLessons = $state<LessonUnit[]>([]);
   let practiceLessons = $state<LessonUnit[]>([]);
   let selectedLesson = $state<LessonUnit | null>(null);
@@ -350,6 +353,35 @@
     return fetch(path, { ...init, headers });
   }
 
+  async function resolveOwnerAccess(): Promise<boolean> {
+    const token = await getIdToken();
+    if (!token) {
+      await goto('/auth');
+      return false;
+    }
+    const response = await fetch('/api/admin/me', {
+      headers: { Authorization: `Bearer ${token}` }
+    }).catch(() => null);
+    if (!response) {
+      await goto('/access-denied');
+      return false;
+    }
+    if (response.status === 401) {
+      await goto('/auth');
+      return false;
+    }
+    if (!response.ok) {
+      await goto('/access-denied');
+      return false;
+    }
+    const payload = (await response.json()) as { is_owner?: boolean };
+    if (!payload.is_owner) {
+      await goto('/access-denied');
+      return false;
+    }
+    return true;
+  }
+
   async function fetchLessons(): Promise<void> {
     lessonLoading = true;
     lessonError = '';
@@ -586,9 +618,14 @@
   }
 
   onMount(() => {
-    void fetchLessons();
-    void fetchProgress();
-    void fetchLearnEntitlements();
+    void (async () => {
+      accessAllowed = await resolveOwnerAccess();
+      accessResolved = true;
+      if (!accessAllowed) return;
+      void fetchLessons();
+      void fetchProgress();
+      void fetchLearnEntitlements();
+    })();
   });
 </script>
 
@@ -601,6 +638,11 @@
 </svelte:head>
 
 <main class="learn-page">
+  {#if !accessResolved}
+    <section class="access-loading" aria-live="polite">
+      <p>Checking access…</p>
+    </section>
+  {:else if accessAllowed}
   <header class="hero">
     <p class="eyebrow">Learn</p>
     <h1>Build philosophical reasoning with guided dialectics.</h1>
@@ -1348,6 +1390,7 @@
       {/if}
     </section>
   {/if}
+  {/if}
 </main>
 
 <style>
@@ -1357,6 +1400,18 @@
     max-width: 1200px;
     margin: 0 auto;
     color: var(--color-text);
+  }
+
+  .access-loading {
+    min-height: 50vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--color-dim);
   }
 
   .hero {

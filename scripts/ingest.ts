@@ -18,7 +18,12 @@ import * as path from 'path';
 import { Surreal } from 'surrealdb';
 import { generateText } from 'ai';
 import { estimateCost as estimateRestormelCost, defaultProviders } from '@restormel/keys';
-import { embedTexts, EMBEDDING_DIMENSIONS } from '../src/lib/server/embeddings.js';
+import {
+	embedTexts,
+	EMBEDDING_DIMENSIONS,
+	EMBEDDING_MODEL,
+	getEmbeddingProvider
+} from '../src/lib/server/embeddings.js';
 import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.js';
 import { z } from 'zod';
 import {
@@ -2348,6 +2353,56 @@ interface IngestionLogRecord {
 	completed_at?: string;
 }
 
+let ingestionLogCanonicalFieldsSupported: boolean | null = null;
+
+function isMissingIngestionLogFieldError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return (
+		/ingestion_log/i.test(message) &&
+		/no such field exists/i.test(message)
+	);
+}
+
+async function initializeIngestionLogCompatibility(db: Surreal | null): Promise<void> {
+	if (!db || ingestionLogCanonicalFieldsSupported !== null) return;
+	try {
+		await db.query(`
+			DEFINE FIELD IF NOT EXISTS canonical_url ON ingestion_log TYPE string;
+			DEFINE FIELD IF NOT EXISTS canonical_url_hash ON ingestion_log TYPE string;
+			DEFINE INDEX IF NOT EXISTS ingestion_log_canonical_hash ON ingestion_log FIELDS canonical_url_hash;
+		`);
+		ingestionLogCanonicalFieldsSupported = true;
+		return;
+	} catch (error) {
+		// Some deployments use restricted DB roles. Fall through to capability probe.
+		if (!isMissingIngestionLogFieldError(error)) {
+			console.warn(
+				`  [WARN] Could not auto-upgrade ingestion_log schema for canonical URL fields: ${
+					error instanceof Error ? error.message : String(error)
+				}`
+			);
+		}
+	}
+
+	try {
+		await db.query('SELECT canonical_url_hash FROM ingestion_log LIMIT 1;');
+		ingestionLogCanonicalFieldsSupported = true;
+	} catch (error) {
+		if (isMissingIngestionLogFieldError(error)) {
+			ingestionLogCanonicalFieldsSupported = false;
+			console.warn(
+				'  [WARN] ingestion_log lacks canonical_url/canonical_url_hash fields; using legacy source_url-only logging compatibility mode.'
+			);
+			return;
+		}
+		throw error;
+	}
+}
+
+function supportsIngestionLogCanonicalFields(): boolean {
+	return ingestionLogCanonicalFieldsSupported !== false;
+}
+
 function buildSourceUrlCandidates(sourceUrl: string): string[] {
 	const identity = canonicalizeAndHashSourceUrl(sourceUrl);
 	if (!identity) return [sourceUrl];
@@ -2374,6 +2429,18 @@ function buildSourceUrlCandidates(sourceUrl: string): string[] {
 async function getIngestionLog(db: Surreal | null, sourceUrl: string): Promise<IngestionLogRecord | null> {
 	if (!db) return null;
 	const identity = canonicalizeAndHashSourceUrl(sourceUrl);
+	if (!supportsIngestionLogCanonicalFields()) {
+		const legacyResult = await db.query<IngestionLogRecord[][]>(
+			`SELECT * FROM ingestion_log
+			 WHERE source_url INSIDE $source_urls
+			 LIMIT 1`,
+			{
+				source_urls: buildSourceUrlCandidates(sourceUrl)
+			}
+		);
+		const legacyRows = Array.isArray(legacyResult?.[0]) ? legacyResult[0] : [];
+		return legacyRows.length > 0 ? legacyRows[0] : null;
+	}
 	const result = await db.query<IngestionLogRecord[][]>(
 		`SELECT * FROM ingestion_log
 		 WHERE source_url INSIDE $source_urls
@@ -2393,6 +2460,21 @@ async function createIngestionLog(db: Surreal | null, sourceUrl: string, sourceT
 	const identity = canonicalizeAndHashSourceUrl(sourceUrl);
 	if (!identity) {
 		throw new Error(`[INTEGRITY] Cannot create ingestion log for invalid source URL: ${sourceUrl}`);
+	}
+	if (!supportsIngestionLogCanonicalFields()) {
+		await db.query(
+			`CREATE ingestion_log CONTENT {
+				source_url: $url,
+				source_title: $title,
+				status: 'extracting',
+				started_at: time::now()
+			}`,
+			{
+				url: identity.canonicalUrl,
+				title: sourceTitle
+			}
+		);
+		return;
 	}
 	await db.query(
 		`CREATE ingestion_log CONTENT {
@@ -2422,6 +2504,22 @@ async function updateIngestionLog(
 	const identity = canonicalizeAndHashSourceUrl(sourceUrl);
 	if (!identity) {
 		throw new Error(`[INTEGRITY] Cannot update ingestion log for invalid source URL: ${sourceUrl}`);
+	}
+	if (!supportsIngestionLogCanonicalFields()) {
+		const legacySetClauses = Object.keys(updates)
+			.map((key) => `${key} = $${key}`)
+			.join(', ');
+		const legacySql = `UPDATE ingestion_log
+			SET source_url = $canonical_url,
+				${legacySetClauses}
+			WHERE source_url INSIDE $source_urls`;
+		const legacyVars = {
+			...updates,
+			canonical_url: identity.canonicalUrl,
+			source_urls: buildSourceUrlCandidates(sourceUrl)
+		};
+		await dbQueryWithRetry(db, legacySql, legacyVars, 3);
+		return;
 	}
 	const setClauses = Object.keys(updates)
 		.map((key) => `${key} = $${key}`)
@@ -2634,9 +2732,13 @@ async function main() {
 		process.exit(1);
 	}
 
+	const configuredEmbeddingProvider = getEmbeddingProvider();
+
 	// Validate environment
-	if (!GOOGLE_VERTEX_PROJECT) {
-		console.error('[ERROR] GOOGLE_VERTEX_PROJECT (or GCP_PROJECT_ID) is required');
+	if (configuredEmbeddingProvider.name === 'vertex' && !GOOGLE_VERTEX_PROJECT) {
+		console.error(
+			'[ERROR] GOOGLE_VERTEX_PROJECT (or GCP_PROJECT_ID) is required when EMBEDDING_PROVIDER=vertex'
+		);
 		process.exit(1);
 	}
 	if (shouldValidate && !GOOGLE_VERTEX_PROJECT) {
@@ -2692,6 +2794,7 @@ async function main() {
 		db = new Surreal();
 		try {
 			await reconnectDbWithRetry(db, 'initial startup');
+			await initializeIngestionLogCompatibility(db);
 		} catch (error) {
 			console.error(`[ERROR] Failed to connect to SurrealDB: ${error instanceof Error ? error.message : String(error)}`);
 			console.error(
@@ -3411,12 +3514,28 @@ async function main() {
 			await updateIngestionLog(db, sourceMeta.url, { status: 'embedding' });
 
 			console.log('\n┌──────────────────────────────────────────────────────────┐');
-			console.log('│ STAGE 4: EMBEDDING (Vertex AI text-embedding-005)        │');
+			console.log(
+				`│ STAGE 4: EMBEDDING (${configuredEmbeddingProvider.name}:${EMBEDDING_MODEL})`
+					.padEnd(59, ' ') + '│'
+			);
 			console.log('└──────────────────────────────────────────────────────────┘');
 
 			const claimTexts = allClaims.map((c) => c.text);
-			if (embeddingPlan.provider !== 'vertex') {
-				throw new Error('Embedding model profile currently supports only vertex provider');
+			if (db) {
+				const dimProbe = await db.query<Array<{ dim?: number }> | { dim?: number }[]>(
+					'SELECT array::len(embedding) AS dim FROM claim WHERE embedding IS NOT NONE LIMIT 1'
+				);
+				const existingDim = Array.isArray(dimProbe?.[0]) ? (dimProbe[0][0]?.dim ?? null) : null;
+				if (typeof existingDim === 'number' && existingDim > 0 && existingDim !== EMBEDDING_DIMENSIONS) {
+					throw new Error(
+						`[INTEGRITY] Existing claim embeddings are ${existingDim}-dim, but configured embedding output is ${EMBEDDING_DIMENSIONS}-dim (${configuredEmbeddingProvider.name}:${EMBEDDING_MODEL}). Migrate or restore vectors/index before re-embedding this corpus.`
+					);
+				}
+			}
+			if (embeddingPlan.provider !== configuredEmbeddingProvider.name) {
+				console.warn(
+					`  [WARN] Embedding plan provider (${embeddingPlan.provider}) differs from configured provider (${configuredEmbeddingProvider.name}).`
+				);
 			}
 
 			const priorEmbeddings =

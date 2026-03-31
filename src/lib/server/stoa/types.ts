@@ -136,6 +136,8 @@ export type DialogueStreamEventType =
   | 'metadata'
   | 'escalation_started'
   | 'escalation_result'
+  | 'progress_update'
+  | 'reasoning_assessed'
   | 'complete'
   | 'error';
 

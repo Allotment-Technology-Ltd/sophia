@@ -6,7 +6,7 @@ import {
   CANONICAL_INGESTION_PRIMARY_MODELS,
   type IngestionLlmStageKey
 } from '../../ingestionCanonicalPipeline.js';
-import { EMBEDDING_MODEL } from '../embeddings.js';
+import { EMBEDDING_MODEL, getEmbeddingProvider } from '../embeddings.js';
 import {
   resolveExtractionModelRoute,
   resolveReasoningModelRoute,
@@ -356,11 +356,12 @@ export async function planIngestionStage(
   const request = buildStageRequest(stage, context);
 
   if (stage === 'embedding') {
+    const embeddingProvider = getEmbeddingProvider();
     return {
       stage,
       request,
       routeId: undefined,
-      provider: 'vertex',
+      provider: embeddingProvider.name,
       model: EMBEDDING_MODEL,
       estimatedCostUsd: estimateEmbeddingCostUsd(context),
       routingSource: 'requested',
@@ -370,7 +371,7 @@ export async function planIngestionStage(
       matchedCriteria: null,
       fallbackCandidates: null,
       routingReason:
-        'Sophia currently executes ingestion embeddings on the Vertex embedding pipeline because Restormel execution routing for embeddings is not exposed in the published runtime.'
+        `Sophia executes ingestion embeddings on the configured ${embeddingProvider.name} embedding pipeline because Restormel execution routing for embeddings is not exposed in the published runtime.`
     };
   }
 

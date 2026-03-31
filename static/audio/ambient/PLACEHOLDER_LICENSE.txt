@@ -1,0 +1,4 @@
+`recognition-theme.mp3` is an original user-provided composition and may be used in STOA.
+
+Any additional ambient files in this directory should remain properly licensed before use in
+production, per docs/stoa/asset-guide.md.

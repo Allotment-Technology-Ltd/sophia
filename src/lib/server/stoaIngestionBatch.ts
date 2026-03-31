@@ -2,7 +2,9 @@ import { randomBytes, createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { Timestamp } from '$lib/server/fsCompat';
 import { query as dbQuery } from '$lib/server/db';
+import { neonGetReportEnvelope } from '$lib/server/db/ingestRunRepository';
 import { ingestRunManager, type IngestRunPayload } from '$lib/server/ingestRuns';
+import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 
 type QueueStatus = 'queued' | 'pending_review' | 'approved' | 'ingesting' | 'ingested' | 'failed' | 'rejected';
@@ -19,11 +21,11 @@ type QueueRow = {
 	status?: QueueStatus;
 	source_kinds?: string[];
 	pass_hints?: string[];
+	submitted_by_uids?: string[];
 	last_error?: string | null;
 	title_hint?: string | null;
 	updated_at?: string;
 	last_submitted_at?: string;
-	visibility_scope?: 'public_shared' | 'private_user_only';
 };
 
 export type StoaLicenseDecision = {
@@ -83,6 +85,30 @@ export type StoaSourcePack = {
 	name: string;
 	description: string;
 	urls: string[];
+};
+
+export type StoaTraditionId =
+	| 'stoicism'
+	| 'platonism'
+	| 'aristotelianism'
+	| 'epicureanism'
+	| 'skepticism'
+	| 'neoplatonism';
+
+export type CanonicalRepositoryId =
+	| 'project_gutenberg'
+	| 'wikisource'
+	| 'perseus'
+	| 'wikidata'
+	| 'wikipedia'
+	| 'pleiades'
+	| 'internet_archive';
+
+type TraditionCatalogRow = {
+	tradition: StoaTraditionId;
+	repository: CanonicalRepositoryId;
+	title: string;
+	url: string;
 };
 
 const STOA_BATCH_COLLECTION = 'stoa_ingestion_batches';
@@ -179,6 +205,513 @@ const DEFAULT_SOURCE_PACKS: StoaSourcePack[] = [
 	}
 ];
 
+const TRADITION_OPTIONS: Array<{ id: StoaTraditionId; label: string }> = [
+	{ id: 'stoicism', label: 'Stoicism' },
+	{ id: 'platonism', label: 'Platonism' },
+	{ id: 'aristotelianism', label: 'Aristotelianism' },
+	{ id: 'epicureanism', label: 'Epicureanism' },
+	{ id: 'skepticism', label: 'Skepticism' },
+	{ id: 'neoplatonism', label: 'Neoplatonism' }
+];
+
+const CANONICAL_REPOSITORIES: Array<{ id: CanonicalRepositoryId; label: string }> = [
+	{ id: 'project_gutenberg', label: 'Project Gutenberg' },
+	{ id: 'wikisource', label: 'Wikisource' },
+	{ id: 'perseus', label: 'Perseus Digital Library' },
+	{ id: 'wikidata', label: 'Wikidata' },
+	{ id: 'wikipedia', label: 'Wikipedia (Wikimedia)' },
+	{ id: 'pleiades', label: 'Pleiades Gazetteer' },
+	{ id: 'internet_archive', label: 'Internet Archive' }
+];
+
+const TRADITION_SOURCE_CATALOG: TraditionCatalogRow[] = [
+	{
+		tradition: 'stoicism',
+		repository: 'project_gutenberg',
+		title: 'Marcus Aurelius — Meditations',
+		url: 'https://www.gutenberg.org/ebooks/2680'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'project_gutenberg',
+		title: 'Epictetus — Enchiridion',
+		url: 'https://www.gutenberg.org/ebooks/45109'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'project_gutenberg',
+		title: 'Seneca — L. Annaeus Seneca on Benefits',
+		url: 'https://www.gutenberg.org/ebooks/3794'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikisource',
+		title: 'Enchiridion (Wikisource)',
+		url: 'https://en.wikisource.org/wiki/Enchiridion'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikisource',
+		title: 'Discourses of Epictetus',
+		url: 'https://en.wikisource.org/wiki/Epictetus,_the_Discourses_as_reported_by_Arrian,_the_Manual,_and_Fragments'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikisource',
+		title: 'Meditations (George Long translation)',
+		url: 'https://en.wikisource.org/wiki/Meditations'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikisource',
+		title: 'Letters from a Stoic (Seneca)',
+		url: 'https://en.wikisource.org/wiki/Letters_from_a_Stoic'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Stoicism overview',
+		url: 'https://en.wikipedia.org/wiki/Stoicism'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Marcus Aurelius',
+		url: 'https://en.wikipedia.org/wiki/Marcus_Aurelius'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Epictetus',
+		url: 'https://en.wikipedia.org/wiki/Epictetus'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Seneca the Younger',
+		url: 'https://en.wikipedia.org/wiki/Seneca_the_Younger'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Cleanthes',
+		url: 'https://en.wikipedia.org/wiki/Cleanthes'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Chrysippus',
+		url: 'https://en.wikipedia.org/wiki/Chrysippus'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Zeno of Citium',
+		url: 'https://en.wikipedia.org/wiki/Zeno_of_Citium'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Musonius Rufus',
+		url: 'https://en.wikipedia.org/wiki/Gaius_Musonius_Rufus'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Dichotomy of control',
+		url: 'https://en.wikipedia.org/wiki/Dichotomy_of_control'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Apatheia',
+		url: 'https://en.wikipedia.org/wiki/Apatheia'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Oikeiosis',
+		url: 'https://en.wikipedia.org/wiki/Oikei%C5%8Dsis'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Logos (Stoicism)',
+		url: 'https://en.wikipedia.org/wiki/Logos'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Virtue ethics',
+		url: 'https://en.wikipedia.org/wiki/Virtue_ethics'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Memento mori',
+		url: 'https://en.wikipedia.org/wiki/Memento_mori'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Negative visualization',
+		url: 'https://en.wikipedia.org/wiki/Negative_visualization'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Stoic ethics',
+		url: 'https://en.wikipedia.org/wiki/Stoic_ethics'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikipedia',
+		title: 'Roman Stoicism',
+		url: 'https://en.wikipedia.org/wiki/Stoicism#Roman_Stoicism'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Stoicism (Q48235)',
+		url: 'https://www.wikidata.org/wiki/Q48235'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Marcus Aurelius',
+		url: 'https://www.wikidata.org/wiki/Q9682'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Epictetus',
+		url: 'https://www.wikidata.org/wiki/Q181137'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Seneca the Younger',
+		url: 'https://www.wikidata.org/wiki/Q1715'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Zeno of Citium',
+		url: 'https://www.wikidata.org/wiki/Q211142'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Chrysippus',
+		url: 'https://www.wikidata.org/wiki/Q312640'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Cleanthes',
+		url: 'https://www.wikidata.org/wiki/Q314981'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Musonius Rufus',
+		url: 'https://www.wikidata.org/wiki/Q1156157'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Apatheia',
+		url: 'https://www.wikidata.org/wiki/Q4780513'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'wikidata',
+		title: 'Wikidata: Oikeiosis',
+		url: 'https://www.wikidata.org/wiki/Q7089727'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'perseus',
+		title: 'Perseus collection: Epictetus',
+		url: 'https://www.perseus.tufts.edu/hopper/collection?collection=Perseus:corpus:perseus,author,Epictetus'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'pleiades',
+		title: 'Pleiades Gazetteer',
+		url: 'https://pleiades.stoa.org/'
+	},
+	{
+		tradition: 'stoicism',
+		repository: 'internet_archive',
+		title: 'Internet Archive advanced text search',
+		url: 'https://archive.org/advancedsearch.php?output=json'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'project_gutenberg',
+		title: 'Plato — Republic (Jowett)',
+		url: 'https://www.gutenberg.org/ebooks/1497'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'project_gutenberg',
+		title: 'Plato — Apology, Crito, Phaedo',
+		url: 'https://www.gutenberg.org/ebooks/1656'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'wikipedia',
+		title: 'Platonism overview',
+		url: 'https://en.wikipedia.org/wiki/Platonism'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'wikipedia',
+		title: 'Plato',
+		url: 'https://en.wikipedia.org/wiki/Plato'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'wikipedia',
+		title: 'Theory of forms',
+		url: 'https://en.wikipedia.org/wiki/Theory_of_forms'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'wikipedia',
+		title: 'Allegory of the cave',
+		url: 'https://en.wikipedia.org/wiki/Allegory_of_the_cave'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'wikidata',
+		title: 'Wikidata: Platonism',
+		url: 'https://www.wikidata.org/wiki/Q172452'
+	},
+	{
+		tradition: 'platonism',
+		repository: 'wikidata',
+		title: 'Wikidata: Plato',
+		url: 'https://www.wikidata.org/wiki/Q859'
+	},
+	{
+		tradition: 'aristotelianism',
+		repository: 'project_gutenberg',
+		title: 'Aristotle — Politics',
+		url: 'https://www.gutenberg.org/ebooks/6762'
+	},
+	{
+		tradition: 'aristotelianism',
+		repository: 'project_gutenberg',
+		title: 'Aristotle — Poetics',
+		url: 'https://www.gutenberg.org/ebooks/1974'
+	},
+	{
+		tradition: 'aristotelianism',
+		repository: 'wikipedia',
+		title: 'Aristotelianism overview',
+		url: 'https://en.wikipedia.org/wiki/Aristotelianism'
+	},
+	{
+		tradition: 'aristotelianism',
+		repository: 'wikipedia',
+		title: 'Aristotle',
+		url: 'https://en.wikipedia.org/wiki/Aristotle'
+	},
+	{
+		tradition: 'aristotelianism',
+		repository: 'wikipedia',
+		title: 'Nicomachean Ethics',
+		url: 'https://en.wikipedia.org/wiki/Nicomachean_Ethics'
+	},
+	{
+		tradition: 'aristotelianism',
+		repository: 'wikidata',
+		title: 'Wikidata: Aristotle',
+		url: 'https://www.wikidata.org/wiki/Q868'
+	},
+	{
+		tradition: 'epicureanism',
+		repository: 'project_gutenberg',
+		title: 'Lucretius — On the Nature of Things',
+		url: 'https://www.gutenberg.org/ebooks/785'
+	},
+	{
+		tradition: 'epicureanism',
+		repository: 'wikipedia',
+		title: 'Epicureanism overview',
+		url: 'https://en.wikipedia.org/wiki/Epicureanism'
+	},
+	{
+		tradition: 'epicureanism',
+		repository: 'wikipedia',
+		title: 'Epicurus',
+		url: 'https://en.wikipedia.org/wiki/Epicurus'
+	},
+	{
+		tradition: 'epicureanism',
+		repository: 'wikipedia',
+		title: 'Tetrapharmakos',
+		url: 'https://en.wikipedia.org/wiki/Tetrapharmakos'
+	},
+	{
+		tradition: 'epicureanism',
+		repository: 'wikidata',
+		title: 'Wikidata: Epicureanism',
+		url: 'https://www.wikidata.org/wiki/Q213452'
+	},
+	{
+		tradition: 'epicureanism',
+		repository: 'wikidata',
+		title: 'Wikidata: Epicurus',
+		url: 'https://www.wikidata.org/wiki/Q167726'
+	},
+	{
+		tradition: 'skepticism',
+		repository: 'wikipedia',
+		title: 'Philosophical skepticism overview',
+		url: 'https://en.wikipedia.org/wiki/Philosophical_skepticism'
+	},
+	{
+		tradition: 'skepticism',
+		repository: 'wikipedia',
+		title: 'Pyrrhonism',
+		url: 'https://en.wikipedia.org/wiki/Pyrrhonism'
+	},
+	{
+		tradition: 'skepticism',
+		repository: 'wikipedia',
+		title: 'Academic skepticism',
+		url: 'https://en.wikipedia.org/wiki/Academic_skepticism'
+	},
+	{
+		tradition: 'skepticism',
+		repository: 'wikidata',
+		title: 'Wikidata: Skepticism',
+		url: 'https://www.wikidata.org/wiki/Q192033'
+	},
+	{
+		tradition: 'skepticism',
+		repository: 'wikidata',
+		title: 'Wikidata: Pyrrhonism',
+		url: 'https://www.wikidata.org/wiki/Q183027'
+	},
+	{
+		tradition: 'neoplatonism',
+		repository: 'wikipedia',
+		title: 'Neoplatonism overview',
+		url: 'https://en.wikipedia.org/wiki/Neoplatonism'
+	},
+	{
+		tradition: 'neoplatonism',
+		repository: 'wikipedia',
+		title: 'Plotinus',
+		url: 'https://en.wikipedia.org/wiki/Plotinus'
+	},
+	{
+		tradition: 'neoplatonism',
+		repository: 'wikipedia',
+		title: 'Porphyry (philosopher)',
+		url: 'https://en.wikipedia.org/wiki/Porphyry_(philosopher)'
+	},
+	{
+		tradition: 'neoplatonism',
+		repository: 'wikidata',
+		title: 'Wikidata: Neoplatonism',
+		url: 'https://www.wikidata.org/wiki/Q191289'
+	},
+	{
+		tradition: 'neoplatonism',
+		repository: 'wikidata',
+		title: 'Wikidata: Plotinus',
+		url: 'https://www.wikidata.org/wiki/Q83358'
+	},
+	{
+		tradition: 'neoplatonism',
+		repository: 'project_gutenberg',
+		title: 'The Enneads by Plotinus',
+		url: 'https://www.gutenberg.org/ebooks/42930'
+	}
+];
+
+const TRADITION_FALLBACK_TERMS: Record<StoaTraditionId, string[]> = {
+	stoicism: [
+		'Stoicism',
+		'Marcus Aurelius',
+		'Epictetus',
+		'Seneca',
+		'Chrysippus',
+		'Zeno of Citium',
+		'Musonius Rufus',
+		'Apatheia',
+		'Oikeiosis',
+		'Dichotomy of control',
+		'Logos Stoicism',
+		'Stoic ethics'
+	],
+	platonism: [
+		'Platonism',
+		'Plato',
+		'Theory of forms',
+		'Allegory of the cave',
+		'Republic Plato',
+		'Timaeus',
+		'Phaedo',
+		'Neoplatonism',
+		'Middle Platonism',
+		'Plato Academy'
+	],
+	aristotelianism: [
+		'Aristotelianism',
+		'Aristotle',
+		'Nicomachean Ethics',
+		'Metaphysics Aristotle',
+		'Poetics',
+		'Politics Aristotle',
+		'Peripatetic school',
+		'Aristotelian logic',
+		'Virtue ethics Aristotle',
+		'Aristotelian causality'
+	],
+	epicureanism: [
+		'Epicureanism',
+		'Epicurus',
+		'Principal Doctrines',
+		'Letter to Menoeceus',
+		'Lucretius',
+		'Tetrapharmakos',
+		'Ataraxia',
+		'Pleasure Epicurus',
+		'Epicurean physics',
+		'Garden Epicurus'
+	],
+	skepticism: [
+		'Philosophical skepticism',
+		'Pyrrhonism',
+		'Academic skepticism',
+		'Sextus Empiricus',
+		'epoché',
+		'Aenesidemus',
+		'Carneades',
+		'Skeptical arguments',
+		'Problem of criterion',
+		'Suspension of judgment'
+	],
+	neoplatonism: [
+		'Neoplatonism',
+		'Plotinus',
+		'Porphyry philosopher',
+		'Iamblichus',
+		'Proclus',
+		'The Enneads',
+		'One (Neoplatonism)',
+		'Nous (philosophy)',
+		'Henosis',
+		'Late antique philosophy'
+	]
+};
+
 function nowMs(): number {
 	return Date.now();
 }
@@ -199,6 +732,13 @@ function normalizeRecordId(value: unknown): string | null {
 		if (typeof rec.id === 'string') return rec.id.trim();
 	}
 	return null;
+}
+
+function queueRecordIdPart(value: unknown): string | null {
+	const normalized = normalizeRecordId(value);
+	if (!normalized) return null;
+	const separator = normalized.indexOf(':');
+	return separator >= 0 ? normalized.slice(separator + 1) : normalized;
 }
 
 function parseQueueRows(rows: unknown): QueueRow[] {
@@ -230,6 +770,19 @@ function isDisallowedHost(hostname: string): boolean {
 	return false;
 }
 
+function normalizeStoaIngestUrl(parsed: URL): URL {
+	const hostname = parsed.hostname.toLowerCase();
+	const isGutenberg = hostname === 'gutenberg.org' || hostname.endsWith('.gutenberg.org');
+	if (!isGutenberg) return parsed;
+	const match = parsed.pathname.match(/^\/ebooks\/(\d+)\/?$/);
+	if (!match) return parsed;
+	const ebookId = match[1];
+	parsed.pathname = `/cache/epub/${ebookId}/pg${ebookId}.txt`;
+	parsed.search = '';
+	parsed.hash = '';
+	return parsed;
+}
+
 export function canonicalizeQueueUrl(raw: string): string | null {
 	const trimmed = raw.trim();
 	if (!trimmed) return null;
@@ -241,6 +794,7 @@ export function canonicalizeQueueUrl(raw: string): string | null {
 	}
 	if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
 	if (isDisallowedHost(parsed.hostname)) return null;
+	parsed = normalizeStoaIngestUrl(parsed);
 	parsed.hash = '';
 	if (parsed.pathname.length > 1) parsed.pathname = parsed.pathname.replace(/\/+$/, '');
 	return parsed.toString();
@@ -341,15 +895,17 @@ async function upsertQueueRowForStoa(decision: StoaLicenseDecision, actorUid: st
 	if (existing?.id) {
 		const rowId = normalizeRecordId(existing.id);
 		if (!rowId) throw new Error('Invalid queue row id');
+		const rowIdPart = queueRecordIdPart(rowId);
+		if (!rowIdPart) throw new Error('Invalid queue row id');
 		const nextStatus: QueueStatus =
 			existing.status === 'ingesting' || existing.status === 'queued' ? existing.status : initialStatus;
 		await dbQuery(
-			`UPDATE type::thing($id) MERGE {
+			`UPDATE type::record('link_ingestion_queue', $id_part) MERGE {
 				 status: $status,
 				 source_kinds: $source_kinds,
 				 pass_hints: $pass_hints,
 				 submitted_by_uid: $submitted_by_uid,
-				 submitted_by_uids: array::add(submitted_by_uids, $submitted_by_uid),
+				 submitted_by_uids: $submitted_by_uids,
 				 title_hint: if title_hint = NONE then $title_hint else title_hint end,
 				 last_error: if $status = 'rejected' then $last_error else NONE end,
 				 last_submitted_at: time::now(),
@@ -357,13 +913,14 @@ async function upsertQueueRowForStoa(decision: StoaLicenseDecision, actorUid: st
 				 approved_at: if $status = 'approved' then time::now() else approved_at end
 			 }`,
 			{
-				id: rowId,
+				id_part: rowIdPart,
 				status: nextStatus,
 				source_kinds: mergeUnique(existing.source_kinds, ['stoa', 'stoa_batch']),
 				pass_hints: mergeUnique(existing.pass_hints, passHints),
 				submitted_by_uid: actorUid,
+				submitted_by_uids: mergeUnique(existing.submitted_by_uids, [actorUid]),
 				title_hint: `STOA batch: ${decision.hostname}`,
-				last_error: decision.reuseMode === 'blocked' ? 'stoa_strict_open_blocked' : null
+				last_error: 'stoa_strict_open_blocked'
 			}
 		);
 		return { id: rowId, status: nextStatus };
@@ -374,10 +931,6 @@ async function upsertQueueRowForStoa(decision: StoaLicenseDecision, actorUid: st
 			 canonical_url: $canonical_url,
 			 canonical_url_hash: $canonical_url_hash,
 			 hostname: $hostname,
-			 visibility_scope: 'public_shared',
-			 owner_uid: NONE,
-			 contributor_uid: $contributor_uid,
-			 deletion_state: 'active',
 			 status: $status,
 			 source_kinds: ['stoa', 'stoa_batch'],
 			 query_run_ids: [],
@@ -390,7 +943,7 @@ async function upsertQueueRowForStoa(decision: StoaLicenseDecision, actorUid: st
 			 grounding_submission_count: 0,
 			 total_submission_count: 1,
 			 attempt_count: 0,
-			 last_error: $last_error,
+			 last_error: NONE,
 			 created_at: time::now(),
 			 queued_at: time::now(),
 			 last_submitted_at: time::now(),
@@ -401,12 +954,10 @@ async function upsertQueueRowForStoa(decision: StoaLicenseDecision, actorUid: st
 			canonical_url: canonicalUrl,
 			canonical_url_hash: canonicalUrlHash,
 			hostname: decision.hostname,
-			contributor_uid: actorUid,
 			submitted_by_uid: actorUid,
 			status: initialStatus,
 			title_hint: `STOA batch: ${decision.hostname}`,
-			pass_hints: passHints,
-			last_error: decision.reuseMode === 'blocked' ? 'stoa_strict_open_blocked' : null
+			pass_hints: passHints
 		}
 	);
 	const createdId = normalizeRecordId(createdRows?.[0]?.id);
@@ -424,6 +975,24 @@ function summarize(items: BatchItem[]) {
 		cancelled: items.filter((i) => i.status === 'cancelled').length,
 		skipped: items.filter((i) => i.status === 'skipped').length
 	};
+}
+
+function logBatch(
+	level: 'info' | 'warn' | 'error',
+	event: string,
+	details: Record<string, unknown>
+): void {
+	const payload = { event, ts: new Date().toISOString(), ...details };
+	const prefix = '[stoa-batch]';
+	if (level === 'error') {
+		console.error(prefix, payload);
+		return;
+	}
+	if (level === 'warn') {
+		console.warn(prefix, payload);
+		return;
+	}
+	console.info(prefix, payload);
 }
 
 function buildBatchId(): string {
@@ -485,14 +1054,31 @@ async function saveBatchRun(batch: StoaBatchRunView): Promise<void> {
 }
 
 async function reserveQueueRow(queueRecordId: string): Promise<boolean> {
+	const idPart = queueRecordIdPart(queueRecordId);
+	if (!idPart) return false;
 	const result = await dbQuery<Array<{ id: string }>>(
-		`UPDATE type::thing($id) SET
+		`UPDATE type::record('link_ingestion_queue', $id_part) SET
 			 status = 'queued',
 			 updated_at = time::now(),
 			 last_error = NONE
 		 WHERE status = 'approved'
 		 RETURN AFTER`,
-		{ id: queueRecordId }
+		{ id_part: idPart }
+	);
+	return Array.isArray(result) && result.length > 0;
+}
+
+async function reopenQueueRowForRetry(queueRecordId: string): Promise<boolean> {
+	const idPart = queueRecordIdPart(queueRecordId);
+	if (!idPart) return false;
+	const result = await dbQuery<Array<{ id: string }>>(
+		`UPDATE type::record('link_ingestion_queue', $id_part) SET
+			 status = 'approved',
+			 updated_at = time::now(),
+			 last_error = NONE
+		 WHERE status = 'failed' OR status = 'cancelled' OR status = 'ingesting' OR status = 'queued' OR status = 'approved'
+		 RETURN AFTER`,
+		{ id_part: idPart }
 	);
 	return Array.isArray(result) && result.length > 0;
 }
@@ -508,11 +1094,29 @@ async function maybeLaunchQueuedItems(batch: StoaBatchRunView): Promise<StoaBatc
 		item.status = 'launching';
 		item.lastUpdatedAtMs = nowMs();
 		try {
-			const reserved = await reserveQueueRow(item.queueRecordId);
+			let reserved = await reserveQueueRow(item.queueRecordId);
+			// Queue rows may be left in failed/cancelled from prior attempts. Re-open once before skipping.
+			if (!reserved) {
+				const reopened = await reopenQueueRowForRetry(item.queueRecordId);
+				if (reopened) {
+					logBatch('info', 'queue_reopened_during_launch', {
+						batchId: batch.id,
+						queueRecordId: item.queueRecordId,
+						url: item.url
+					});
+					reserved = await reserveQueueRow(item.queueRecordId);
+				}
+			}
 			if (!reserved) {
 				item.status = 'skipped';
 				item.error = 'Queue row no longer approved (already claimed or status changed).';
 				item.lastUpdatedAtMs = nowMs();
+				logBatch('warn', 'queue_reserve_failed', {
+					batchId: batch.id,
+					queueRecordId: item.queueRecordId,
+					url: item.url,
+					reason: item.error
+				});
 				continue;
 			}
 			const payload: IngestRunPayload = {
@@ -529,32 +1133,110 @@ async function maybeLaunchQueuedItems(batch: StoaBatchRunView): Promise<StoaBatc
 			item.attempts += 1;
 			item.error = null;
 			item.lastUpdatedAtMs = nowMs();
+			logBatch('info', 'child_run_started', {
+				batchId: batch.id,
+				queueRecordId: item.queueRecordId,
+				url: item.url,
+				childRunId,
+				attempts: item.attempts
+			});
 		} catch (error) {
 			item.status = 'error';
 			item.error = error instanceof Error ? error.message : String(error);
 			item.lastUpdatedAtMs = nowMs();
+			logBatch('error', 'child_run_start_error', {
+				batchId: batch.id,
+				queueRecordId: item.queueRecordId,
+				url: item.url,
+				error: item.error
+			});
 		}
 	}
 	return batch;
 }
 
 async function refreshChildStates(batch: StoaBatchRunView): Promise<StoaBatchRunView> {
+	const durableOutcomeCache = new Map<string, { status: 'done' | 'error' | 'cancelled'; error: string | null } | null>();
 	for (const item of batch.items) {
 		if (!item.childRunId) continue;
 		if (item.status !== 'running') continue;
 		const state = await ingestRunManager.getStateAsync(item.childRunId);
-		if (!state) continue;
-		if (state.status === 'done') {
+		if (state?.status === 'done') {
 			item.status = 'done';
 			item.error = null;
 			item.lastUpdatedAtMs = nowMs();
-		} else if (state.status === 'error') {
+			logBatch('info', 'child_run_done', {
+				batchId: batch.id,
+				queueRecordId: item.queueRecordId,
+				childRunId: item.childRunId
+			});
+			continue;
+		}
+		if (state?.status === 'error') {
 			item.status = 'error';
 			item.error = state.error ?? 'Run failed';
 			item.lastUpdatedAtMs = nowMs();
+			logBatch('warn', 'child_run_error', {
+				batchId: batch.id,
+				queueRecordId: item.queueRecordId,
+				childRunId: item.childRunId,
+				error: item.error,
+				resumable: state.resumable === true
+			});
+			continue;
+		}
+		// Cross-instance recovery: if this process does not hold the child run state,
+		// use durable run reports so batch monitors don't stall forever at "running".
+		if (!state) {
+			if (!durableOutcomeCache.has(item.childRunId)) {
+				durableOutcomeCache.set(item.childRunId, await getDurableChildRunOutcome(item.childRunId));
+			}
+			const durable = durableOutcomeCache.get(item.childRunId) ?? null;
+			if (!durable) continue;
+			item.status = durable.status === 'cancelled' ? 'cancelled' : durable.status;
+			item.error = durable.error;
+			item.lastUpdatedAtMs = nowMs();
+			logBatch('info', 'child_run_recovered_from_durable', {
+				batchId: batch.id,
+				queueRecordId: item.queueRecordId,
+				childRunId: item.childRunId,
+				status: item.status,
+				error: item.error
+			});
 		}
 	}
 	return batch;
+}
+
+async function getDurableChildRunOutcome(
+	runId: string
+): Promise<{ status: 'done' | 'error' | 'cancelled'; error: string | null } | null> {
+	try {
+		let envelope: Record<string, unknown> | null = null;
+		if (isNeonIngestPersistenceEnabled()) {
+			envelope = await neonGetReportEnvelope(runId);
+		} else {
+			const snap = await sophiaDocumentsDb.collection('ingestion_run_reports').doc(runId).get();
+			if (!snap.exists) return null;
+			const data = snap.data() ?? {};
+			envelope =
+				data && typeof data === 'object' && !Array.isArray(data)
+					? (data as Record<string, unknown>)
+					: null;
+		}
+		if (!envelope) return null;
+		const status = typeof envelope.status === 'string' ? envelope.status : null;
+		const terminalError = typeof envelope.terminalError === 'string' ? envelope.terminalError : null;
+		const cancelledByUser = envelope.cancelledByUser === true;
+		if (cancelledByUser) {
+			return { status: 'cancelled', error: terminalError ?? 'Run cancelled by operator' };
+		}
+		if (status === 'done') return { status: 'done', error: null };
+		if (status === 'error') return { status: 'error', error: terminalError ?? 'Run failed' };
+		return null;
+	} catch {
+		return null;
+	}
 }
 
 function finalizeBatchStatus(batch: StoaBatchRunView): StoaBatchRunView {
@@ -620,27 +1302,43 @@ export async function listStoaQueue(filters?: {
 }): Promise<QueueRow[]> {
 	const limit = Math.max(1, Math.min(500, filters?.limit ?? 120));
 	const status = filters?.status ?? 'all';
-	if (status === 'all') {
-		const rows = await dbQuery<QueueRow[]>(
-			`SELECT id, canonical_url, canonical_url_hash, hostname, status, source_kinds, pass_hints, last_error, title_hint, updated_at, last_submitted_at, visibility_scope
-			 FROM link_ingestion_queue
-			 WHERE array::contains(source_kinds, 'stoa') OR array::contains(source_kinds, 'stoa_batch')
-			 ORDER BY last_submitted_at DESC
-			 LIMIT $limit`,
-			{ limit }
-		);
-		return parseQueueRows(rows);
-	}
-	const rows = await dbQuery<QueueRow[]>(
-		`SELECT id, canonical_url, canonical_url_hash, hostname, status, source_kinds, pass_hints, last_error, title_hint, updated_at, last_submitted_at, visibility_scope
+	// Query broadly, then filter in TS so prod rows with source_kinds = NONE
+	// do not trigger Surreal array::contains runtime/type errors.
+	const baseRows = await dbQuery<QueueRow[]>(
+		`SELECT id, canonical_url, canonical_url_hash, hostname, status, source_kinds, pass_hints, last_error, title_hint, updated_at, last_submitted_at
 		 FROM link_ingestion_queue
-		 WHERE (array::contains(source_kinds, 'stoa') OR array::contains(source_kinds, 'stoa_batch'))
-		   AND status = $status
 		 ORDER BY last_submitted_at DESC
 		 LIMIT $limit`,
-		{ status, limit }
+		{ limit: Math.max(limit * 3, 200) }
 	);
-	return parseQueueRows(rows);
+	const rows = parseQueueRows(baseRows).filter((row) => {
+		const kinds = Array.isArray(row.source_kinds) ? row.source_kinds : [];
+		const isStoa = kinds.includes('stoa') || kinds.includes('stoa_batch');
+		if (!isStoa) return false;
+		if (status === 'all') return true;
+		return row.status === status;
+	});
+	return rows.slice(0, limit);
+}
+
+export async function resetFailedStoaQueueRows(limit = 2000): Promise<{ updated: number }> {
+	const cap = Math.max(1, Math.min(10000, limit));
+	let updated = 0;
+	while (updated < cap) {
+		const remaining = cap - updated;
+		const chunk = Math.min(500, remaining);
+		const failedRows = await listStoaQueue({ status: 'failed', limit: chunk });
+		if (failedRows.length === 0) break;
+		const recordIds = failedRows
+			.map((row) => normalizeRecordId(row.id))
+			.filter((id): id is string => typeof id === 'string' && id.length > 0);
+		if (recordIds.length === 0) break;
+		const result = await bulkSetQueueStatus({ recordIds, status: 'approved' });
+		updated += result.updated;
+		if (result.updated === 0) break;
+	}
+	logBatch('info', 'queue_failed_reset', { updated, limit: cap });
+	return { updated };
 }
 
 export async function bulkSetQueueStatus(args: {
@@ -650,16 +1348,16 @@ export async function bulkSetQueueStatus(args: {
 }): Promise<{ updated: number }> {
 	let updated = 0;
 	for (const recordId of args.recordIds) {
-		const id = normalizeRecordId(recordId);
-		if (!id) continue;
+		const idPart = queueRecordIdPart(recordId);
+		if (!idPart) continue;
 		await dbQuery(
-			`UPDATE type::thing($id) MERGE {
+			`UPDATE type::record('link_ingestion_queue', $id_part) MERGE {
 				 status: $status,
 				 updated_at: time::now(),
 				 approved_at: if $status = 'approved' then time::now() else approved_at end,
 				 last_error: if $status = 'rejected' then $last_error else NONE end
 			 }`,
-			{ id, status: args.status, last_error: args.reason ?? 'manually_rejected' }
+			{ id_part: idPart, status: args.status, last_error: args.reason ?? 'manually_rejected' }
 		);
 		updated += 1;
 	}
@@ -680,11 +1378,13 @@ export async function createStoaBatchRun(args: {
 	const statusFilter = args.statusFilter ?? 'approved';
 	const queueRows = await listStoaQueue({ status: statusFilter, limit });
 	const items: BatchItem[] = queueRows.map((row) => {
-		const hostname = typeof row.hostname === 'string' && row.hostname ? row.hostname : new URL(row.canonical_url).hostname;
-		const decision = evaluateStoaLicense(row.canonical_url);
+		const normalizedUrl = canonicalizeQueueUrl(row.canonical_url) ?? row.canonical_url;
+		const hostname =
+			typeof row.hostname === 'string' && row.hostname ? row.hostname : new URL(normalizedUrl).hostname;
+		const decision = evaluateStoaLicense(normalizedUrl);
 		return {
 			queueRecordId: normalizeRecordId(row.id) ?? String(row.id),
-			url: row.canonical_url,
+			url: normalizedUrl,
 			hostname,
 			status: 'pending',
 			lastUpdatedAtMs: nowMs(),
@@ -758,16 +1458,158 @@ export async function cancelBatchRun(batchId: string): Promise<StoaBatchRunView 
 	return batch;
 }
 
+function findBatchItemByQueueId(batch: StoaBatchRunView, queueRecordId: string): BatchItem | null {
+	const target = normalizeRecordId(queueRecordId) ?? queueRecordId.trim();
+	return (
+		batch.items.find((item) => {
+			const itemId = normalizeRecordId(item.queueRecordId) ?? item.queueRecordId;
+			return itemId === target;
+		}) ?? null
+	);
+}
+
+export async function cancelBatchItem(batchId: string, queueRecordId: string): Promise<StoaBatchRunView | null> {
+	const batch = await getBatchRun(batchId);
+	if (!batch) return null;
+	const item = findBatchItemByQueueId(batch, queueRecordId);
+	if (!item) throw new Error('Batch item not found');
+	if (item.status === 'done' || item.status === 'skipped') {
+		throw new Error('Batch item is already complete and cannot be cancelled');
+	}
+
+	if (item.childRunId && (item.status === 'running' || item.status === 'launching')) {
+		const result = ingestRunManager.cancelRun(item.childRunId);
+		if (!result.ok && !result.error.toLowerCase().includes('not found')) {
+			item.error = result.error;
+		}
+	}
+
+	item.status = 'cancelled';
+	item.error = item.error ?? 'Cancelled by operator.';
+	item.lastUpdatedAtMs = nowMs();
+	logBatch('info', 'batch_item_cancelled', {
+		batchId,
+		queueRecordId: item.queueRecordId,
+		childRunId: item.childRunId
+	});
+
+	await saveBatchRun(batch);
+	return refreshBatchRunStatus(batchId);
+}
+
+export async function resumeBatchItem(batchId: string, queueRecordId: string): Promise<StoaBatchRunView | null> {
+	const batch = await getBatchRun(batchId);
+	if (!batch) return null;
+	batch.status = 'running';
+	const item = findBatchItemByQueueId(batch, queueRecordId);
+	if (!item) throw new Error('Batch item not found');
+	if (item.status !== 'cancelled' && item.status !== 'error') {
+		throw new Error('Batch item is not in a resumable state');
+	}
+
+	if (item.childRunId) {
+		const childState = await ingestRunManager.getStateAsync(item.childRunId);
+		if (childState?.status === 'error' && childState.resumable === true) {
+			const resumed = await ingestRunManager.resumeFromFailure(item.childRunId);
+			if (resumed.ok) {
+				item.status = 'running';
+				item.error = null;
+				item.attempts += 1;
+				item.lastUpdatedAtMs = nowMs();
+				logBatch('info', 'batch_item_resumed_from_checkpoint', {
+					batchId,
+					queueRecordId: item.queueRecordId,
+					childRunId: item.childRunId,
+					attempts: item.attempts
+				});
+				await saveBatchRun(batch);
+				return refreshBatchRunStatus(batchId);
+			}
+			logBatch('warn', 'batch_item_checkpoint_resume_failed', {
+				batchId,
+				queueRecordId: item.queueRecordId,
+				childRunId: item.childRunId,
+				error: resumed.error
+			});
+		}
+	}
+
+	// Fallback: relaunch from queue when checkpoint resume is unavailable.
+	const reopened = await reopenQueueRowForRetry(item.queueRecordId);
+	if (!reopened) {
+		throw new Error('Unable to reopen queue row for retry');
+	}
+	item.status = 'pending';
+	item.error = null;
+	item.childRunId = null;
+	item.lastUpdatedAtMs = nowMs();
+	logBatch('info', 'batch_item_reopened_for_retry', {
+		batchId,
+		queueRecordId: item.queueRecordId
+	});
+	await saveBatchRun(batch);
+	return refreshBatchRunStatus(batchId);
+}
+
 export async function resumeBatchRun(batchId: string): Promise<StoaBatchRunView | null> {
 	const batch = await getBatchRun(batchId);
 	if (!batch) return null;
 	batch.status = 'running';
+	logBatch('info', 'batch_resume_requested', {
+		batchId,
+		itemCount: batch.items.length
+	});
 	for (const item of batch.items) {
-		if (item.status === 'cancelled' || item.status === 'error') {
-			item.status = 'pending';
-			item.error = null;
-			item.lastUpdatedAtMs = nowMs();
+		if (item.status !== 'cancelled' && item.status !== 'error') continue;
+
+		// Closest-to-failure recovery: resume the existing child run from its checkpoint when possible.
+		if (item.childRunId) {
+			const childState = await ingestRunManager.getStateAsync(item.childRunId);
+			if (childState?.status === 'error' && childState.resumable === true) {
+				const resumed = await ingestRunManager.resumeFromFailure(item.childRunId);
+				if (resumed.ok) {
+					item.status = 'running';
+					item.error = null;
+					item.attempts += 1;
+					item.lastUpdatedAtMs = nowMs();
+					logBatch('info', 'child_run_resumed_from_checkpoint', {
+						batchId,
+						queueRecordId: item.queueRecordId,
+						childRunId: item.childRunId,
+						attempts: item.attempts
+					});
+					continue;
+				}
+				logBatch('warn', 'child_run_checkpoint_resume_failed', {
+					batchId,
+					queueRecordId: item.queueRecordId,
+					childRunId: item.childRunId,
+					error: resumed.error
+				});
+			}
 		}
+
+		// Fallback: re-approve queue row and relaunch as a fresh child run.
+		const reopened = await reopenQueueRowForRetry(item.queueRecordId);
+		if (!reopened) {
+			item.status = 'error';
+			item.error = 'Unable to reopen queue row for retry.';
+			item.lastUpdatedAtMs = nowMs();
+			logBatch('error', 'queue_reopen_for_retry_failed', {
+				batchId,
+				queueRecordId: item.queueRecordId,
+				childRunId: item.childRunId
+			});
+			continue;
+		}
+		item.status = 'pending';
+		item.error = null;
+		item.childRunId = null;
+		item.lastUpdatedAtMs = nowMs();
+		logBatch('info', 'queue_reopened_for_retry', {
+			batchId,
+			queueRecordId: item.queueRecordId
+		});
 	}
 	await saveBatchRun(batch);
 	return refreshBatchRunStatus(batchId);
@@ -803,6 +1645,113 @@ export async function saveSourcePack(pack: StoaSourcePack): Promise<void> {
 		updatedAt: Timestamp.now(),
 		updatedAtMs: nowMs()
 	});
+}
+
+export function getTraditionOptions(): Array<{ id: StoaTraditionId; label: string }> {
+	return [...TRADITION_OPTIONS];
+}
+
+export function getCanonicalRepositoryOptions(): Array<{ id: CanonicalRepositoryId; label: string }> {
+	return [...CANONICAL_REPOSITORIES];
+}
+
+export function suggestSourcesForTradition(args: {
+	tradition: StoaTraditionId;
+	count: number;
+	repositories?: CanonicalRepositoryId[];
+}): {
+	tradition: StoaTraditionId;
+	count: number;
+	repositories: CanonicalRepositoryId[];
+	urls: string[];
+	candidates: Array<{ title: string; url: string; repository: CanonicalRepositoryId; licenseType: LicenseType; reuseMode: ReuseMode }>;
+} {
+	const requestedCount = [5, 10, 15, 20, 25, 30].includes(args.count) ? args.count : 10;
+	const requestedRepos =
+		args.repositories && args.repositories.length > 0
+			? args.repositories.filter((repo) => CANONICAL_REPOSITORIES.some((r) => r.id === repo))
+			: CANONICAL_REPOSITORIES.map((r) => r.id);
+	const rows = TRADITION_SOURCE_CATALOG.filter(
+		(row) => row.tradition === args.tradition && requestedRepos.includes(row.repository)
+	);
+	const uniqueByUrl = new Map<string, TraditionCatalogRow>();
+	for (const row of rows) {
+		if (!uniqueByUrl.has(row.url)) uniqueByUrl.set(row.url, row);
+	}
+	const ranked = Array.from(uniqueByUrl.values()).sort((a, b) => {
+		const aDecision = evaluateStoaLicense(a.url);
+		const bDecision = evaluateStoaLicense(b.url);
+		const aScore = aDecision.reuseMode === 'full_text' ? 0 : 1;
+		const bScore = bDecision.reuseMode === 'full_text' ? 0 : 1;
+		if (aScore !== bScore) return aScore - bScore;
+		return a.title.localeCompare(b.title);
+	});
+
+	const selectedCandidates: Array<{
+		title: string;
+		url: string;
+		repository: CanonicalRepositoryId;
+		licenseType: LicenseType;
+		reuseMode: ReuseMode;
+	}> = [];
+	for (const row of ranked) {
+		const decision = evaluateStoaLicense(row.url);
+		if (!decision.allowed || !decision.canonicalUrl) continue;
+		selectedCandidates.push({
+			title: row.title,
+			url: decision.canonicalUrl,
+			repository: row.repository,
+			licenseType: decision.licenseType,
+			reuseMode: decision.reuseMode
+		});
+		if (selectedCandidates.length >= requestedCount) break;
+	}
+
+	if (selectedCandidates.length < requestedCount) {
+		const existing = new Set(selectedCandidates.map((c) => c.url));
+		const terms = TRADITION_FALLBACK_TERMS[args.tradition] ?? [];
+		for (const term of terms) {
+			for (const repo of requestedRepos) {
+				let fallbackUrl = '';
+				if (repo === 'wikipedia') {
+					fallbackUrl = `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(term)}`;
+				} else if (repo === 'wikidata') {
+					fallbackUrl = `https://www.wikidata.org/w/index.php?search=${encodeURIComponent(term)}`;
+				} else if (repo === 'project_gutenberg') {
+					fallbackUrl = `https://www.gutenberg.org/ebooks/search/?query=${encodeURIComponent(term)}`;
+				} else if (repo === 'wikisource') {
+					fallbackUrl = `https://en.wikisource.org/wiki/Special:Search?search=${encodeURIComponent(term)}`;
+				} else if (repo === 'perseus') {
+					fallbackUrl = `https://www.perseus.tufts.edu/hopper/searchresults?q=${encodeURIComponent(term)}`;
+				} else if (repo === 'internet_archive') {
+					fallbackUrl = `https://archive.org/advancedsearch.php?q=${encodeURIComponent(term)}&output=json`;
+				} else if (repo === 'pleiades') {
+					fallbackUrl = `https://pleiades.stoa.org/search?SearchableText=${encodeURIComponent(term)}`;
+				}
+				if (!fallbackUrl || existing.has(fallbackUrl)) continue;
+				const decision = evaluateStoaLicense(fallbackUrl);
+				if (!decision.allowed || !decision.canonicalUrl) continue;
+				selectedCandidates.push({
+					title: `${term} (${repo} search)`,
+					url: decision.canonicalUrl,
+					repository: repo,
+					licenseType: decision.licenseType,
+					reuseMode: decision.reuseMode
+				});
+				existing.add(decision.canonicalUrl);
+				if (selectedCandidates.length >= requestedCount) break;
+			}
+			if (selectedCandidates.length >= requestedCount) break;
+		}
+	}
+
+	return {
+		tradition: args.tradition,
+		count: requestedCount,
+		repositories: requestedRepos,
+		urls: selectedCandidates.map((c) => c.url),
+		candidates: selectedCandidates
+	};
 }
 
 export function estimateCoverageForPack(urls: string[]): {

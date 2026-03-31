@@ -168,6 +168,22 @@ function normalizePinProvider(slug: string): string | null {
   return null;
 }
 
+function normalizeEmbeddingProvider(slug: string): 'vertex' | 'voyage' | null {
+  const s = slug.toLowerCase().trim();
+  if (s === 'google') return 'vertex';
+  if (s === 'vertex' || s === 'voyage') return s;
+  return null;
+}
+
+function normalizePinnedModelId(provider: string, modelId: string): string {
+  const p = provider.toLowerCase().trim();
+  const m = modelId.trim();
+  // Vertex/Google 1.5 IDs are retired in several environments; pin modern equivalents.
+  if ((p === 'vertex' || p === 'google') && m === 'gemini-1.5-pro') return 'gemini-2.5-pro';
+  if ((p === 'vertex' || p === 'google') && m === 'gemini-1.5-flash') return 'gemini-2.5-flash';
+  return m;
+}
+
 /**
  * Parses one Expand pipeline value: either `provider · modelId` (display) or
  * `provider__modelId` (stable catalog id from admin `stableModelId()`).
@@ -207,12 +223,36 @@ export function modelChainLabelsToEnv(chain: IngestRunPayload['model_chain']): R
     const provider = normalizePinProvider(parsed.providerRaw);
     if (!provider) return;
     out[`INGEST_PIN_PROVIDER_${suffix}`] = provider;
-    out[`INGEST_PIN_MODEL_${suffix}`] = parsed.modelId;
+    out[`INGEST_PIN_MODEL_${suffix}`] = normalizePinnedModelId(provider, parsed.modelId);
   };
   apply(chain.extract, 'EXTRACTION');
   apply(chain.relate, 'RELATIONS');
   apply(chain.group, 'GROUPING');
   apply(chain.validate, 'VALIDATION');
+  return out;
+}
+
+function embeddingPreferenceToEnv(embeddingModel: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  const raw = embeddingModel?.trim();
+  if (!raw) return out;
+  const parsed = parseModelChainLabel(raw);
+  if (!parsed) return out;
+  const provider = normalizeEmbeddingProvider(parsed.providerRaw);
+  if (!provider) return out;
+  const modelId = normalizePinnedModelId(provider, parsed.modelId);
+
+  if (provider === 'voyage') {
+    out.EMBEDDING_PROVIDER = 'voyage';
+    out.VOYAGE_DOCUMENT_MODEL = modelId;
+    return out;
+  }
+
+  if (provider === 'vertex') {
+    out.EMBEDDING_PROVIDER = 'vertex';
+    return out;
+  }
+
   return out;
 }
 
@@ -343,25 +383,37 @@ type LinkQueuePromotionRow = {
   attempt_count?: number;
 };
 
+function queueRecordIdPart(recordId: string): string {
+  const trimmed = recordId.trim();
+  const separator = trimmed.indexOf(':');
+  return separator >= 0 ? trimmed.slice(separator + 1) : trimmed;
+}
+
 async function markLinkedQueueStatus(
   queueRecordId: string,
   status: 'queued' | 'approved' | 'ingesting' | 'ingested' | 'failed',
   opts?: { lastError?: string | null; ingested?: boolean; attemptCount?: number }
 ): Promise<void> {
+  const idPart = queueRecordIdPart(queueRecordId);
+  const hasAttemptCount = typeof opts?.attemptCount === 'number' && Number.isFinite(opts.attemptCount);
+  const attemptCount = hasAttemptCount ? Math.max(0, Math.trunc(opts!.attemptCount!)) : 0;
+  const hasLastError = typeof opts?.lastError === 'string' && opts.lastError.length > 0;
   await dbQuery(
-    `UPDATE type::thing($id) MERGE {
+    `UPDATE type::record('link_ingestion_queue', $id_part) MERGE {
        status: $status,
        updated_at: time::now(),
-       attempt_count: $attempt_count,
-       last_error: $last_error,
+       attempt_count: if $has_attempt_count then $attempt_count else attempt_count end,
+       last_error: if $has_last_error then $last_error else NONE end,
        ingested_at: if $mark_ingested then time::now() else ingested_at end
      }
      RETURN AFTER`,
     {
-      id: queueRecordId,
+      id_part: idPart,
       status,
-      attempt_count: opts?.attemptCount ?? null,
-      last_error: opts?.lastError ?? null,
+      has_attempt_count: hasAttemptCount,
+      attempt_count: attemptCount,
+      has_last_error: hasLastError,
+      last_error: hasLastError ? opts?.lastError : 'none',
       mark_ingested: opts?.ingested === true
     }
   );
@@ -502,7 +554,7 @@ class IngestRunManager extends EventEmitter {
       const batchRaw = (process.env.LINK_QUEUE_PROMOTION_BATCH_SIZE ?? '5').trim();
       const batch = Math.max(1, Math.min(20, parseInt(batchRaw, 10) || 5));
       const rows = await dbQuery<LinkQueuePromotionRow[]>(
-        `SELECT id, canonical_url, attempt_count
+        `SELECT id, canonical_url, attempt_count, last_submitted_at
          FROM link_ingestion_queue
          WHERE status = 'approved'
            AND (deletion_state = NONE OR deletion_state = 'active')
@@ -514,14 +566,15 @@ class IngestRunManager extends EventEmitter {
 
       for (const row of rows) {
         if (!row?.id || !row?.canonical_url) continue;
+        const idPart = queueRecordIdPart(row.id);
         const reserve = await dbQuery<Array<{ id: string }>>(
-          `UPDATE type::thing($id) SET
+          `UPDATE type::record('link_ingestion_queue', $id_part) SET
              status = 'queued',
              updated_at = time::now(),
              last_error = NONE
            WHERE status = 'approved'
            RETURN AFTER`,
-          { id: row.id }
+          { id_part: idPart }
         );
         if (!Array.isArray(reserve) || reserve.length === 0) continue;
 
@@ -815,7 +868,9 @@ class IngestRunManager extends EventEmitter {
     state.completedAt = Date.now();
     state.currentAction = 'Cancelled by operator';
     state.process = undefined;
-    state.resumable = false;
+    // Keep cancellation resumable when a checkpoint source file exists so operators can stop
+    // noisy runs and restart from the closest completed stage.
+    state.resumable = Boolean(state.sourceFilePath);
 
     for (const key of Object.keys(state.stages)) {
       const st = state.stages[key];
@@ -938,6 +993,10 @@ class IngestRunManager extends EventEmitter {
       runId,
       '[RESUME] Restarting ingest.ts from checkpoint. The pipeline will continue from the last completed stage.'
     );
+    if (state.payload.queue_record_id) {
+      // Keep queue state aligned with checkpoint-resumed runs so operators can see retries in progress.
+      void markLinkedQueueStatus(state.payload.queue_record_id, 'ingesting');
+    }
     void this.execStartIngestChild(runId, state.payload, state.sourceFilePath, {
       forSyncOnly: false,
       resumeFromFailure: true
@@ -1093,8 +1152,10 @@ class IngestRunManager extends EventEmitter {
     }
 
     const pinEnvFlat = modelChainLabelsToEnv(payload.model_chain);
+    const embeddingEnvOverrides = embeddingPreferenceToEnv(payload.embedding_model);
     const batchEnvOverrides = {
       ...batchOverridesToEnv(payload.batch_overrides),
+      ...embeddingEnvOverrides,
       ...pinEnvFlat
     };
     const ingestPinsJsonCli = encodeIngestPinsJsonCliArg(pinEnvFlat);
@@ -1105,6 +1166,14 @@ class IngestRunManager extends EventEmitter {
       this.addLog(
         runId,
         `[ingest] operator BYOK: merged ${Object.keys(operatorByokEnv).join(', ')} into worker env (same bucket as Admin → Operator BYOK)`
+      );
+    }
+    if (Object.keys(embeddingEnvOverrides).length > 0) {
+      const provider = embeddingEnvOverrides.EMBEDDING_PROVIDER ?? 'unknown';
+      const docModel = embeddingEnvOverrides.VOYAGE_DOCUMENT_MODEL;
+      this.addLog(
+        runId,
+        `[ingest] embedding preference applied: ${provider}${docModel ? `/${docModel}` : ''}`
       );
     }
 

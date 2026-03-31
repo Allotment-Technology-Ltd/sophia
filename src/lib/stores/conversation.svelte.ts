@@ -878,69 +878,16 @@ function createConversationStore() {
           if (done) break;
         }
 
-        if (!gotMetadata && (currentPasses.analysis || currentPasses.critique || currentPasses.synthesis)) {
-          const fallbackMetadata = {
-            total_input_tokens: 0,
-            total_output_tokens: 0,
-            duration_ms: 0,
-            claims_retrieved: 0,
-            arguments_retrieved: 0,
-            retrieval_degraded: true,
-            retrieval_degraded_reason: 'stream_disconnected_before_metadata'
-          };
-
-          messages = [...messages, {
-            id: crypto.randomUUID(),
-            role: 'assistant',
-            content: currentPasses.synthesis || currentPasses.critique || currentPasses.analysis,
-            passes: { ...currentPasses },
-            structuredPasses: { ...currentStructuredPasses },
-            metadata: fallbackMetadata,
-            reasoningQuality: reasoningQuality ?? undefined,
-            constitutionDeltas: constitutionDeltas.length > 0 ? constitutionDeltas : undefined,
-            timestamp: new Date()
-          }];
-
-          historyStore.saveCachedResult(query, {
-            lens: lens || undefined,
-            domain_mode: domainMode,
-            domain: domainMode === 'manual' ? domain : undefined,
-            passes: { ...currentPasses },
-            metadata: fallbackMetadata,
-            reasoningQuality: reasoningQuality ?? undefined,
-            constitutionDeltas: constitutionDeltas.length > 0 ? constitutionDeltas : undefined,
-            sources: streamedSources,
-            claimsByPass: streamedClaimsByPass,
-            relationsByPass: streamedRelationsByPass,
-            graphSnapshot: latestGraphSnapshot ?? snapshotGraphState()
-          }, {
-            lens,
-            depthMode,
-            modelProvider,
-            modelId,
-            domainMode,
-            domain,
-            resourceMode,
-            userLinks: normalizedUserLinks,
-            linkPreferences: normalizedLinkPreferences,
-            queueForNightlyIngest
-          });
-
-          historyStore.addEntry(query, {
-            passCount:
-              depthMode === 'quick'
-                ? 1
-                : currentPasses.synthesis
-                  ? 3
-                  : currentPasses.critique
-                    ? 2
-                    : 1,
-            modelProvider,
-            modelId,
-            depthMode
-          });
-        } else if (!gotMetadata && !error) {
-          error = 'Analysis stream ended before a final result was received. Please retry.';
+        if (!gotMetadata && !error) {
+          const requiredPasses: Array<'analysis' | 'critique' | 'synthesis'> = depthMode === 'quick'
+            ? ['analysis']
+            : ['analysis', 'critique', 'synthesis'];
+          const missingPasses = requiredPasses.filter((pass) => !completedPasses.has(pass));
+          if (missingPasses.length > 0) {
+            error = `Inquiry interrupted before completing all phases (${missingPasses.join(', ')} missing). Please retry.`;
+          } else {
+            error = 'Inquiry stream ended before a final result was received. Please retry.';
+          }
         }
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);

@@ -1,0 +1,13 @@
+{
+  "identifier": "default",
+  "description": "Default capability set for Stoa desktop.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "fs:read-all",
+    "fs:write-app-data",
+    "path:all",
+    "shell:open",
+    "window:allow-set-title"
+  ]
+}

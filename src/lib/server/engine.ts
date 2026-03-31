@@ -166,8 +166,9 @@ interface EngineOptions {
   platformMaxCostUsd?: number;
 }
 
+// Default ON to avoid indefinite hangs; can be disabled with ENABLE_PASS_HARD_TIMEOUTS=false.
 const PASS_HARD_TIMEOUT_ENABLED =
-  (process.env.ENABLE_PASS_HARD_TIMEOUTS ?? '').trim().toLowerCase() === 'true';
+  (process.env.ENABLE_PASS_HARD_TIMEOUTS ?? 'true').trim().toLowerCase() !== 'false';
 
 function withPassTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   // Default behavior: do not hard-timeout long-running passes.

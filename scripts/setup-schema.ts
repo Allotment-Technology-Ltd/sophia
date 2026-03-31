@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { Surreal } from 'surrealdb';
+import { getEmbeddingDimensions } from '../src/lib/server/embeddings';
 
 // Read environment variables
 const SURREAL_URL = process.env.SURREAL_URL || 'http://localhost:8000/rpc';
@@ -7,6 +8,7 @@ const SURREAL_USER = process.env.SURREAL_USER || 'root';
 const SURREAL_PASS = process.env.SURREAL_PASS || 'root';
 const SURREAL_NAMESPACE = process.env.SURREAL_NAMESPACE || 'sophia';
 const SURREAL_DATABASE = process.env.SURREAL_DATABASE || 'sophia';
+const CLAIM_EMBEDDING_DIMENSION = getEmbeddingDimensions();
 
 async function signInWithScopeFallback(db: Surreal): Promise<void> {
 	try {
@@ -171,9 +173,11 @@ export async function setupSchema(existingDb?: Surreal) {
 		`);
 		try {
 			await db.query(`
-				DEFINE INDEX IF NOT EXISTS claim_embedding ON claim FIELDS embedding MTREE DIMENSION 768;
+				DEFINE INDEX IF NOT EXISTS claim_embedding ON claim FIELDS embedding MTREE DIMENSION ${CLAIM_EMBEDDING_DIMENSION};
 			`);
-			console.log('[SETUP] ✓ Indexes: claim (embedding, domain, source, passage, source+position)');
+			console.log(
+				`[SETUP] ✓ Indexes: claim (embedding:${CLAIM_EMBEDDING_DIMENSION}d, domain, source, passage, source+position)`
+			);
 		} catch (embeddingIndexError) {
 			console.warn(
 				'[SETUP] ⚠ Skipping claim_embedding index (MTREE unsupported on this SurrealDB deployment).'

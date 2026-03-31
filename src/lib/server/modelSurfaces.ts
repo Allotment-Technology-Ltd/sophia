@@ -95,11 +95,54 @@ export async function loadModelSurfacesConfig(): Promise<ModelSurfacesStored> {
 function parseSurfaceAssignmentsFromDoc(raw: unknown): Record<string, SurfaceRole> | undefined {
 	if (!isRecord(raw) || Array.isArray(raw)) return undefined;
 	const out: Record<string, SurfaceRole> = {};
-	for (const [k, v] of Object.entries(raw)) {
-		const p = surfaceRoleSchema.safeParse(v);
-		if (p.success) out[k] = p.data;
-	}
+	/**
+	 * Firestore map keys can be hostile to dotted model ids (e.g. gpt-4.1), so we support:
+	 * 1) encoded keys (preferred)
+	 * 2) legacy plain keys
+	 * 3) accidental nested-map shape from historical dotted keys.
+	 */
+	const visit = (value: unknown, prefix = '', depth = 0): void => {
+		if (!isRecord(value) || Array.isArray(value) || depth > 12) return;
+		for (const [k, v] of Object.entries(value)) {
+			const merged = prefix ? `${prefix}.${k}` : k;
+			const parsedRole = surfaceRoleSchema.safeParse(v);
+			if (parsedRole.success) {
+				out[decodeSurfaceAssignmentStorageKey(merged)] = parsedRole.data;
+				continue;
+			}
+			if (isRecord(v) && !Array.isArray(v)) {
+				visit(v, merged, depth + 1);
+			}
+		}
+	};
+	visit(raw);
 	return Object.keys(out).length ? out : undefined;
+}
+
+function encodeSurfaceAssignmentStorageKey(key: string): string {
+	// Firestore-safe stable encoding for arbitrary model ids.
+	return `b64:${Buffer.from(key, 'utf8').toString('base64url')}`;
+}
+
+function decodeSurfaceAssignmentStorageKey(key: string): string {
+	if (!key.startsWith('b64:')) return key;
+	try {
+		const decoded = Buffer.from(key.slice(4), 'base64url').toString('utf8').trim();
+		return decoded || key;
+	} catch {
+		return key;
+	}
+}
+
+function encodeSurfaceAssignmentsForStorage(
+	assignments: Record<string, SurfaceRole> | undefined
+): Record<string, SurfaceRole> | undefined {
+	if (!assignments) return undefined;
+	const out: Record<string, SurfaceRole> = {};
+	for (const [k, v] of Object.entries(assignments)) {
+		out[encodeSurfaceAssignmentStorageKey(k)] = v;
+	}
+	return out;
 }
 
 /** True when Firestore has no per-row assignment map (use legacy ops/user-query fields). */
@@ -162,7 +205,7 @@ export async function saveModelSurfacesConfig(
 	meta?: { clearRestormelError?: boolean }
 ): Promise<void> {
 	const payload: Record<string, unknown> = {
-		surfaceAssignments: config.surfaceAssignments ?? null,
+		surfaceAssignments: encodeSurfaceAssignmentsForStorage(config.surfaceAssignments) ?? null,
 		operationsMode: FieldValue.delete(),
 		operationsExplicit: FieldValue.delete(),
 		userQueriesMode: FieldValue.delete(),

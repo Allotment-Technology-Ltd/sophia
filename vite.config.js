@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { sveltekit } from '@sveltejs/kit/vite';
+import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
 const repoRoot = fileURLToPath(new URL('.', import.meta.url));
@@ -10,7 +11,7 @@ const observabilitySrc = fileURLToPath(new URL('./packages/observability/src', i
 
 export default defineConfig({
   root: repoRoot,
-  plugins: [sveltekit()],
+  plugins: [react(), sveltekit()],
   // Bundle Restormel Keys for SSR so `@restormel/keys` and `@restormel/keys/dashboard`
   // resolve via Vite (avoids flaky `nodeImport` / package-exports edge cases with externalized deps).
   ssr: {

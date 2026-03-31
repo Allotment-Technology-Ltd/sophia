@@ -16,9 +16,9 @@
     },
     {
       href: '/admin/ingest/batch',
-      title: 'STOA batch ingestion',
+      title: 'Batch ingestions',
       description:
-        'Queue and run strict-open STOA source batches from the frontend: policy preview, bulk approve/reject, run controls, and live progress.',
+        'Tradition-based STOA batch wizard: scan canonical open-license repositories, choose 5–30 sources, then queue/review/run from one flow.',
       emphasis: false
     },
     {
