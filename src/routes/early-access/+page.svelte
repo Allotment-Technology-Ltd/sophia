@@ -70,10 +70,6 @@
           If you would like to talk sooner or ask about access, email us at
           <a href="mailto:admin@usesophia.app">admin@usesophia.app</a>.
         </p>
-        <p class="hint">
-          App access is limited to <strong>owners</strong> for now. Other accounts must be added as users in Neon or via
-          the in-app admin screen before they can use the product.
-        </p>
 
         <form class="waitlist-form" onsubmit={handleSubmit}>
           <label class="field-label" for="waitlist-email">Join the waitlist</label>
@@ -186,11 +182,6 @@
 
   .early-body a:hover {
     color: var(--color-blue);
-  }
-
-  .hint {
-    font-size: 13px;
-    color: var(--color-dim);
   }
 
   .waitlist-form {
