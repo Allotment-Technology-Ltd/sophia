@@ -29,7 +29,7 @@
 #     WIF_PROVIDER        projects/{N}/locations/global/workloadIdentityPools/{P}/providers/{ID}
 #     WIF_SERVICE_ACCOUNT github-deploy@sophia-488807.iam.gserviceaccount.com
 #     GCP_PROJECT_ID      sophia-488807
-#     PULUMI_ACCESS_TOKEN (optional) — only if ENABLE_PULUMI_IAC=true
+#     PULUMI_ACCESS_TOKEN (optional) — Pulumi Cloud token; only if ENABLE_PULUMI_IAC=true
 #     PULUMI_STACK_NAME (optional) — overrides default stack ref for pulumi/actions
 #
 # AIKIDO: This repo uses the GitHub App for PR checks. Do NOT add AikidoSec/github-actions-workflow
