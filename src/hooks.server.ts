@@ -11,7 +11,8 @@ export const handle: Handle = async ({ event, resolve }) => {
     event.url.pathname.startsWith('/api/') &&
     !event.url.pathname.startsWith('/api/health') &&
     !event.url.pathname.startsWith('/api/v1/verify') &&
-    !event.url.pathname.startsWith('/api/billing/webhook');
+    !event.url.pathname.startsWith('/api/billing/webhook') &&
+    !event.url.pathname.startsWith('/api/early-access/');
 
   if (isProtectedApi) {
     const requestId = resolveRequestId(event.request);
