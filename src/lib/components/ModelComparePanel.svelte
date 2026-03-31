@@ -363,8 +363,8 @@
     max-height: 340px;
     overflow: auto;
     max-width: none;
-    font-size: 0.9rem;
-    line-height: 1.65;
+    font-size: 1rem;
+    line-height: 1.75;
     overflow-wrap: anywhere;
     word-break: break-word;
   }
