@@ -1,6 +1,6 @@
 /**
  * Drizzle schema for Neon (ingestion orchestration, staging, Firestore-shaped docs).
- * Canonical SQL migration: drizzle/0000_neon_first.sql — keep in sync when changing tables.
+ * Canonical SQL migrations: drizzle/0000_neon_first.sql, drizzle/0002_early_access_waitlist.sql — keep in sync when changing tables.
  */
 
 import {
@@ -210,5 +210,19 @@ export const sophiaDocuments = pgTable(
   (t) => ({
     topColIdx: index('idx_sophia_docs_top_collection').on(t.topCollection),
     sortIdx: index('idx_sophia_docs_sort_created').on(t.topCollection, t.sortCreatedAt)
+  })
+);
+
+export const earlyAccessWaitlist = pgTable(
+  'early_access_waitlist',
+  {
+    id: serial('id').primaryKey(),
+    email: text('email').notNull().unique(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    sourcePath: text('source_path'),
+    userAgent: text('user_agent')
+  },
+  (t) => ({
+    createdIdx: index('idx_early_access_waitlist_created_at').on(t.createdAt)
   })
 );
