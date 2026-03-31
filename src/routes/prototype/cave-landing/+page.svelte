@@ -341,7 +341,7 @@
   }
 
   .brand-name {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1.2rem;
     letter-spacing: 0.12em;
     font-weight: 500;
@@ -411,7 +411,7 @@
     left: 50%;
     transform: translateX(-42%);
     margin: 0;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-weight: 300;
     font-size: clamp(18vw, 20vw, 22vw);
     line-height: 0.85;

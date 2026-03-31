@@ -48,7 +48,7 @@
   .card h2 {
     margin: 0 0 var(--space-2) 0;
     font-size: var(--text-meta);
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }

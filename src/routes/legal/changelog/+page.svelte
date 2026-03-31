@@ -55,7 +55,7 @@
   }
 
   h1 {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 2rem;
     font-weight: 400;
     margin: 0 0 0.35rem;

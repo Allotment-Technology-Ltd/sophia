@@ -134,7 +134,7 @@
   }
 
   .early-title {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied (<32px hero) */
     font-size: 28px;
     font-weight: 700;
     letter-spacing: 0.06em;
@@ -143,7 +143,7 @@
   }
 
   .early-eyebrow {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.14em;
@@ -164,10 +164,10 @@
   }
 
   .early-body p {
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-size: 14px;
-    line-height: 1.6;
-    color: var(--color-muted);
+    line-height: 1.65;
+    color: var(--color-text);
     margin: 0;
   }
 
@@ -194,7 +194,7 @@
   }
 
   .field-label {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 13px;
     font-weight: 600;
     color: var(--color-text);
@@ -202,9 +202,9 @@
 
   .field-help {
     font-size: 12px;
-    color: var(--color-dim);
+    color: var(--color-muted);
     margin: -4px 0 0;
-    line-height: 1.45;
+    line-height: 1.65;
   }
 
   .field-row {
@@ -237,7 +237,7 @@
     border: none;
     background: var(--color-sage);
     color: var(--color-bg);
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;

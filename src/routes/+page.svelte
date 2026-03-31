@@ -236,9 +236,9 @@
   .subhead {
     margin: 16px 0 0;
     max-width: 58ch;
-    color: var(--color-muted);
+    color: var(--color-text);
     font-size: 1.07rem;
-    line-height: 1.6;
+    line-height: 1.65;
   }
 
   .hero-actions {
@@ -281,9 +281,9 @@
 
   .microcopy {
     margin: 14px 0 0;
-    color: var(--color-dim);
+    color: var(--color-muted);
     font-size: 0.88rem;
-    line-height: 1.55;
+    line-height: 1.65;
     max-width: 62ch;
   }
 
@@ -318,7 +318,7 @@
 
   h2 {
     margin: 0 0 16px;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: clamp(1.35rem, 3vw, 2rem);
   }
 
@@ -340,21 +340,21 @@
   .glyph {
     margin: 0 0 8px;
     color: var(--color-sage);
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-size: 1.08rem;
   }
 
   .info-card p:last-child,
   .price-card p:last-child {
     margin: 0;
-    color: var(--color-muted);
-    line-height: 1.58;
+    color: var(--color-text);
+    line-height: 1.65;
   }
 
   .journey p,
   .audience p {
     margin: 0;
-    color: var(--color-muted);
+    color: var(--color-text);
     line-height: 1.7;
     max-width: 78ch;
   }
@@ -430,8 +430,8 @@
   .preview-card p,
   .section-note {
     margin: 0;
-    color: var(--color-muted);
-    line-height: 1.6;
+    color: var(--color-text);
+    line-height: 1.65;
   }
 
   .section-note {
@@ -459,14 +459,14 @@
     border-radius: 8px;
     background: var(--color-surface-sunken);
     padding: 12px;
-    color: var(--color-muted);
+    color: var(--color-text);
     line-height: 1.7;
   }
 
   .essay-review ul {
     margin: 0;
     padding-left: 18px;
-    color: var(--color-muted);
+    color: var(--color-text);
     line-height: 1.7;
   }
 
@@ -477,7 +477,7 @@
 
   .price-card h3 {
     margin: 0;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1.08rem;
   }
 
@@ -500,7 +500,7 @@
 
   .closing p {
     margin: 0 0 16px;
-    color: var(--color-muted);
+    color: var(--color-text);
     font-size: 1.02rem;
     line-height: 1.7;
   }
@@ -508,7 +508,7 @@
   .marketing-footer {
     margin-top: 26px;
     text-align: center;
-    color: var(--color-dim);
+    color: var(--color-muted);
     font-family: var(--font-ui);
     font-size: 0.67rem;
     text-transform: uppercase;

@@ -590,8 +590,8 @@
 
   .header p {
     margin: 14px 0 0;
-    color: var(--color-muted);
-    line-height: 1.6;
+    color: var(--color-text);
+    line-height: 1.65;
   }
 
   .founder-callout {
@@ -632,7 +632,7 @@
 
   .plan h2 {
     margin: 0;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1.16rem;
   }
 
@@ -653,7 +653,7 @@
 
   .price {
     margin: 8px 0 12px;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1.4rem;
     color: var(--color-text);
   }
@@ -694,14 +694,14 @@
     margin: 0;
     font-family: var(--font-ui);
     font-size: 0.8rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .plan ul {
     margin: 0;
     padding-left: 18px;
-    color: var(--color-muted);
-    line-height: 1.55;
+    color: var(--color-text);
+    line-height: 1.65;
     font-size: 0.94rem;
   }
 
@@ -713,21 +713,22 @@
 
   .notes h2 {
     margin: 0 0 8px;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1.12rem;
   }
 
   .notes ul {
     margin: 0;
     padding-left: 18px;
-    color: var(--color-muted);
-    line-height: 1.55;
+    color: var(--color-text);
+    line-height: 1.65;
     font-size: 0.94rem;
   }
 
   .notes p {
     margin: 12px 0 0;
-    color: var(--color-muted);
+    color: var(--color-text);
+    line-height: 1.65;
   }
 
   .resource-note {
@@ -769,7 +770,7 @@
     margin-top: 6px;
     font-family: var(--font-ui);
     font-size: 0.78rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .error-note {

@@ -27,14 +27,14 @@
       </div>
 
       <!-- Message -->
-      <h1 class="text-2xl font-bold text-center mb-3" style="color: var(--color-text); font-family: var(--font-display);">Early Access Required</h1>
+      <h1 class="text-2xl font-bold text-center mb-3" style="color: var(--color-text); font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */">Early Access Required</h1>
       <p class="text-center text-sm mb-6" style="color: var(--color-muted);">
         SOPHIA is currently in development and available by invitation only. Your email address does not have access yet.
       </p>
 
       <!-- Contact Info -->
       <div class="p-4 rounded-lg mb-6" style="background: var(--color-surface); border: 1px solid var(--color-border);">
-        <p class="text-xs mb-2" style="color: var(--color-dim);">To request access, contact:</p>
+        <p class="text-xs mb-2" style="color: var(--color-muted);">To request access, contact:</p>
         <p style="color: var(--color-sage); font-family: var(--font-ui); font-size: 0.875rem; margin: 0;">
           <a href="mailto:admin@usesophia.app" style="color: var(--color-sage); text-decoration: none;">admin@usesophia.app</a>
         </p>
@@ -44,7 +44,7 @@
       <button
         onclick={handleSignOut}
         class="sign-out-btn w-full flex items-center justify-center gap-2 px-6 py-2 rounded-lg text-sm font-medium transition-all"
-        style="background: transparent; color: var(--color-muted); border: 1px solid var(--color-border); cursor: pointer; font-family: var(--font-display);"
+        style="background: transparent; color: var(--color-muted); border: 1px solid var(--color-border); cursor: pointer; font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */"
       >
         Sign out
       </button>

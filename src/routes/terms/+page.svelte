@@ -277,7 +277,7 @@
   }
 
   h2 {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1.25rem;
     font-weight: 400;
     margin: 0 0 1rem;

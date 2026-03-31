@@ -251,7 +251,7 @@
   }
 
   .footer-nav a {
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-decoration: none;
     transition: color var(--transition-base);
   }

@@ -91,7 +91,7 @@
     display: flex;
     justify-content: space-between;
     gap: var(--space-3);
-    color: var(--color-dim);
+    color: var(--color-muted);
     font-size: var(--text-meta);
   }
 
@@ -100,6 +100,6 @@
   }
 
   .empty {
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 </style>

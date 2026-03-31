@@ -172,14 +172,14 @@
 
   h1 {
     margin: 8px 0;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: clamp(1.6rem, 3.4vw, 2.5rem);
   }
 
   .hero p {
     margin: 0;
-    color: var(--color-muted);
-    line-height: 1.6;
+    color: var(--color-text);
+    line-height: 1.65;
   }
 
   .modes {
@@ -212,13 +212,14 @@
 
   .mode-card h2 {
     margin: 0 0 8px;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     color: var(--color-text);
   }
 
   .mode-card p {
     margin: 0;
-    color: var(--color-muted);
+    color: var(--color-text);
+    line-height: 1.65;
   }
 
   .mode-card span {
@@ -233,7 +234,7 @@
 
   .note {
     margin-top: 12px;
-    color: var(--color-dim);
+    color: var(--color-muted);
     font-size: 0.85rem;
   }
 </style>

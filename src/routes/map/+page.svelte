@@ -70,7 +70,7 @@
   .map-page-header p {
     margin: 0;
     font-family: var(--font-ui);
-    color: var(--color-dim);
+    color: var(--color-muted);
     font-size: var(--text-meta);
   }
 

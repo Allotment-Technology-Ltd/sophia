@@ -4949,7 +4949,7 @@
   .pill.cx-high { color: var(--color-coral); border-color: var(--color-coral-border); background: var(--color-coral-bg); }
   .pill.cx-medium { color: var(--color-amber); border-color: var(--color-amber-border); background: var(--color-amber-bg); }
   .pill.cx-low { color: var(--color-sage); border-color: var(--color-sage-border); background: var(--color-sage-bg); }
-  .pill.latency { color: var(--color-dim); }
+  .pill.latency { color: var(--color-muted); }
   .pill.cost { color: var(--color-amber); border-color: var(--color-amber-border); background: var(--color-amber-bg); }
   .pill.good { color: var(--color-sage); border-color: var(--color-sage-border); background: var(--color-sage-bg); }
   .pill.bad { color: var(--color-coral); border-color: var(--color-coral-border); background: var(--color-coral-bg); }
@@ -4999,7 +4999,7 @@
     margin-top: 6px;
     font-family: var(--font-ui);
     font-size: var(--text-meta);
-    color: var(--color-dim);
+    color: var(--color-muted);
     transition: color 180ms ease;
   }
   .run-stage-node--done {
@@ -5169,7 +5169,7 @@
   .pipeline-theory-details summary::after {
     content: ' ▸';
     margin-left: 6px;
-    color: var(--color-dim);
+    color: var(--color-muted);
     font-size: 0.85em;
   }
   .pipeline-theory-details[open] summary::after {
