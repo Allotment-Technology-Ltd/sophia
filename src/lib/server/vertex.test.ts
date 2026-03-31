@@ -156,6 +156,7 @@ describe('resolveReasoningModelRoute', () => {
     );
   });
 
+
   it('uses @ai-sdk/mistral for Mistral (not OpenAI-compatible client; avoids max_completion_tokens 422)', async () => {
     process.env.MISTRAL_API_KEY = 'mistral-test-key';
     mockResolveProviderDecision.mockResolvedValue({
