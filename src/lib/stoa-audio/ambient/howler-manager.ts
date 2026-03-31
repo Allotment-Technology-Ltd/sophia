@@ -13,7 +13,8 @@ const ZONE_POSITIONS: Record<StoaZone, { wavesX: number; torchX: number }> = {
   'sea-terrace': { wavesX: -1.2, torchX: 0.15 },
   shrines: { wavesX: -0.2, torchX: 0.6 },
   library: { wavesX: -0.1, torchX: 0.45 },
-  garden: { wavesX: -0.8, torchX: 0.25 }
+  garden: { wavesX: -0.8, torchX: 0.25 },
+  'world-map': { wavesX: -0.5, torchX: 0.1 }
 };
 
 export class HowlerManager {

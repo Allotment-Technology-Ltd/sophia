@@ -42,6 +42,10 @@ const ZONE_CAMERA: Record<StoaZone, { position: THREE.Vector3; target: THREE.Vec
   garden: {
     position: new THREE.Vector3(0, 3.4, 11.2),
     target: new THREE.Vector3(0, 1.1, -2.5)
+  },
+  'world-map': {
+    position: new THREE.Vector3(0, 11.5, 15.5),
+    target: new THREE.Vector3(0, 0, 0)
   }
 };
 
