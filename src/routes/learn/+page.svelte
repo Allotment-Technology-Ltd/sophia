@@ -745,7 +745,7 @@
             <p class="primer-preview">{activeDailyPrimerPreview}</p>
             <details class="expandable">
               <summary>Open full lesson primer</summary>
-              <div class="markdown">{@html renderMarkdown(activeDailyLesson.lesson_content_markdown)}</div>
+              <div class="reasoning-prose lesson-markdown">{@html renderMarkdown(activeDailyLesson.lesson_content_markdown)}</div>
             </details>
             <label class="ready-check">
               <input
@@ -987,7 +987,7 @@
             <p class="primer-preview">{activePracticePrimerPreview}</p>
             <details class="expandable">
               <summary>Open full lesson primer</summary>
-              <div class="markdown">{@html renderMarkdown(activePracticeLesson.lesson_content_markdown)}</div>
+              <div class="reasoning-prose lesson-markdown">{@html renderMarkdown(activePracticeLesson.lesson_content_markdown)}</div>
             </details>
             {#if !isLessonUnlocked(activePracticeLesson)}
               <p class="error">
@@ -1411,7 +1411,7 @@
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .hero {
@@ -1423,7 +1423,7 @@
 
   .hero h1 {
     margin: 8px 0;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: clamp(1.6rem, 3vw, 2.4rem);
   }
 
@@ -1455,15 +1455,16 @@
 
   .journey-header h2 {
     margin: 0 0 4px;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1.15rem;
     color: var(--color-text);
   }
 
   .journey-header p {
     margin: 0;
-    color: var(--color-muted);
+    color: var(--color-text);
     font-size: 0.86rem;
+    line-height: 1.65;
   }
 
   .journey-grid {
@@ -1496,9 +1497,9 @@
 
   .journey-stage p {
     margin: 0;
-    color: var(--color-muted);
+    color: var(--color-text);
     font-size: 0.8rem;
-    line-height: 1.4;
+    line-height: 1.65;
   }
 
   .journey-step {
@@ -1562,9 +1563,9 @@
 
   .coming-soon-banner p {
     margin: 0;
-    color: var(--color-muted);
+    color: var(--color-text);
     font-size: 0.84rem;
-    line-height: 1.45;
+    line-height: 1.65;
   }
 
   .subnav-btn {
@@ -1630,14 +1631,15 @@
   .lesson-card h2 {
     margin: 0 0 7px;
     font-size: 1rem;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     color: var(--color-text);
   }
 
   .lesson-card p {
     margin: 0;
-    color: var(--color-muted);
+    color: var(--color-text);
     font-size: 0.82rem;
+    line-height: 1.65;
   }
 
   .card-kicker {
@@ -1667,38 +1669,12 @@
     padding: 16px;
   }
 
-  .markdown {
+  .lesson-markdown {
+    max-width: none;
+  }
+
+  .lesson-markdown :global(li)::marker {
     color: var(--color-muted);
-    line-height: 1.65;
-  }
-
-  .markdown :global(p) {
-    margin: 0.55rem 0;
-  }
-
-  .markdown :global(ol),
-  .markdown :global(ul) {
-    margin: 0.6rem 0;
-    padding-left: 1.35rem;
-    list-style-position: outside;
-  }
-
-  .markdown :global(ol) {
-    list-style-type: decimal;
-  }
-
-  .markdown :global(ul) {
-    list-style-type: disc;
-  }
-
-  .markdown :global(li) {
-    margin: 0.3rem 0;
-    padding-left: 0.2rem;
-    line-height: 1.55;
-  }
-
-  .markdown :global(li)::marker {
-    color: var(--color-dim);
   }
 
   .lesson-detail h2,
@@ -1731,8 +1707,8 @@
 
   .primer-preview {
     margin: 10px 0;
-    color: var(--color-muted);
-    line-height: 1.55;
+    color: var(--color-text);
+    line-height: 1.65;
     font-size: 0.92rem;
   }
 
@@ -1885,7 +1861,7 @@
   .refs h3,
   .guided h3 {
     margin: 0 0 8px;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1rem;
   }
 
@@ -1899,7 +1875,8 @@
   .refs ul {
     margin: 0;
     padding-left: 18px;
-    color: var(--color-muted);
+    color: var(--color-text);
+    line-height: 1.65;
   }
 
   .refs li {
@@ -1995,7 +1972,7 @@
   }
 
   .meta {
-    color: var(--color-dim);
+    color: var(--color-muted);
     font-size: 0.82rem;
   }
 

@@ -1871,7 +1871,7 @@
                   <h2>Your Question</h2>
                   <p class="simple-question">— "{currentQuery}"</p>
                   <h3>{simplePrimaryHeading}</h3>
-                  <div class="simple-prose">
+                  <div class="simple-prose reasoning-prose">
                     {@html renderPass(simplePrimaryContent)}
                   </div>
                   <div class="simple-actions secondary">
@@ -2150,7 +2150,7 @@
                       </svg>
                       Scholarly Review
                     </div>
-                    <div class="prose">
+                    <div class="prose reasoning-prose">
                       {@html renderPass(passes.verification)}
                     </div>
                   </div>
@@ -2388,7 +2388,7 @@
   }
 
   .query-heading {
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: var(--text-d2);
     font-weight: 500;
     color: var(--color-text);
@@ -2408,7 +2408,7 @@
 
   .query-persona {
     margin: 0 0 var(--space-5);
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-size: 1.0625rem;
     font-style: italic;
     color: color-mix(in srgb, var(--color-muted) 88%, var(--color-text) 12%);
@@ -2479,7 +2479,7 @@
     font-size: 0.66rem;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-align: left;
   }
 
@@ -2487,7 +2487,7 @@
     margin: -2px 0 2px;
     font-family: var(--font-ui);
     font-size: 0.72rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-align: left;
     line-height: 1.4;
   }
@@ -2560,7 +2560,7 @@
     margin: 0;
     font-family: var(--font-ui);
     font-size: 0.72rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-align: left;
     line-height: 1.4;
     text-transform: none;
@@ -2571,7 +2571,7 @@
     margin: 0;
     font-family: var(--font-ui);
     font-size: 0.72rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-align: left;
     line-height: 1.4;
     text-transform: none;
@@ -2589,7 +2589,7 @@
     margin: 0;
     font-family: var(--font-ui);
     font-size: 0.7rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-align: left;
     text-transform: none;
     letter-spacing: 0;
@@ -2679,7 +2679,7 @@
     margin: -2px 0 2px;
     font-family: var(--font-ui);
     font-size: 0.74rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-align: left;
     line-height: 1.45;
   }
@@ -2732,7 +2732,7 @@
     margin: 6px 0 0;
     font-family: var(--font-ui);
     font-size: 0.73rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     line-height: 1.45;
   }
 
@@ -2818,7 +2818,7 @@
   }
 
   .pill {
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-size: 0.9375rem;
     font-weight: 400;
     color: color-mix(in srgb, var(--color-muted) 65%, var(--color-text) 35%);
@@ -2856,31 +2856,26 @@
 
   .simple-card h2 {
     margin: 0;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1.55rem;
     font-weight: 500;
   }
 
   .simple-card h3 {
     margin: 0;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1.15rem;
     font-weight: 500;
   }
 
   .simple-question {
     margin: 0;
-    color: var(--color-dim);
+    color: var(--color-muted);
     font-style: italic;
   }
 
   .simple-prose {
-    color: var(--color-muted);
-    line-height: 1.75;
-  }
-
-  .simple-prose :global(p) {
-    margin: 0 0 0.75rem;
+    max-width: none;
   }
 
   .simple-actions {
@@ -2931,7 +2926,7 @@
     margin: 0;
     font-family: var(--font-ui);
     font-size: 0.7rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .simple-note.error {
@@ -2996,7 +2991,7 @@
     margin: 0;
     font-family: var(--font-ui);
     font-size: 0.72rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     line-height: 1.4;
   }
 
@@ -3033,17 +3028,17 @@
 
   .run-cost-run-head span {
     font-size: 0.62rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     letter-spacing: 0.04em;
   }
 
   .run-cost-query {
     margin: 0;
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-size: 0.79rem;
     font-style: italic;
-    color: var(--color-muted);
-    line-height: 1.45;
+    color: var(--color-text);
+    line-height: 1.65;
   }
 
   .run-cost-summary {
@@ -3052,7 +3047,7 @@
     gap: 4px 8px;
     font-family: var(--font-ui);
     font-size: 0.62rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .run-cost-summary span:not(:first-child) {
@@ -3072,7 +3067,7 @@
   .run-cost-table th {
     text-align: left;
     font-weight: 500;
-    color: var(--color-dim);
+    color: var(--color-muted);
     padding: 3px 2px;
     border-bottom: 1px solid var(--color-border);
     letter-spacing: 0.05em;
@@ -3090,7 +3085,7 @@
     margin: 0;
     font-family: var(--font-ui);
     font-size: 0.58rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .results-col {
@@ -3147,7 +3142,7 @@
 
   .live-progress-status {
     margin: 0;
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-size: 0.86rem;
     font-style: italic;
     color: var(--color-text);
@@ -3158,7 +3153,7 @@
     margin: 0;
     font-family: var(--font-ui);
     font-size: 0.7rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-align: center;
   }
 
@@ -3171,10 +3166,10 @@
   }
 
   .query-echo-text {
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-style: italic;
     font-size: 1rem;
-    color: var(--color-muted);
+    color: var(--color-text);
     margin: 0;
     line-height: 1.65;
   }
@@ -3344,7 +3339,7 @@
   .scan-dots span:nth-child(3) { animation-delay: 0.4s; }
 
   .scan-note {
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-style: italic;
     font-size: 0.85rem;
     color: var(--color-muted);
@@ -3367,11 +3362,7 @@
     cursor: not-allowed;
   }
 
-  /* ── Prose (verification content) ──────────────────────────────────── */
-  .prose :global(p) { margin-bottom: var(--space-3); color: var(--color-muted); font-family: var(--font-display); font-size: 1rem; line-height: 1.85; }
-  .prose :global(h1), .prose :global(h2), .prose :global(h3) { font-family: var(--font-display); font-weight: 400; color: var(--color-text); margin: var(--space-4) 0 var(--space-2); }
-  .prose :global(a) { color: var(--color-blue); }
-  .prose :global(strong) { font-weight: 600; color: var(--color-text); }
+  /* ── Prose (verification content): typography via .reasoning-prose in base.css ──────────────────────────────────── */
 
   /* ── Metadata row ───────────────────────────────────────────────────── */
   .metadata-row {
@@ -3443,7 +3434,7 @@
   .upgrade-note {
     font-family: var(--font-ui);
     font-size: 0.72rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .dot {
@@ -3459,10 +3450,10 @@
   }
 
   .limit-message {
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-style: italic;
     font-size: 0.9rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     margin: 0;
     padding: var(--space-3) var(--space-4);
     border: 1px solid var(--color-border);
@@ -3492,7 +3483,7 @@
 
   .error-message {
     flex: 1;
-    font-family: var(--font-display);
+    font-family: var(--font-body); /* was --font-display: landing-only restriction applied */
     font-size: 1rem;
     color: var(--color-copper);
     margin: 0;
@@ -3502,7 +3493,7 @@
     margin: 0;
     font-family: var(--font-ui);
     font-size: 0.68rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
     word-break: break-word;
   }
 
