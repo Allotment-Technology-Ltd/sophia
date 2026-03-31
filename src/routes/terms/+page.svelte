@@ -47,7 +47,7 @@
         { href: '/#learn-track', label: 'Learn' },
         { href: '/#inquire-track', label: 'Think' },
         { href: '/pricing', label: 'Pricing' },
-        { href: '/auth', label: 'Sign In' }
+        { href: '/early-access', label: 'Sign In' }
       ]}
     />
   {/if}

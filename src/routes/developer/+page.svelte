@@ -476,7 +476,7 @@
           <p class="font-mono text-sm text-sophia-dark-muted">Sign in to create keys and view usage analytics.</p>
           <button
             class="rounded border border-sophia-dark-sage px-3 py-2 font-mono text-sm text-sophia-dark-sage hover:bg-sophia-dark-sage/10"
-            onclick={() => goto('/auth')}
+            onclick={() => goto('/early-access')}
           >
             Sign in
           </button>

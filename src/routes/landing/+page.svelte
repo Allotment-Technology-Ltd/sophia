@@ -17,7 +17,7 @@
       { href: '#learn-track', label: 'Learn' },
       { href: '#inquire-track', label: 'Think' },
       { href: '/pricing', label: 'Pricing' },
-      { href: '/auth', label: 'Sign In' }
+      { href: '/early-access', label: 'Sign In' }
     ]}
   />
 
@@ -30,7 +30,7 @@
         dialectical inquiries.
       </p>
       <div class="hero-actions">
-        <a class="btn primary" href="/auth">Sign In to Get Started</a>
+        <a class="btn primary" href="/early-access">Sign In to Get Started</a>
         <a class="btn secondary" href="#how-it-works-title">See Learn + Inquire Paths</a>
       </div>
       <p class="microcopy">
@@ -49,7 +49,7 @@
       Founder offer: the first 50 users receive 12 months of Premium plus £10 in starter wallet
       credit.
     </p>
-    <a class="inline-link" href="/auth">Sign in to claim founder access →</a>
+    <a class="inline-link" href="/early-access">Sign in to claim founder access →</a>
   </section>
 
   <section id="learn-track" class="panel" aria-labelledby="how-it-works-title">
@@ -92,7 +92,7 @@
       <span>Short Reflections</span>
       <span>Master Essays</span>
     </div>
-    <a class="inline-link" href="/auth">Sign in to explore the Philosophy Curriculum →</a>
+    <a class="inline-link" href="/early-access">Sign in to explore the Philosophy Curriculum →</a>
   </section>
 
   <section id="inquire-track" class="panel" aria-labelledby="preview-title">
@@ -133,7 +133,7 @@
         <li>Critique: Assumptions around agency need refinement.</li>
         <li>Synthesis: Rephrase to align with existentialist view.</li>
       </ul>
-      <a class="inline-link" href="/auth">Get Feedback on Your Philosophy Writing →</a>
+      <a class="inline-link" href="/early-access">Get Feedback on Your Philosophy Writing →</a>
     </div>
   </section>
 
@@ -172,7 +172,7 @@
       Philosophy is learned through thinking - and thinking through dialogue. SOPHIA supports
       both.
     </p>
-    <a class="btn primary" href="/auth">Start Your Journey</a>
+    <a class="btn primary" href="/early-access">Start Your Journey</a>
   </section>
 
   <footer class="marketing-footer">Think deeply. Write clearly. Learn continuously.</footer>

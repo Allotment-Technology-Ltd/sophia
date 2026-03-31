@@ -100,7 +100,7 @@
     <nav class="nav" aria-label="Links">
       <a href="/">Main site</a>
       <a href="/pricing">Pricing</a>
-      <a href="/auth">Sign In</a>
+      <a href="/early-access">Sign In</a>
     </nav>
     <button class="audio-btn" type="button" onclick={toggleAudio}>
       Sound: {audioEnabled ? 'On' : 'Off'}
@@ -125,7 +125,7 @@
           dialectical inquiries.
         </p>
         <div class="actions intro-fade">
-          <a class="btn primary" href="/auth">Sign In to Get Started</a>
+          <a class="btn primary" href="/early-access">Sign In to Get Started</a>
           <a class="btn ghost" href="#pathways">See Learn + Inquire Paths</a>
         </div>
       </div>
@@ -137,7 +137,7 @@
           Founder offer: the first 50 users receive 12 months of Premium plus £10 in starter wallet
           credit.
         </p>
-        <a class="inline-link" href="/auth">Sign in to claim founder access →</a>
+        <a class="inline-link" href="/early-access">Sign in to claim founder access →</a>
       </div>
     </section>
 
@@ -189,7 +189,7 @@
         <span>Short Reflections</span>
         <span>Master Essays</span>
       </div>
-      <a class="inline-link" href="/auth">Sign in to explore the Philosophy Curriculum →</a>
+      <a class="inline-link" href="/early-access">Sign in to explore the Philosophy Curriculum →</a>
     </section>
 
     <section class="chapter block intro-fade" data-chapter="0.76" data-intensity="0.78">
@@ -235,7 +235,7 @@
             <li>Critique: Assumptions around agency need refinement.</li>
             <li>Synthesis: Rephrase to align with existentialist view.</li>
           </ul>
-          <a class="inline-link" href="/auth">Get Feedback on Your Philosophy Writing →</a>
+          <a class="inline-link" href="/early-access">Get Feedback on Your Philosophy Writing →</a>
         </div>
       </div>
     </section>
@@ -249,7 +249,7 @@
         both.
       </p>
       <div class="actions">
-        <a class="btn primary" href="/auth">Start Your Journey</a>
+        <a class="btn primary" href="/early-access">Start Your Journey</a>
         <a class="btn ghost" href="/">Back to Home</a>
       </div>
     </section>

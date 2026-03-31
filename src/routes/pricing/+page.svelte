@@ -392,7 +392,7 @@
         { href: '/#learn-track', label: 'Learn' },
         { href: '/#inquire-track', label: 'Think' },
         { href: '/pricing', label: 'Pricing' },
-        { href: '/auth', label: 'Sign In' }
+        { href: '/early-access', label: 'Sign In' }
       ]}
     />
   {/if}
@@ -549,7 +549,7 @@
         <a class="button primary" href="/app">Back to SOPHIA</a>
       {/if}
       {#if !isAuthenticated}
-        <a class="button primary" href="/auth">Get started</a>
+        <a class="button primary" href="/early-access">Get started</a>
       {/if}
     </div>
     </section>
