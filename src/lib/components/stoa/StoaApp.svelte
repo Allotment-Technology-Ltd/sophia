@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { getAudioEngine } from '$lib/stoa-audio';
+  import { fetchWithAuth } from '$lib/stoa/fetchWithAuth';
   import { stoaSessionStore } from '$lib/stores/stoa-session.svelte';
   import type {
     ThinkerProfile,
@@ -126,7 +127,7 @@
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      return await fetch(input, { signal: controller.signal });
+      return await fetchWithAuth(input, { signal: controller.signal });
     } finally {
       clearTimeout(timer);
     }
@@ -137,14 +138,11 @@
     setupError = null;
     try {
       const response = await fetchWithTimeout('/api/stoa/profile');
-      if (response.status === 401) {
-        isNewStudent = true;
-        isReturningStudent = false;
-        profile = null;
-        returningLines = [];
-        return;
-      }
       if (!response.ok) {
+        if (response.status === 401) {
+          setupError = 'Sign in to continue your STOA session.';
+          return;
+        }
         throw new Error('Failed to load profile');
       }
       const payload = (await response.json()) as StoaProfile | null;
@@ -162,7 +160,7 @@
       isReturningStudent = Boolean(payload.philosophyLevel);
 
       if (isReturningStudent) {
-        const greetRes = await fetch('/api/stoa/prologue/returning-greeting');
+        const greetRes = await fetchWithAuth('/api/stoa/prologue/returning-greeting');
         if (greetRes.ok) {
           const greet = (await greetRes.json()) as { lines?: string[]; startingPath?: StoaProfile['startingPath'] };
           returningLines = Array.isArray(greet.lines) ? greet.lines : [];
@@ -224,7 +222,7 @@
 
   async function refreshWorldMap(): Promise<void> {
     try {
-      const response = await fetch('/api/stoa/world-map');
+      const response = await fetchWithAuth('/api/stoa/world-map');
       if (!response.ok) return;
       const payload = (await response.json()) as WorldMapResponse;
       worldMapData = {
@@ -244,7 +242,7 @@
 
   async function refreshProgress(): Promise<void> {
     try {
-      const response = await fetch('/api/stoa/progress');
+      const response = await fetchWithAuth('/api/stoa/progress');
       if (!response.ok) {
         return;
       }

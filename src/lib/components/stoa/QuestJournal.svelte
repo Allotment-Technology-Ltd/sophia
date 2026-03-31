@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { fade } from 'svelte/transition';
+	import { fetchWithAuth } from '$lib/stoa/fetchWithAuth';
 	import type { QuestDefinition } from '$lib/server/stoa/game/types.js';
 	import type { StoaProgressState } from '$lib/types/stoa.js';
 	import QuestCard from './QuestCard.svelte';
@@ -67,7 +68,7 @@
 
 	async function loadQuestDefinitions(): Promise<void> {
 		try {
-			const response = await fetch('/api/stoa/curriculum');
+			const response = await fetchWithAuth('/api/stoa/curriculum');
 			if (!response.ok) {
 				// Fallback: we won't have quest definitions, but we can still show basic info
 				return;
@@ -93,8 +94,8 @@
 
 		try {
 			const [progressResponse, completionsResponse] = await Promise.all([
-				fetch('/api/stoa/progress'),
-				fetch('/api/stoa/quest-completions').catch(() => null) // This endpoint may not exist yet
+				fetchWithAuth('/api/stoa/progress'),
+				fetchWithAuth('/api/stoa/quest-completions').catch(() => null) // This endpoint may not exist yet
 			]);
 
 			if (!progressResponse.ok) {

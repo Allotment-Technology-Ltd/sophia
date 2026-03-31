@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { fetchWithAuth } from '$lib/stoa/fetchWithAuth';
   import type {
     ArrivalReason,
     PrologueState,
@@ -269,7 +270,7 @@
     showChoices = false;
     prologueState = 'beat_4';
 
-    await fetch('/api/stoa/profile', {
+    await fetchWithAuth('/api/stoa/profile', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ beat3Choice: option.text })
@@ -315,7 +316,7 @@
     streamedResponse = '';
 
     try {
-      const response = await fetch('/api/stoa/dialogue', {
+      const response = await fetchWithAuth('/api/stoa/dialogue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -364,7 +365,7 @@
     await addLineWordByWord(BEAT6_CLOSING_LINE, { wordMs: 90, linePauseMs: 400 });
     await delay(2000);
 
-    await fetch('/api/stoa/prologue/assess', {
+    await fetchWithAuth('/api/stoa/prologue/assess', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

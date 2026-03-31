@@ -127,7 +127,7 @@
         </button>
       {/if}
     {:else}
-      <div class="carried">Carried.</div>
+      <div class="carried">Saved. Continuing...</div>
     {/if}
   </div>
 

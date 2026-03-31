@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
+  import { fetchWithAuth } from '$lib/stoa/fetchWithAuth';
 
   import type { ReasoningAssessment, StanceType } from '$lib/types/stoa';
   import { stoaSessionStore } from '$lib/stores/stoa-session.svelte';
@@ -124,7 +125,7 @@
     let resolvedClaims: ClaimReference[] = [];
 
     try {
-      const response = await fetch('/api/stoa/dialogue', {
+      const response = await fetchWithAuth('/api/stoa/dialogue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
