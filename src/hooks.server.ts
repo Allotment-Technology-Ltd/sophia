@@ -1,4 +1,4 @@
-import { isSeedOwnerEmail, syncAuthenticatedUserRole, type UserRoleRecord } from '$lib/server/authRoles';
+import { hasOwnerRole, isSeedOwnerEmail, syncAuthenticatedUserRole, type UserRoleRecord } from '$lib/server/authRoles';
 import { verifyBearerTokenForApi } from '$lib/server/bearerAuthVerification';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
 import type { Handle } from '@sveltejs/kit';
@@ -70,6 +70,16 @@ export const handle: Handle = async ({ event, resolve }) => {
       });
     }
 
+    const isOwnerRestrictedApi =
+      event.url.pathname.startsWith('/api/stoa') || event.url.pathname.startsWith('/api/learn');
+    if (isOwnerRestrictedApi && !hasOwnerRole(event.locals.user)) {
+      return problemJson({
+        status: 403,
+        title: 'Forbidden',
+        detail: 'Owner access is required for this module.',
+        requestId
+      });
+    }
   }
 
   return resolve(event);

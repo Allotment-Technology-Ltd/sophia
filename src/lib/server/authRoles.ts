@@ -42,9 +42,9 @@ export function isSeedOwnerEmail(email: string | null | undefined): boolean {
   return SEEDED_OWNER_EMAILS.has(normalized);
 }
 
-/** Legacy Firestore / JWT fallback may still contain `administrator`; treat as owner. */
+/** Legacy Firestore / JWT fallback may still contain admin aliases; treat as owner. */
 export function migrateLegacyRoleToken(role: unknown): AppUserRole | null {
-  if (role === 'owner' || role === 'administrator') return 'owner';
+  if (role === 'owner' || role === 'administrator' || role === 'admin') return 'owner';
   if (role === 'user') return 'user';
   return null;
 }
