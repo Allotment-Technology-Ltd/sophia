@@ -9,7 +9,7 @@ export interface AdminActor {
 /** Admin APIs and operator UI: owners only. */
 export function assertAdminAccess(locals: App.Locals): AdminActor {
   if (!locals.user) {
-    throw redirect(302, '/auth');
+    throw redirect(302, '/early-access');
   }
 
   if (!hasOwnerRole(locals.user)) {

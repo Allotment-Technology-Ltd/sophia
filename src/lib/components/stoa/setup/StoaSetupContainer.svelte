@@ -82,7 +82,7 @@
     <div class="error">{errorText}</div>
   {/if}
   {#if authRequired}
-    <a class="auth-cta" href="/auth?next=/stoa">Sign in with Google</a>
+    <a class="auth-cta" href="/early-access?next=/stoa">Request early access</a>
   {/if}
 </div>
 

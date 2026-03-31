@@ -11,7 +11,7 @@
   async function resolveOwnerAccess(): Promise<void> {
     const token = await getIdToken();
     if (!token) {
-      await goto('/auth');
+      await goto('/early-access');
       return;
     }
     const response = await fetch('/api/admin/me', {
@@ -22,7 +22,7 @@
       return;
     }
     if (response.status === 401) {
-      await goto('/auth');
+      await goto('/early-access');
       return;
     }
     if (!response.ok) {
