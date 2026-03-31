@@ -45,6 +45,7 @@
     const PUBLIC_ROUTES = new Set([
       '/',
       '/auth',
+      '/early-access',
       '/landing',
       '/pricing',
       '/privacy',
@@ -54,7 +55,10 @@
       '/api-access'
     ]);
     const isPublicRoute = (path: string) =>
-      PUBLIC_ROUTES.has(path) || path.startsWith('/auth') || path.startsWith('/prototype/');
+      PUBLIC_ROUTES.has(path) ||
+      path.startsWith('/auth') ||
+      path.startsWith('/early-access') ||
+      path.startsWith('/prototype/');
 
     let lastAuthUid: string | null = auth?.currentUser?.uid ?? null;
 
@@ -64,6 +68,8 @@
       authResolved = true;
 
       if (isAuthenticated && $page.url.pathname.startsWith('/auth')) {
+        goto('/home');
+      } else if (isAuthenticated && $page.url.pathname.startsWith('/early-access')) {
         goto('/home');
       } else if (!isAuthenticated && !onPublicRoute) {
         goto('/');
@@ -94,6 +100,7 @@
   const BARE_ROUTES = new Set([
     '/',
     '/landing',
+    '/early-access',
     '/legal/changelog',
     '/developer',
     '/api-access'
@@ -140,7 +147,7 @@
       return;
     }
     if (!isAuthenticated) {
-      await goto('/auth');
+      await goto('/early-access');
       return;
     }
     const destination = new URL('/app', window.location.origin);
@@ -193,7 +200,7 @@
 {#if isAuthPage || authResolved}
   <div class="layout-shell">
     <div id="main" class="layout-main" style={isAuthPage ? '' : 'padding-top: var(--nav-height);'}>
-      {#if isAuthPage || isAuthenticated || BARE_ROUTES.has($page.url.pathname) || $page.url.pathname.startsWith('/prototype/')}
+      {#if isAuthPage || isAuthenticated || BARE_ROUTES.has($page.url.pathname) || $page.url.pathname.startsWith('/early-access') || $page.url.pathname.startsWith('/prototype/')}
         {@render children()}
       {/if}
     </div>

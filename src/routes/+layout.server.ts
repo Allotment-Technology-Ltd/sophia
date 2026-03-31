@@ -11,6 +11,7 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
     '/terms',
     '/legal/changelog',
     '/auth',
+    '/early-access',
     '/access-denied',
     '/api-access',
     '/developer'
