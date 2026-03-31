@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation';
   import { adaptGraphViewModelToLegacyCanvas } from '$lib/graph-kit/adapters/legacyCanvasAdapter';
   import { buildGraphSemanticStyles } from '$lib/graph-kit/rendering/graphSemantics';
-  import GraphCanvas from '$lib/components/visualization/GraphCanvas.svelte';
+  import ReagraphCanvas from '$lib/graph-kit/components/ReagraphCanvas.svelte';
   import {
     buildNodeInspectorPayload,
     buildWorkspaceInspectorPayload,
@@ -316,15 +316,12 @@
 
       <div class="canvas-frame">
         {#if workspaceView.graph.nodes.length > 0}
-          <GraphCanvas
+          <ReagraphCanvas
             nodes={legacyCanvas.nodes}
             edges={legacyCanvas.edges}
             ghostNodes={legacyCanvas.ghostNodes}
             ghostEdges={legacyCanvas.ghostEdges}
             showGhostLayer={showGhosts}
-            showInlineDetail={false}
-            showStatusChip={false}
-            showViewportControls={false}
             {viewportCommand}
             nodeSemanticStyles={semanticStyles.nodeStyles}
             edgeSemanticStyles={semanticStyles.edgeStyles}
@@ -336,7 +333,7 @@
             dimOutOfScope={effectiveFocusMode === 'local-dim'}
             selectedNodeId={selectedNodeId}
             onSelectedNodeChange={setSelectedNodeId}
-            onJumpToReferences={(nodeId) => {
+            onJumpToReferences={(nodeId: string) => {
               setSelectedNodeId(nodeId);
               handleInspectorAction('open-references');
             }}
@@ -349,7 +346,7 @@
         {/if}
       </div>
       <div class="canvas-footer-note">
-        <span>Blocker to exact Figma fidelity: this screen still uses the legacy SOPHIA SVG renderer behind a Graph Kit adapter. Evidence and provenance are only as deep as the current SOPHIA snapshot data.</span>
+        <span>This screen now uses the Reagraph WebGL renderer through the Graph Kit adapter seam. Evidence and provenance are only as deep as the current SOPHIA snapshot data.</span>
         {#if focusSummary.active}
           <span>Local focus is active at {neighborhoodDepth} hop{neighborhoodDepth === 1 ? '' : 's'} around the selected node.</span>
         {/if}
