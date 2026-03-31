@@ -325,14 +325,14 @@
   .compare-header h2,
   .compare-card h3 {
     margin: 0;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
   }
 
   .compare-intro,
   .empty-copy,
   .diff-item p {
     margin: 8px 0 0;
-    color: var(--color-muted);
+    color: var(--color-text);
   }
 
   .compare-controls {
@@ -423,7 +423,7 @@
   }
 
   dt {
-    color: var(--color-dim);
+    color: var(--color-muted);
     font-size: var(--text-meta);
     text-transform: uppercase;
     letter-spacing: 0.05em;

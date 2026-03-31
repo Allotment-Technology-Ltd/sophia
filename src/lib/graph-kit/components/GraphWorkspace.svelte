@@ -411,7 +411,7 @@
   }
 
   .selection-pill.is-muted {
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .selection-pill.is-trace {
@@ -430,7 +430,7 @@
   .canvas-header h2 {
     margin: 0;
     font-size: 1.15rem;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
   }
 
   .canvas-header-meta {
@@ -459,7 +459,7 @@
     padding: 10px 16px 12px;
     border-top: 1px solid var(--color-border);
     background: color-mix(in srgb, var(--color-surface) 92%, transparent);
-    color: var(--color-dim);
+    color: var(--color-muted);
     font-family: var(--font-ui);
     font-size: var(--text-meta);
     letter-spacing: 0.02em;

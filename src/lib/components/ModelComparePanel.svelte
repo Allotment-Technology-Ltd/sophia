@@ -205,13 +205,13 @@
     <div class="side-by-side">
       <article class="model-card">
         <div class="model-title">{leftLabel}</div>
-        <div class="model-content">
+        <div class="model-content reasoning-prose">
           {@html renderPass(leftPasses[activePass] ?? '')}
         </div>
       </article>
       <article class="model-card">
         <div class="model-title">{rightLabel}</div>
-        <div class="model-content">
+        <div class="model-content reasoning-prose">
           {@html renderPass(rightPasses[activePass] ?? '')}
         </div>
       </article>
@@ -244,7 +244,7 @@
     margin: 4px 0 0;
     font-family: var(--font-ui);
     font-size: 0.72rem;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   .compare-tabs {
@@ -327,8 +327,8 @@
     margin: 0 0 6px;
     font-family: var(--font-ui);
     font-size: 0.72rem;
-    color: var(--color-dim);
-    line-height: 1.4;
+    color: var(--color-text);
+    line-height: 1.65;
     overflow-wrap: anywhere;
     word-break: break-word;
     hyphens: auto;
@@ -362,7 +362,7 @@
     padding: 12px;
     max-height: 340px;
     overflow: auto;
-    font-family: var(--font-display);
+    max-width: none;
     font-size: 0.9rem;
     line-height: 1.65;
     overflow-wrap: anywhere;

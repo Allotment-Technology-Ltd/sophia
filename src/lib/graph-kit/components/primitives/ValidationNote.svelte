@@ -42,7 +42,7 @@
     font-size: var(--text-meta);
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 
   p {

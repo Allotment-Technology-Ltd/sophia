@@ -199,13 +199,13 @@
   .trace-header h2 {
     margin: 0;
     font-size: 1.1rem;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
   }
 
   .trace-intro {
     margin: 8px 0 0;
     max-width: 78ch;
-    color: var(--color-muted);
+    color: var(--color-text);
   }
 
   .trace-controls {
@@ -229,7 +229,7 @@
     border: 1px solid var(--color-border);
     border-radius: 999px;
     padding: 3px 8px;
-    color: var(--color-dim);
+    color: var(--color-muted);
     font-size: var(--text-meta);
   }
 
@@ -313,7 +313,7 @@
   .trace-kind {
     margin: 0 0 4px;
     font-size: var(--text-meta);
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -344,8 +344,8 @@
 
   .trace-summary {
     margin: 0;
-    color: var(--color-muted);
-    line-height: 1.45;
+    color: var(--color-text);
+    line-height: 1.65;
   }
 
   @media (max-width: 960px) {

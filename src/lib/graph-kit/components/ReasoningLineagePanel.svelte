@@ -196,7 +196,7 @@
   h2,
   h3 {
     margin: 0;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
   }
 
   .intro,
@@ -206,7 +206,7 @@
   .list-item span,
   .list-item p {
     margin: 8px 0 0;
-    color: var(--color-muted);
+    color: var(--color-text);
   }
 
   .actions {

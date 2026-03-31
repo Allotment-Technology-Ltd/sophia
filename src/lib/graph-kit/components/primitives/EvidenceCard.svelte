@@ -62,7 +62,7 @@
 
   .evidence-kind {
     margin: 0;
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
@@ -80,11 +80,11 @@
 
   .evidence-summary {
     margin: 0;
-    color: var(--color-muted);
-    line-height: 1.45;
+    color: var(--color-text);
+    line-height: 1.65;
   }
 
   .evidence-meta {
-    color: var(--color-dim);
+    color: var(--color-muted);
   }
 </style>

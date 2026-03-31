@@ -214,7 +214,7 @@
 
   .inspector-header h2 {
     margin: 0;
-    font-family: var(--font-display);
+    font-family: var(--font-ui); /* was --font-display: landing-only restriction applied */
     font-size: 1.6rem;
     line-height: 1.15;
   }
@@ -239,7 +239,7 @@
   .subtitle,
   .summary {
     margin: 8px 0 0;
-    color: var(--color-muted);
+    color: var(--color-text);
   }
 
   .badge-row,
@@ -328,7 +328,7 @@
   }
 
   dt {
-    color: var(--color-dim);
+    color: var(--color-muted);
     font-size: var(--text-meta);
     text-transform: lowercase;
   }
@@ -362,7 +362,7 @@
   ul {
     margin: 0;
     padding-left: 18px;
-    color: var(--color-muted);
+    color: var(--color-text);
     display: grid;
     gap: 8px;
   }

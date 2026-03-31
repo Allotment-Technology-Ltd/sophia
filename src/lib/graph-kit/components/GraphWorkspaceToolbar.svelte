@@ -283,7 +283,7 @@
   .filter-label {
     font-family: var(--font-ui);
     font-size: var(--text-meta);
-    color: var(--color-dim);
+    color: var(--color-muted);
     text-transform: uppercase;
     letter-spacing: 0.06em;
   }
