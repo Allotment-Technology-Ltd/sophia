@@ -56,6 +56,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.58",
     "@ai-sdk/google": "^3.0.43",
+    "@ai-sdk/google-vertex": "^4.0.68",
     "@ai-sdk/mistral": "^3.0.27",
     "@ai-sdk/openai": "^2.0.78",
     "@anthropic-ai/sdk": "^0.26.0",
