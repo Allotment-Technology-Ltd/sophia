@@ -154,7 +154,7 @@ jobs:
 
       - name: Scan for secrets (PR diff)
         if: github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@v3.93.7
+        uses: trufflesecurity/trufflehog@v3.94.2
         with:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}
@@ -163,7 +163,7 @@ jobs:
 
       - name: Scan for secrets (full repo)
         if: github.event_name != 'pull_request'
-        uses: trufflesecurity/trufflehog@v3.93.7
+        uses: trufflesecurity/trufflehog@v3.94.2
         with:
           path: ./
           extra_args: --only-verified
