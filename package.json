@@ -5,8 +5,7 @@
   "type": "module",
   "workspaces": [
     "apps/*",
-    "packages/*",
-    "infra"
+    "packages/*"
   ],
   "scripts": {
     "dev": "node scripts/dev.mjs",
@@ -36,10 +35,6 @@
     "restormel:ingestion-bootstrap": "tsx --env-file=.env scripts/restormel/bootstrap-ingestion-routes.ts",
     "restormel:keys-catalog-diff": "tsx scripts/restormel/keys-catalog-diff.ts",
     "restormel:dogfood-issue": "bash scripts/restormel/create_dogfood_issue.sh",
-    "infra:preview": "cd infra && pulumi preview --stack production",
-    "infra:up": "cd infra && pulumi up --stack production",
-    "infra:refresh": "cd infra && pulumi refresh --stack production",
-    "infra:install": "pnpm install --filter sophia-infra",
     "migrate": "bash scripts/migrate-to-europe-west2.sh",
     "migrate:firestore-to-neon": "tsx scripts/migrate-firestore-to-neon.ts",
     "db:ping": "tsx scripts/db-ping.ts",

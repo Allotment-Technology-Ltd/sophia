@@ -15,38 +15,20 @@ last_reviewed: 2026-03-13
 - Start dev server wired to production SurrealDB (auto tunnel + secret): `pnpm run dev:prod-db`
 - Run checks: `pnpm run check` (runs svelte-check + custom scripts if configured)
 
-## Infra (Pulumi) — optional during migration
+## Infra (GCP) — no Pulumi in-repo
 
-**CI:** Pulumi preview/up jobs run only when the GitHub repo variable **`ENABLE_PULUMI_IAC`** is set to `true`. Otherwise Cloud Run changes ship via **`gcloud run deploy`** in `.github/workflows/deploy.yml` (Neon `DATABASE_URL`, `SOPHIA_DATA_BACKEND`, etc.).
+**CI/CD:** Production app deploys run from **`.github/workflows/deploy.yml`** (Docker → Artifact Registry → `gcloud run deploy`). Secret mounts and env vars are defined there.
 
-**Local (when you choose to use Pulumi):** use the **org** stack so state matches live GCP (~32 resources), not an unqualified `production` stack on a personal backend:
+**Layout & resources** (VPC connector, Cloud Run service/jobs, load balancer, typical service accounts): see **[GCP infrastructure](../../operations/gcp-infrastructure.md)**.
+
+**GCP CLI auth (operators):**
 
 ```bash
-cd infra && pulumi preview --stack adamboon1984-arch-org/production
-cd infra && pulumi up --stack adamboon1984-arch-org/production
+gcloud auth login
+gcloud auth application-default login   # if tools need ADC
 ```
 
-Override the stack ref with repo variable **`PULUMI_STACK_NAME`** when CI Pulumi is on. Run `pulumi stack ls --all` if unsure.
-
-Destroy (careful): `cd infra && pulumi destroy --stack adamboon1984-arch-org/production`
-
-### Pulumi locally — pitfalls
-- **Wrong directory:** `Pulumi.yaml` lives in `infra/`. Running `pulumi` from the repo root fails with “no Pulumi.yaml project file”. Always `cd infra` first (or pass `--cwd infra`).
-- **`accepts at most 1 arg(s), received 12`:** You pasted a **comment on the same line** as `pulumi stack select production` (or the shell did not strip `# …`). Run **only** `pulumi stack select production` on one line, or use `pulumi preview --stack production` so you do not need `stack select`.
-- **GCP `invalid_grant` / `invalid_rapt` during preview:** Application Default Credentials are stale (common with Google Workspace). Refresh them, then retry:
-
-  ```bash
-  gcloud auth application-default login
-  ```
-
-- **Pulumi Cloud “expired trial” banner:** Does not replace GCP auth; fix ADC as above. Resolve org billing separately if you need Pulumi Cloud features beyond the free tier.
-- **`cd: no such file or directory: infra`:** You are **already** in `infra/` (prompt shows `…/sophia/infra %`). Run `pulumi` from there without `cd infra` again.
-- **GCP `409` / `already exists` on `pulumi up`:** The stack’s **state is empty or wrong**, but **GCP already has** those resources (created earlier by another stack, another Pulumi org, or manual setup). Pulumi tries to **create** → Google returns “already exists”. **Do not** assume you need a greenfield deploy.
-
-  1. Confirm **which Pulumi org** you are using (`pulumi whoami -v` and the preview URL). If CI Pulumi is enabled (`ENABLE_PULUMI_IAC`), use the same stack ref as **`PULUMI_STACK_NAME`** (or the workflow default).
-  2. List stacks: `cd infra && pulumi stack ls --all` (or in Pulumi Cloud UI) and open the stack that **already lists** your resources (not one that plans “+31 to create” against live `sophia-488807`).
-  3. Use that stack for `pulumi preview` / `pulumi up` (fully qualified name if needed: `pulumi up --stack <org>/production`).
-  4. If you truly have a **new** stack and must adopt existing GCP resources, use **`pulumi import`** (or bulk import) per resource — not a blind create. After a **partially failed** `up`, check GCP and Pulumi state for stray resources before retrying.
+**Future declarative IaC:** Prefer **OpenTofu** or **Terraform** (free tooling) in a separate path or repo if you want versioned GCP state again; keep this repo focused on the app and the deploy workflow.
 
 ## Monitoring & ingestion
 - Run a single monitor job once:
