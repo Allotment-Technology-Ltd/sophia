@@ -1,5 +1,6 @@
 import { redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
+import { passesEarlyAccessAllowlist } from '$lib/server/accessAllowlist';
 
 export const load: LayoutServerLoad = async ({ locals, url }) => {
   // Skip email check on public pages
@@ -20,19 +21,9 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
     return {};
   }
 
-  // Check email allowlist for development gating
-  const allowedEmailsEnv = process.env.ALLOWED_EMAILS || '';
-  const allowedEmails = allowedEmailsEnv
-    .split(',')
-    .map(e => e.trim().toLowerCase())
-    .filter(e => e.length > 0);
-
-  // If allowlist is configured and user email is not in it, deny access
-  if (locals.user && allowedEmails.length > 0 && locals.user.email) {
-    const userEmail = locals.user.email.toLowerCase();
-    if (!allowedEmails.includes(userEmail)) {
-      throw redirect(302, '/access-denied');
-    }
+  // Early access (ALLOWED_EMAILS): owners / OWNER_EMAILS bypass — see accessAllowlist.ts + /api/access/allow
+  if (locals.user?.email && !passesEarlyAccessAllowlist({ email: locals.user.email, user: locals.user })) {
+    throw redirect(302, '/access-denied');
   }
 
   return {

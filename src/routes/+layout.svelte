@@ -5,7 +5,7 @@
   import { referencesStore } from '$lib/stores/references.svelte';
   import { historyStore } from '$lib/stores/history.svelte';
   import { panelStore } from '$lib/stores/panel.svelte';
-  import { auth, onAuthChange } from '$lib/authClient';
+  import { auth, getIdToken, onAuthChange } from '$lib/authClient';
   import { goto, afterNavigate } from '$app/navigation';
   import { page } from '$app/stores';
   import { browser } from '$app/environment';
@@ -37,6 +37,51 @@
     window.gtag('event', 'page_view', { page_path: to?.url.pathname });
   });
 
+  const EARLY_ACCESS_PUBLIC_ROUTES = new Set([
+    '/',
+    '/auth',
+    '/landing',
+    '/pricing',
+    '/privacy',
+    '/terms',
+    '/legal/changelog',
+    '/developer',
+    '/api-access',
+    '/access-denied'
+  ]);
+
+  function pathExemptFromEarlyAccess(path: string): boolean {
+    if (EARLY_ACCESS_PUBLIC_ROUTES.has(path)) return true;
+    if (path.startsWith('/auth') || path.startsWith('/prototype/')) return true;
+    return false;
+  }
+
+  let earlyAccessCheckGeneration = 0;
+
+  async function enforceEarlyAccessAllowlistForRoute(): Promise<void> {
+    if (!browser || !isAuthenticated || !auth?.currentUser) return;
+    const path = $page.url.pathname;
+    if (pathExemptFromEarlyAccess(path)) return;
+    const token = await getIdToken();
+    if (!token) return;
+    const gen = ++earlyAccessCheckGeneration;
+    try {
+      const response = await fetch('/api/access/allow', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (gen !== earlyAccessCheckGeneration) return;
+      if (response.status === 403) {
+        await goto('/access-denied');
+      }
+    } catch {
+      // Offline or transient errors — do not trap the user on a blank shell
+    }
+  }
+
+  afterNavigate(() => {
+    if (browser) void enforceEarlyAccessAllowlistForRoute();
+  });
+
   // Client-side auth guard for page navigation.
   // API routes are protected server-side in hooks.server.ts.
   onMount(() => {
@@ -52,7 +97,8 @@
       '/terms',
       '/legal/changelog',
       '/developer',
-      '/api-access'
+      '/api-access',
+      '/access-denied'
     ]);
     const isPublicRoute = (path: string) =>
       PUBLIC_ROUTES.has(path) ||
@@ -81,6 +127,10 @@
     historyStore.setUid(initialUser?.uid ?? null);
     if (initialUser?.uid) historyStore.syncFromServer();
 
+    if (initialUser?.uid) {
+      queueMicrotask(() => void enforceEarlyAccessAllowlistForRoute());
+    }
+
     return onAuthChange((user) => {
       const prevUid = lastAuthUid;
       const newUid = user?.uid ?? null;
@@ -94,6 +144,7 @@
       }
 
       applyAuthGuard(user);
+      if (user) void enforceEarlyAccessAllowlistForRoute();
     });
   });
 

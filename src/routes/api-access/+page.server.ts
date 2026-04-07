@@ -27,13 +27,25 @@ export const actions: Actions = {
       });
     }
 
-    await sophiaDocumentsDb.collection('waitlist').add({
-      name,
-      email: email.toLowerCase(),
-      use_case: useCase,
-      created_at: new Date(),
-      source: 'api_access_page'
-    });
+    try {
+      await sophiaDocumentsDb.collection('waitlist').add({
+        name,
+        email: email.toLowerCase(),
+        use_case: useCase,
+        created_at: new Date(),
+        source: 'api_access_page'
+      });
+    } catch (err) {
+      console.error(
+        '[api-access waitlist]',
+        err instanceof Error ? err.message : String(err)
+      );
+      return fail(500, {
+        error:
+          'We could not save your request right now. Please try again in a moment or email admin@usesophia.app.',
+        values: { name, email, useCase }
+      });
+    }
 
     return {
       success: true
