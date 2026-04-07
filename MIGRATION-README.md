@@ -7,7 +7,7 @@ This repository is now scaffolded to grow into a single Restormel monorepo while
 - The live SOPHIA SvelteKit application still runs from the repository root.
 - `apps/sophia` is a placeholder location for the future app package once relocation is safe.
 - `packages/*` marks the first shared package boundaries to extract into incrementally.
-- `infra` remains a separate package-like workspace for Pulumi infrastructure.
+- Production GCP is operated via **GitHub Actions** and **`gcloud`**; see `docs/operations/gcp-infrastructure.md`.
 
 ## Intended structure
 

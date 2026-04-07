@@ -238,7 +238,7 @@ CURRENT_RANGES=$(gcloud compute firewall-rules describe allow-surrealdb \
   --format="value(sourceRanges)" 2>/dev/null || echo "NOT_FOUND")
 
 if [ "$CURRENT_RANGES" = "NOT_FOUND" ]; then
-  warn "Firewall rule 'allow-surrealdb' not found — skipping (Pulumi will create it)"
+  warn "Firewall rule 'allow-surrealdb' not found — create it (see docs/operations/gcp-infrastructure.md)"
 elif echo "$CURRENT_RANGES" | grep -q "0.0.0.0/0"; then
   warn "Current rule allows 0.0.0.0/0 — updating to VPC connector CIDR only..."
   gcloud compute firewall-rules update allow-surrealdb \
@@ -355,8 +355,7 @@ echo "  DB internal IP:        $DB_INTERNAL_IP (via VPC, no external traffic)"
 echo ""
 echo -e "${BOLD}Next steps:${NC}"
 echo "  1. Update DNS / domain mapping for usesophia.app → $TARGET_REGION (see Step 7 above)"
-echo "  2. Run: cd infra && pulumi stack init production && pulumi up"
-echo "     (imports all resources into Pulumi state for ongoing IaC management)"
-echo "  3. Add PULUMI_ACCESS_TOKEN GitHub secret for automated infra deployments"
+echo "  2. Confirm CI: push to main or workflow_dispatch force_app_deploy in .github/workflows/deploy.yml"
+echo "  3. Document any manual GCP edits in docs/operations/gcp-infrastructure.md (or adopt OpenTofu/Terraform later)"
 echo "  4. Verify: curl https://usesophia.app/api/health"
 echo ""

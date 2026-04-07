@@ -19,15 +19,15 @@ So the **Neon + Neon Auth** migration does **not** need to replace an existing �
 
 ## GCP infra: what is “storage-like” but not user data
 
-From [`infra/index.ts`](../../infra/index.ts) (and `bin/index.js`):
+From [`docs/operations/gcp-infrastructure.md`](../operations/gcp-infrastructure.md) (production layout; deploy via `deploy.yml`):
 
 | Resource | Role |
 | -------- | ---- |
-| **Artifact Registry** (`gcp.artifactregistry.Repository`) | Stores **Docker images** for Cloud Run (app + ingest). Stays relevant as long as you deploy on GCP; **not** replaced by Neon. |
+| **Artifact Registry** (`sophia`, Docker) | Stores **Docker images** for Cloud Run (app + ingest). Stays relevant as long as you deploy on GCP; **not** replaced by Neon. |
 | **Firestore** (`roles/datastore.user` on the app SA) | Legacy **Google Firestore** access for the old document store — replaced in app code by Neon `sophia_documents` via `sophiaDocumentsDb`; **not** GCS. |
 | **Cloud Logging** (`roles/logging.logWriter`) | Logs, not blobs. |
 
-No Pulumi-managed **Cloud Storage bucket** for app data appears in the infra files reviewed.
+No **Cloud Storage bucket** for app user data appears in the documented production footprint.
 
 ## Recommendation for the overall migration plan
 

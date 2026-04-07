@@ -84,8 +84,8 @@ The codebase still contains both product implementation and platform extraction 
 - [`docs/`](docs) Public, reference, and archived documentation surfaces.
 - [`scripts/`](scripts) Operational tooling, ingestion utilities, and docs automation.
 - [`tests/`](tests) Playwright end-to-end coverage.
-- [`infra/`](infra) Infrastructure configuration and deployment assets.
 - [`data/`](data) Source data and ingestion inputs.
+- [`docs/operations/gcp-infrastructure.md`](docs/operations/gcp-infrastructure.md) — production GCP layout; app deploys via [`deploy.yml`](.github/workflows/deploy.yml) (`gcloud run deploy`).
 <!-- GENERATED:repo-structure:end -->
 
 ## Active vs archived

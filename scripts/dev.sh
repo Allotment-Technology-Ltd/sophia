@@ -2,6 +2,7 @@
 set -euo pipefail
 # Start local development environment for sophia
 # Usage: ./scripts/dev.sh [--with-infra]
+# --with-infra: print pointer to production GCP docs (no IaC in-repo)
 WITH_INFRA=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -10,9 +11,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$WITH_INFRA" = true && -d infra ]]; then
-  echo "Starting infra preview (Pulumi) in a separate terminal:"
-  echo "  cd infra && pulumi preview --stack production"
+if [[ "$WITH_INFRA" = true ]]; then
+  echo "Production GCP layout: docs/operations/gcp-infrastructure.md"
+  echo "Deploy workflow: .github/workflows/deploy.yml"
 fi
 
 echo "Starting SvelteKit dev server"

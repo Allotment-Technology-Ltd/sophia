@@ -19,7 +19,7 @@
     "src/**/*.{ts,js,svelte,css}",
     "scripts/**/*.{ts,mjs,js}",
     "packages/**/*.ts",
-    "infra/**/*.ts",
+    ".github/workflows/deploy.yml",
     "apps/**/*.{json,md}",
     "README.md",
     "docs/README.md",

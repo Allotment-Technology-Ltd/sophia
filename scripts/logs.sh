@@ -11,6 +11,6 @@ fi
 
 if [[ "$MODE" = "cloud" ]]; then
   echo "Cloud logs depend on provider. Examples:"
-  echo "- GCP: use 'gcloud logging read' or Cloud Logging UI"
-  echo "- Pulumi failures are visible in the Pulumi console and via CLI 'pulumi logs' (if supported)"
+  echo "- GCP: gcloud logging read 'resource.type=cloud_run_revision' --limit=50 --project=sophia-488807"
+  echo "  or Cloud Logging → Cloud Run → sophia"
 fi

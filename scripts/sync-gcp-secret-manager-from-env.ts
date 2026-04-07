@@ -47,29 +47,23 @@ const ENV_TO_SECRET: Record<string, string> = {
 	PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION: 'PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION',
 	PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION: 'PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION',
 	/** Cloud Run env `PUBLIC_PADDLE_CLIENT_TOKEN_PRODUCTION` ← SM id `PADDLE_CLIENT_TOKEN` */
-	PUBLIC_PADDLE_CLIENT_TOKEN_PRODUCTION: 'PADDLE_CLIENT_TOKEN'
-};
-
-/** Optional: Pulumi app (`infra/index.ts`); only merged when `--pulumi` and var is set in env files. */
-const PULUMI_ENV_TO_SECRET: Record<string, string> = {
+	PUBLIC_PADDLE_CLIENT_TOKEN_PRODUCTION: 'PADDLE_CLIENT_TOKEN',
+	/** Same Neon Auth URL as GitHub Actions `NEON_AUTH_BASE_URL`; optional SM duplicate. */
 	NEON_AUTH_BASE_URL: 'neon-auth-base-url'
 };
 
 function parseArgs(argv: string[]): {
 	dryRun: boolean;
-	pulumiExtras: boolean;
 	root: string;
 	extraEnvFiles: string[];
 } {
 	let dryRun = false;
-	let pulumiExtras = false;
 	const extraEnvFiles: string[] = [];
 	let root = process.cwd();
 	const rest = [...argv];
 	while (rest.length) {
 		const a = rest.shift()!;
 		if (a === '--dry-run') dryRun = true;
-		else if (a === '--pulumi') pulumiExtras = true;
 		else if (a === '--root' && rest[0]) root = resolve(rest.shift()!);
 		else if (a.startsWith('--env-file=')) extraEnvFiles.push(resolve(a.slice('--env-file='.length)));
 		else if (a === '--env-file' && rest[0]) extraEnvFiles.push(resolve(rest.shift()!));
@@ -78,14 +72,13 @@ function parseArgs(argv: string[]): {
 
 Options:
   --dry-run              Print actions only
-  --pulumi               Also sync NEON_AUTH_BASE_URL → neon-auth-base-url (Pulumi)
   --root <dir>           Repo root (default: cwd)
   --env-file <path>      Extra file to merge after .env / .env.local (repeatable)
 `);
 			process.exit(0);
 		}
 	}
-	return { dryRun, pulumiExtras, root, extraEnvFiles };
+	return { dryRun, root, extraEnvFiles };
 }
 
 function loadMergedEnv(root: string, extraEnvFiles: string[]): Record<string, string> {
@@ -183,12 +176,11 @@ function normalize(s: string): string {
 }
 
 function main(): void {
-	const { dryRun, pulumiExtras, root, extraEnvFiles } = parseArgs(process.argv.slice(2));
+	const { dryRun, root, extraEnvFiles } = parseArgs(process.argv.slice(2));
 	const project = gcloudProject();
 	const env = loadMergedEnv(root, extraEnvFiles);
 
-	let mapping: Record<string, string> = { ...ENV_TO_SECRET };
-	if (pulumiExtras) mapping = { ...mapping, ...PULUMI_ENV_TO_SECRET };
+	const mapping: Record<string, string> = { ...ENV_TO_SECRET };
 
 	console.log(`Project: ${project}`);
 	if (dryRun) console.log('Dry run — no changes will be made.\n');

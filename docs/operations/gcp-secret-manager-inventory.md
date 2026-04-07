@@ -6,7 +6,7 @@ Source of truth for names: [`.github/workflows/deploy.yml`](../../.github/workfl
 
 **Not in Secret Manager (GitHub Actions / plain env on deploy):** `NEON_AUTH_BASE_URL`, optional `SURREAL_RPC_URL`, Restormel vars, Workload Identity, etc.—see deploy workflow `set-env-vars` and repository **Settings → Secrets and variables → Actions**.
 
-**Pulumi-only (when you apply `infra/`):** secret **`neon-auth-base-url`** → runtime `NEON_AUTH_BASE_URL` (same value as GitHub `NEON_AUTH_BASE_URL` if you use both paths).
+**Optional duplicate in Secret Manager:** secret **`neon-auth-base-url`** can hold the same Neon Auth `base_url` as GitHub **`NEON_AUTH_BASE_URL`** if you ever mount it from SM instead of plain deploy env (today’s `deploy.yml` uses the GitHub secret for `NEON_AUTH_BASE_URL`).
 
 ---
 
@@ -39,7 +39,7 @@ Source of truth for names: [`.github/workflows/deploy.yml`](../../.github/workfl
 
 | Secret | Used for |
 |--------|----------|
-| `neon-auth-base-url` | Pulumi Cloud Run app in [`infra/index.ts`](../../infra/index.ts) (`NEON_AUTH_BASE_URL`) |
+| `neon-auth-base-url` | Optional: same value as `NEON_AUTH_BASE_URL` if you bind auth URL from Secret Manager |
 | `api-key-hash-secret` | Some API-key verification paths / runbooks—only if your revision mounts it |
 
 ---
@@ -129,7 +129,7 @@ PADDLE_CLIENT_TOKEN:
   <client token string>
 ```
 
-Optional (Pulumi / dual path):
+Optional:
 
 ```
 neon-auth-base-url:

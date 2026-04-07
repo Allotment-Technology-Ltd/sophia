@@ -338,9 +338,7 @@ Sophia’s **GitHub Actions** deploy (`.github/workflows/deploy.yml`) expects:
 | `DATABASE_URL` | GCP Secret Manager secret **`neon-database-url`** (latest) → Cloud Run env `DATABASE_URL` |
 | `SOPHIA_DATA_BACKEND=neon` | Plain env on the **`sophia`** Cloud Run service (set in the same `gcloud run deploy` step) |
 
-**Migration mode:** GitHub Actions **does not run Pulumi** unless the repo variable **`ENABLE_PULUMI_IAC`** is set to `true`. Treat the **`gcloud run deploy`** step in `.github/workflows/deploy.yml` as the source of truth for Cloud Run env (including `DATABASE_URL` and `SOPHIA_DATA_BACKEND`). Re-enable Pulumi later when you settle the next IAC / cloud plan.
-
-The `infra/` program still documents intent; optional local `pulumi` is described in [runbooks — Infra (Pulumi)](../reference/operations/runbooks.md).
+**Deploy path:** Treat the **`gcloud run deploy`** step in `.github/workflows/deploy.yml` as the source of truth for Cloud Run env (including `DATABASE_URL` and `SOPHIA_DATA_BACKEND`). There is no Pulumi stack in this repo; GCP layout is summarized in [GCP infrastructure](./gcp-infrastructure.md) and [runbooks — Infra](../reference/operations/runbooks.md).
 
 ### One-time (GCP console or gcloud)
 
@@ -367,7 +365,7 @@ The `infra/` program still documents intent; optional local `pulumi` is describe
 
 3. Run **`pnpm migrate:firestore-to-neon -- --execute`** against production Neon (from a trusted machine with Firebase Admin + `DATABASE_URL`) **before** or right after enabling `SOPHIA_DATA_BACKEND=neon`, so `sophia_documents` has the rows the app expects.
 
-4. **Neon Auth:** set `USE_NEON_AUTH=1`, `NEON_AUTH_BASE_URL`, and build-time `VITE_NEON_AUTH_URL` (GitHub Actions uses repo secret `NEON_AUTH_BASE_URL`; Pulumi stacks can use Secret Manager `neon-auth-base-url`). Replace `admin-uids` / `owner-uids` with **Neon JWT `sub`** values, not legacy Firebase UIDs (see `docs/operations/neon-auth-migration.md`).
+4. **Neon Auth:** set `USE_NEON_AUTH=1`, `NEON_AUTH_BASE_URL`, and build-time `VITE_NEON_AUTH_URL` (GitHub Actions uses repo secret `NEON_AUTH_BASE_URL`; optionally mirror in Secret Manager as `neon-auth-base-url`). Replace `admin-uids` / `owner-uids` with **Neon JWT `sub`** values, not legacy Firebase UIDs (see `docs/operations/neon-auth-migration.md`).
 
 ### Rollback
 
@@ -375,7 +373,7 @@ The `infra/` program still documents intent; optional local `pulumi` is describe
 
 ### Not yet wired here
 
-- **Cloud Run Jobs** (`sophia-ingest`, nightly) in Pulumi do not mount `DATABASE_URL` in this repo; add the same secret ref there if those jobs need Neon-backed behavior.
+- **Cloud Run Jobs** (`sophia-ingest`, nightly): ensure job definitions in GCP mount `DATABASE_URL` / Neon-related secrets if those workloads need `sophia_documents` or Neon-backed behavior (align with `deploy.yml` for the main service).
 
 ---
 

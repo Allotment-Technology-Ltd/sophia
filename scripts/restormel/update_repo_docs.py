@@ -46,7 +46,6 @@ ROOT_STRUCTURE = OrderedDict(
         ("docs", "Public, reference, and archived documentation surfaces."),
         ("scripts", "Operational tooling, ingestion utilities, and docs automation."),
         ("tests", "Playwright end-to-end coverage."),
-        ("infra", "Infrastructure configuration and deployment assets."),
         ("data", "Source data and ingestion inputs."),
     ]
 )
@@ -324,6 +323,14 @@ def render_root_repo_structure(from_file: Path) -> str:
         if path.exists():
             link = relative_link(from_file, path)
             lines.append(f"- [`{directory}/`]({link}) {description}")
+    gcp_doc = REPO_ROOT / "docs" / "operations" / "gcp-infrastructure.md"
+    deploy_yml = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
+    if gcp_doc.is_file() and deploy_yml.is_file():
+        lines.append(
+            f"- [`docs/operations/gcp-infrastructure.md`]({relative_link(from_file, gcp_doc)}) "
+            "— production GCP layout; app deploys via "
+            f"[`deploy.yml`]({relative_link(from_file, deploy_yml)}) (`gcloud run deploy`)."
+        )
     return "\n".join(lines)
 
 
