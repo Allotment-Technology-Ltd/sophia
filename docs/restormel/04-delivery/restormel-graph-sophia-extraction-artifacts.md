@@ -10,11 +10,11 @@ Prepared for lifting the SOPHIA graph + visualisation stack into a standalone **
 |---------|----------|
 | `@restormel/graph-core` | **npm** `0.1.0` — Contract v0 + `layout` / `trace` / `workspace` |
 | `@restormel/ui-graph-svelte` | **npm** `0.1.0` — SVG canvas + styles (`styles.css` imported in `src/app.css`) |
-| `@sophia/graph-reasoning-extensions` | **`packages/graph-reasoning-extensions`** — `compare`, `lineage`, `projection`, `diff`, `evaluation`, `summary` (depends on `@restormel/contracts`) |
+| `@restormel/graph-reasoning-extensions` | **npm** (`^0.1.0`) — `compare`, `lineage`, `projection`, `diff`, `evaluation`, `summary` (depends on `@restormel/contracts`; source in Restormel Keys) |
 
-Reasoning-heavy imports use `@sophia/graph-reasoning-extensions/*`; render path uses `@restormel/*` only.
+Reasoning-heavy imports use `@restormel/graph-reasoning-extensions/*`; render path uses `@restormel/graph-core` + `@restormel/ui-graph-svelte`.
 
-**Phase 1 trace emitters:** RunTrace / ReasoningEvent checklist and `@restormel/observability` role — [`phase1-run-trace-emitter-checklist.md`](../phase1-run-trace-emitter-checklist.md).
+**Phase 1 — trace + handoff:** emitter checklist [`phase1-run-trace-emitter-checklist.md`](../phase1-run-trace-emitter-checklist.md); **status index** [`PHASE1-EXTRACTION-STATUS.md`](../PHASE1-EXTRACTION-STATUS.md); **Restormel build spec** [`phase1-restormel-engineering-spec.md`](../phase1-restormel-engineering-spec.md); **copy-paste agent prompt** [`phase1-agent-prompt-restormel-engineering.md`](../phase1-agent-prompt-restormel-engineering.md).
 
 ---
 
@@ -79,7 +79,7 @@ export function graphDataFromSophiaGraphKit(graph: GraphKitGraphViewModel): Grap
 
 ## Non-MVP modules (contracts-coupled — Sophia workspace package)
 
-In SOPHIA these live under **`@sophia/graph-reasoning-extensions`**: **`compare`**, **`diff`**, **`evaluation`**, **`lineage`**, **`projection`**, **`summary`** (all import **`@restormel/contracts`**).
+SOPHIA consumes **`@restormel/graph-reasoning-extensions`** from npm: **`compare`**, **`diff`**, **`evaluation`**, **`lineage`**, **`projection`**, **`summary`**.
 
 **Not required** for: rendering, pan/zoom, selection, orbital layout, or `GraphCanvas` / `NodeDetail` from `@restormel/ui-graph-svelte`.
 
@@ -138,7 +138,7 @@ In SOPHIA these live under **`@sophia/graph-reasoning-extensions`**: **`compare`
 
 **npm `@restormel/ui-graph-svelte`:** `GraphCanvas`, `NodeDetail`, semantic style helpers, `styles.css`.
 
-**Workspace `packages/graph-reasoning-extensions` (`@sophia/graph-reasoning-extensions`):** `compare`, `diff`, `evaluation`, `lineage`, `projection`, `summary` + `graph-reasoning-extensions.test.ts`.
+**npm `@restormel/graph-reasoning-extensions`:** `compare`, `diff`, `evaluation`, `lineage`, `projection`, `summary`. Consumer smoke test: [`src/lib/restormel/graph-reasoning-extensions-smoke.test.ts`](../../src/lib/restormel/graph-reasoning-extensions-smoke.test.ts).
 
 ### A.6 SOPHIA stores & server graph plumbing
 
@@ -313,7 +313,7 @@ Restormel hosts implement **their** adapter → `GraphData`; they do not import 
 | Semantic styling | Still from `graphSemantics` + `semanticStyles` keys |
 | Workspace chrome | Unchanged (SOPHIA) |
 
-**Re-validation:** `pnpm check`; `pnpm vitest run packages/graph-reasoning-extensions/src/graph-reasoning-extensions.test.ts`; manual `/dev/graph-portability` and map workspace for zoom/pan/wheel/select. No “expansion/collapse” tree control in `GraphCanvas` (N/A).
+**Re-validation:** `pnpm check`; `pnpm vitest run src/lib/restormel/graph-reasoning-extensions-smoke.test.ts`; manual `/dev/graph-portability` and map workspace for zoom/pan/wheel/select. No “expansion/collapse” tree control in `GraphCanvas` (N/A).
 
 **Known non-goals:** Moving Svelte files into `ui-graph-svelte` (mechanical follow-up). Non-v0 `graph-core` modules remain contracts-coupled and are **out of Contract v0**.
 
@@ -324,5 +324,5 @@ Restormel hosts implement **their** adapter → `GraphData`; they do not import 
 - Contract v0: npm `@restormel/graph-core/viewModel` (see Restormel Keys `GRAPH_CORE_V0_SCOPE.md`)
 - SOPHIA adapter: `src/lib/graph-kit/adapters/sophiaGraphData.ts` (public), `legacyCanvasAdapter.ts` (internal)
 - Canvas: npm `@restormel/ui-graph-svelte`
-- Reasoning extensions: `packages/graph-reasoning-extensions`
+- Reasoning extensions: npm `@restormel/graph-reasoning-extensions`
 - Portability dev route: `src/routes/dev/graph-portability/+page.svelte`

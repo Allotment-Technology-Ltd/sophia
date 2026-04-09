@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { sampleOpenInferenceLikeTrace, sampleSophiaReasoningEvents } from './fixtures';
 import {
+  eventsToTrace,
   normalizeOpenInferenceLikeTrace,
   normalizeRunTrace,
   normalizeSophiaReasoningEvents,
-  normalizedTraceToReasoningObjectEvents
-} from './normalize';
-import { parseReasoningEventBlock, serializeReasoningEvent } from './sse';
-import { eventsToTrace, traceToEvents } from './trace';
+  normalizedTraceToReasoningObjectEvents,
+  parseReasoningEventBlock,
+  sampleOpenInferenceLikeTrace,
+  sampleSophiaReasoningEvents,
+  serializeReasoningEvent,
+  traceToEvents
+} from '@restormel/observability';
 
-describe('@restormel/observability', () => {
+/** Consumer tests against published `@restormel/observability` (npm). */
+describe('@restormel/observability (npm)', () => {
   it('serializes and parses SSE reasoning events', () => {
     const payload = serializeReasoningEvent(sampleSophiaReasoningEvents[0]);
     const parsed = parseReasoningEventBlock(payload);

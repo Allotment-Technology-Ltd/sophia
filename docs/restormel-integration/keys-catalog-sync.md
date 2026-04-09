@@ -3,7 +3,7 @@
 **Third-party catalog API (HTTP / paging / `contractVersion`):** see [`restormel-keys-catalog-integrator-guide.md`](./restormel-keys-catalog-integrator-guide.md).
 
 Sophia pulls **provider metadata and the ModelSelector UI** from the vendored **`@restormel/keys`** package (`vendor/restormel/restormel-keys-*.tgz`).  
-**Candidate model ids** for `/api/allowed-models`, routing, and `getAvailableReasoningModels()` come from **`@restormel/contracts`** — `DEFAULT_MODEL_CATALOG` in `packages/contracts/src/providers.ts`.
+**Candidate model ids** for `/api/allowed-models`, routing, and `getAvailableReasoningModels()` come from **`@restormel/contracts`** (npm) — `DEFAULT_MODEL_CATALOG` in Restormel Keys [`packages/contracts/src/providers.ts`](https://github.com/Allotment-Technology-Ltd/restormel-keys/tree/main/packages/contracts/src/providers.ts).
 
 Those two sources can drift. Use the flow below to stay current.
 
@@ -42,7 +42,7 @@ pnpm run restormel:keys-catalog-diff
 This prints a Markdown table of model ids that appear **only** in Keys or **only** in `DEFAULT_MODEL_CATALOG` (per provider).  
 **`google` in Keys maps to `vertex` in contracts.**
 
-Manually merge missing ids into `packages/contracts/src/providers.ts`. It is normal for contracts to list **extra** ids Keys does not ship (e.g. Vertex embedding models) — keep those for ingestion / platform behaviour.
+Manually merge missing ids into **Restormel Keys** `packages/contracts/src/providers.ts`, then bump the published **`@restormel/contracts`** version SOPHIA depends on. It is normal for contracts to list **extra** ids Keys does not ship (e.g. Vertex embedding models) — keep those for ingestion / platform behaviour.
 
 ## 3. Project model index vs global catalog (dashboard / Gateway Key)
 

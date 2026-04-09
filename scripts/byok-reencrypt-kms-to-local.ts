@@ -18,7 +18,7 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
 import { GoogleAuth } from 'google-auth-library';
-import { BYOK_PROVIDER_ORDER } from '../packages/contracts/src/providers.ts';
+import { BYOK_PROVIDER_ORDER } from '@restormel/contracts/providers';
 import { loadServerEnv } from '../src/lib/server/env.ts';
 import {
   encryptByokSecret,
