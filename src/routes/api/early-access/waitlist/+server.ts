@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { earlyAccessWaitlist } from '$lib/server/db/schema';
 import { getDrizzleDb } from '$lib/server/db/neon';
+import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 
 const MAX_EMAIL_LEN = 254;
 const WINDOW_MS = 60_000;
@@ -61,8 +62,21 @@ export const POST: RequestHandler = async ({ request }) => {
     typeof record.sourcePath === 'string' ? record.sourcePath.slice(0, 512) : null;
   const userAgent = request.headers.get('user-agent')?.slice(0, 512) ?? null;
 
+  let db: ReturnType<typeof getDrizzleDb>;
   try {
-    const db = getDrizzleDb();
+    db = getDrizzleDb();
+  } catch (err: unknown) {
+    console.error('[early-access-waitlist] database unavailable:', err);
+    return json(
+      {
+        error:
+          'Waitlist signup is temporarily unavailable (database not configured). Please email admin@usesophia.app or try again later.'
+      },
+      { status: 503 }
+    );
+  }
+
+  try {
     await db.insert(earlyAccessWaitlist).values({
       email,
       sourcePath,
@@ -72,6 +86,29 @@ export const POST: RequestHandler = async ({ request }) => {
     const code = typeof err === 'object' && err !== null && 'code' in err ? String((err as { code: unknown }).code) : '';
     if (code === '23505') {
       return json({ ok: true, alreadyRegistered: true });
+    }
+    // Table missing in Neon (migration not applied) — store in sophia_documents so signup still works.
+    if (code === '42P01') {
+      console.warn('[early-access-waitlist] early_access_waitlist missing; falling back to sophia_documents');
+      try {
+        await sophiaDocumentsDb.collection('early_access_waitlist').add({
+          email,
+          source_path: sourcePath,
+          user_agent: userAgent,
+          created_at: new Date(),
+          source: 'early_access_page_fallback'
+        });
+        return json({ ok: true, alreadyRegistered: false, storedVia: 'documents' });
+      } catch (fallbackErr: unknown) {
+        console.error('[early-access-waitlist] fallback insert failed:', fallbackErr);
+        return json(
+          {
+            error:
+              'Could not save your email right now. Please email admin@usesophia.app or try again later.'
+          },
+          { status: 500 }
+        );
+      }
     }
     console.error('[early-access-waitlist] insert failed:', err);
     return json({ error: 'Could not save your email right now. Please try again later.' }, { status: 500 });

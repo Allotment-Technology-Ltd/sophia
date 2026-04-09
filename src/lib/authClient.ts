@@ -8,8 +8,14 @@
  * see docs/operations/neon-auth-migration.md.
  */
 import { browser } from '$app/environment';
+import { env as publicEnv } from '$env/dynamic/public';
 
-const neonAuthUrl = (import.meta.env.VITE_NEON_AUTH_URL as string | undefined)?.trim();
+/** Runtime `PUBLIC_NEON_AUTH_URL` (Cloud Run) or build-time `VITE_NEON_AUTH_URL` (Docker build). */
+function neonAuthUrl(): string | undefined {
+  const fromRuntime = publicEnv.PUBLIC_NEON_AUTH_URL?.trim();
+  const fromVite = (import.meta.env.VITE_NEON_AUTH_URL as string | undefined)?.trim();
+  return fromRuntime || fromVite || undefined;
+}
 
 /** Firebase-shaped user for existing Svelte code (`uid`, `email`, …). */
 export type SophiaAuthUser = {
@@ -47,12 +53,13 @@ let neonAuthClientPromise: Promise<any> | null = null;
 let neonCachedUser: SophiaAuthUser | null = null;
 
 async function loadNeonAuthClient() {
-  if (!browser || !neonAuthUrl) return null;
+  const url = neonAuthUrl();
+  if (!browser || !url) return null;
   if (!neonAuthClientPromise) {
     neonAuthClientPromise = (async () => {
       const { createAuthClient } = await import('@neondatabase/neon-js/auth');
       const { SupabaseAuthAdapter } = await import('@neondatabase/neon-js/auth/vanilla/adapters');
-      return createAuthClient(neonAuthUrl, {
+      return createAuthClient(url, {
         adapter: SupabaseAuthAdapter()
       });
     })();
@@ -60,8 +67,8 @@ async function loadNeonAuthClient() {
   return neonAuthClientPromise;
 }
 
-if (browser && !neonAuthUrl) {
-  console.error('VITE_NEON_AUTH_URL is missing; Neon Auth client cannot start.');
+if (browser && !neonAuthUrl()) {
+  console.error('PUBLIC_NEON_AUTH_URL or VITE_NEON_AUTH_URL is missing; Neon Auth client cannot start.');
 }
 
 /** Same shape as legacy `Auth` for `auth?.currentUser` in layouts. */
@@ -74,11 +81,18 @@ export const auth: { currentUser: SophiaAuthUser | null } = {
 /** @deprecated No-op for Neon OAuth; kept so imports do not break. */
 export const googleProvider = null;
 
-export async function signInWithGoogle() {
+export async function signInWithGoogle(options?: { redirectPath?: string }) {
   if (!browser) throw new Error('Sign-in is only available in the browser.');
   const client = await loadNeonAuthClient();
-  if (!client) throw new Error('Neon Auth is not configured. Set VITE_NEON_AUTH_URL.');
-  const redirectTo = `${window.location.origin}/home`;
+  if (!client) {
+    throw new Error(
+      'Neon Auth is not configured. Set PUBLIC_NEON_AUTH_URL at runtime or VITE_NEON_AUTH_URL at build time.'
+    );
+  }
+  const raw = options?.redirectPath?.trim();
+  const path =
+    raw && raw.startsWith('/') && !raw.startsWith('//') ? raw : '/home';
+  const redirectTo = `${window.location.origin}${path}`;
   const { error } = await client.signInWithOAuth({
     provider: 'google',
     options: { redirectTo }
