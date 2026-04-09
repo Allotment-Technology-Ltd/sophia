@@ -74,11 +74,14 @@ export const auth: { currentUser: SophiaAuthUser | null } = {
 /** @deprecated No-op for Neon OAuth; kept so imports do not break. */
 export const googleProvider = null;
 
-export async function signInWithGoogle() {
+export async function signInWithGoogle(options?: { redirectPath?: string }) {
   if (!browser) throw new Error('Sign-in is only available in the browser.');
   const client = await loadNeonAuthClient();
   if (!client) throw new Error('Neon Auth is not configured. Set VITE_NEON_AUTH_URL.');
-  const redirectTo = `${window.location.origin}/home`;
+  const raw = options?.redirectPath?.trim();
+  const path =
+    raw && raw.startsWith('/') && !raw.startsWith('//') ? raw : '/home';
+  const redirectTo = `${window.location.origin}${path}`;
   const { error } = await client.signInWithOAuth({
     provider: 'google',
     options: { redirectTo }

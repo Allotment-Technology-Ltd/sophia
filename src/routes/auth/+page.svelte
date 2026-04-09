@@ -1,4 +1,4 @@
-<!-- Sign-in is paused during early access; /auth redirects in +page.server.ts -->
+<!-- /auth redirects to /early-access (with optional ?next=) — Google sign-in lives there. -->
 <p class="sr-only">Redirecting…</p>
 
 <style>

@@ -1,10 +1,41 @@
 <script lang="ts">
   import { page } from '$app/stores';
+  import { browser } from '$app/environment';
   import DialecticalTriangle from '$lib/components/DialecticalTriangle.svelte';
+  import { signInWithGoogle } from '$lib/authClient';
+
+  const POST_OAUTH_PATH_KEY = 'sophia_post_oauth_path';
+
+  let { data }: { data: { googleSignInAvailable: boolean } } = $props();
 
   let email = $state('');
   let status = $state<'idle' | 'loading' | 'success' | 'error'>('idle');
   let message = $state('');
+  let oauthStatus = $state<'idle' | 'loading' | 'error'>('idle');
+  let oauthMessage = $state('');
+
+  function resolveNextPath(): string {
+    const fromUrl = $page.url.searchParams.get('next');
+    if (fromUrl?.startsWith('/') && !fromUrl.startsWith('//')) return fromUrl;
+    return '/home';
+  }
+
+  async function handleGoogleSignIn(): Promise<void> {
+    oauthStatus = 'loading';
+    oauthMessage = '';
+    try {
+      if (browser) {
+        sessionStorage.setItem(POST_OAUTH_PATH_KEY, resolveNextPath());
+      }
+      // OAuth redirect often lands on a fixed path; layout reads POST_OAUTH_PATH_KEY for deep links.
+      await signInWithGoogle({ redirectPath: '/home' });
+    } catch (e) {
+      oauthStatus = 'error';
+      oauthMessage =
+        e instanceof Error ? e.message : 'Sign-in failed. Please try again or contact support.';
+      if (browser) sessionStorage.removeItem(POST_OAUTH_PATH_KEY);
+    }
+  }
 
   async function handleSubmit(e: Event): Promise<void> {
     e.preventDefault();
@@ -19,14 +50,14 @@
           sourcePath: $page.url.pathname + $page.url.search
         })
       });
-      const data = (await response.json()) as { ok?: boolean; alreadyRegistered?: boolean; error?: string };
+      const payload = (await response.json()) as { ok?: boolean; alreadyRegistered?: boolean; error?: string };
       if (!response.ok) {
         status = 'error';
-        message = data.error ?? 'Something went wrong. Please try again.';
+        message = payload.error ?? 'Something went wrong. Please try again.';
         return;
       }
       status = 'success';
-      message = data.alreadyRegistered
+      message = payload.alreadyRegistered
         ? 'You are already on the list. We will be in touch when spots open up.'
         : 'Thanks — you are on the early access list. We will email you when we are ready for the next wave of testers.';
       email = '';
@@ -41,7 +72,7 @@
   <title>SOPHIA — Early access</title>
   <meta
     name="description"
-    content="SOPHIA is in prototyping. Join the early access waitlist or contact us to test."
+    content="SOPHIA is in prototyping. Sign in if you have access, or join the early access waitlist."
   />
 </svelte:head>
 
@@ -70,6 +101,30 @@
           If you would like to talk sooner or ask about access, email us at
           <a href="mailto:admin@usesophia.app">admin@usesophia.app</a>.
         </p>
+
+        {#if data.googleSignInAvailable}
+          <div class="sign-in-block">
+            <h2 class="section-heading">Already invited?</h2>
+            <p class="section-help">
+              If your email is on the access list, sign in with Google. Everyone else can join the waitlist below.
+            </p>
+            <button
+              type="button"
+              class="google-btn"
+              disabled={oauthStatus === 'loading'}
+              onclick={() => void handleGoogleSignIn()}
+            >
+              {oauthStatus === 'loading' ? 'Redirecting…' : 'Continue with Google'}
+            </button>
+            {#if oauthMessage}
+              <p class="form-message error" role="status">{oauthMessage}</p>
+            {/if}
+          </div>
+        {:else}
+          <p class="config-note" role="note">
+            Google sign-in is not configured in this environment. Use the waitlist or contact us by email.
+          </p>
+        {/if}
 
         <form class="waitlist-form" onsubmit={handleSubmit}>
           <label class="field-label" for="waitlist-email">Join the waitlist</label>
@@ -182,6 +237,64 @@
 
   .early-body a:hover {
     color: var(--color-blue);
+  }
+
+  .sign-in-block {
+    margin-top: 4px;
+    padding: 18px 0 4px;
+    border-top: 1px solid var(--color-border);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .section-heading {
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text);
+    margin: 0;
+  }
+
+  .section-help {
+    font-size: 12px;
+    color: var(--color-muted);
+    line-height: 1.65;
+    margin: -4px 0 0;
+  }
+
+  .google-btn {
+    padding: 10px 20px;
+    border-radius: 6px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background 150ms ease,
+      border-color 150ms ease;
+  }
+
+  .google-btn:hover:not(:disabled) {
+    border-color: var(--color-sage);
+    background: var(--color-surface-raised);
+  }
+
+  .google-btn:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+  }
+
+  .config-note {
+    font-size: 12px;
+    color: var(--color-muted);
+    line-height: 1.65;
+    padding: 12px 0 0;
+    border-top: 1px solid var(--color-border);
+    margin: 0;
   }
 
   .waitlist-form {

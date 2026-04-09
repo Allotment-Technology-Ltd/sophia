@@ -79,7 +79,14 @@
   }
 
   afterNavigate(() => {
-    if (browser) void enforceEarlyAccessAllowlistForRoute();
+    if (!browser) return;
+    if ($page.url.pathname.startsWith('/early-access') && auth?.currentUser) {
+      const next = $page.url.searchParams.get('next');
+      const dest = next?.startsWith('/') && !next.startsWith('//') ? next : '/home';
+      void goto(dest);
+      return;
+    }
+    void enforceEarlyAccessAllowlistForRoute();
   });
 
   // Client-side auth guard for page navigation.
@@ -108,6 +115,8 @@
 
     let lastAuthUid: string | null = auth?.currentUser?.uid ?? null;
 
+    const POST_OAUTH_PATH_KEY = 'sophia_post_oauth_path';
+
     const applyAuthGuard = (user: unknown) => {
       const onPublicRoute = isPublicRoute($page.url.pathname);
       isAuthenticated = !!user;
@@ -116,7 +125,19 @@
       if (isAuthenticated && $page.url.pathname.startsWith('/auth')) {
         goto('/home');
       } else if (isAuthenticated && $page.url.pathname.startsWith('/early-access')) {
-        goto('/home');
+        const next = $page.url.searchParams.get('next');
+        const dest = next?.startsWith('/') && !next.startsWith('//') ? next : '/home';
+        goto(dest);
+      } else if (
+        isAuthenticated &&
+        $page.url.pathname === '/home' &&
+        typeof sessionStorage !== 'undefined'
+      ) {
+        const pending = sessionStorage.getItem(POST_OAUTH_PATH_KEY);
+        if (pending?.startsWith('/') && !pending.startsWith('//')) {
+          sessionStorage.removeItem(POST_OAUTH_PATH_KEY);
+          if (pending !== '/home') goto(pending);
+        }
       } else if (!isAuthenticated && !onPublicRoute) {
         goto('/');
       }

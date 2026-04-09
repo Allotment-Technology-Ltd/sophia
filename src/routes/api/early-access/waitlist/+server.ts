@@ -61,8 +61,21 @@ export const POST: RequestHandler = async ({ request }) => {
     typeof record.sourcePath === 'string' ? record.sourcePath.slice(0, 512) : null;
   const userAgent = request.headers.get('user-agent')?.slice(0, 512) ?? null;
 
+  let db: ReturnType<typeof getDrizzleDb>;
   try {
-    const db = getDrizzleDb();
+    db = getDrizzleDb();
+  } catch (err: unknown) {
+    console.error('[early-access-waitlist] database unavailable:', err);
+    return json(
+      {
+        error:
+          'Waitlist signup is temporarily unavailable (database not configured). Please email admin@usesophia.app or try again later.'
+      },
+      { status: 503 }
+    );
+  }
+
+  try {
     await db.insert(earlyAccessWaitlist).values({
       email,
       sourcePath,
