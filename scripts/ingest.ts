@@ -153,13 +153,19 @@ const VALIDATION_TOKEN_ESTIMATE_MULTIPLIER = Math.max(
 // Chunking is enabled when RELATIONS_BATCH_TARGET_TOKENS > 0 (set to 0 to disable).
 const RELATIONS_BATCH_TARGET_TOKENS = (() => {
 	const raw = process.env.RELATIONS_BATCH_TARGET_TOKENS;
-	if (raw == null || raw.trim() === '') return 20_000;
+	// Lower default reduces OpenAI TPM blowups (then expensive cross-provider fallback).
+	if (raw == null || raw.trim() === '') return 12_000;
 	const n = Number(raw);
 	if (!Number.isFinite(n) || n <= 0) return 0;
 	return Math.trunc(n);
 })();
 const RELATIONS_BATCH_OVERLAP_CLAIMS =
 	parsePositiveInt(process.env.RELATIONS_BATCH_OVERLAP_CLAIMS) ?? 4;
+/** When >1, run independent extraction batches in parallel (ordered merge). Splits mid-batch disable parallelism for remaining work. */
+const INGEST_EXTRACTION_CONCURRENCY = Math.max(
+	1,
+	parsePositiveInt(process.env.INGEST_EXTRACTION_CONCURRENCY) ?? 2
+);
 const INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE =
 	(process.env.INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE || 'true').toLowerCase() !== 'false';
 const INGEST_SAVE_GROUPING_RAW =
@@ -939,6 +945,17 @@ function buildRelationsBatches(
 
 function relationDedupeKey(relation: PhaseOneRelation): string {
 	return `${relation.from_position}:${relation.to_position}:${relation.relation_type}`;
+}
+
+function estimateRelationsClaimsJsonTokens(claims: PhaseOneClaim[]): number {
+	return estimateTokens(JSON.stringify(claims, null, 2));
+}
+
+function isTpmOrRateLimitModelErrorMessage(msg: string): boolean {
+	return (
+		/\btpm\b|tokens per min|token.?per.?min/i.test(msg) ||
+		/rate limit|too many requests|429/i.test(msg)
+	);
 }
 
 function mergeRelationsDedup(
@@ -2033,6 +2050,8 @@ interface PartialResults {
 		relations_so_far: PhaseOneRelation[];
 		next_batch_index: number;
 		total_batches: number;
+		/** Adaptive TPM splits: linear queue of claim batches (replaces rebuild from RELATIONS_BATCH_TARGET_TOKENS when present). */
+		batch_claim_slices?: PhaseOneClaim[][];
 	};
 	// Mid-embedding checkpoint: resume after each successful Vertex batch (see embedTexts onBatchComplete)
 	embedding_progress?: {
@@ -3065,131 +3084,250 @@ async function main() {
 					}
 				}
 
-				for (let i = 0; i < batchQueue.length; i++) {
-					const batch = batchQueue[i];
-					batchLabel++;
-					const renderedBatch = renderPassageBatch(batch);
-					const queuePos = i + 1;
+				let i = 0;
+				while (i < batchQueue.length) {
+					const batch = batchQueue[i]!;
 					const queueTotal = batchQueue.length;
 					const passagesTotalSegmented = passages.length;
-					const passagesAfterThisBatch = batchQueue
-						.slice(i + 1)
-						.reduce((sum, b) => sum + b.length, 0);
-					const extractionProgressSuffix = ` · ${passagesAfterThisBatch} passage(s) left after this batch · ${passagesTotalSegmented} segmented total`;
-					console.log(
-						`\n  [BATCH ${batchLabel}] (${queuePos}/${queueTotal}) ${batch.length} passage(s) (~${estimateTokens(renderedBatch).toLocaleString()} tokens)${extractionProgressSuffix}`
-					);
 
-					const userMsg = EXTRACTION_USER(
-						`${sourceMeta.title} (Batch ${batchLabel})`,
-						sourceMeta.author.join(', ') || 'Unknown',
-						renderedBatch
-					);
-
-					let rawResponse: string;
-					try {
-						rawResponse = await callStageModelWithProgress({
-							stage: 'extraction',
-							plan: extractionPlan,
-							budget: extractionBudget,
-							tracker: extractionTracker,
-							systemPrompt: EXTRACTION_SYSTEM,
-							userMessage: userMsg,
-							label: `Extracting batch ${batchLabel} (${queuePos}/${queueTotal})`,
-							planningContext: basePlanningContext
-						});
-					} catch (apiError) {
-						const apiMsg = apiError instanceof Error ? apiError.message : String(apiError);
-						if (apiMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
-							if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
-							const mid = Math.ceil(batch.length / 2);
-							batchQueue.splice(i + 1, 0, batch.slice(0, mid), batch.slice(mid));
-							const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
-							console.warn(
-								`  [SPLIT] Batch ${batchLabel} truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
-							);
-							batchLabel--;
-							continue;
-						}
-						throw apiError;
-					}
-					logStageCost('Extraction', extractionTracker, extractionPlan);
-
-					try {
-						const parsed = parseJsonResponse(rawResponse);
-						const validated = ExtractionOutputSchema.parse(
-							normalizeExtractionPayload(parsed, domainOverride)
-						);
-						const offsetClaims = attachPassageMetadataToClaims(
-							validated,
-							batch,
-							allClaims.length,
-							sourceMeta
-						);
-
-						allClaims.push(...offsetClaims);
+					const runSequentialSingleBatch = async (): Promise<'done' | 'split'> => {
+						batchLabel++;
+						const renderedBatch = renderPassageBatch(batch);
+						const queuePos = i + 1;
+						const passagesAfterThisBatch = batchQueue
+							.slice(i + 1)
+							.reduce((sum, b) => sum + b.length, 0);
+						const extractionProgressSuffix = ` · ${passagesAfterThisBatch} passage(s) left after this batch · ${passagesTotalSegmented} segmented total`;
 						console.log(
-							`  [OK] Extracted ${validated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
+							`\n  [BATCH ${batchLabel}] (${queuePos}/${queueTotal}) ${batch.length} passage(s) (~${estimateTokens(renderedBatch).toLocaleString()} tokens)${extractionProgressSuffix}`
 						);
 
-						partial.extraction_progress = {
-							claims_so_far: [...allClaims],
-							remaining_batches: batchQueue.slice(i + 1)
-						};
-						await savePartialResults(slug, partial);
-					} catch (parseError) {
-						console.warn(
-							`  [WARN] JSON parse/validation failed for batch ${batchLabel}. Attempting fix...`
+						const userMsg = EXTRACTION_USER(
+							`${sourceMeta.title} (Batch ${batchLabel})`,
+							sourceMeta.author.join(', ') || 'Unknown',
+							renderedBatch
 						);
 
-						let fixedResponse: string;
+						let rawResponse: string;
 						try {
-							fixedResponse = await fixJsonWithModel(
-								jsonRepairPlan,
-								jsonRepairBudget,
-								repairTracker,
-								rawResponse,
-								parseError instanceof Error ? parseError.message : String(parseError),
-								'Array of { text, claim_type, domain, passage_id, section_context, position_in_source, confidence }',
-								basePlanningContext
-							);
-						} catch (fixError) {
-							const fixMsg = fixError instanceof Error ? fixError.message : String(fixError);
-							if (fixMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
+							rawResponse = await callStageModelWithProgress({
+								stage: 'extraction',
+								plan: extractionPlan,
+								budget: extractionBudget,
+								tracker: extractionTracker,
+								systemPrompt: EXTRACTION_SYSTEM,
+								userMessage: userMsg,
+								label: `Extracting batch ${batchLabel} (${queuePos}/${queueTotal})`,
+								planningContext: basePlanningContext
+							});
+						} catch (apiError) {
+							const apiMsg = apiError instanceof Error ? apiError.message : String(apiError);
+							if (apiMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
 								if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
 								const mid = Math.ceil(batch.length / 2);
 								batchQueue.splice(i + 1, 0, batch.slice(0, mid), batch.slice(mid));
 								const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
 								console.warn(
-									`  [SPLIT] Batch ${batchLabel} repair response truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
+									`  [SPLIT] Batch ${batchLabel} truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
 								);
 								batchLabel--;
-								continue;
+								return 'split';
 							}
-							throw fixError;
+							throw apiError;
 						}
+						logStageCost('Extraction', extractionTracker, extractionPlan);
 
-						const fixedParsed = parseJsonResponse(fixedResponse);
-						const fixedValidated = ExtractionOutputSchema.parse(
-							normalizeExtractionPayload(fixedParsed, domainOverride)
-						);
-						const fixedClaims = attachPassageMetadataToClaims(
-							fixedValidated,
-							batch,
-							allClaims.length,
-							sourceMeta
-						);
-						allClaims.push(...fixedClaims);
-						console.log(
-							`  [OK] Fixed and extracted ${fixedValidated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
-						);
+						try {
+							const parsed = parseJsonResponse(rawResponse);
+							const validated = ExtractionOutputSchema.parse(
+								normalizeExtractionPayload(parsed, domainOverride)
+							);
+							const offsetClaims = attachPassageMetadataToClaims(
+								validated,
+								batch,
+								allClaims.length,
+								sourceMeta
+							);
 
-						partial.extraction_progress = {
-							claims_so_far: [...allClaims],
-							remaining_batches: batchQueue.slice(i + 1)
-						};
-						await savePartialResults(slug, partial);
+							allClaims.push(...offsetClaims);
+							console.log(
+								`  [OK] Extracted ${validated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
+							);
+
+							partial.extraction_progress = {
+								claims_so_far: [...allClaims],
+								remaining_batches: batchQueue.slice(i + 1)
+							};
+							await savePartialResults(slug, partial);
+						} catch (parseError) {
+							console.warn(
+								`  [WARN] JSON parse/validation failed for batch ${batchLabel}. Attempting fix...`
+							);
+
+							let fixedResponse: string;
+							try {
+								fixedResponse = await fixJsonWithModel(
+									jsonRepairPlan,
+									jsonRepairBudget,
+									repairTracker,
+									rawResponse,
+									parseError instanceof Error ? parseError.message : String(parseError),
+									'Array of { text, claim_type, domain, passage_id, section_context, position_in_source, confidence }',
+									basePlanningContext
+								);
+							} catch (fixError) {
+								const fixMsg = fixError instanceof Error ? fixError.message : String(fixError);
+								if (fixMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
+									if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
+									const mid = Math.ceil(batch.length / 2);
+									batchQueue.splice(i + 1, 0, batch.slice(0, mid), batch.slice(mid));
+									const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
+									console.warn(
+										`  [SPLIT] Batch ${batchLabel} repair response truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
+									);
+									batchLabel--;
+									return 'split';
+								}
+								throw fixError;
+							}
+
+							const fixedParsed = parseJsonResponse(fixedResponse);
+							const fixedValidated = ExtractionOutputSchema.parse(
+								normalizeExtractionPayload(fixedParsed, domainOverride)
+							);
+							const fixedClaims = attachPassageMetadataToClaims(
+								fixedValidated,
+								batch,
+								allClaims.length,
+								sourceMeta
+							);
+							allClaims.push(...fixedClaims);
+							console.log(
+								`  [OK] Fixed and extracted ${fixedValidated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
+							);
+
+							partial.extraction_progress = {
+								claims_so_far: [...allClaims],
+								remaining_batches: batchQueue.slice(i + 1)
+							};
+							await savePartialResults(slug, partial);
+						}
+						return 'done';
+					};
+
+					if (INGEST_EXTRACTION_CONCURRENCY > 1 && batch.length === 1) {
+						const groupIndices: number[] = [];
+						let j = i;
+						while (
+							j < batchQueue.length &&
+							batchQueue[j]!.length === 1 &&
+							groupIndices.length < INGEST_EXTRACTION_CONCURRENCY
+						) {
+							groupIndices.push(j);
+							j++;
+						}
+						if (groupIndices.length >= 2) {
+							const parallelStartLabel = batchLabel + 1;
+							console.log(
+								`\n  [PARALLEL] Extracting ${groupIndices.length} single-passage batches concurrently (max ${INGEST_EXTRACTION_CONCURRENCY})`
+							);
+							type ParResult = {
+								order: number;
+								validated: ExtractionOutput;
+								batch: PassageRecord[];
+								batchOrd: number;
+								queuePos: number;
+							};
+							const parResults = await Promise.all(
+								groupIndices.map(async (qi, gidx) => {
+									const b = batchQueue[qi]!;
+									const batchOrd = parallelStartLabel + gidx;
+									const renderedBatch = renderPassageBatch(b);
+									const queuePos = qi + 1;
+									const passagesAfter = batchQueue
+										.slice(qi + 1)
+										.reduce((sum, bb) => sum + bb.length, 0);
+									const suffix = ` · ${passagesAfter} passage(s) left after this batch · ${passagesTotalSegmented} segmented total`;
+									console.log(
+										`\n  [BATCH ${batchOrd}] (${queuePos}/${queueTotal}) 1 passage(s) (~${estimateTokens(renderedBatch).toLocaleString()} tokens)${suffix}`
+									);
+									const userMsg = EXTRACTION_USER(
+										`${sourceMeta.title} (Batch ${batchOrd})`,
+										sourceMeta.author.join(', ') || 'Unknown',
+										renderedBatch
+									);
+									const rawResponse = await callStageModelWithProgress({
+										stage: 'extraction',
+										plan: extractionPlan,
+										budget: extractionBudget,
+										tracker: extractionTracker,
+										systemPrompt: EXTRACTION_SYSTEM,
+										userMessage: userMsg,
+										label: `Extracting batch ${batchOrd} (${queuePos}/${queueTotal})`,
+										planningContext: basePlanningContext
+									});
+									logStageCost('Extraction', extractionTracker, extractionPlan);
+									let validated: ExtractionOutput;
+									try {
+										const parsed = parseJsonResponse(rawResponse);
+										validated = ExtractionOutputSchema.parse(
+											normalizeExtractionPayload(parsed, domainOverride)
+										);
+									} catch (parseError) {
+										console.warn(
+											`  [WARN] JSON parse/validation failed for batch ${batchOrd}. Attempting fix...`
+										);
+										const fixedResponse = await fixJsonWithModel(
+											jsonRepairPlan,
+											jsonRepairBudget,
+											repairTracker,
+											rawResponse,
+											parseError instanceof Error ? parseError.message : String(parseError),
+											'Array of { text, claim_type, domain, passage_id, section_context, position_in_source, confidence }',
+											basePlanningContext
+										);
+										const fixedParsed = parseJsonResponse(fixedResponse);
+										validated = ExtractionOutputSchema.parse(
+											normalizeExtractionPayload(fixedParsed, domainOverride)
+										);
+									}
+									const order = b[0]?.order_in_source ?? qi;
+									return {
+										order,
+										validated,
+										batch: b,
+										batchOrd,
+										queuePos
+									} satisfies ParResult;
+								})
+							);
+							parResults.sort((a, b) => a.order - b.order);
+							for (const pr of parResults) {
+								const offsetClaims = attachPassageMetadataToClaims(
+									pr.validated,
+									pr.batch,
+									allClaims.length,
+									sourceMeta
+								);
+								allClaims.push(...offsetClaims);
+								console.log(
+									`  [OK] Extracted ${pr.validated.length} claims from batch ${pr.batchOrd} (${pr.queuePos}/${queueTotal} in queue)`
+								);
+							}
+							batchLabel = parallelStartLabel + groupIndices.length - 1;
+							partial.extraction_progress = {
+								claims_so_far: [...allClaims],
+								remaining_batches: batchQueue.slice(i + groupIndices.length)
+							};
+							await savePartialResults(slug, partial);
+							i += groupIndices.length;
+							continue;
+						}
 					}
+
+					const seqOutcome = await runSequentialSingleBatch();
+					if (seqOutcome === 'split') continue;
+					i += 1;
 				}
 
 				allClaims = normalizeSequentialClaimPositions(allClaims);
@@ -3286,12 +3424,23 @@ async function main() {
 				RELATIONS_BATCH_OVERLAP_CLAIMS
 			);
 
-			console.log(
-				`  [INFO] Relations in ${relationsBatches.length} batch(es), target ~${relationsBatchTarget.toLocaleString()} tokens (overlap ${RELATIONS_BATCH_OVERLAP_CLAIMS} claim(s))`
-			);
-
+			let workQueue: PhaseOneClaim[][] = relationsBatches.map((b) => [...b]);
 			let startBatchIndex = 0;
-			if (
+
+			const savedSlices = partial.relations_progress?.batch_claim_slices;
+			if (Array.isArray(savedSlices) && savedSlices.length > 0) {
+				workQueue = savedSlices.map((b) => [...b]);
+				relations = Array.isArray(partial.relations_progress?.relations_so_far)
+					? partial.relations_progress.relations_so_far
+					: [];
+				startBatchIndex = Math.min(
+					partial.relations_progress?.next_batch_index ?? 0,
+					workQueue.length
+				);
+				console.log(
+					`  [RESUME] Mid-relations checkpoint (adaptive queue) — ${relations.length} relations; batch ${startBatchIndex + 1}/${workQueue.length}`
+				);
+			} else if (
 				partial.relations_progress &&
 				Array.isArray(partial.relations_progress.relations_so_far) &&
 				partial.relations_progress.total_batches === relationsBatches.length &&
@@ -3299,70 +3448,109 @@ async function main() {
 			) {
 				relations = partial.relations_progress.relations_so_far;
 				startBatchIndex = Math.min(partial.relations_progress.next_batch_index, relationsBatches.length);
+				workQueue = relationsBatches.map((b) => [...b]);
 				console.log(
 					`  [RESUME] Mid-relations checkpoint — ${relations.length} relations so far; resuming at batch ${startBatchIndex + 1}/${relationsBatches.length}`
 				);
 			}
 
+			console.log(
+				`  [INFO] Relations in ${workQueue.length} batch(es), target ~${relationsBatchTarget.toLocaleString()} tokens (overlap ${RELATIONS_BATCH_OVERLAP_CLAIMS} claim(s)); TPM splits may increase batch count`
+			);
+
 			const relationsPlanningContext = {
 				...basePlanningContext,
 				claimCount: allClaims.length
 			};
-			for (let batchIndex = startBatchIndex; batchIndex < relationsBatches.length; batchIndex++) {
-				const batchClaims = relationsBatches[batchIndex]!;
-				const claimsJson = JSON.stringify(batchClaims, null, 2);
-				const relUserMsg = RELATIONS_USER(claimsJson);
 
-				console.log(
-					`  [BATCH ${batchIndex + 1}/${relationsBatches.length}] ${batchClaims.length} claims (~${estimateTokens(
-						claimsJson
-					).toLocaleString()} tokens claim JSON)`
-				);
+			for (let batchIndex = startBatchIndex; batchIndex < workQueue.length; batchIndex++) {
+					// Inner loop: on TPM/rate-limit, split this queue slot into two smaller slices before escalating provider.
+					while (true) {
+					const batchClaims = workQueue[batchIndex]!;
+					const claimsJson = JSON.stringify(batchClaims, null, 2);
+					const relUserMsg = RELATIONS_USER(claimsJson);
+					const tokEst = estimateRelationsClaimsJsonTokens(batchClaims);
 
-				const relRawResponse = await callStageModel({
-					stage: 'relations',
-					plan: relationPlan,
-					budget: relationBudget,
-					tracker: relationsTracker,
-					systemPrompt: RELATIONS_SYSTEM,
-					userMessage: relUserMsg,
-					planningContext: relationsPlanningContext
-				});
-				logStageCost('Relations', relationsTracker, relationPlan);
-
-				let batchRelations: PhaseOneRelation[] = [];
-				try {
-					const parsed = parseJsonResponse(relRawResponse);
-					batchRelations = attachRelationMetadata(RelationsOutputSchema.parse(parsed), allClaims);
-					console.log(`  [OK] Identified ${batchRelations.length} relations in batch ${batchIndex + 1}`);
-				} catch (parseError) {
-					console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
-					const fixedResponse = await fixJsonWithModel(
-						jsonRepairPlan,
-						jsonRepairBudget,
-						repairTracker,
-						relRawResponse,
-						parseError instanceof Error ? parseError.message : String(parseError),
-						'Array of { from_position, to_position, relation_type, strength, note? }',
-						relationsPlanningContext
-					);
-					const fixedParsed = parseJsonResponse(fixedResponse);
-					batchRelations = attachRelationMetadata(RelationsOutputSchema.parse(fixedParsed), allClaims);
 					console.log(
-						`  [OK] Fixed and identified ${batchRelations.length} relations in batch ${batchIndex + 1}`
+						`  [BATCH ${batchIndex + 1}/${workQueue.length}] ${batchClaims.length} claims (~${tokEst.toLocaleString()} tokens claim JSON)`
 					);
+
+					let relRawResponse: string;
+					try {
+						relRawResponse = await callStageModel({
+							stage: 'relations',
+							plan: relationPlan,
+							budget: relationBudget,
+							tracker: relationsTracker,
+							systemPrompt: RELATIONS_SYSTEM,
+							userMessage: relUserMsg,
+							planningContext: relationsPlanningContext
+						});
+					} catch (relErr) {
+						const msg = relErr instanceof Error ? relErr.message : String(relErr);
+						if (batchClaims.length > 1 && isTpmOrRateLimitModelErrorMessage(msg)) {
+							const mid = Math.ceil(batchClaims.length / 2);
+							workQueue.splice(
+								batchIndex,
+								1,
+								batchClaims.slice(0, mid),
+								batchClaims.slice(mid)
+							);
+							console.warn(
+								`  [SPLIT] Relations batch hit TPM/rate limit — splitting into 2 slices (queue now ${workQueue.length} batch(es))`
+							);
+							partial.relations = relations;
+							partial.relations_progress = {
+								relations_so_far: relations,
+								next_batch_index: batchIndex,
+								total_batches: workQueue.length,
+								batch_claim_slices: workQueue
+							};
+							partial.stage_completed = 'relating';
+							await savePartialResults(slug, partial);
+							continue;
+						}
+						throw relErr;
+					}
+
+					logStageCost('Relations', relationsTracker, relationPlan);
+
+					let batchRelations: PhaseOneRelation[] = [];
+					try {
+						const parsed = parseJsonResponse(relRawResponse);
+						batchRelations = attachRelationMetadata(RelationsOutputSchema.parse(parsed), allClaims);
+						console.log(`  [OK] Identified ${batchRelations.length} relations in batch ${batchIndex + 1}`);
+					} catch (parseError) {
+						console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
+						const fixedResponse = await fixJsonWithModel(
+							jsonRepairPlan,
+							jsonRepairBudget,
+							repairTracker,
+							relRawResponse,
+							parseError instanceof Error ? parseError.message : String(parseError),
+							'Array of { from_position, to_position, relation_type, strength, note? }',
+							relationsPlanningContext
+						);
+						const fixedParsed = parseJsonResponse(fixedResponse);
+						batchRelations = attachRelationMetadata(RelationsOutputSchema.parse(fixedParsed), allClaims);
+						console.log(
+							`  [OK] Fixed and identified ${batchRelations.length} relations in batch ${batchIndex + 1}`
+						);
+					}
+
+					relations = mergeRelationsDedup(relations, batchRelations);
+
+					partial.relations = relations;
+					partial.relations_progress = {
+						relations_so_far: relations,
+						next_batch_index: batchIndex + 1,
+						total_batches: workQueue.length,
+						batch_claim_slices: workQueue
+					};
+					partial.stage_completed = 'relating';
+					await savePartialResults(slug, partial);
+					break;
 				}
-
-				relations = mergeRelationsDedup(relations, batchRelations);
-
-				partial.relations = relations;
-				partial.relations_progress = {
-					relations_so_far: relations,
-					next_batch_index: batchIndex + 1,
-					total_batches: relationsBatches.length
-				};
-				partial.stage_completed = 'relating';
-				await savePartialResults(slug, partial);
 			}
 
 			// Print breakdown
