@@ -15,6 +15,7 @@ SOPHIA remains the concrete app that proves these ideas in product form. Use [..
 
 ## How to navigate this pack
 
+- **SOPHIA ↔ Restormel npm extraction:** Phase 1 — [`PHASE1-EXTRACTION-STATUS.md`](./PHASE1-EXTRACTION-STATUS.md); Phase 2 (context packs) — [`PHASE2-EXTRACTION-STATUS.md`](./PHASE2-EXTRACTION-STATUS.md), [`phase2-context-packs-extraction-scope.md`](./phase2-context-packs-extraction-scope.md).
 - Start with the overview and strategy docs if you need the platform framing.
 - Move into architecture and product docs when defining reusable boundaries or product surfaces.
 - Use the delivery and design docs when sequencing work.

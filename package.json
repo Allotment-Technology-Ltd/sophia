@@ -62,6 +62,7 @@
     "@neondatabase/neon-js": "0.2.0-beta.1",
     "@neondatabase/serverless": "^0.10.4",
     "@restormel/aaif": "workspace:*",
+    "@restormel/context-packs": "^0.1.0",
     "@restormel/contracts": "^0.1.0",
     "@restormel/graph-core": "^0.1.1",
     "@restormel/graph-reasoning-extensions": "^0.1.0",

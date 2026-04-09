@@ -21,6 +21,7 @@ import { VERIFICATION_SYSTEM, buildVerificationUserPrompt } from './prompts/veri
 import { ensureHarvardReferencesSection } from './citations/harvard';
 import { retrieveContext } from './retrieval';
 import { buildPassSpecificContextPacks, type ContextPackStats } from './contextPacks';
+import { contextPackInputFromRetrieval } from './contextPackRetrieval';
 import { classifyQueryDomain, getRetrievalDomain } from './domainClassifier';
 import type { PassType } from '@restormel/contracts/passes';
 import type { AnalysisPhase, Claim, RelationBundle, SourceReference } from '@restormel/contracts/references';
@@ -620,7 +621,9 @@ export async function runDialecticalEngine(
       maxClaims: retrievalMaxClaims,
       viewerUid: options?.viewerUid ?? null
     });
-    const packs = buildPassSpecificContextPacks(retrievalResult, { depthMode });
+    const packs = buildPassSpecificContextPacks(contextPackInputFromRetrieval(retrievalResult), {
+      depthMode
+    });
     contextBlockByPass = {
       analysis: packs.analysis.block,
       critique: packs.critique.block,

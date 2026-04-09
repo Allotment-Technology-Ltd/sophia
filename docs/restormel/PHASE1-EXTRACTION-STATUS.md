@@ -27,4 +27,4 @@
 ## Next action (ongoing)
 
 - Bump **`^0.1.x`** when Restormel publishes fixes; watch **`RESTORMEL_CONTRACTS_SCHEMA_VERSION`** in release notes.
-- Phase 2 (optional): extract context packs to a shared package per roadmap.
+- **Phase 2 (context packs):** **`@restormel/context-packs`** on npm — see **[PHASE2-EXTRACTION-STATUS.md](./PHASE2-EXTRACTION-STATUS.md)**; companion product docs: [restormel.dev/graph/docs](https://restormel.dev/graph/docs).

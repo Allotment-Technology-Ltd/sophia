@@ -16,6 +16,8 @@ Reasoning-heavy imports use `@restormel/graph-reasoning-extensions/*`; render pa
 
 **Phase 1 — trace + handoff:** emitter checklist [`phase1-run-trace-emitter-checklist.md`](../phase1-run-trace-emitter-checklist.md); **status index** [`PHASE1-EXTRACTION-STATUS.md`](../PHASE1-EXTRACTION-STATUS.md); **Restormel build spec** [`phase1-restormel-engineering-spec.md`](../phase1-restormel-engineering-spec.md); **copy-paste agent prompt** [`phase1-agent-prompt-restormel-engineering.md`](../phase1-agent-prompt-restormel-engineering.md).
 
+**Phase 2 — context packs:** [`PHASE2-EXTRACTION-STATUS.md`](../PHASE2-EXTRACTION-STATUS.md), [`phase2-context-packs-extraction-scope.md`](../phase2-context-packs-extraction-scope.md), [`phase2-agent-prompt-restormel-engineering.md`](../phase2-agent-prompt-restormel-engineering.md) (portable input: `src/lib/server/contextPackRetrieval.ts`).
+
 ---
 
 ## graph-core v0 — frozen scope (Contract v0)

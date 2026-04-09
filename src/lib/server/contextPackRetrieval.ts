@@ -1,49 +1,25 @@
 /**
- * Portable seam for Restormel Context extraction: only the retrieval shape that
- * {@link buildPassSpecificContextPacks} consumes. Implementations backed by SurrealDB
- * (SOPHIA's {@link RetrievalResult}) satisfy this structurally; non-Sophia graphs can
- * omit Surreal-only diagnostics on their own DTOs.
+ * SOPHIA adapter: map full {@link RetrievalResult} onto the portable input type consumed by
+ * `buildPassSpecificContextPacks` from `@restormel/context-packs`.
+ *
+ * @see https://www.npmjs.com/package/@restormel/context-packs
+ * @see https://restormel.dev/graph/docs — published graph + reasoning packages; context-packs is separate (retrieval → LLM blocks).
  */
 
+import type { ContextPackArgument, ContextPackRetrievalInput } from '@restormel/context-packs';
 import type { RetrievalResult } from './retrieval';
 
-/** Claim fields read by context pack selection and rendering. */
-export interface ContextPackClaim {
-	id: string;
-	text: string;
-	claim_type: string;
-	source_title: string;
-	confidence?: number;
-}
+export type {
+	ContextPackArgument,
+	ContextPackClaim,
+	ContextPackRelation,
+	ContextPackRetrievalInput
+} from '@restormel/context-packs';
 
-/** Relation fields read by context packs (index-local graph). */
-export interface ContextPackRelation {
-	from_index: number;
-	to_index: number;
-	relation_type: string;
-}
-
-/** Argument fields read by context packs. */
-export interface ContextPackArgument {
-	name: string;
-	tradition: string | null;
-	summary: string;
-}
-
-/**
- * Minimal retrieval payload for pass-specific context packs (analysis / critique / synthesis).
- * No DB driver, trace, or lineage fields — add those only on your full retrieval type.
- */
-export interface ContextPackRetrievalInput {
-	claims: ContextPackClaim[];
-	relations: ContextPackRelation[];
-	arguments: ContextPackArgument[];
-	seed_claim_ids: string[];
-}
 
 /**
  * {@link RetrievalResult} fields that context pack construction does **not** read.
- * Safe to omit on alternate backends when only {@link buildPassSpecificContextPacks} is used.
+ * Safe to omit on alternate backends when only `buildPassSpecificContextPacks` is used.
  *
  * - **thinker_context** — Wikidata lineage block; appended separately in prompts, not in packs.
  * - **trace** — hybrid/seed/traversal diagnostics (Surreal pipeline).
@@ -55,12 +31,22 @@ export type RetrievalResultFieldsExcludedFromContextPacks =
 	| 'degraded'
 	| 'degraded_reason';
 
-/** Narrows a full SOPHIA retrieval result to the portable input type (identity / shallow copy). */
+function argumentToContextPackShape(arg: RetrievalResult['arguments'][number]): ContextPackArgument {
+	return {
+		name: arg.name,
+		tradition: arg.tradition,
+		summary: arg.summary,
+		key_premises: arg.key_premises,
+		conclusion_text: arg.conclusion_text ?? undefined
+	};
+}
+
+/** Narrows a full SOPHIA retrieval result to the portable input type (shallow copy for arguments). */
 export function contextPackInputFromRetrieval(result: RetrievalResult): ContextPackRetrievalInput {
 	return {
 		claims: result.claims,
 		relations: result.relations,
-		arguments: result.arguments,
+		arguments: result.arguments.map(argumentToContextPackShape),
 		seed_claim_ids: result.seed_claim_ids
 	};
 }
