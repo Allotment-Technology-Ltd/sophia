@@ -17,6 +17,7 @@
 import { Surreal } from 'surrealdb';
 import * as fs from 'fs';
 import * as path from 'path';
+import { defineClaimEmbeddingIndex, removeClaimEmbeddingIndexSql } from './lib/surrealClaimVectorIndex.js';
 
 const SURREAL_URL = process.env.SURREAL_URL || 'http://localhost:8000/rpc';
 const SURREAL_USER = process.env.SURREAL_USER || 'root';
@@ -78,14 +79,12 @@ function loadBackup(backupFile: string): VectorBackup {
 
 async function updateVectorIndexDimension(db: Surreal, dimension: number): Promise<void> {
 	console.log(`[RESTORE] Updating vector index dimension → ${dimension}...`);
-	
-	// Remove current index
-	await db.query('REMOVE INDEX claim_embedding ON claim');
+
+	await db.query(removeClaimEmbeddingIndexSql());
 	console.log(`[RESTORE]   - Removed existing index`);
-	
-	// Create new index with specified dimension
-	await db.query(`DEFINE INDEX claim_embedding ON claim FIELDS embedding MTREE DIMENSION ${dimension}`);
-	console.log(`[RESTORE]   - Created ${dimension}-dim index`);
+
+	const { kind } = await defineClaimEmbeddingIndex(db, { dimension });
+	console.log(`[RESTORE]   - Created ${dimension}-dim ${kind.toUpperCase()} index`);
 }
 
 async function restoreClaimEmbedding(db: Surreal, claimId: string, embedding: number[]): Promise<void> {
