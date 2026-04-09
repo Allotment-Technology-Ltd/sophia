@@ -1,6 +1,6 @@
 /**
  * Drizzle schema for Neon (ingestion orchestration, staging, Firestore-shaped docs).
- * Canonical SQL migrations: drizzle/0000_neon_first.sql, drizzle/0002_early_access_waitlist.sql — keep in sync when changing tables.
+ * Canonical SQL migrations under drizzle/ — keep in sync when changing tables.
  */
 
 import {
@@ -12,6 +12,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   serial,
   text,
   timestamp,
@@ -227,3 +228,22 @@ export const earlyAccessWaitlist = pgTable(
     createdIdx: index('idx_early_access_waitlist_created_at').on(t.createdAt)
   })
 );
+
+/** Rolling tallies for ingestion LLM routing (cross-run deprioritization). */
+export const ingestLlmModelHealth = pgTable(
+  'ingest_llm_model_health',
+  {
+    provider: text('provider').notNull(),
+    modelId: text('model_id').notNull(),
+    failureCount: integer('failure_count').notNull().default(0),
+    successCount: integer('success_count').notNull().default(0),
+    lastFailureAt: timestamp('last_failure_at', { withTimezone: true }),
+    lastSuccessAt: timestamp('last_success_at', { withTimezone: true }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.provider, t.modelId] }),
+    updatedIdx: index('idx_ingest_llm_model_health_updated').on(t.updatedAt)
+  })
+);
+

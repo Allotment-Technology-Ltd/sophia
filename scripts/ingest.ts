@@ -50,6 +50,12 @@ import {
 } from '../src/lib/server/ingestion/modelBatchCaps.js';
 import { normalizeIngestPinModelId } from '../src/lib/server/ingestPinNormalize.js';
 import type { IngestCatalogRoutingJson } from '../src/lib/server/ingestCatalogRouting.js';
+import {
+	bumpIngestModelFailureInDb,
+	loadIngestLlmFailureCountsFromDb,
+	noteIngestModelSuccessInDb
+} from '../src/lib/server/db/ingestModelHealth.js';
+import { createIngestProviderTpmGuard } from './lib/ingestProviderTpm.js';
 import { startSpinner } from './progress.js';
 
 // ─── Prompt imports (relative paths for standalone script) ─────────────────
@@ -104,6 +110,8 @@ import type {
 } from '../src/lib/server/ingestion/contracts.js';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
+const ingestTpmGuard = createIngestProviderTpmGuard();
+
 const INGEST_PROVIDER_DEFAULT = (process.env.INGEST_PROVIDER || 'auto').toLowerCase();
 
 const SURREAL_URL = process.env.SURREAL_URL || 'http://localhost:8000/rpc';
@@ -283,6 +291,7 @@ function ingestModelFailureKey(provider: string, model: string): string {
 function recordIngestModelFailure(provider: string, model: string): void {
 	const k = ingestModelFailureKey(provider, model);
 	ingestModelFailureCounts.set(k, (ingestModelFailureCounts.get(k) ?? 0) + 1);
+	void bumpIngestModelFailureInDb(provider, model);
 }
 
 function loadIngestCatalogRoutingFromEnv(): IngestCatalogRoutingJson | null {
@@ -358,7 +367,7 @@ function buildEffectiveModelChainForStage(
 
 		scored.sort((a, b) => {
 			if (a.fails !== b.fails) return a.fails - b.fails;
-			return 0;
+			return a.provider.localeCompare(b.provider) || a.modelId.localeCompare(b.modelId);
 		});
 
 		for (const t of scored) {
@@ -1790,6 +1799,9 @@ async function callStageModel(params: {
 				const callStarted = Date.now();
 				const routingProvider = activePlan.route.provider ?? activePlan.provider;
 				const foldSystem = shouldFoldSystemPromptIntoUserForProvider(routingProvider);
+				const estTpmTokens =
+					estimateTokens(systemPrompt) + estimateTokens(userMessage) + maxTokens;
+				await ingestTpmGuard.waitForBudget(routingProvider, estTpmTokens);
 				const result = await withTimeout(
 					generateText(
 						foldSystem
@@ -1823,6 +1835,7 @@ async function callStageModel(params: {
 				}
 				const inputTokens = result.usage?.inputTokens ?? 0;
 				const outputTokens = result.usage?.outputTokens ?? 0;
+				ingestTpmGuard.recordUsage(routingProvider, inputTokens + outputTokens);
 				const usageCostUsd = trackReasoningCost(activePlan.model, inputTokens, outputTokens);
 				if (result.finishReason === 'length') {
 					throw new Error('Model output was truncated (max_tokens reached)');
@@ -1830,6 +1843,9 @@ async function callStageModel(params: {
 				console.log(
 					`  [ROUTE] ${stage}: ${activePlan.provider}/${activePlan.model} source=${activePlan.routingSource} step=${activePlan.selectedStepId ?? '—'} order=${activePlan.selectedOrderIndex ?? '—'} switch=${activePlan.switchReasonCode ?? '—'} cost~$${usageCostUsd.toFixed(4)}`
 				);
+				if ((process.env.INGEST_LLM_HEALTH_RECORD_SUCCESS || '').trim() === '1') {
+					void noteIngestModelSuccessInDb(activePlan.provider, activePlan.model);
+				}
 				assertStageBudget(budget, tracker);
 				return result.text;
 			} catch (error) {
@@ -2967,6 +2983,12 @@ async function main() {
 	// Load source files (or full text from Neon when the worker has no local data/sources copy)
 	const { txtPath, sourceText, sourceMeta, slug } = await loadSourceTextAndMeta(filePath);
 	ingestSourceTextBodyForCheckpoint = sourceText;
+	if (process.env.DATABASE_URL?.trim()) {
+		const persistedFails = await loadIngestLlmFailureCountsFromDb();
+		for (const [k, v] of persistedFails) {
+			ingestModelFailureCounts.set(k, v);
+		}
+	}
 	assertValidSourceMetadata(sourceMeta);
 	const sectionTokenLimit = getSectionTokenLimit(sourceMeta.source_type);
 	const rawPassages = segmentArgumentativePassages(sourceText, {

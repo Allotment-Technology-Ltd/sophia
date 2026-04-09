@@ -6,7 +6,7 @@ export default defineConfig({
     alias: [{ find: '$lib', replacement: path.resolve('./src/lib') }]
   },
   test: {
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
     environment: 'node',
     globals: true,
     coverage: {
