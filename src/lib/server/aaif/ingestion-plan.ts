@@ -12,6 +12,7 @@ import {
   resolveReasoningModelRoute,
   type ReasoningModelRoute
 } from '../vertex.js';
+import { normalizeIngestPinModelId } from '../ingestPinNormalize.js';
 export type IngestionStage =
   | 'extraction'
   | 'relations'
@@ -148,9 +149,11 @@ function readPinnedModel(
 ): { provider?: ModelProvider; modelId?: string } {
   if (stage === 'embedding') return {};
   const suffix = PIN_ENV_SUFFIX[stage];
-  const modelId = process.env[`INGEST_PIN_MODEL_${suffix}`]?.trim();
+  const rawModelId = process.env[`INGEST_PIN_MODEL_${suffix}`]?.trim();
   const provider = process.env[`INGEST_PIN_PROVIDER_${suffix}`]?.trim().toLowerCase() as ModelProvider | undefined;
-  if (modelId && provider) return { provider, modelId };
+  if (rawModelId && provider) {
+    return { provider, modelId: normalizeIngestPinModelId(provider, rawModelId) };
+  }
 
   const disableCanonical = ['1', 'true', 'yes'].includes(
     (process.env.INGEST_DISABLE_CANONICAL_DEFAULTS ?? '').trim().toLowerCase()

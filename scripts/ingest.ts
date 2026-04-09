@@ -46,6 +46,8 @@ import {
 	capIngestBatchTargetForPlan,
 	isContextLengthExceededError
 } from '../src/lib/server/ingestion/modelBatchCaps.js';
+import { normalizeIngestPinModelId } from '../src/lib/server/ingestPinNormalize.js';
+import { fetchParsedSourceForIngest } from './lib/fetchSourceCore.js';
 import { startSpinner } from './progress.js';
 
 // ─── Prompt imports (relative paths for standalone script) ─────────────────
@@ -2713,8 +2715,9 @@ function applyIngestPinsJsonArg(argv: string[]): void {
 				v.provider.trim() &&
 				v.model.trim()
 			) {
-				process.env[`INGEST_PIN_PROVIDER_${suffix}`] = v.provider.trim();
-				process.env[`INGEST_PIN_MODEL_${suffix}`] = v.model.trim();
+				const prov = v.provider.trim();
+				process.env[`INGEST_PIN_PROVIDER_${suffix}`] = prov;
+				process.env[`INGEST_PIN_MODEL_${suffix}`] = normalizeIngestPinModelId(prov, v.model.trim());
 				applied++;
 			}
 		}
@@ -2786,19 +2789,52 @@ async function loadSourceTextAndMeta(
 		const fromNeon = await loadIngestPartialFromNeon(runId, hintSlug);
 		const snap = fromNeon?.source_text_snapshot;
 		const src = fromNeon?.source;
-		if (typeof snap !== 'string' || snap.length === 0 || !src || typeof src !== 'object' || Array.isArray(src)) {
+		const srcRec =
+			src && typeof src === 'object' && !Array.isArray(src) ? (src as Record<string, unknown>) : null;
+
+		if (typeof snap === 'string' && snap.length > 0 && srcRec) {
+			sourceText = snap;
+			sourceMeta = src as SourceMeta;
+			txtPath = path.join(process.cwd(), 'data/sources', `${hintSlug}.txt`);
+			console.log(
+				`  [RESUME] Loaded source body from Neon checkpoint (local file missing) — slug ${hintSlug}`
+			);
+		} else if (srcRec) {
+			const url = typeof srcRec.url === 'string' ? srcRec.url.trim() : '';
+			const st = typeof srcRec.source_type === 'string' ? srcRec.source_type.trim() : '';
+			if (!url || !st) {
+				console.error(`[ERROR] Source text not found: ${txtPath}`);
+				console.error(
+					'  Hint: No Neon text snapshot and source metadata is missing url/source_type. Re-fetch the URL in Admin or run fetch-source locally, then resume.'
+				);
+				process.exit(1);
+			}
+			console.log(
+				`  [RESUME] No text snapshot in Neon — refetching HTML and rebuilding body (slug ${hintSlug})…`
+			);
+			const fetched = await fetchParsedSourceForIngest(url, st, { quiet: false });
+			sourceText = fetched.text;
+			sourceMeta = fetched.meta as unknown as SourceMeta;
+			txtPath = path.join(process.cwd(), 'data/sources', `${hintSlug}.txt`);
+			try {
+				const sourcesDir = path.join(process.cwd(), 'data/sources');
+				fs.mkdirSync(sourcesDir, { recursive: true });
+				fs.writeFileSync(txtPath, sourceText, 'utf-8');
+				fs.writeFileSync(
+					txtPath.replace(/\.txt$/, '.meta.json'),
+					JSON.stringify(sourceMeta, null, 2),
+					'utf-8'
+				);
+			} catch {
+				/* optional cache on worker */
+			}
+		} else {
 			console.error(`[ERROR] Source text not found: ${txtPath}`);
 			console.error(
-				'  Hint: On serverless workers the fetch output may be gone. Re-run fetch or ensure the latest deploy persists source_text_snapshot in Neon (ingest_staging_meta).'
+				'  Hint: On serverless workers the fetch output may be gone. Deploy the ingest worker with Neon snapshot support, or re-run Fetch in Admin once so a snapshot is saved.'
 			);
 			process.exit(1);
 		}
-		sourceText = snap;
-		sourceMeta = src as SourceMeta;
-		txtPath = path.join(process.cwd(), 'data/sources', `${hintSlug}.txt`);
-		console.log(
-			`  [RESUME] Loaded source body from Neon checkpoint (local file missing) — slug ${hintSlug}`
-		);
 	} else {
 		console.error(`[ERROR] Source text not found: ${txtPath}`);
 		process.exit(1);

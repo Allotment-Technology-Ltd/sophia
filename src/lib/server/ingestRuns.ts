@@ -28,6 +28,7 @@ import {
   neonHasIngestSourceTextSnapshot,
   neonRestoreSourceTextToDataSources
 } from '$lib/server/db/ingestStaging';
+import { normalizeIngestPinModelId } from '$lib/server/ingestPinNormalize';
 
 export interface IngestRunPayload {
   source_url: string;
@@ -187,14 +188,7 @@ function normalizeEmbeddingProvider(slug: string): 'vertex' | 'voyage' | null {
 }
 
 function normalizePinnedModelId(provider: string, modelId: string): string {
-  const p = provider.toLowerCase().trim();
-  const m = modelId.trim();
-  // Vertex/Google 1.5 IDs are retired in several environments; pin modern equivalents.
-  if ((p === 'vertex' || p === 'google') && m === 'gemini-1.5-pro') return 'gemini-2.5-pro';
-  if ((p === 'vertex' || p === 'google') && m === 'gemini-1.5-flash') return 'gemini-2.5-flash';
-  // Anthropic Messages API expects dated Haiku 3.5 ids; bare alias returns 404 from some gateways.
-  if (p === 'anthropic' && m === 'claude-3-5-haiku') return 'claude-3-5-haiku-20241022';
-  return m;
+  return normalizeIngestPinModelId(provider, modelId);
 }
 
 /**
