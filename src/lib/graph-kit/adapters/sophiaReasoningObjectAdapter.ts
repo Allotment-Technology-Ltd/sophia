@@ -31,7 +31,7 @@ import {
   normalizeSophiaReasoningEvents,
   normalizedTraceToReasoningObjectEvents
 } from '@restormel/observability';
-import { evaluateReasoningGraph as evaluateReasoningGraphStructure } from '@restormel/graph-core/evaluation';
+import { evaluateReasoningGraph as evaluateReasoningGraphStructure } from '@sophia/graph-reasoning-extensions/evaluation';
 
 const PLAYBACK_MISSING_CAPABILITIES = [
   'Per-event graph frames are not persisted; only the latest graph snapshot is available in the workspace.',

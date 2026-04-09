@@ -45,7 +45,7 @@ Use the active docs surfaces below before reaching for older repo notes or archi
 | Status | Surface | Docs | Scope | Entry point |
 | --- | --- | --- | --- | --- |
 | Active | SOPHIA | 9 | Showcase app identity, architecture, roadmap, domains, and changelog. | [SOPHIA Documentation](docs/sophia/README.md) |
-| Active | Restormel | 46 | Platform strategy, modularisation, delivery controls, and product planning. | [Restormel Documentation](docs/restormel/README.md) |
+| Active | Restormel | 47 | Platform strategy, modularisation, delivery controls, and product planning. | [Restormel Documentation](docs/restormel/README.md) |
 | Reference | Reference docs | 19 | Supporting API, architecture, operations, product, and learning references. | [Reference Documentation](docs/reference/README.md) |
 | Archived | Archive | 64 | Historical strategy, architecture, delivery, product, and experiment material. | [Documentation Archive](docs/archive/README.md) |
 <!-- GENERATED:repo-doc-map:end -->

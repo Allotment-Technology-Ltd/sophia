@@ -8,11 +8,11 @@
     buildSophiaWorkspaceBundleFromCurrentSession
   } from '$lib/graph-kit/adapters/sophiaWorkspaceBuilder';
   import { buildWorkspaceCompareResult } from '$lib/graph-kit/state/compare';
-  import { diffReasoningSnapshots } from '@restormel/graph-core/compare';
+  import { diffReasoningSnapshots } from '@sophia/graph-reasoning-extensions/compare';
   import {
     buildReasoningLineageReport,
     renderReasoningLineageMarkdown
-  } from '@restormel/graph-core/lineage';
+  } from '@sophia/graph-reasoning-extensions/lineage';
   import { conversation } from '$lib/stores/conversation.svelte';
   import { comparisonStore } from '$lib/stores/comparison.svelte';
   import { graphStore } from '$lib/stores/graph.svelte';

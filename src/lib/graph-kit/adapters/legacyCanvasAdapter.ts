@@ -1,9 +1,14 @@
+/**
+ * @internal
+ * SOPHIA-only implementation detail for {@link graphDataFromSophiaGraphKit}.
+ * Do not import from application or Restormel integration code — use that function as the sole adapter entry.
+ */
 import type {
   GraphEdge,
   GraphGhostEdge,
   GraphGhostNode,
   GraphNode
-} from '$lib/types/api';
+} from '@restormel/graph-core/viewModel';
 import type {
   GraphKitEdge,
   GraphKitGhostEdge,
@@ -117,9 +122,7 @@ export function adaptGraphViewModelToLegacyCanvas(graph: GraphKitGraphViewModel)
   ghostNodes: GraphGhostNode[];
   ghostEdges: GraphGhostEdge[];
 } {
-  // Extraction note: this adapter is the main remaining compatibility seam.
-  // A future package should replace the legacy GraphCanvas renderer, not the
-  // Graph Kit graph view model above it.
+  // Implementation of Graph Kit → Contract v0 (`GraphData`). Callers outside this folder should use graphDataFromSophiaGraphKit only.
   return {
     nodes: graph.nodes.map(toLegacyNode),
     edges: graph.edges.map(toLegacyEdge),
