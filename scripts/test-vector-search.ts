@@ -28,7 +28,22 @@ console.log(`  All zeros: ${hasZeros}`);
 console.log(`\nTesting vector search with topK=5...`);
 
 try {
-  const results = await db.query(`
+  const ef = Math.max(16, Math.min(512, parseInt(process.env.RETRIEVAL_KNN_EF || '64', 10) || 64));
+  let results;
+  try {
+    results = await db.query(`
+    SELECT
+      id,
+      text,
+      confidence
+    FROM claim
+    WHERE embedding <|5,${ef}|> $query_embedding
+    LIMIT 5
+  `, {
+    query_embedding: testEmbedding
+  });
+  } catch {
+    results = await db.query(`
     SELECT
       id,
       text,
@@ -39,6 +54,7 @@ try {
   `, {
     query_embedding: testEmbedding
   });
+  }
   
   console.log('Vector search results:', results[0]?.length || 0, 'claims');
   for (const claim of results[0] || []) {
