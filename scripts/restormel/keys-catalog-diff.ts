@@ -1,6 +1,6 @@
 /**
  * Compare model id lists: @restormel/keys from npm (defaultProviders) vs
- * packages/contracts DEFAULT_MODEL_CATALOG (used by allowed-models / routing).
+ * @restormel/contracts DEFAULT_MODEL_CATALOG (used by allowed-models / routing).
  *
  * Run from repo root: pnpm exec tsx scripts/restormel/keys-catalog-diff.ts
  */
@@ -59,7 +59,7 @@ function main(): void {
   lines.push('## Next steps');
   lines.push('');
   lines.push('1. Bump vendored `@restormel/keys` / `@restormel/keys-svelte` tarballs when upstream releases (see `docs/restormel-integration/keys-catalog-sync.md`).');
-  lines.push('2. For each row with differences, merge new model ids into `packages/contracts/src/providers.ts` (`DEFAULT_MODEL_CATALOG`).');
+  lines.push('2. For each row with differences, merge new model ids into Restormel Keys `packages/contracts/src/providers.ts` (`DEFAULT_MODEL_CATALOG`), publish `@restormel/contracts`, bump SOPHIA.');
   lines.push('3. Keep embedding / non-chat ids (e.g. Vertex `text-embedding-*`) in contracts even if Keys omits them.');
   lines.push('4. Re-run `pnpm run check` and allowed-models tests after edits.');
   lines.push('');

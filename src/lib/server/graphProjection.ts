@@ -1,4 +1,4 @@
-import { projectGraph, type GraphProjectionInput } from '@sophia/graph-reasoning-extensions/projection';
+import { projectGraph, type GraphProjectionInput } from '@restormel/graph-reasoning-extensions/projection';
 import type { GraphEdge, GraphNode, GraphSnapshotMeta } from '@restormel/contracts/api';
 import type { RetrievalResult } from './retrieval';
 
