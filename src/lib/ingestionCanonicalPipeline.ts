@@ -37,8 +37,9 @@ export type CanonicalModelRef = { provider: ModelProvider; modelId: string };
  */
 export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, CanonicalModelRef> = {
 	extraction: { provider: 'openai', modelId: 'gpt-4o-mini' },
-	relations: { provider: 'openai', modelId: 'gpt-4-turbo' },
-	grouping: { provider: 'openai', modelId: 'gpt-4-turbo' },
+	/** gpt-4o: large context + better TPM headroom than gpt-4-turbo for big claim JSON graphs */
+	relations: { provider: 'openai', modelId: 'gpt-4o' },
+	grouping: { provider: 'openai', modelId: 'gpt-4o' },
 	validation: { provider: 'openai', modelId: 'gpt-4o-mini' },
 	json_repair: { provider: 'vertex', modelId: 'gemini-2.5-flash' }
 };
@@ -53,11 +54,11 @@ export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, C
 		{ provider: 'vertex', modelId: 'gemini-2.5-flash' }
 	],
 	relations: [
-		{ provider: 'openai', modelId: 'gpt-4o' },
+		{ provider: 'openai', modelId: 'gpt-4-turbo' },
 		{ provider: 'vertex', modelId: 'gemini-2.5-pro' }
 	],
 	grouping: [
-		{ provider: 'openai', modelId: 'gpt-4o' },
+		{ provider: 'openai', modelId: 'gpt-4-turbo' },
 		{ provider: 'vertex', modelId: 'gemini-2.5-pro' }
 	],
 	validation: [

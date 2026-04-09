@@ -4,6 +4,7 @@ import { assertAdminAccess } from '$lib/server/adminAccess';
 import {
 	computeEffectiveOperationsBindings,
 	computeEffectiveUserQueryRefs,
+	canonicalizeSurfaceAssignmentsForPut,
 	fetchKeysBindableModelKeySet,
 	isRestormelProjectModelPutProvider,
 	isRestormelProjectModelRegistryBindingsEnabled,
@@ -24,7 +25,8 @@ import {
 	listCatalogSurfaceCandidatesWithEmbeddingSupplement,
 	listCatalogUnparsedModelRows,
 	parseCatalogContractVersionFromPayload,
-	parseCatalogFreshnessFromPayload
+	parseCatalogFreshnessFromPayload,
+	type CatalogSurfaceRow
 } from '$lib/server/restormelCatalogRows';
 import {
 	isRestormelCatalogContractSupported,
@@ -78,8 +80,10 @@ export const GET: RequestHandler = async ({ locals }) => {
 	const catalogRowsUnparsed = catalogPayload ? listCatalogUnparsedModelRows(catalogPayload) : [];
 	const catalogEnvelope = catalogPayload ? extractCatalogAdminEnvelope(catalogPayload) : {};
 	const catalogTotalRowCount = catalogRowsRaw.length;
-	let catalogRows = catalogRowsRaw.map((r) => ({
+	let catalogRows = catalogRowsRaw.map((r: CatalogSurfaceRow) => ({
 		...r,
+		/** Canonical key for surfaceAssignments (matches save/resolve; use instead of raw provider::model). */
+		surfaceRowKey: catalogSurfaceStableKey(r.providerType, r.modelId),
 		userQueryable: catalogRowEligibleForAppUserModels(r),
 		ingestionPhaseSuitability: computeIngestionPhaseSuitability(
 			r.providerType,
@@ -199,7 +203,11 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 		);
 	}
 
-	const validated = validateSurfaceAssignmentsPut(catalogPayload, parsed.data.surfaceAssignments);
+	const surfaceAssignments = canonicalizeSurfaceAssignmentsForPut(
+		catalogPayload,
+		parsed.data.surfaceAssignments
+	);
+	const validated = validateSurfaceAssignmentsPut(catalogPayload, surfaceAssignments);
 	if (!validated.ok) {
 		return json({ error: validated.error.code, detail: validated.error }, { status: 400 });
 	}
@@ -230,7 +238,7 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 	const next: ModelSurfacesStored = {
 		operationsMode: 'default',
 		userQueriesMode: 'default',
-		surfaceAssignments: parsed.data.surfaceAssignments,
+		surfaceAssignments,
 		updatedByUid: actor.uid,
 		lastRestormelSyncError: null
 	};

@@ -1,6 +1,10 @@
 import { fileURLToPath } from 'node:url';
 import { Surreal } from 'surrealdb';
 import { getEmbeddingDimensions } from '../src/lib/server/embeddings';
+import {
+	defineClaimEmbeddingIndex,
+	requireVectorIndex
+} from './lib/surrealClaimVectorIndex.js';
 
 // Read environment variables
 const SURREAL_URL = process.env.SURREAL_URL || 'http://localhost:8000/rpc';
@@ -164,7 +168,7 @@ export async function setupSchema(existingDb?: Surreal) {
 			console.log('[SETUP] ✓ Table: claim');
 
 		// Create indexes for claim table.
-		// Some SurrealDB Cloud versions reject MTREE syntax; continue schema setup if so.
+		// Vector index: HNSW (preferred) or MTREE fallback — see scripts/lib/surrealClaimVectorIndex.ts
 		await db.query(`
 			DEFINE INDEX IF NOT EXISTS claim_domain ON claim FIELDS domain;
 			DEFINE INDEX IF NOT EXISTS claim_source ON claim FIELDS source;
@@ -172,15 +176,17 @@ export async function setupSchema(existingDb?: Surreal) {
 			DEFINE INDEX IF NOT EXISTS claim_source_position ON claim FIELDS source, position_in_source;
 		`);
 		try {
-			await db.query(`
-				DEFINE INDEX IF NOT EXISTS claim_embedding ON claim FIELDS embedding MTREE DIMENSION ${CLAIM_EMBEDDING_DIMENSION};
-			`);
+			const vec = await defineClaimEmbeddingIndex(db, { dimension: CLAIM_EMBEDDING_DIMENSION });
 			console.log(
-				`[SETUP] ✓ Indexes: claim (embedding:${CLAIM_EMBEDDING_DIMENSION}d, domain, source, passage, source+position)`
+				`[SETUP] ✓ Indexes: claim (embedding:${CLAIM_EMBEDDING_DIMENSION}d ${vec.kind.toUpperCase()}, domain, source, passage, source+position)`
 			);
 		} catch (embeddingIndexError) {
+			if (requireVectorIndex()) {
+				throw embeddingIndexError;
+			}
 			console.warn(
-				'[SETUP] ⚠ Skipping claim_embedding index (MTREE unsupported on this SurrealDB deployment).'
+				'[SETUP] ⚠ Skipping claim_embedding vector index (set SURREAL_REQUIRE_VECTOR_INDEX=1 to fail hard).',
+				embeddingIndexError instanceof Error ? embeddingIndexError.message : String(embeddingIndexError)
 			);
 			console.log('[SETUP] ✓ Indexes: claim (domain, source, passage, source+position)');
 		}

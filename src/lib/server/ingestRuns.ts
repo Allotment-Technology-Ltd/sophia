@@ -43,6 +43,8 @@ export interface IngestRunPayload {
     embedBatchSize?: number;
     /** Claim overlap between adjacent relation batches (`scripts/ingest.ts`). */
     relationsBatchOverlapClaims?: number;
+    /** Parallel single-passage extraction batches (`INGEST_EXTRACTION_CONCURRENCY`). */
+    extractionConcurrency?: number;
     /** When false, disables strict grouping integrity exit (`INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE`). */
     failOnGroupingPositionCollapse?: boolean;
     /** Narrow provider preference for the worker (`INGEST_PROVIDER`). */
@@ -93,6 +95,7 @@ function batchOverridesToEnv(
     relationsTargetTokens,
     embedBatchSize,
     relationsBatchOverlapClaims,
+    extractionConcurrency,
     failOnGroupingPositionCollapse,
     ingestProvider,
     ingestLogPins,
@@ -118,6 +121,7 @@ function batchOverridesToEnv(
   const relations = asPositiveInt(relationsTargetTokens);
   const embed = asPositiveInt(embedBatchSize);
   const overlap = asPositiveInt(relationsBatchOverlapClaims);
+  const extractConc = asPositiveInt(extractionConcurrency);
 
   if (extraction != null) out.INGEST_EXTRACTION_MAX_TOKENS_PER_SECTION = String(extraction);
   if (grouping != null) out.GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS = String(grouping);
@@ -125,6 +129,7 @@ function batchOverridesToEnv(
   if (relations != null) out.RELATIONS_BATCH_TARGET_TOKENS = String(relations);
   if (embed != null) out.VERTEX_EMBED_BATCH_SIZE = String(embed);
   if (overlap != null) out.RELATIONS_BATCH_OVERLAP_CLAIMS = String(overlap);
+  if (extractConc != null) out.INGEST_EXTRACTION_CONCURRENCY = String(extractConc);
   if (typeof failOnGroupingPositionCollapse === 'boolean') {
     out.INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE = failOnGroupingPositionCollapse ? 'true' : 'false';
   }

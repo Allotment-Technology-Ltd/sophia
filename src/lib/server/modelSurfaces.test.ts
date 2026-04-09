@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	buildKeysBindableModelKeySet,
+	canonicalizeSurfaceAssignmentsForPut,
 	computeEffectiveOperationsBindings,
 	isDeniedProjectModelPutModelId,
 	isRestormelProjectModelPutProvider,
@@ -333,5 +334,35 @@ describe('computeEffectiveOperationsBindings (registry bindings mode)', () => {
 				bindingKind: 'registry'
 			}
 		]);
+	});
+});
+
+describe('canonicalizeSurfaceAssignmentsForPut', () => {
+	const catalogPayload = {
+		data: {
+			models: [
+				{ providerType: 'openai', modelId: 'gpt-4o' },
+				{ providerType: 'google', modelId: 'gemini-2.0-flash' }
+			]
+		}
+	};
+
+	it('keeps google:: stable key and still reads vertex:: alias from the PUT body', () => {
+		const kGoogle = catalogSurfaceStableKey('google', 'gemini-2.0-flash');
+		const kVertex = catalogSurfaceStableKey('vertex', 'gemini-2.0-flash');
+		const raw = {
+			[kGoogle]: 'off' as SurfaceRole,
+			[catalogSurfaceStableKey('openai', 'gpt-4o')]: 'ingestion_only' as SurfaceRole
+		};
+		const out = canonicalizeSurfaceAssignmentsForPut(catalogPayload, raw);
+		expect(out[kGoogle]).toBe('off');
+		expect(out[catalogSurfaceStableKey('openai', 'gpt-4o')]).toBe('ingestion_only');
+
+		const fromVertexOnly = canonicalizeSurfaceAssignmentsForPut(catalogPayload, {
+			[kVertex]: 'ingestion_only' as SurfaceRole,
+			[catalogSurfaceStableKey('openai', 'gpt-4o')]: 'off' as SurfaceRole
+		});
+		expect(fromVertexOnly[kGoogle]).toBe('ingestion_only');
+		expect(fromVertexOnly[kVertex]).toBeUndefined();
 	});
 });

@@ -19,6 +19,7 @@ import { Surreal } from 'surrealdb';
 import * as fs from 'fs';
 import * as path from 'path';
 import { embedTexts } from '../src/lib/server/embeddings';
+import { defineClaimEmbeddingIndex, removeClaimEmbeddingIndexSql } from './lib/surrealClaimVectorIndex.js';
 
 const SURREAL_URL = process.env.SURREAL_URL || 'http://localhost:8000/rpc';
 const SURREAL_USER = process.env.SURREAL_USER || 'root';
@@ -88,23 +89,20 @@ async function fetchClaims(db: Surreal): Promise<Claim[]> {
 
 async function updateVectorIndexDimension(db: Surreal): Promise<void> {
 	console.log('[REEMBED] Updating vector index dimension (1024 → 768)...');
-	
-	// Step 1: Try to remove old index (ignore if doesn't exist)
+
 	try {
-		await db.query('REMOVE INDEX claim_embedding ON claim');
+		await db.query(removeClaimEmbeddingIndexSql());
 		console.log('[REEMBED]   - Removed old index');
-	} catch (error) {
+	} catch {
 		console.log('[REEMBED]   - No existing index to remove (ok)');
 	}
-	
-	// Step 2: Clear all existing embeddings (required before creating new dimension index)
+
 	console.log('[REEMBED]   - Clearing existing embeddings...');
-	const clearResult = await db.query('UPDATE claim SET embedding = NONE WHERE embedding IS NOT NULL');
+	await db.query('UPDATE claim SET embedding = NONE WHERE embedding IS NOT NULL');
 	console.log('[REEMBED]   - Embeddings cleared');
-	
-	// Step 3: Create new 768-dim index
-	await db.query('DEFINE INDEX claim_embedding ON claim FIELDS embedding MTREE DIMENSION 768');
-	console.log('[REEMBED]   - Created new 768-dim index');
+
+	const { kind } = await defineClaimEmbeddingIndex(db, { dimension: 768 });
+	console.log(`[REEMBED]   - Created new 768-dim ${kind.toUpperCase()} index`);
 }
 
 async function updateClaimEmbedding(db: Surreal, claimId: string, embedding: number[]): Promise<void> {
