@@ -6,7 +6,7 @@
   import {
     buildReasoningLineageReport,
     renderReasoningLineageMarkdown
-  } from '@restormel/graph-core/lineage';
+  } from '@sophia/graph-reasoning-extensions/lineage';
   import { conversation } from '$lib/stores/conversation.svelte';
   import { graphStore } from '$lib/stores/graph.svelte';
   import { referencesStore } from '$lib/stores/references.svelte';

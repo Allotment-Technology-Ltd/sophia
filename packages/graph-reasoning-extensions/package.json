@@ -1,5 +1,5 @@
 {
-  "name": "@restormel/graph-core",
+  "name": "@sophia/graph-reasoning-extensions",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -8,14 +8,12 @@
     "./compare": "./src/compare.ts",
     "./diff": "./src/diff.ts",
     "./evaluation": "./src/evaluation.ts",
-    "./layout": "./src/layout.ts",
     "./lineage": "./src/lineage.ts",
     "./projection": "./src/projection.ts",
-    "./summary": "./src/summary.ts",
-    "./trace": "./src/trace.ts",
-    "./workspace": "./src/workspace.ts"
+    "./summary": "./src/summary.ts"
   },
   "dependencies": {
-    "@restormel/contracts": "workspace:*"
+    "@restormel/contracts": "workspace:*",
+    "@restormel/graph-core": "0.1.1"
   }
 }

@@ -51,12 +51,21 @@ importers:
       '@restormel/contracts':
         specifier: workspace:*
         version: link:packages/contracts
+      '@restormel/graph-core':
+        specifier: 0.1.1
+        version: 0.1.1
       '@restormel/keys':
         specifier: 0.2.14
         version: 0.2.14
       '@restormel/keys-svelte':
         specifier: 0.1.7
         version: 0.1.7(svelte@5.53.6)
+      '@restormel/ui-graph-svelte':
+        specifier: 0.1.1
+        version: 0.1.1(svelte@5.53.6)
+      '@sophia/graph-reasoning-extensions':
+        specifier: workspace:*
+        version: link:packages/graph-reasoning-extensions
       '@tauri-apps/api':
         specifier: ^2.10.1
         version: 2.10.1
@@ -190,11 +199,14 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
-  packages/graph-core:
+  packages/graph-reasoning-extensions:
     dependencies:
       '@restormel/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@restormel/graph-core':
+        specifier: 0.1.1
+        version: 0.1.1
 
   packages/graphrag-core: {}
 
@@ -1676,6 +1688,10 @@ packages:
     peerDependencies:
       react: ^18.0 || ^19.0 || ^19.0.0-rc
 
+  '@restormel/graph-core@0.1.1':
+    resolution: {integrity: sha512-v8A05vY3KW9/l2CwwTMGdo2NGbEnOJW9rDekeaMkcG/DL3qNcKLXv9EtS9Firca98AoQwvJ+u+3kDjtG/llZ1g==}
+    engines: {node: '>=20'}
+
   '@restormel/keys-svelte@0.1.7':
     resolution: {integrity: sha512-GVcc3nASMneFHR+hc5acjOr8ye7DITiyT1xQwfEIf84h/7S5cvHgnbrG1qoCMH5S9fQHwtWTsbbJVYJn+yfTLg==}
     peerDependencies:
@@ -1683,6 +1699,11 @@ packages:
 
   '@restormel/keys@0.2.14':
     resolution: {integrity: sha512-pwrku5jwXHSiVsVfbmOk39ewn+XYF0kLFsS8Jy2pAEE+N9nr0k25IdU4qd4W53OsyMCUhtOvUcvdzZ5VIsSDUw==}
+
+  '@restormel/ui-graph-svelte@0.1.1':
+    resolution: {integrity: sha512-we0JaY9vEEW8jasPtDoF+gwkj9jqmYPt0sWOEqlMR7CI2q8cFGkfUHVGo2un5dvSBDWu3a6GyRAeIGJEgVvZtg==}
+    peerDependencies:
+      svelte: ^5.0.0
 
   '@rollup/plugin-commonjs@29.0.0':
     resolution: {integrity: sha512-U2YHaxR2cU/yAiwKJtJRhnyLk7cifnQw0zUpISsocBDoHDJn+HTV74ABqnwr5bEgWUwFZC9oFL6wLe21lHu5eQ==}
@@ -6092,12 +6113,19 @@ snapshots:
     dependencies:
       react: 19.2.4
 
+  '@restormel/graph-core@0.1.1': {}
+
   '@restormel/keys-svelte@0.1.7(svelte@5.53.6)':
     dependencies:
       '@restormel/keys': 0.2.14
       svelte: 5.53.6
 
   '@restormel/keys@0.2.14': {}
+
+  '@restormel/ui-graph-svelte@0.1.1(svelte@5.53.6)':
+    dependencies:
+      '@restormel/graph-core': 0.1.1
+      svelte: 5.53.6
 
   '@rollup/plugin-commonjs@29.0.0(rollup@4.59.0)':
     dependencies:

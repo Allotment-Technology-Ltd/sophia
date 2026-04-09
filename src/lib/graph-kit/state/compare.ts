@@ -1,7 +1,7 @@
 import type { GraphKitCompareResult, GraphKitNodeKind } from '$lib/graph-kit/types';
 import type { GraphSnapshotMeta } from '@restormel/contracts/api';
 import type { ReasoningObjectSnapshot } from '@restormel/contracts/reasoning-object';
-import { diffReasoningSnapshots } from '@restormel/graph-core/compare';
+import { diffReasoningSnapshots } from '@sophia/graph-reasoning-extensions/compare';
 
 interface GraphKitCompareInput {
   label: string;

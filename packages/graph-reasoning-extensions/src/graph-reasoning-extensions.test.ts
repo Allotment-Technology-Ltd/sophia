@@ -1,11 +1,4 @@
-import { describe, expect, it } from 'vitest';
-import { diffReasoningSnapshots } from './compare';
-import { diffGraphs } from './diff';
-import { evaluateReasoningGraph } from './evaluation';
-import { computeLayout } from './layout';
-import { buildReasoningLineageReport, renderReasoningLineageMarkdown } from './lineage';
-import { projectGraph } from './projection';
-import { summarizeGraph } from './summary';
+import { computeLayout } from '@restormel/graph-core/layout';
 import {
   buildReadabilityWarnings,
   collectEdgeKinds,
@@ -13,7 +6,14 @@ import {
   collectNodeKinds,
   filterGraph,
   isolateGraphToScope
-} from './workspace';
+} from '@restormel/graph-core/workspace';
+import { describe, expect, it } from 'vitest';
+import { diffReasoningSnapshots } from './compare';
+import { diffGraphs } from './diff';
+import { evaluateReasoningGraph } from './evaluation';
+import { buildReasoningLineageReport, renderReasoningLineageMarkdown } from './lineage';
+import { projectGraph } from './projection';
+import { summarizeGraph } from './summary';
 
 const retrievalFixture = {
   claims: [
@@ -50,7 +50,7 @@ const retrievalFixture = {
   degraded: false
 };
 
-describe('@restormel/graph-core', () => {
+describe('@sophia/graph-reasoning-extensions', () => {
   it('projects retrieval-like input into a graph snapshot', () => {
     const snapshot = projectGraph(retrievalFixture);
 
