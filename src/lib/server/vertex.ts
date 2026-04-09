@@ -135,12 +135,27 @@ export interface AvailableModelOption {
   credential_source?: 'byok' | 'platform';
 }
 
-const DEFAULT_STANDARD_PROVIDER: ReasoningProvider = 'vertex';
-const DEFAULT_STANDARD_MODEL_ID =
-  DEFAULT_MODEL_CATALOG.vertex[1] ?? DEFAULT_MODEL_CATALOG.vertex[0] ?? 'gemini-2.5-flash';
-const DEFAULT_DEEP_MODEL_ID =
-  DEFAULT_MODEL_CATALOG.vertex[0] ?? DEFAULT_STANDARD_MODEL_ID;
-const DEFAULT_EXTRACTION_MODEL_ID = DEFAULT_STANDARD_MODEL_ID;
+/** Degraded-default reasoning when Restormel resolve fails: prefer OpenAI (cost + TPM) when keys exist. */
+const DEGRADED_DEFAULT_PROVIDER_ORDER: ReasoningProvider[] = [
+  'openai',
+  ...REASONING_PROVIDER_ORDER.filter((p) => p !== 'openai')
+];
+
+const OPENAI_DEGRADED_STANDARD_MODEL =
+  DEFAULT_MODEL_CATALOG.openai.find((id) => id.includes('gpt-4o-mini')) ?? 'gpt-4o-mini';
+const OPENAI_DEGRADED_DEEP_MODEL =
+  DEFAULT_MODEL_CATALOG.openai.find((id) => id === 'gpt-4o') ??
+  DEFAULT_MODEL_CATALOG.openai.find((id) => id.startsWith('gpt-4o')) ??
+  'gpt-4o';
+
+const VERTEX_DEGRADED_STANDARD_MODEL =
+  DEFAULT_MODEL_CATALOG.vertex.find((id) => id.includes('flash') && id.includes('2.5')) ??
+  DEFAULT_MODEL_CATALOG.vertex[1] ??
+  'gemini-2.5-flash';
+const VERTEX_DEGRADED_DEEP_MODEL =
+  DEFAULT_MODEL_CATALOG.vertex.find((id) => id.includes('2.5-pro')) ??
+  DEFAULT_MODEL_CATALOG.vertex[0] ??
+  'gemini-2.5-pro';
 
 function uniqueModelIds(values: Array<string | undefined>): string[] {
   const out: string[] = [];
@@ -161,28 +176,45 @@ function getDefaultReasoningModelId(
 ): string {
   const catalog = DEFAULT_MODEL_CATALOG[provider];
   if (!catalog || catalog.length === 0) {
-    return provider === 'vertex' ? DEFAULT_STANDARD_MODEL_ID : DEFAULT_STANDARD_MODEL_ID;
+    if (provider === 'vertex') {
+      return depthMode === 'deep' || pass === 'verification'
+        ? VERTEX_DEGRADED_DEEP_MODEL
+        : VERTEX_DEGRADED_STANDARD_MODEL;
+    }
+    if (provider === 'openai') {
+      return depthMode === 'deep' || pass === 'verification'
+        ? OPENAI_DEGRADED_DEEP_MODEL
+        : OPENAI_DEGRADED_STANDARD_MODEL;
+    }
+    return OPENAI_DEGRADED_STANDARD_MODEL;
   }
 
   if (provider === 'vertex') {
     return depthMode === 'deep' || pass === 'verification'
-      ? DEFAULT_DEEP_MODEL_ID
-      : DEFAULT_STANDARD_MODEL_ID;
+      ? VERTEX_DEGRADED_DEEP_MODEL
+      : VERTEX_DEGRADED_STANDARD_MODEL;
+  }
+
+  if (provider === 'openai') {
+    return depthMode === 'deep' || pass === 'verification'
+      ? OPENAI_DEGRADED_DEEP_MODEL
+      : OPENAI_DEGRADED_STANDARD_MODEL;
   }
 
   if (provider === 'anthropic') {
     if (depthMode === 'deep') {
-      return catalog[0] ?? catalog[1] ?? DEFAULT_STANDARD_MODEL_ID;
+      return catalog[0] ?? catalog[1] ?? OPENAI_DEGRADED_STANDARD_MODEL;
     }
-    return catalog[1] ?? catalog[0] ?? DEFAULT_STANDARD_MODEL_ID;
+    return catalog[1] ?? catalog[0] ?? OPENAI_DEGRADED_STANDARD_MODEL;
   }
 
-  return catalog[0] ?? DEFAULT_STANDARD_MODEL_ID;
+  return catalog[0] ?? OPENAI_DEGRADED_STANDARD_MODEL;
 }
 
 function getDefaultExtractionModelId(provider: ReasoningProvider): string {
-  if (provider === 'vertex') return DEFAULT_EXTRACTION_MODEL_ID;
-  return DEFAULT_MODEL_CATALOG[provider][0] ?? DEFAULT_STANDARD_MODEL_ID;
+  if (provider === 'vertex') return VERTEX_DEGRADED_STANDARD_MODEL;
+  if (provider === 'openai') return OPENAI_DEGRADED_STANDARD_MODEL;
+  return DEFAULT_MODEL_CATALOG[provider][0] ?? OPENAI_DEGRADED_STANDARD_MODEL;
 }
 
 /**
@@ -318,7 +350,7 @@ function buildSafeDefaultDecision(
   pass: RoutingPass,
   providerApiKeys?: ProviderApiKeys
 ): { provider: ReasoningProvider; model: string; explanation: string } {
-  for (const provider of REASONING_PROVIDER_ORDER) {
+  for (const provider of DEGRADED_DEFAULT_PROVIDER_ORDER) {
     if (!hasProviderAccess(provider, providerApiKeys)) continue;
     const model =
       type === 'extraction'
