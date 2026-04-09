@@ -14,7 +14,8 @@ vi.mock('ai', () => ({
 
 vi.mock('$lib/server/embeddings', () => ({
   EMBEDDING_MODEL: 'text-embedding-005',
-  embedQuery: mockEmbedQuery
+  embedQuery: mockEmbedQuery,
+  getEmbeddingProvider: () => ({ name: 'vertex' })
 }));
 
 vi.mock('$lib/server/vertex', () => ({
@@ -86,7 +87,7 @@ describe('executeAAIFRequest', () => {
       cost: expect.any(Number),
       routing: {
         reason:
-          'Sophia currently executes AAIF embedding requests on the Vertex embedding pipeline because Restormel AAIF runtime routing is not yet published.'
+          'Sophia currently executes AAIF embedding requests on the configured vertex embedding pipeline because Restormel AAIF runtime routing is not yet published.'
       }
     });
   });

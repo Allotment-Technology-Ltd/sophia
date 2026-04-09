@@ -160,6 +160,7 @@
 
   <div class="workspace-shell">
     <GraphWorkspace
+      embedded
       {workspace}
       {selectedNodeId}
       onSelectedNodeChange={(nodeId) => selectedNodeId = nodeId}
@@ -247,7 +248,10 @@
   }
 
   .workspace-shell {
-    min-height: 720px;
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     overflow: hidden;
@@ -257,10 +261,6 @@
   @media (max-width: 960px) {
     .map-tab-header {
       flex-direction: column;
-    }
-
-    .workspace-shell {
-      min-height: 620px;
     }
   }
 </style>

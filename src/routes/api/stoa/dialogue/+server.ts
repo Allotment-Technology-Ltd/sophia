@@ -222,6 +222,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             escalated: false,
             errorTaxonomy: 'crisis_hard_stop'
           });
+          closeHandled = true;
           controller.close();
           return;
         }
@@ -560,8 +561,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           uniq(frameworksReferenced)
         );
         const reasoningAssessmentEvaluation = runReasoningAssessment();
+        // Defer stream close to background work; skip outer `finally` close to avoid double-close.
+        closeHandled = true;
         void Promise.allSettled([baselineQuestEvaluation, reasoningAssessmentEvaluation]).finally(() => {
-          closeHandled = true;
           controller.close();
         });
         return;
