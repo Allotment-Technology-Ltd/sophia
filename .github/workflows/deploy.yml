@@ -42,6 +42,11 @@
 #   Trigger the "Rollback App" workflow_dispatch with a Cloud Run revision name.
 #   For GCP resource changes, use the Cloud Console or `gcloud` (see gcp-infrastructure.md).
 #
+# SPEED (main merge path):
+#   - app-deploy does not wait on CodeQL (security gate still required); CodeQL runs in parallel.
+#   - Docker Buildx + registry cache (Artifact Registry) replaces `docker build --no-cache --pull`.
+#   - Redundant `gcloud run services update-traffic --to-latest` removed (deploy already shifts traffic).
+#
 # AIKIDO: https://app.aikido.dev/ — GitHub App posts PR checks; Settings → GitHub Apps → Aikido.
 # AIKIDO: Configure in https://app.aikido.dev/ (PR gating, AutoFix). On GitHub: Settings →
 #   Integrations → GitHub Apps (org or user) → Aikido, or repo Settings → GitHub Apps /
@@ -217,13 +222,13 @@ jobs:
   # ── 3. Build & deploy app ──────────────────────────────────────────────────
   app-deploy:
     if: >
-      always() &&
+      success() &&
       github.ref == 'refs/heads/main' &&
       (
         (github.event_name == 'push' && needs.changes.outputs.app == 'true') ||
         (github.event_name == 'workflow_dispatch' && inputs.force_app_deploy == true)
       )
-    needs: [changes, security, codeql]
+    needs: [changes, security]
     runs-on: ubuntu-latest
     env:
       RESTORMEL_GATEWAY_KEY: ${{ secrets.RESTORMEL_GATEWAY_KEY_PRODUCTION || secrets.RESTORMEL_GATEWAY_KEY_STAGING }}
@@ -249,24 +254,32 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGISTRY }}
 
-      - name: Build Docker image
+      - name: Require NEON_AUTH_BASE_URL for Docker build
         env:
-          # Same value as Cloud Run NEON_AUTH_BASE_URL; baked into client bundle as VITE_NEON_AUTH_URL.
           VITE_NEON_AUTH_URL: ${{ secrets.NEON_AUTH_BASE_URL }}
         run: |
           if [ -z "$VITE_NEON_AUTH_URL" ]; then
             echo "::error::Repository secret NEON_AUTH_BASE_URL is not set. Add it under Settings → Secrets and variables → Actions (Neon Console → branch → Auth → base_url, ends with /…/auth). Without it, production shows 'Neon Auth is not configured'."
             exit 1
           fi
-          docker build --no-cache --pull \
-            --build-arg "VITE_NEON_AUTH_URL=${VITE_NEON_AUTH_URL}" \
-            -t ${{ env.IMAGE_BASE }}:${{ github.sha }} \
-            -t ${{ env.IMAGE_BASE }}:latest .
 
-      - name: Push Docker image
-        run: |
-          docker push ${{ env.IMAGE_BASE }}:${{ github.sha }}
-          docker push ${{ env.IMAGE_BASE }}:latest
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image (BuildKit + registry cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          provenance: false
+          sbom: false
+          tags: |
+            ${{ env.IMAGE_BASE }}:${{ github.sha }}
+            ${{ env.IMAGE_BASE }}:latest
+          build-args: |
+            VITE_NEON_AUTH_URL=${{ secrets.NEON_AUTH_BASE_URL }}
+          cache-from: type=registry,ref=${{ env.IMAGE_BASE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_BASE }}:buildcache,mode=max
 
       - name: Deploy to Cloud Run (europe-west2)
         run: |
@@ -283,13 +296,6 @@ jobs:
             --vpc-egress=private-ranges-only \
             --set-env-vars="^|^ADMIN_INGEST_RUN_REAL=1|INGEST_QUEUE_ENABLED=0|SOPHIA_DATA_BACKEND=neon|USE_NEON_AUTH=1|NEON_AUTH_BASE_URL=${{ secrets.NEON_AUTH_BASE_URL }}|PUBLIC_NEON_AUTH_URL=${{ secrets.NEON_AUTH_BASE_URL }}|GCP_PROJECT_ID=${{ env.PROJECT_ID }}|GCP_LOCATION=${{ env.REGION }}|GOOGLE_VERTEX_LOCATION=us-central1|ALLOWED_EMAILS=adam.boon1984@gmail.com,adam.boon1984@googlemail.com,admin@usesophia.app|OWNER_EMAILS=adam.boon1984@gmail.com,adam.boon1984@googlemail.com,admin@usesophia.app|PADDLE_RUNTIME=production|BYOK_DISABLE_CLOUD_KMS_ENCRYPT=1|RESTORMEL_GATEWAY_KEY=${{ env.RESTORMEL_GATEWAY_KEY }}|RESTORMEL_PROJECT_ID=${{ env.RESTORMEL_PROJECT_ID }}|RESTORMEL_ENVIRONMENT_ID=${{ env.RESTORMEL_ENVIRONMENT_ID }}|RESTORMEL_KEYS_BASE=${{ env.RESTORMEL_KEYS_BASE }}|RESTORMEL_BASE_URL=${{ env.RESTORMEL_BASE_URL }}|RESTORMEL_ANALYSE_ROUTE_ID=${{ env.RESTORMEL_ANALYSE_ROUTE_ID }}|RESTORMEL_VERIFY_ROUTE_ID=${{ env.RESTORMEL_VERIFY_ROUTE_ID }}|RESTORMEL_PROJECT_MODEL_REGISTRY_BINDINGS=1" \
             --set-secrets="ANTHROPIC_API_KEY=anthropic-api-key:latest,SURREAL_URL=surreal-db-url:latest,SURREAL_USER=surreal-db-user:latest,SURREAL_PASS=surreal-db-pass:latest,SURREAL_NAMESPACE=surreal-db-namespace:latest,SURREAL_DATABASE=surreal-db-database:latest,VOYAGE_API_KEY=voyage-api-key:latest,GOOGLE_AI_API_KEY=google-ai-api-key:latest,DATABASE_URL=neon-database-url:latest,ADMIN_UIDS=admin-uids:latest,OWNER_UIDS=owner-uids:latest,PADDLE_API_KEY_PRODUCTION=PADDLE_API_KEY_PRODUCTION:latest,PADDLE_WEBHOOK_SECRET_PRODUCTION=PADDLE_WEBHOOK_SECRET_PRODUCTION:latest,PADDLE_PRICE_PRO_GBP_PRODUCTION=PADDLE_PRICE_PRO_GBP_PRODUCTION:latest,PADDLE_PRICE_PRO_USD_PRODUCTION=PADDLE_PRICE_PRO_USD_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_GBP_PRODUCTION=PADDLE_PRICE_PREMIUM_GBP_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_USD_PRODUCTION=PADDLE_PRICE_PREMIUM_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION:latest,PUBLIC_PADDLE_CLIENT_TOKEN_PRODUCTION=PADDLE_CLIENT_TOKEN:latest"
-
-      - name: Route 100% traffic to latest revision
-        run: |
-          gcloud run services update-traffic sophia \
-            --to-latest \
-            --project=${{ env.PROJECT_ID }} \
-            --region=${{ env.REGION }}
 
       - name: Health check
         run: |
