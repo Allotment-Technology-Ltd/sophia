@@ -218,6 +218,8 @@ export function parseModelChainLabel(label: string): { providerRaw: string; mode
 export function modelChainLabelsToEnv(chain: IngestRunPayload['model_chain']): Record<string, string> {
   const out: Record<string, string> = {};
   const apply = (label: string, suffix: string) => {
+    const raw = label.trim().toLowerCase();
+    if (!raw || raw === 'auto') return;
     const parsed = parseModelChainLabel(label);
     if (!parsed) return;
     const provider = normalizePinProvider(parsed.providerRaw);
@@ -1153,10 +1155,12 @@ class IngestRunManager extends EventEmitter {
 
     const pinEnvFlat = modelChainLabelsToEnv(payload.model_chain);
     const embeddingEnvOverrides = embeddingPreferenceToEnv(payload.embedding_model);
+    const operatorModelPins = Object.keys(pinEnvFlat).length > 0;
     const batchEnvOverrides = {
       ...batchOverridesToEnv(payload.batch_overrides),
       ...embeddingEnvOverrides,
-      ...pinEnvFlat
+      ...pinEnvFlat,
+      ...(operatorModelPins ? { INGEST_NO_MODEL_FALLBACK: '1' } : {})
     };
     const ingestPinsJsonCli = encodeIngestPinsJsonCliArg(pinEnvFlat);
     const forSync = options.forSyncOnly;
@@ -1179,15 +1183,23 @@ class IngestRunManager extends EventEmitter {
 
     if (!forSync) {
       if (options.resumeFromFailure) {
-        for (const stage of PIPELINE_STAGES) {
-          this.updateStageStatus(runId, stage, 'idle');
-        }
-        if (payload.validate) {
-          this.updateStageStatus(runId, 'validate', 'idle');
+        const st = this.runs.get(runId);
+        const failKey = st?.lastFailureStageKey;
+        const order = orderedStagesAfterFetch(payload.validate === true);
+        const failIdx = failKey ? order.indexOf(failKey) : -1;
+        if (st && failIdx >= 0) {
+          this.applyPipelineFocusFromLog(runId, failKey!, 'Resuming after failure…');
         } else {
-          this.updateStageStatus(runId, 'validate', 'skipped');
+          for (const stage of PIPELINE_STAGES) {
+            this.updateStageStatus(runId, stage, 'idle');
+          }
+          if (payload.validate) {
+            this.updateStageStatus(runId, 'validate', 'idle');
+          } else {
+            this.updateStageStatus(runId, 'validate', 'skipped');
+          }
+          this.updateStageStatus(runId, 'store', 'idle');
         }
-        this.updateStageStatus(runId, 'store', 'idle');
       } else {
         // Only the first ingest stage is active; others stay pending until logs advance focus.
         this.updateStageStatus(runId, 'extract', 'running');
@@ -1270,13 +1282,15 @@ class IngestRunManager extends EventEmitter {
 
       if (code === 0) {
         if (stopBeforeStore) {
-          for (const stage of PIPELINE_STAGES) {
-            this.updateStageStatus(runId, stage, 'done');
+          const order = orderedStagesAfterFetch(payload.validate === true);
+          for (const key of order) {
+            if (key === 'store') {
+              this.updateStageStatus(runId, 'store', 'idle');
+              continue;
+            }
+            if (s?.stages[key]?.status === 'skipped') continue;
+            this.updateStageStatus(runId, key, 'done');
           }
-          if (payload.validate) {
-            this.updateStageStatus(runId, 'validate', 'done');
-          }
-          this.updateStageStatus(runId, 'store', 'idle');
           if (s) s.status = 'awaiting_sync';
           this.addLog(runId, 'Run phases complete. Press “Sync to SurrealDB” to finish.');
           this.schedulePersistReport(runId);
@@ -1333,13 +1347,36 @@ class IngestRunManager extends EventEmitter {
             : `SurrealDB sync (ingest.ts) exited with code ${code ?? 1}`
         );
       } else {
-        const terminalStages = [
-          ...PIPELINE_STAGES,
-          ...(payload.validate ? (['validate'] as const) : []),
-          'store'
-        ] as const;
-        for (const stage of terminalStages) {
-          this.updateStageStatus(runId, stage, 'error');
+        const order = orderedStagesAfterFetch(payload.validate === true);
+        const failKey = s?.lastFailureStageKey;
+        const failIdx = failKey ? order.indexOf(failKey) : -1;
+        if (s && failIdx >= 0) {
+          for (let i = 0; i < failIdx; i++) {
+            const k = order[i]!;
+            if (s.stages[k]?.status === 'skipped') continue;
+            this.updateStageStatus(runId, k, 'done');
+          }
+          if (s.stages[failKey!]?.status !== 'skipped') {
+            this.updateStageStatus(runId, failKey!, 'error');
+          }
+          for (let i = failIdx + 1; i < order.length; i++) {
+            const k = order[i]!;
+            if (k === 'store' && payload.stop_before_store !== false) {
+              this.updateStageStatus(runId, 'store', 'idle');
+              continue;
+            }
+            if (s.stages[k]?.status === 'skipped') continue;
+            this.updateStageStatus(runId, k, 'idle');
+          }
+        } else {
+          const terminalStages = [
+            ...PIPELINE_STAGES,
+            ...(payload.validate ? (['validate'] as const) : []),
+            'store'
+          ] as const;
+          for (const stage of terminalStages) {
+            this.updateStageStatus(runId, stage, 'error');
+          }
         }
         const hint = s ? extractIngestWorkerFailureHint(s.logLines) : '';
         this.failRun(

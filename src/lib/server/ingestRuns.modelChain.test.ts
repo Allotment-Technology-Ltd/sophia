@@ -34,6 +34,16 @@ describe('modelChainLabelsToEnv', () => {
     expect(env.INGEST_PIN_PROVIDER_VALIDATION).toBe('anthropic');
   });
 
+  it('does not emit pins for auto (Restormel + canonical defaults apply)', () => {
+    const env = modelChainLabelsToEnv({
+      extract: 'auto',
+      relate: 'auto',
+      group: 'auto',
+      validate: 'auto'
+    });
+    expect(Object.keys(env).length).toBe(0);
+  });
+
   it('maps admin stable ids (provider__modelId) like the ingest wizard sends in JSON', () => {
     const env = modelChainLabelsToEnv({
       extract: 'anthropic__claude-sonnet-4-20250514',
