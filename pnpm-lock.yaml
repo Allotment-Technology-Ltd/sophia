@@ -75,6 +75,9 @@ importers:
       '@restormel/observability':
         specifier: ^0.1.1
         version: 0.1.1
+      '@restormel/state':
+        specifier: ^0.2.0
+        version: 0.2.0(@restormel/context-packs@0.1.1)
       '@restormel/ui-graph-svelte':
         specifier: ^0.1.1
         version: 0.1.1(svelte@5.53.6)
@@ -1741,6 +1744,10 @@ packages:
     peerDependencies:
       react: ^18.0 || ^19.0 || ^19.0.0-rc
 
+  '@restormel/context-packs@0.1.1':
+    resolution: {integrity: sha512-x9ztfZp0l5znui3JRKAmAhmADNxvFcF15krf75xMZXcanmrLEt+6KYrOkjCqlIaYGoYC/BYcgMFLkoRa6VwmlQ==}
+    engines: {node: '>=20'}
+
   '@restormel/contracts@0.1.0':
     resolution: {integrity: sha512-bFDpXND3BNA4m+5FSfNgopLnwD1E50Fwh4n0C0EobeF6c7+SSWCsSwVXwGSKbcZGwFVA31Xx8K8oJKuVKZcUOQ==}
     engines: {node: '>=20'}
@@ -1764,6 +1771,12 @@ packages:
   '@restormel/observability@0.1.1':
     resolution: {integrity: sha512-gvH9t6KtqBbDelD8pxBiiqvpdiFHQ/Pyz7oQrc1bJ+xkk7Q0uAPg18rXTF39dXkurMabyDLBre/kZT0+k0p3gw==}
     engines: {node: '>=20'}
+
+  '@restormel/state@0.2.0':
+    resolution: {integrity: sha512-x+Xuk3MaiZIvFid/Peolf/jukNufQqm7We7ilSYRQ2H1wtXt14TlLbuY7/X5021V6wZrT0n8eME/yH7algPLXA==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@restormel/context-packs': ^0.1.1
 
   '@restormel/ui-graph-svelte@0.1.1':
     resolution: {integrity: sha512-we0JaY9vEEW8jasPtDoF+gwkj9jqmYPt0sWOEqlMR7CI2q8cFGkfUHVGo2un5dvSBDWu3a6GyRAeIGJEgVvZtg==}
@@ -6231,6 +6244,8 @@ snapshots:
     dependencies:
       react: 19.2.4
 
+  '@restormel/context-packs@0.1.1': {}
+
   '@restormel/contracts@0.1.0':
     dependencies:
       zod: 4.3.6
@@ -6252,6 +6267,10 @@ snapshots:
   '@restormel/observability@0.1.1':
     dependencies:
       '@restormel/contracts': 0.1.0
+
+  '@restormel/state@0.2.0(@restormel/context-packs@0.1.1)':
+    dependencies:
+      '@restormel/context-packs': 0.1.1
 
   '@restormel/ui-graph-svelte@0.1.1(svelte@5.53.6)':
     dependencies:

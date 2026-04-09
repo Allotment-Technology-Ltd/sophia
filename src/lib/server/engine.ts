@@ -34,6 +34,13 @@ import type {
 } from '@restormel/contracts/api';
 import type { ModelProvider, ReasoningProvider } from '@restormel/contracts/providers';
 import { projectRetrievalToGraph } from './graphProjection';
+import {
+  observabilityCorrelationFromView,
+  projectWorkingMemory,
+  type MemoryPolicy,
+  type StateEvent,
+  type StateObservabilityCorrelation
+} from '@restormel/state';
 
 
 // ─── Sophia-Meta Block Parsing ────────────────────────────────────────────
@@ -127,6 +134,8 @@ export interface EngineCallbacks {
         critique: ContextPackStats;
         synthesis: ContextPackStats;
       };
+      /** Restormel State + observability correlation (when engine receives a state timeline). */
+      restormel_state_correlation?: StateObservabilityCorrelation;
     },
     modelCostBreakdown?: {
       total_estimated_cost_usd: number;
@@ -164,6 +173,12 @@ interface EngineOptions {
   };
   providerApiKeys?: ProviderApiKeys;
   platformMaxCostUsd?: number;
+  /** Optional append-only Restormel State events (e.g. Stoa thread) for context-pack correlation. */
+  restormelState?: {
+    events: StateEvent[];
+    policy: MemoryPolicy;
+    retrievalVersion?: string;
+  };
 }
 
 // Default ON to avoid indefinite hangs; can be disabled with ENABLE_PASS_HARD_TIMEOUTS=false.
@@ -607,6 +622,7 @@ export async function runDialecticalEngine(
   let argumentsRetrieved = 0;
   let retrievalDegraded = false;
   let retrievalDegradedReason: string | undefined;
+  let restormelStateTraceCorr: StateObservabilityCorrelation | undefined;
   const retrievalTopK = depthMode === 'deep' ? 12 : depthMode === 'quick' ? 3 : 6;
   const retrievalMaxHops = depthMode === 'deep' ? 3 : depthMode === 'quick' ? 1 : 2;
   const retrievalMaxClaims = depthMode === 'deep' ? 140 : depthMode === 'quick' ? 36 : 84;
@@ -621,6 +637,14 @@ export async function runDialecticalEngine(
       viewerUid: options?.viewerUid ?? null
     });
     const packs = buildPassSpecificContextPacks(retrievalResult, { depthMode });
+    const runIdForState = options?.queryRunId?.trim();
+    if (options?.restormelState?.events && runIdForState) {
+      const wmView = projectWorkingMemory(
+        options.restormelState.events,
+        options.restormelState.policy
+      );
+      restormelStateTraceCorr = observabilityCorrelationFromView(runIdForState, wmView);
+    }
     contextBlockByPass = {
       analysis: packs.analysis.block,
       critique: packs.critique.block,
@@ -933,7 +957,10 @@ export async function runDialecticalEngine(
       domain_confidence: domainClassification.domain ? domainClassification.confidence : undefined,
       selected_domain_mode: selectedDomainMode,
       selected_domain: selectedDomainMode === 'manual' ? selectedDomain : undefined,
-      context_pack_stats: contextPackStats
+      context_pack_stats: contextPackStats,
+      ...(restormelStateTraceCorr
+        ? { restormel_state_correlation: restormelStateTraceCorr }
+        : {})
     }, buildModelCostBreakdown());
     return;
   }
@@ -1118,7 +1145,10 @@ export async function runDialecticalEngine(
     domain_confidence: domainClassification.domain ? domainClassification.confidence : undefined,
     selected_domain_mode: selectedDomainMode,
     selected_domain: selectedDomainMode === 'manual' ? selectedDomain : undefined,
-    context_pack_stats: contextPackStats
+    context_pack_stats: contextPackStats,
+    ...(restormelStateTraceCorr
+      ? { restormel_state_correlation: restormelStateTraceCorr }
+      : {})
   }, buildModelCostBreakdown());
 }
 

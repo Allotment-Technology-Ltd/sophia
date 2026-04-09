@@ -3,6 +3,7 @@ import { streamText } from 'ai';
 import { loadInquiryEffectiveProviderApiKeys } from '$lib/server/byok/effectiveKeys';
 import { resolveReasoningModelRoute } from '$lib/server/vertex';
 import {
+  appendStoaStateEvents,
   appendStoaTurns,
   listJournalEntries,
   listIncompleteActionItems,
@@ -12,6 +13,12 @@ import {
   upsertActionItems,
   updateStoaProfileFromTurns
 } from '$lib/server/stoa/sessionStore';
+import type { StateEvent } from '@restormel/state';
+import {
+  createStoaHistorySummarizationEvent,
+  createStoaTurnDigestEvents
+} from '$lib/server/stoa/restormelStoaStateEvents';
+import { redactStoaUserTurnDigest } from '$lib/server/stoa/restormelStateDigest';
 import {
   buildGroundingExplainer,
   retrieveStoaGroundingWithMode,
@@ -214,6 +221,19 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           sendSse(controller, { type: 'delta', text: response });
           sendSse(controller, { type: 'complete', response, stance: 'hold', frameworksReferenced: [] });
           await appendStoaTurns({ sessionId, userId: uid, turns: [userTurn, agentTurn] });
+          const crisisRunId = crypto.randomUUID();
+          const crisisTs = new Date().toISOString();
+          await appendStoaStateEvents({
+            sessionId,
+            userId: uid,
+            events: createStoaTurnDigestEvents({
+              id: crypto.randomUUID(),
+              ts: crisisTs,
+              run_id: crisisRunId,
+              user_turn_digest_cell_id: `stoa-digest-${turnIndex}`,
+              user_turn_digest: redactStoaUserTurnDigest(message)
+            })
+          });
           await recordStoaTelemetry({
             uid,
             sessionId,
@@ -403,6 +423,31 @@ export const POST: RequestHandler = async ({ request, locals }) => {
           turns: [userTurn, agentTurn],
           summary: buildSessionSummary([...fullHistory, agentTurn])
         });
+
+        const stoaRunId = crypto.randomUUID();
+        const stoaTs = new Date().toISOString();
+        const stateEvents: StateEvent[] = createStoaTurnDigestEvents({
+          id: crypto.randomUUID(),
+          ts: stoaTs,
+          run_id: stoaRunId,
+          user_turn_digest_cell_id: `stoa-digest-${turnIndex}`,
+          user_turn_digest: redactStoaUserTurnDigest(message)
+        });
+        if (escalated && escalationResult?.analysis?.trim()) {
+          stateEvents.push(
+            createStoaHistorySummarizationEvent({
+              id: crypto.randomUUID(),
+              ts: new Date().toISOString(),
+              run_id: stoaRunId,
+              remove_cell_ids: Array.from({ length: turnIndex }, (_, i) => `stoa-digest-${i}`),
+              summary_cell_id: `stoa-escalation-summary-${turnIndex}`,
+              summary_text: redactStoaUserTurnDigest(escalationResult.analysis),
+              pinned: true
+            })
+          );
+        }
+        await appendStoaStateEvents({ sessionId, userId: uid, events: stateEvents });
+
         await updateStoaProfileFromTurns({
           userId: uid,
           turns: [...fullHistory, agentTurn]
