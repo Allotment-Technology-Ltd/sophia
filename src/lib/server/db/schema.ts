@@ -111,6 +111,7 @@ export const ingestStagingMeta = pgTable('ingest_staging_meta', {
     .primaryKey()
     .references(() => ingestRuns.id, { onDelete: 'cascade' }),
   slug: text('slug').notNull().default(''),
+  sourceTextSnapshot: text('source_text_snapshot'),
   sourceJson: jsonb('source_json').$type<Record<string, unknown> | null>(),
   stageCompleted: text('stage_completed').notNull().default(''),
   costUsdSnapshot: doublePrecision('cost_usd_snapshot'),
