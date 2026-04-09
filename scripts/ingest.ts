@@ -885,6 +885,22 @@ function buildGroupingBatches(
 	});
 }
 
+function splitGroupingBatchInHalf(batch: GroupingBatch): [GroupingBatch, GroupingBatch] | null {
+	if (batch.claims.length <= 1) return null;
+	const mid = Math.ceil(batch.claims.length / 2);
+	const firstClaims = batch.claims.slice(0, mid);
+	const secondClaims = batch.claims.slice(mid);
+	const rels = batch.relations;
+	const sub = (batchClaims: PhaseOneClaim[]): GroupingBatch => {
+		const claimPositions = new Set(batchClaims.map((c) => c.position_in_source));
+		const batchRelations = rels.filter(
+			(r) => claimPositions.has(r.from_position) && claimPositions.has(r.to_position)
+		);
+		return { claims: batchClaims, relations: batchRelations };
+	};
+	return [sub(firstClaims), sub(secondClaims)];
+}
+
 function buildRelationsBatches(
 	claims: PhaseOneClaim[],
 	targetTokens: number,
@@ -1214,6 +1230,18 @@ function mergeValidationOutputs(outputs: ValidationOutput[]): ValidationOutput {
 	};
 
 	return normalizeValidationOutput(merged);
+}
+
+function assertEmbeddingVectorsMatchConfig(vectors: number[][], label: string): void {
+	const prov = getEmbeddingProvider();
+	for (let i = 0; i < vectors.length; i++) {
+		const v = vectors[i];
+		if (!Array.isArray(v) || v.length !== EMBEDDING_DIMENSIONS) {
+			throw new Error(
+				`[INTEGRITY] ${label}: vector at index ${i} has length ${Array.isArray(v) ? v.length : 'n/a'}, expected ${EMBEDDING_DIMENSIONS} (${prov.name}:${EMBEDDING_MODEL}). Re-embed with a consistent model or clear checkpoints.`
+			);
+		}
+	}
 }
 
 function analyzeGroupingReferenceHealth(arguments_: GroupingOutput): {
@@ -1563,6 +1591,27 @@ function planMatchesCanonicalTier(
 	return plan.provider === tier.provider && plan.model === tier.modelId;
 }
 
+const PIN_SUFFIX_BY_STAGE: Partial<Record<StageKey, string>> = {
+	extraction: 'EXTRACTION',
+	relations: 'RELATIONS',
+	grouping: 'GROUPING',
+	validation: 'VALIDATION',
+	json_repair: 'JSON_REPAIR'
+};
+
+function isStageModelPinned(stage: StageKey): boolean {
+	const suf = PIN_SUFFIX_BY_STAGE[stage];
+	if (!suf) return false;
+	const p = process.env[`INGEST_PIN_PROVIDER_${suf}`]?.trim();
+	const m = process.env[`INGEST_PIN_MODEL_${suf}`]?.trim();
+	return Boolean(p && m);
+}
+
+function ingestModelFallbackDisabled(): boolean {
+	const v = (process.env.INGEST_NO_MODEL_FALLBACK ?? '').trim().toLowerCase();
+	return v === '1' || v === 'true' || v === 'yes';
+}
+
 async function callStageModel(params: {
 	stage: StageKey;
 	plan: IngestionStagePlan;
@@ -1588,6 +1637,7 @@ async function callStageModel(params: {
 	const llmStage = stage as IngestionLlmStageKey;
 	const chain = canonicalModelChainForStage(llmStage);
 	const idxInChain = chain.findIndex((t) => planMatchesCanonicalTier(plan, t));
+	const noFallback = ingestModelFallbackDisabled() || isStageModelPinned(stage);
 
 	let lastError: Error | null = null;
 
@@ -1671,7 +1721,8 @@ async function callStageModel(params: {
 					msg.includes('prompt_too_long') ||
 					msg.includes('context_length') ||
 					/resource exhausted/i.test(msg) ||
-					/rate limit|quota|too many requests/i.test(msg);
+					/rate limit|quota|too many requests/i.test(msg) ||
+					/\btpm\b|tokens per min|token.?per.?min/i.test(msg);
 				console.warn(
 					`  [WARN] ${stage} ${activePlan.provider}:${activePlan.model} failed: ${formatModelCallErrorDetails(error)}`
 				);
@@ -1680,6 +1731,16 @@ async function callStageModel(params: {
 			}
 		}
 		return null;
+	}
+
+	if (noFallback) {
+		const only = await runInnerRetries(plan);
+		if (only !== null) return only;
+		const detail =
+			lastError != null ? formatModelCallErrorDetails(lastError) : 'Unknown error';
+		throw new Error(
+			`[${stage}] Model call failed and cross-model fallback is disabled (operator model pin or INGEST_NO_MODEL_FALLBACK): ${detail}`
+		);
 	}
 
 	if (idxInChain < 0) {
@@ -2728,6 +2789,7 @@ async function main() {
 		console.error('  INGEST_PIN_PROVIDER_EXTRACTION, INGEST_PIN_MODEL_EXTRACTION (same for RELATIONS, GROUPING, VALIDATION, JSON_REPAIR)');
 		console.error('  --ingest-pins-json=<base64url JSON>  Preferred when spawned from admin (survives dotenv)');
 		console.error('  INGEST_LOG_PINS=1            Log pin + routing diagnostics (per-stage planning, dotenv restore)');
+		console.error('  INGEST_NO_MODEL_FALLBACK=1   When set, do not escalate to other providers/models after retries (pins imply strict mode)');
 		console.error('\nResume is automatic — re-run the same source to pick up where it left off.');
 		process.exit(1);
 	}
@@ -3379,12 +3441,21 @@ async function main() {
 					);
 				}
 
-				const groupingBatches = buildGroupingBatches(allClaims, relations, groupingBatchTarget);
+				let groupingBatches = buildGroupingBatches(allClaims, relations, groupingBatchTarget);
 				console.log(
 					`  [INFO] Grouping in ${groupingBatches.length} batch(es), target ~${groupingBatchTarget.toLocaleString()} tokens`
 				);
 				let groupedOutputs: GroupingOutput[] = [];
 				let startGroupingBatchIndex = 0;
+				if (
+					partial.grouping_progress &&
+					partial.grouping_progress.total_batches !== groupingBatches.length
+				) {
+					console.warn(
+						`  [WARN] Grouping checkpoint batch count (${partial.grouping_progress.total_batches}) does not match current plan (${groupingBatches.length}) — restarting Stage 3 grouping from scratch`
+					);
+					partial.grouping_progress = undefined;
+				}
 				if (
 					partial.grouping_progress?.grouped_outputs_so_far &&
 					partial.grouping_progress.next_batch_index > 0 &&
@@ -3402,8 +3473,9 @@ async function main() {
 					claimCount: allClaims.length,
 					relationCount: relations.length
 				};
-				for (let batchIndex = startGroupingBatchIndex; batchIndex < groupingBatches.length; batchIndex++) {
-					const batch = groupingBatches[batchIndex];
+				let batchIndex = startGroupingBatchIndex;
+				while (batchIndex < groupingBatches.length) {
+					const batch = groupingBatches[batchIndex]!;
 					const claimsJson = JSON.stringify(batch.claims, null, 2);
 					const relationsJson = JSON.stringify(batch.relations, null, 2);
 					console.log(
@@ -3422,10 +3494,10 @@ async function main() {
 					saveGroupingDebugRaw(slug, batchIndex, grpRawResponse);
 					logStageCost('Grouping', groupingTracker, groupingPlan);
 
+					let batchArguments: GroupingOutput;
 					try {
 						const parsed = parseJsonResponse(grpRawResponse);
-						const batchArguments = GroupingOutputSchema.parse(normalizeGroupingPayload(parsed));
-						groupedOutputs.push(batchArguments);
+						batchArguments = GroupingOutputSchema.parse(normalizeGroupingPayload(parsed));
 						console.log(
 							`  [OK] Identified ${batchArguments.length} arguments in batch ${batchIndex + 1}`
 						);
@@ -3443,19 +3515,38 @@ async function main() {
 							groupingPlanningContext
 						);
 						const fixedParsed = parseJsonResponse(fixedResponse);
-						const fixedArguments = GroupingOutputSchema.parse(normalizeGroupingPayload(fixedParsed));
-						groupedOutputs.push(fixedArguments);
+						batchArguments = GroupingOutputSchema.parse(normalizeGroupingPayload(fixedParsed));
 						console.log(
-							`  [OK] Fixed and identified ${fixedArguments.length} arguments in batch ${batchIndex + 1}`
+							`  [OK] Fixed and identified ${batchArguments.length} arguments in batch ${batchIndex + 1}`
 						);
 					}
 
+					const batchHealth = analyzeGroupingReferenceHealth(batchArguments);
+					if (batchHealth.collapsed) {
+						const halves = splitGroupingBatchInHalf(batch);
+						if (halves) {
+							console.warn(
+								`  [SPLIT] Grouping batch ${batchIndex + 1} collapsed claim references (${batchHealth.uniquePositions} unique positions / ${batchHealth.totalReferences} refs) — splitting into two smaller batches`
+							);
+							groupingBatches.splice(batchIndex, 1, halves[0], halves[1]);
+							partial.grouping_progress = {
+								grouped_outputs_so_far: groupedOutputs,
+								next_batch_index: batchIndex,
+								total_batches: groupingBatches.length
+							};
+							await savePartialResults(slug, partial);
+							continue;
+						}
+					}
+
+					groupedOutputs.push(batchArguments);
 					partial.grouping_progress = {
 						grouped_outputs_so_far: groupedOutputs,
 						next_batch_index: batchIndex + 1,
 						total_batches: groupingBatches.length
 					};
 					await savePartialResults(slug, partial);
+					batchIndex += 1;
 				}
 
 				arguments_ = mergeGroupingOutputs(groupedOutputs);
@@ -3546,6 +3637,9 @@ async function main() {
 					'[INTEGRITY] Partial embedding vectors exceed claim count — clear Neon staging / remove *-partial.json or use --force-stage embedding'
 				);
 			}
+			if (priorEmbeddings.length > 0) {
+				assertEmbeddingVectorsMatchConfig(priorEmbeddings, 'Restored embedding checkpoint');
+			}
 			if (priorEmbeddings.length === claimTexts.length && priorEmbeddings.length > 0) {
 				console.log(
 					`  [RESUME] Embedding already complete on disk (${priorEmbeddings.length} vectors) — skipping API calls`
@@ -3587,6 +3681,8 @@ async function main() {
 				);
 				allEmbeddings = [...prefix, ...newVectors];
 			}
+
+			assertEmbeddingVectorsMatchConfig(allEmbeddings, 'Claim embeddings');
 
 			const embedMs = Date.now() - stageEmbedStart;
 			if (activeIngestTiming) {
@@ -3803,6 +3899,7 @@ async function main() {
 			console.log(
 				'\n  [PHASE] Stages 1–5 complete. Resume this source without --stop-before-store (or use admin Sync) to run Stage 6 (SurrealDB).'
 			);
+			console.log('[UI] Pipeline phases 1–5 finished; awaiting SurrealDB sync (Stage 6).');
 			await savePartialResults(slug, partial);
 			await updateIngestionLog(db, sourceMeta.url, {
 				status: 'validating',
