@@ -6,6 +6,7 @@ const {
   mockLoadSession,
   mockLoadProfile,
   mockAppendTurns,
+  mockAppendStoaStateEvents,
   mockUpdateProfile,
   mockListIncompleteActionItems,
   mockListRelevantJournalEntries,
@@ -25,6 +26,7 @@ const {
   mockLoadSession: vi.fn(),
   mockLoadProfile: vi.fn(),
   mockAppendTurns: vi.fn(),
+  mockAppendStoaStateEvents: vi.fn(),
   mockUpdateProfile: vi.fn(),
   mockListIncompleteActionItems: vi.fn(),
   mockListRelevantJournalEntries: vi.fn(),
@@ -56,6 +58,7 @@ vi.mock('$lib/server/stoa/sessionStore', () => ({
   loadStoaSession: mockLoadSession,
   loadStoaProfile: mockLoadProfile,
   appendStoaTurns: mockAppendTurns,
+  appendStoaStateEvents: mockAppendStoaStateEvents,
   updateStoaProfileFromTurns: mockUpdateProfile,
   listIncompleteActionItems: mockListIncompleteActionItems,
   listRelevantJournalEntries: mockListRelevantJournalEntries,
@@ -208,6 +211,7 @@ describe('/api/stoa/dialogue SSE contract', () => {
       finishReason: Promise.resolve('stop')
     });
     mockAppendTurns.mockResolvedValue(undefined);
+    mockAppendStoaStateEvents.mockResolvedValue(undefined);
     mockUpdateProfile.mockResolvedValue(undefined);
     mockRecordTelemetry.mockResolvedValue(undefined);
     mockRunDeepEscalation.mockResolvedValue({

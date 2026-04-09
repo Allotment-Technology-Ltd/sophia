@@ -68,6 +68,7 @@
     "@restormel/keys": "0.2.14",
     "@restormel/keys-svelte": "0.1.7",
     "@restormel/observability": "^0.1.1",
+    "@restormel/state": "^0.2.0",
     "@restormel/ui-graph-svelte": "^0.1.1",
     "@tauri-apps/api": "^2.10.1",
     "ai": "6.0.105",

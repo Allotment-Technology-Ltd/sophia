@@ -1,3 +1,4 @@
+import type { StateEvent } from '@restormel/state';
 import { isDatabaseUnavailable, query } from '$lib/server/db';
 import type {
   ActionItemStatus,
@@ -57,12 +58,14 @@ async function ensureStoaTables(): Promise<void> {
     DEFINE TABLE IF NOT EXISTS stoa_journal_entry SCHEMALESS;
     DEFINE TABLE IF NOT EXISTS stoa_ritual_run SCHEMALESS;
     DEFINE TABLE IF NOT EXISTS stoa_curriculum_progress SCHEMALESS;
+    DEFINE TABLE IF NOT EXISTS stoa_session_state_event SCHEMALESS;
     DEFINE INDEX IF NOT EXISTS stoa_session_identity ON stoa_session FIELDS session_id, user_id;
     DEFINE INDEX IF NOT EXISTS stoa_session_turn_identity ON stoa_session_turn FIELDS session_id, user_id, timestamp;
     DEFINE INDEX IF NOT EXISTS stoa_profile_user ON stoa_profile FIELDS user_id UNIQUE;
     DEFINE INDEX IF NOT EXISTS stoa_action_item_identity ON stoa_action_item FIELDS user_id, session_id, status, timeframe;
     DEFINE INDEX IF NOT EXISTS stoa_journal_entry_identity ON stoa_journal_entry FIELDS user_id, session_id, created_at;
     DEFINE INDEX IF NOT EXISTS stoa_curriculum_progress_user ON stoa_curriculum_progress FIELDS user_id UNIQUE;
+    DEFINE INDEX IF NOT EXISTS stoa_session_state_event_session ON stoa_session_state_event FIELDS session_id, user_id, recorded_at;
   `);
   stoaTablesEnsured = true;
 }
@@ -658,6 +661,76 @@ export async function loadStoaSession(params: {
       );
     }
     return { sessionId, userId, summary: null, turns: [], updatedAt: null };
+  }
+}
+
+/** Append-only Restormel State events for Stoa / operator correlation (see `@restormel/state`). */
+export async function appendStoaStateEvents(params: {
+  sessionId: string;
+  userId: string;
+  events: StateEvent[];
+}): Promise<void> {
+  if (params.events.length === 0) return;
+  try {
+    await ensureStoaTables();
+    await ensureSessionRecord(params.sessionId, params.userId);
+  } catch (error) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn(
+        '[STOA] State event table ensure failed; skipping:',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+    return;
+  }
+  for (const event of params.events) {
+    try {
+      await query(
+        `CREATE stoa_session_state_event CONTENT {
+          session_id: $sessionId,
+          user_id: $userId,
+          payload: $payload,
+          recorded_at: time::now()
+        }`,
+        {
+          sessionId: params.sessionId,
+          userId: params.userId,
+          payload: event as unknown as Record<string, unknown>
+        }
+      );
+    } catch (error) {
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn(
+          '[STOA] Failed writing state event; continuing:',
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+      return;
+    }
+  }
+}
+
+export async function listStoaStateEvents(params: {
+  sessionId: string;
+  userId: string;
+}): Promise<StateEvent[]> {
+  try {
+    await ensureStoaTables();
+    const rows = await query<Array<{ payload?: StateEvent }>>(
+      `SELECT payload FROM stoa_session_state_event
+       WHERE session_id = $sessionId AND user_id = $userId
+       ORDER BY recorded_at ASC`,
+      { sessionId: params.sessionId, userId: params.userId }
+    );
+    return rows.map((r) => r.payload).filter((p): p is StateEvent => p != null && typeof p === 'object');
+  } catch (error) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn(
+        '[STOA] Failed listing state events:',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+    return [];
   }
 }
 
