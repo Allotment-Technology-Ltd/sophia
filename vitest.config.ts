@@ -3,21 +3,10 @@ import path from 'path';
 
 export default defineConfig({
   resolve: {
-    alias: [
-      { find: '$lib', replacement: path.resolve('./src/lib') },
-      { find: /^@restormel\/contracts\/(.+)$/, replacement: path.resolve('./packages/contracts/src/$1.ts') },
-      { find: '@restormel/contracts', replacement: path.resolve('./packages/contracts/src/index.ts') },
-      { find: /^@restormel\/observability\/(.+)$/, replacement: path.resolve('./packages/observability/src/$1.ts') },
-      { find: '@restormel/observability', replacement: path.resolve('./packages/observability/src/index.ts') }
-    ]
+    alias: [{ find: '$lib', replacement: path.resolve('./src/lib') }]
   },
   test: {
-    include: [
-      'src/**/*.test.ts',
-      'packages/contracts/src/**/*.test.ts',
-      'packages/graph-reasoning-extensions/src/**/*.test.ts',
-      'packages/observability/src/**/*.test.ts'
-    ],
+    include: ['src/**/*.test.ts'],
     environment: 'node',
     globals: true,
     coverage: {

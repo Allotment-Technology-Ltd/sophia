@@ -127,7 +127,7 @@ Primary env/config inputs discovered during the audit:
 - `DEEP_MODEL_PASSES`
 - `ANTHROPIC_API_KEY`
 - `BYOK_ENABLED_PROVIDERS`
-- Provider-specific platform/base URL env names defined in `packages/contracts/src/providers.ts`
+- Provider-specific platform/base URL env names defined in `@restormel/contracts` / Restormel Keys `packages/contracts/src/providers.ts`
 
 ## Issues found during the audit
 

@@ -12,10 +12,8 @@ This repository is now scaffolded to grow into a single Restormel monorepo while
 ## Intended structure
 
 - `apps/sophia`: future home of the SOPHIA app package
-- `packages/contracts`: shared platform types and schemas
-- `packages/graph-reasoning-extensions`: Sophia-only reasoning graph helpers (`compare`, `lineage`, `projection`, …) on `@restormel/contracts`
+- Published **`@restormel/contracts`**, **`@restormel/observability`**, **`@restormel/graph-reasoning-extensions`** (npm): shared types, trace helpers, compare/projection/evaluation
 - Published **`@restormel/graph-core`** + **`@restormel/ui-graph-svelte`** (npm): Contract v0 DTOs, layout/trace/workspace, and SVG canvas
-- `packages/observability`: shared telemetry, tracing, and logging helpers
 - `packages/graphrag-core`: retrieval and graph-RAG composition logic
 - `packages/reasoning-core`: reasoning, validation, and synthesis orchestration
 - `packages/providers`: provider integrations and BYOK-facing abstractions
@@ -34,4 +32,4 @@ This repository is now scaffolded to grow into a single Restormel monorepo while
 
 ## Next step
 
-Begin with `@restormel/contracts` and the extraction-ready Graph Kit data model before attempting app relocation or deeper runtime extraction.
+Phase 1 platform packages are consumed from **npm**; see [`docs/restormel/PHASE1-EXTRACTION-STATUS.md`](docs/restormel/PHASE1-EXTRACTION-STATUS.md). Further extraction (e.g. `packages/aaif` → npm, app relocation to `apps/sophia`) can proceed when ready.

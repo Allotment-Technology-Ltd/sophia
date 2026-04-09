@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { GraphEdgeSchema, GraphNodeSchema, AnalyseRequestSchema } from './api';
-import { PhaseOneClaimMetadataSchema } from './ingestion';
-import { ReasoningObjectSnapshotDiffSchema } from './reasoning-compare';
-import { ReasoningLineageReportSchema } from './reasoning-lineage';
-import { ReasoningObjectSnapshotSchema } from './reasoning-object';
-import { ClaimSchema, RelationBundleSchema } from './references';
-import { NormalizedRunTraceSchema } from './trace-ingestion';
+import { GraphEdgeSchema, GraphNodeSchema, AnalyseRequestSchema } from '@restormel/contracts/api';
+import { PhaseOneClaimMetadataSchema } from '@restormel/contracts/ingestion';
+import { ReasoningObjectSnapshotDiffSchema } from '@restormel/contracts/reasoning-compare';
+import { ReasoningLineageReportSchema } from '@restormel/contracts/reasoning-lineage';
+import { ReasoningObjectSnapshotSchema } from '@restormel/contracts/reasoning-object';
+import { ClaimSchema, RelationBundleSchema } from '@restormel/contracts/references';
+import { NormalizedRunTraceSchema } from '@restormel/contracts/trace-ingestion';
 
-describe('@restormel/contracts schemas', () => {
+/** Consumer contract tests against published `@restormel/contracts` (npm). */
+describe('@restormel/contracts schemas (npm)', () => {
   it('parses core graph contracts', () => {
     const node = GraphNodeSchema.parse({
       id: 'claim:a',
