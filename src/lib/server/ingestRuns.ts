@@ -7,6 +7,8 @@ import { REASONING_PROVIDER_ORDER } from '@restormel/contracts/providers';
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'child_process';
 import { randomBytes } from 'crypto';
 import { EventEmitter } from 'events';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { buildLocalTsxSpawnArgs, findFetchedSourceFile } from '$lib/server/adminOperations';
 import type { IngestionPipelinePreset } from '$lib/ingestionPipelineModelRequirements';
 import {
@@ -22,6 +24,10 @@ import { appendIssueFromLogLine, persistIngestRunReport, type IngestIssueRecord 
 import { buildOperatorByokProcessEnv } from '$lib/server/byok/buildOperatorIngestEnv';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 import { query as dbQuery } from '$lib/server/db';
+import {
+  neonHasIngestSourceTextSnapshot,
+  neonRestoreSourceTextToDataSources
+} from '$lib/server/db/ingestStaging';
 
 export interface IngestRunPayload {
   source_url: string;
@@ -186,6 +192,8 @@ function normalizePinnedModelId(provider: string, modelId: string): string {
   // Vertex/Google 1.5 IDs are retired in several environments; pin modern equivalents.
   if ((p === 'vertex' || p === 'google') && m === 'gemini-1.5-pro') return 'gemini-2.5-pro';
   if ((p === 'vertex' || p === 'google') && m === 'gemini-1.5-flash') return 'gemini-2.5-flash';
+  // Anthropic Messages API expects dated Haiku 3.5 ids; bare alias returns 404 from some gateways.
+  if (p === 'anthropic' && m === 'claude-3-5-haiku') return 'claude-3-5-haiku-20241022';
   return m;
 }
 
@@ -856,7 +864,18 @@ class IngestRunManager extends EventEmitter {
       state.completedAt = Date.now();
       state.lastFailureStageKey = state.currentStageKey ?? state.lastFailureStageKey ?? null;
       state.currentAction = `Failed: ${error}`;
+      const rid = state.id;
       state.resumable = Boolean(state.sourceFilePath);
+      if (!state.resumable && isNeonIngestPersistenceEnabled()) {
+        void neonHasIngestSourceTextSnapshot(rid).then((hasSnap) => {
+          const s = this.runs.get(rid);
+          if (!s || s.status !== 'error') return;
+          if (hasSnap) {
+            s.resumable = true;
+            this.flushNeonSnapshotPersist(rid);
+          }
+        });
+      }
       this.flushNeonSnapshotPersist(runId);
       this.schedulePersistReport(runId);
       if (state.payload.queue_record_id) {
@@ -877,7 +896,18 @@ class IngestRunManager extends EventEmitter {
     state.process = undefined;
     // Keep cancellation resumable when a checkpoint source file exists so operators can stop
     // noisy runs and restart from the closest completed stage.
+    const rid = state.id;
     state.resumable = Boolean(state.sourceFilePath);
+    if (!state.resumable && isNeonIngestPersistenceEnabled()) {
+      void neonHasIngestSourceTextSnapshot(rid).then((hasSnap) => {
+        const s = this.runs.get(rid);
+        if (!s || s.status !== 'error') return;
+        if (hasSnap) {
+          s.resumable = true;
+          this.flushNeonSnapshotPersist(rid);
+        }
+      });
+    }
 
     for (const key of Object.keys(state.stages)) {
       const st = state.stages[key];
@@ -960,7 +990,22 @@ class IngestRunManager extends EventEmitter {
     if (!state) return { ok: false, error: 'Run not found.' };
     if (state.status !== 'error') return { ok: false, error: 'Run is not in a failed state.' };
     if (!state.sourceFilePath) {
-      return { ok: false, error: 'No source file checkpoint was found for this run.' };
+      if (!isNeonIngestPersistenceEnabled()) {
+        return { ok: false, error: 'No source file checkpoint was found for this run.' };
+      }
+      try {
+        const { txtPath, restored } = await neonRestoreSourceTextToDataSources(state.id);
+        if (!restored) {
+          return { ok: false, error: 'No source file checkpoint was found for this run.' };
+        }
+        state.sourceFilePath = txtPath;
+        this.flushNeonSnapshotPersist(runId);
+      } catch (e) {
+        return {
+          ok: false,
+          error: `Could not restore source from Neon: ${e instanceof Error ? e.message : String(e)}`
+        };
+      }
     }
 
     if (options?.model_chain || options?.batch_overrides) {
@@ -1170,6 +1215,9 @@ class IngestRunManager extends EventEmitter {
     const ingestPinsJsonCli = encodeIngestPinsJsonCliArg(pinEnvFlat);
     const forSync = options.forSyncOnly;
     const stopBeforeStore = forSync ? false : payload.stop_before_store !== false;
+    const orchestrationEnv = isNeonIngestPersistenceEnabled()
+      ? { INGEST_ORCHESTRATION_RUN_ID: runId }
+      : {};
 
     if (Object.keys(operatorByokEnv).length > 0) {
       this.addLog(
@@ -1222,7 +1270,35 @@ class IngestRunManager extends EventEmitter {
       this.updateStageStatus(runId, 'store', 'running');
     }
 
-    const ingestTail: string[] = ['scripts/ingest.ts', sourceFile];
+    let resolvedSourceFile = sourceFile;
+    const orchestrationRunId = orchestrationEnv.INGEST_ORCHESTRATION_RUN_ID;
+    if (orchestrationRunId) {
+      try {
+        const absSource = path.isAbsolute(sourceFile)
+          ? sourceFile
+          : path.resolve(process.cwd(), sourceFile);
+        if (!fs.existsSync(absSource)) {
+          const { txtPath, restored } = await neonRestoreSourceTextToDataSources(
+            orchestrationRunId,
+            sourceFile
+          );
+          if (restored) {
+            resolvedSourceFile = txtPath;
+            this.addLog(
+              runId,
+              `[RESUME] Restored source .txt from Neon checkpoint (worker had no local copy) → ${txtPath}`
+            );
+          }
+        }
+      } catch (e) {
+        this.addLog(
+          runId,
+          `[WARN] Neon source restore attempt failed: ${e instanceof Error ? e.message : String(e)}`
+        );
+      }
+    }
+
+    const ingestTail: string[] = ['scripts/ingest.ts', resolvedSourceFile];
     if (ingestPinsJsonCli) {
       ingestTail.push(`--ingest-pins-json=${ingestPinsJsonCli}`);
     }
@@ -1234,10 +1310,6 @@ class IngestRunManager extends EventEmitter {
     if (stopBeforeStore) ingestTail.push('--stop-before-store');
 
     const { command: ingestCmd, args: ingestArgs } = buildLocalTsxSpawnArgs(ingestTail);
-
-    const orchestrationEnv = isNeonIngestPersistenceEnabled()
-      ? { INGEST_ORCHESTRATION_RUN_ID: runId }
-      : {};
 
     const ingestChild = spawn(ingestCmd, ingestArgs, {
       cwd: process.cwd(),

@@ -266,6 +266,9 @@ interface IngestTimingPayload {
 
 let activeIngestTiming: IngestTimingPayload | null = null;
 
+/** Full source text for Neon `ingest_staging_meta.source_text_snapshot` (not written to local *-partial.json). */
+let ingestSourceTextBodyForCheckpoint: string | undefined;
+
 function createEmptyTiming(): IngestTimingPayload {
 	return {
 		planning_initial_ms: 0,
@@ -2018,6 +2021,8 @@ type PhaseOneRelation = Relation & PhaseOneRelationMetadata;
 // ─── Partial Results (for crash recovery) ──────────────────────────────────
 interface PartialResults {
 	source: SourceMeta;
+	/** Full cleaned source text (Neon checkpoints only) — allows resume when data/sources is missing on the worker. */
+	source_text_snapshot?: string;
 	claims?: PhaseOneClaim[];
 	relations?: PhaseOneRelation[];
 	arguments?: GroupingOutput;
@@ -2065,9 +2070,11 @@ async function savePartialResults(slug: string, results: PartialResults) {
 	if (runId && process.env.DATABASE_URL?.trim()) {
 		try {
 			const snapshot = parseFloat(estimateCostUsd());
+			const body = ingestSourceTextBodyForCheckpoint;
 			const withSnapshot: PartialResults = {
 				...results,
-				cost_usd_snapshot: Number.isFinite(snapshot) && snapshot >= 0 ? snapshot : results.cost_usd_snapshot
+				cost_usd_snapshot: Number.isFinite(snapshot) && snapshot >= 0 ? snapshot : results.cost_usd_snapshot,
+				...(typeof body === 'string' && body.length > 0 ? { source_text_snapshot: body } : {})
 			};
 			await saveIngestPartialToNeon({
 				runId,
@@ -2088,8 +2095,9 @@ async function savePartialResults(slug: string, results: PartialResults) {
 	const partialPath = path.join(INGESTED_DIR, `${slug}-partial.json`);
 	const tmpPath = `${partialPath}.tmp`;
 	const snapshot = parseFloat(estimateCostUsd());
+	const { source_text_snapshot: _omitSnap, ...forDisk } = results;
 	const withSnapshot: PartialResults = {
-		...results,
+		...forDisk,
 		cost_usd_snapshot: Number.isFinite(snapshot) && snapshot >= 0 ? snapshot : results.cost_usd_snapshot
 	};
 	// Write to temp file first, then atomic rename — prevents corruption on crash mid-write
@@ -2756,6 +2764,50 @@ function logIngestPinsWorkerSnapshot(phase: string, argv: string[]): void {
 	}
 }
 
+async function loadSourceTextAndMeta(
+	filePathArg: string
+): Promise<{ txtPath: string; sourceText: string; sourceMeta: SourceMeta; slug: string }> {
+	const runId = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim();
+	const resolvedArg = path.resolve(filePathArg);
+	let txtPath = resolvedArg;
+	let sourceText: string;
+	let sourceMeta: SourceMeta;
+	const hintSlug = path.basename(resolvedArg, '.txt');
+
+	if (fs.existsSync(txtPath)) {
+		const metaPath = txtPath.replace(/\.txt$/, '.meta.json');
+		if (!fs.existsSync(metaPath)) {
+			console.error(`[ERROR] Source metadata not found: ${metaPath}`);
+			process.exit(1);
+		}
+		sourceText = fs.readFileSync(txtPath, 'utf-8');
+		sourceMeta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as SourceMeta;
+	} else if (runId && process.env.DATABASE_URL?.trim()) {
+		const fromNeon = await loadIngestPartialFromNeon(runId, hintSlug);
+		const snap = fromNeon?.source_text_snapshot;
+		const src = fromNeon?.source;
+		if (typeof snap !== 'string' || snap.length === 0 || !src || typeof src !== 'object' || Array.isArray(src)) {
+			console.error(`[ERROR] Source text not found: ${txtPath}`);
+			console.error(
+				'  Hint: On serverless workers the fetch output may be gone. Re-run fetch or ensure the latest deploy persists source_text_snapshot in Neon (ingest_staging_meta).'
+			);
+			process.exit(1);
+		}
+		sourceText = snap;
+		sourceMeta = src as SourceMeta;
+		txtPath = path.join(process.cwd(), 'data/sources', `${hintSlug}.txt`);
+		console.log(
+			`  [RESUME] Loaded source body from Neon checkpoint (local file missing) — slug ${hintSlug}`
+		);
+	} else {
+		console.error(`[ERROR] Source text not found: ${txtPath}`);
+		process.exit(1);
+	}
+
+	const slug = path.basename(txtPath, '.txt');
+	return { txtPath, sourceText, sourceMeta, slug };
+}
+
 async function main() {
 	const args = process.argv.slice(2);
 	applyIngestPinsJsonArg(args);
@@ -2827,22 +2879,9 @@ async function main() {
 		process.exit(1);
 	}
 
-	// Load source files
-	const txtPath = path.resolve(filePath);
-	const metaPath = txtPath.replace(/\.txt$/, '.meta.json');
-
-	if (!fs.existsSync(txtPath)) {
-		console.error(`[ERROR] Source text not found: ${txtPath}`);
-		process.exit(1);
-	}
-	if (!fs.existsSync(metaPath)) {
-		console.error(`[ERROR] Source metadata not found: ${metaPath}`);
-		process.exit(1);
-	}
-
-	const sourceText = fs.readFileSync(txtPath, 'utf-8');
-	const sourceMeta: SourceMeta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-	const slug = path.basename(txtPath, '.txt');
+	// Load source files (or full text from Neon when the worker has no local data/sources copy)
+	const { txtPath, sourceText, sourceMeta, slug } = await loadSourceTextAndMeta(filePath);
+	ingestSourceTextBodyForCheckpoint = sourceText;
 	assertValidSourceMetadata(sourceMeta);
 	const sectionTokenLimit = getSectionTokenLimit(sourceMeta.source_type);
 	const rawPassages = segmentArgumentativePassages(sourceText, {
