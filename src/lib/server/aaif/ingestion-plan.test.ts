@@ -6,7 +6,8 @@ const { mockResolveExtractionModelRoute, mockResolveReasoningModelRoute } = vi.h
 }));
 
 vi.mock('$lib/server/embeddings', () => ({
-  EMBEDDING_MODEL: 'text-embedding-005'
+  EMBEDDING_MODEL: 'text-embedding-005',
+  getEmbeddingProvider: () => ({ name: 'vertex' })
 }));
 
 vi.mock('$lib/server/vertex', () => ({
@@ -45,7 +46,8 @@ describe('planIngestionStage', () => {
     });
 
     expect(mockResolveExtractionModelRoute).toHaveBeenCalledWith({
-      requestedProvider: 'auto',
+      requestedProvider: 'openai',
+      requestedModelId: 'gpt-4o-mini',
       routeId: 'interactive',
       failureMode: 'degraded_default',
       restormelContext: {
@@ -129,7 +131,7 @@ describe('planIngestionStage', () => {
     expect(plan.model).toBe('text-embedding-005');
     expect(plan.route).toBeUndefined();
     expect(plan.request.task).toBe('embedding');
-    expect(plan.routingReason).toContain('Vertex embedding pipeline');
+    expect(plan.routingReason).toContain('vertex embedding pipeline');
   });
 
   it('builds phase token/complexity estimates for pre-scan', async () => {

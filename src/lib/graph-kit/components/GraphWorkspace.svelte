@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation';
   import { adaptGraphViewModelToLegacyCanvas } from '$lib/graph-kit/adapters/legacyCanvasAdapter';
   import { buildGraphSemanticStyles } from '$lib/graph-kit/rendering/graphSemantics';
-  import ReagraphCanvas from '$lib/graph-kit/components/ReagraphCanvas.svelte';
+  import GraphCanvas from '$lib/components/visualization/GraphCanvas.svelte';
   import {
     buildNodeInspectorPayload,
     buildWorkspaceInspectorPayload,
@@ -50,12 +50,15 @@
     workspace: GraphKitWorkspaceData;
     selectedNodeId?: string | null;
     onSelectedNodeChange?: (nodeId: string | null) => void;
+    /** When true (e.g. map tab), fill the parent panel instead of forcing viewport min-height. */
+    embedded?: boolean;
   }
 
   let {
     workspace,
     selectedNodeId: selectedNodeIdProp = undefined,
-    onSelectedNodeChange
+    onSelectedNodeChange,
+    embedded = false
   }: Props = $props();
 
   let search = $state('');
@@ -265,7 +268,11 @@
   }
 </script>
 
-<section class="workspace" aria-label="Restormel graph workspace">
+<section
+  class="workspace"
+  class:workspace--embedded={embedded}
+  aria-label="Restormel graph workspace"
+>
   <GraphWorkspaceToolbar
     {search}
     {phase}
@@ -316,12 +323,15 @@
 
       <div class="canvas-frame">
         {#if workspaceView.graph.nodes.length > 0}
-          <ReagraphCanvas
+          <GraphCanvas
             nodes={legacyCanvas.nodes}
             edges={legacyCanvas.edges}
             ghostNodes={legacyCanvas.ghostNodes}
             ghostEdges={legacyCanvas.ghostEdges}
             showGhostLayer={showGhosts}
+            showInlineDetail={false}
+            showStatusChip={false}
+            showViewportControls={false}
             {viewportCommand}
             nodeSemanticStyles={semanticStyles.nodeStyles}
             edgeSemanticStyles={semanticStyles.edgeStyles}
@@ -333,7 +343,7 @@
             dimOutOfScope={effectiveFocusMode === 'local-dim'}
             selectedNodeId={selectedNodeId}
             onSelectedNodeChange={setSelectedNodeId}
-            onJumpToReferences={(nodeId: string) => {
+            onJumpToReferences={(nodeId) => {
               setSelectedNodeId(nodeId);
               handleInspectorAction('open-references');
             }}
@@ -346,7 +356,7 @@
         {/if}
       </div>
       <div class="canvas-footer-note">
-        <span>This screen now uses the Reagraph WebGL renderer through the Graph Kit adapter seam. Evidence and provenance are only as deep as the current SOPHIA snapshot data.</span>
+        <span>This screen uses the SOPHIA SVG graph canvas behind the Graph Kit adapter. Evidence and provenance are only as deep as the current SOPHIA snapshot data.</span>
         {#if focusSummary.active}
           <span>Local focus is active at {neighborhoodDepth} hop{neighborhoodDepth === 1 ? '' : 's'} around the selected node.</span>
         {/if}
@@ -380,6 +390,11 @@
     background:
       linear-gradient(180deg, rgba(111, 163, 212, 0.04) 0%, transparent 14%),
       var(--color-bg);
+  }
+
+  .workspace--embedded {
+    min-height: 0;
+    height: 100%;
   }
 
   .workspace-main {
@@ -448,11 +463,19 @@
   }
 
   .canvas-frame {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
     min-height: 520px;
     background:
       radial-gradient(circle at 20% 20%, rgba(127, 163, 131, 0.06), transparent 28%),
       radial-gradient(circle at 80% 20%, rgba(111, 163, 212, 0.05), transparent 30%),
       var(--color-bg);
+  }
+
+  .canvas-frame :global(.graph-canvas-container) {
+    flex: 1 1 auto;
+    min-height: 400px;
   }
 
   .canvas-footer-note {

@@ -9,6 +9,7 @@ const {
   mockUpdateProfile,
   mockListIncompleteActionItems,
   mockListRelevantJournalEntries,
+  mockListJournalEntries,
   mockUpsertActionItems,
   mockRetrieveGrounding,
   mockScoreCitationQuality,
@@ -16,7 +17,8 @@ const {
   mockClassifyStanceV2,
   mockShouldEscalate,
   mockRunDeepEscalation,
-  mockRecordTelemetry
+  mockRecordTelemetry,
+  mockGetProgress
 } = vi.hoisted(() => ({
   mockStreamText: vi.fn(),
   mockResolveReasoningModelRoute: vi.fn(),
@@ -26,6 +28,7 @@ const {
   mockUpdateProfile: vi.fn(),
   mockListIncompleteActionItems: vi.fn(),
   mockListRelevantJournalEntries: vi.fn(),
+  mockListJournalEntries: vi.fn(),
   mockUpsertActionItems: vi.fn(),
   mockRetrieveGrounding: vi.fn(),
   mockScoreCitationQuality: vi.fn(),
@@ -33,7 +36,8 @@ const {
   mockClassifyStanceV2: vi.fn(),
   mockShouldEscalate: vi.fn(),
   mockRunDeepEscalation: vi.fn(),
-  mockRecordTelemetry: vi.fn()
+  mockRecordTelemetry: vi.fn(),
+  mockGetProgress: vi.fn()
 }));
 
 vi.mock('ai', () => ({
@@ -55,7 +59,26 @@ vi.mock('$lib/server/stoa/sessionStore', () => ({
   updateStoaProfileFromTurns: mockUpdateProfile,
   listIncompleteActionItems: mockListIncompleteActionItems,
   listRelevantJournalEntries: mockListRelevantJournalEntries,
+  listJournalEntries: mockListJournalEntries,
   upsertActionItems: mockUpsertActionItems
+}));
+
+vi.mock('$lib/server/stoa/game/progress-store', () => ({
+  getProgress: mockGetProgress
+}));
+
+vi.mock('$lib/server/stoa/game/quest-engine', () => ({
+  QuestEngine: class {
+    async evaluateCompletions(): Promise<never[]> {
+      return [];
+    }
+    async evaluateTriggers(): Promise<never[]> {
+      return [];
+    }
+    async awardCompletion(): Promise<void> {
+      return;
+    }
+  }
 }));
 
 vi.mock('$lib/server/stoa/grounding', () => ({
@@ -129,6 +152,18 @@ async function readSseEvents(response: Response): Promise<any[]> {
 describe('/api/stoa/dialogue SSE contract', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetProgress.mockResolvedValue({
+      xp: 0,
+      level: 1,
+      levelTitle: 'Novice',
+      xpToNextLevel: 100,
+      levelProgress: 0,
+      unlockedThinkers: ['marcus'],
+      masteredFrameworks: [],
+      activeQuestIds: [],
+      completedQuestIds: []
+    });
+    mockListJournalEntries.mockResolvedValue([]);
     mockLoadSession.mockResolvedValue({ turns: [] });
     mockLoadProfile.mockResolvedValue({ userId: 'u1', goals: [], triggers: [], practices: [], updatedAt: null });
     mockClassifyStanceV2.mockResolvedValue(DEFAULT_STANCE);
