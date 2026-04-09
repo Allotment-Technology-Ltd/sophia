@@ -6,7 +6,7 @@
 
   const POST_OAUTH_PATH_KEY = 'sophia_post_oauth_path';
 
-  let { data }: { data: { googleSignInAvailable: boolean } } = $props();
+  let { data }: { data: { neonAuthUrlPresent: boolean } } = $props();
 
   let email = $state('');
   let status = $state<'idle' | 'loading' | 'success' | 'error'>('idle');
@@ -102,29 +102,30 @@
           <a href="mailto:admin@usesophia.app">admin@usesophia.app</a>.
         </p>
 
-        {#if data.googleSignInAvailable}
-          <div class="sign-in-block">
-            <h2 class="section-heading">Already invited?</h2>
-            <p class="section-help">
-              If your email is on the access list, sign in with Google. Everyone else can join the waitlist below.
-            </p>
-            <button
-              type="button"
-              class="google-btn"
-              disabled={oauthStatus === 'loading'}
-              onclick={() => void handleGoogleSignIn()}
-            >
-              {oauthStatus === 'loading' ? 'Redirecting…' : 'Continue with Google'}
-            </button>
-            {#if oauthMessage}
-              <p class="form-message error" role="status">{oauthMessage}</p>
-            {/if}
-          </div>
-        {:else}
-          <p class="config-note" role="note">
-            Google sign-in is not configured in this environment. Use the waitlist or contact us by email.
+        <div class="sign-in-block">
+          <h2 class="section-heading">Already invited?</h2>
+          <p class="section-help">
+            If your email is on the access list, sign in with Google. Everyone else can join the waitlist below.
           </p>
-        {/if}
+          {#if !data.neonAuthUrlPresent}
+            <p class="config-note inline" role="note">
+              Sign-in needs <code class="env-hint">PUBLIC_NEON_AUTH_URL</code> (or a build-time
+              <code class="env-hint">VITE_NEON_AUTH_URL</code>). If the button errors, contact
+              <a href="mailto:admin@usesophia.app">admin@usesophia.app</a>.
+            </p>
+          {/if}
+          <button
+            type="button"
+            class="google-btn"
+            disabled={oauthStatus === 'loading'}
+            onclick={() => void handleGoogleSignIn()}
+          >
+            {oauthStatus === 'loading' ? 'Redirecting…' : 'Continue with Google'}
+          </button>
+          {#if oauthMessage}
+            <p class="form-message error" role="status">{oauthMessage}</p>
+          {/if}
+        </div>
 
         <form class="waitlist-form" onsubmit={handleSubmit}>
           <label class="field-label" for="waitlist-email">Join the waitlist</label>
@@ -292,9 +293,19 @@
     font-size: 12px;
     color: var(--color-muted);
     line-height: 1.65;
-    padding: 12px 0 0;
-    border-top: 1px solid var(--color-border);
     margin: 0;
+  }
+
+  .config-note.inline {
+    padding: 0;
+    border: none;
+  }
+
+  .env-hint {
+    font-family: var(--font-ui);
+    font-size: 0.85em;
+    color: var(--color-text);
+    word-break: break-all;
   }
 
   .waitlist-form {
