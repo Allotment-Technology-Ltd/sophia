@@ -13,7 +13,8 @@ This repository is now scaffolded to grow into a single Restormel monorepo while
 
 - `apps/sophia`: future home of the SOPHIA app package
 - `packages/contracts`: shared platform types and schemas
-- `packages/graph-core`: graph view models, adapters, and shared graph logic
+- `packages/graph-reasoning-extensions`: Sophia-only reasoning graph helpers (`compare`, `lineage`, `projection`, …) on `@restormel/contracts`
+- Published **`@restormel/graph-core`** + **`@restormel/ui-graph-svelte`** (npm): Contract v0 DTOs, layout/trace/workspace, and SVG canvas
 - `packages/observability`: shared telemetry, tracing, and logging helpers
 - `packages/graphrag-core`: retrieval and graph-RAG composition logic
 - `packages/reasoning-core`: reasoning, validation, and synthesis orchestration

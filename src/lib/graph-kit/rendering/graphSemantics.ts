@@ -1,4 +1,8 @@
-import { graphCanvasEdgeKey, type GraphCanvasEdgeSemanticStyle, type GraphCanvasNodeSemanticStyle } from '$lib/components/visualization/semanticStyles';
+import {
+  graphCanvasEdgeKey,
+  type GraphCanvasEdgeSemanticStyle,
+  type GraphCanvasNodeSemanticStyle
+} from '@restormel/ui-graph-svelte';
 import type { GraphKitEdge, GraphKitNode, GraphKitGraphViewModel } from '$lib/graph-kit/types';
 
 function nodeStyleForKind(node: GraphKitNode): GraphCanvasNodeSemanticStyle {

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
-  import { adaptGraphViewModelToLegacyCanvas } from '$lib/graph-kit/adapters/legacyCanvasAdapter';
+  import { graphDataFromSophiaGraphKit } from '$lib/graph-kit/adapters/sophiaGraphData';
   import { buildGraphSemanticStyles } from '$lib/graph-kit/rendering/graphSemantics';
-  import GraphCanvas from '$lib/components/visualization/GraphCanvas.svelte';
+  import { GraphCanvas } from '@restormel/ui-graph-svelte';
   import {
     buildNodeInspectorPayload,
     buildWorkspaceInspectorPayload,
@@ -191,7 +191,7 @@
     enabledEdgeKinds = new Set(availableEdgeKinds);
   }
 
-  const legacyCanvas = $derived(adaptGraphViewModelToLegacyCanvas(workspaceView.graph));
+  const legacyCanvas = $derived(graphDataFromSophiaGraphKit(workspaceView.graph));
   const semanticStyles = $derived(buildGraphSemanticStyles(workspaceView.graph));
   const selectedNode = $derived(
     selectedNodeId
@@ -343,7 +343,7 @@
             dimOutOfScope={effectiveFocusMode === 'local-dim'}
             selectedNodeId={selectedNodeId}
             onSelectedNodeChange={setSelectedNodeId}
-            onJumpToReferences={(nodeId) => {
+            onJumpToReferences={(nodeId: string) => {
               setSelectedNodeId(nodeId);
               handleInspectorAction('open-references');
             }}
@@ -356,7 +356,7 @@
         {/if}
       </div>
       <div class="canvas-footer-note">
-        <span>This screen uses the SOPHIA SVG graph canvas behind the Graph Kit adapter. Evidence and provenance are only as deep as the current SOPHIA snapshot data.</span>
+        <span>This screen uses the Restormel Graph canvas (<code>@restormel/ui-graph-svelte</code>) behind the Graph Kit adapter. Evidence and provenance are only as deep as the current SOPHIA snapshot data.</span>
         {#if focusSummary.active}
           <span>Local focus is active at {neighborhoodDepth} hop{neighborhoodDepth === 1 ? '' : 's'} around the selected node.</span>
         {/if}
