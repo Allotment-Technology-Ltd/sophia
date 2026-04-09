@@ -27,8 +27,10 @@ import {
 import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.js';
 import { z } from 'zod';
 import {
+	estimateStageUsage,
 	planIngestionStage,
 	planIngestionStageWithExplicitModel,
+	type IngestionStage,
 	type IngestionStagePlan,
 	type IngestProviderPreference,
 	type IngestionPlanningContext
@@ -46,6 +48,8 @@ import {
 	capIngestBatchTargetForPlan,
 	isContextLengthExceededError
 } from '../src/lib/server/ingestion/modelBatchCaps.js';
+import { normalizeIngestPinModelId } from '../src/lib/server/ingestPinNormalize.js';
+import type { IngestCatalogRoutingJson } from '../src/lib/server/ingestCatalogRouting.js';
 import { startSpinner } from './progress.js';
 
 // ─── Prompt imports (relative paths for standalone script) ─────────────────
@@ -268,6 +272,106 @@ let activeIngestTiming: IngestTimingPayload | null = null;
 
 /** Full source text for Neon `ingest_staging_meta.source_text_snapshot` (not written to local *-partial.json). */
 let ingestSourceTextBodyForCheckpoint: string | undefined;
+
+/** Per-run failure counts for catalog-ordered fallback deprioritization (provider::model). */
+const ingestModelFailureCounts = new Map<string, number>();
+
+function ingestModelFailureKey(provider: string, model: string): string {
+	return `${provider.trim().toLowerCase()}::${model.trim()}`;
+}
+
+function recordIngestModelFailure(provider: string, model: string): void {
+	const k = ingestModelFailureKey(provider, model);
+	ingestModelFailureCounts.set(k, (ingestModelFailureCounts.get(k) ?? 0) + 1);
+}
+
+function loadIngestCatalogRoutingFromEnv(): IngestCatalogRoutingJson | null {
+	const raw = process.env.INGEST_CATALOG_ROUTING_JSON_B64?.trim();
+	if (!raw) return null;
+	try {
+		const json = Buffer.from(raw, 'base64url').toString('utf8');
+		const data = JSON.parse(json) as IngestCatalogRoutingJson;
+		return data && typeof data === 'object' ? data : null;
+	} catch {
+		return null;
+	}
+}
+
+function tierFitsEstimatedContext(
+	stage: IngestionStage,
+	tier: { provider: string; modelId: string },
+	ctx: IngestionPlanningContext
+): boolean {
+	const u = estimateStageUsage(stage, ctx);
+	const estIn = u.inputTokens + 2_000;
+	const m = tier.modelId.toLowerCase();
+	// Conservative ceilings (tokens) — avoids obvious context blowups before planning.
+	let maxIn = 200_000;
+	if (m.includes('gpt-4o-mini') || m.includes('gpt-3.5')) maxIn = 120_000;
+	else if (m.includes('haiku') && !m.includes('sonnet')) maxIn = 190_000;
+	else if (m.includes('gemini') && m.includes('flash')) maxIn = 950_000;
+	else if (m.includes('gemini')) maxIn = 950_000;
+	else if (m.includes('gpt-4')) maxIn = 120_000;
+	else if (m.includes('claude')) maxIn = 190_000;
+	return estIn <= maxIn;
+}
+
+/**
+ * Ordered fallback chain: catalog (cheapest suitable first, failure-deprioritized) ∪ canonical defaults, deduped.
+ */
+function buildEffectiveModelChainForStage(
+	stage: StageKey,
+	plan: IngestionStagePlan,
+	ctx: IngestionPlanningContext,
+	catalogRouting: IngestCatalogRoutingJson | null
+): { provider: string; modelId: string }[] {
+	const llmStage = stage as IngestionLlmStageKey;
+	const canonical = canonicalModelChainForStage(llmStage);
+	const out: { provider: string; modelId: string }[] = [];
+	const seen = new Set<string>();
+
+	const pushTier = (t: { provider: string; modelId: string }, front = false) => {
+		const prov = t.provider.trim().toLowerCase();
+		const mid = t.modelId.trim();
+		if (!prov || !mid) return;
+		const k = `${prov}::${mid}`;
+		if (seen.has(k)) return;
+		if (!tierFitsEstimatedContext(stage as IngestionStage, { provider: prov, modelId: mid }, ctx)) return;
+		seen.add(k);
+		if (front) out.unshift({ provider: prov, modelId: mid });
+		else out.push({ provider: prov, modelId: mid });
+	};
+
+	// 1) Restormel primary (may differ from canonical)
+	pushTier({ provider: plan.provider, modelId: plan.model }, true);
+
+	const catList = catalogRouting?.[llmStage];
+	if (Array.isArray(catList) && catList.length > 0) {
+		const scored = catList
+			.filter((t) => t && typeof t.provider === 'string' && typeof t.modelId === 'string')
+			.map((t) => ({
+				provider: t.provider.trim().toLowerCase(),
+				modelId: t.modelId.trim(),
+				fails: ingestModelFailureCounts.get(ingestModelFailureKey(t.provider, t.modelId)) ?? 0
+			}))
+			.filter((t) => t.provider && t.modelId);
+
+		scored.sort((a, b) => {
+			if (a.fails !== b.fails) return a.fails - b.fails;
+			return 0;
+		});
+
+		for (const t of scored) {
+			pushTier({ provider: t.provider, modelId: t.modelId });
+		}
+	}
+
+	for (const t of canonical) {
+		pushTier({ provider: t.provider, modelId: t.modelId });
+	}
+
+	return out;
+}
 
 function createEmptyTiming(): IngestTimingPayload {
 	return {
@@ -1654,9 +1758,8 @@ async function callStageModel(params: {
 		planningContext
 	} = params;
 
-	const llmStage = stage as IngestionLlmStageKey;
-	const chain = canonicalModelChainForStage(llmStage);
-	const idxInChain = chain.findIndex((t) => planMatchesCanonicalTier(plan, t));
+	const catalogRouting = loadIngestCatalogRoutingFromEnv();
+	const effectiveChain = buildEffectiveModelChainForStage(stage, plan, planningContext, catalogRouting);
 	const noFallback = ingestModelFallbackDisabled() || isStageModelPinned(stage);
 
 	let lastError: Error | null = null;
@@ -1750,6 +1853,7 @@ async function callStageModel(params: {
 				if (!retryable) break;
 			}
 		}
+		recordIngestModelFailure(activePlan.provider, activePlan.model);
 		return null;
 	}
 
@@ -1763,17 +1867,22 @@ async function callStageModel(params: {
 		);
 	}
 
-	if (idxInChain < 0) {
-		const primaryText = await runInnerRetries(plan);
-		if (primaryText !== null) return primaryText;
-		for (let ci = 0; ci < chain.length; ci++) {
-			const tier = chain[ci]!;
-			if (planMatchesCanonicalTier(plan, tier)) continue;
-			let activePlan: IngestionStagePlan;
+	if (catalogRouting && effectiveChain.length > 1) {
+		console.log(
+			`  [ROUTING] ${stage}: catalog-aware chain (${effectiveChain.length} candidate(s)) — cheapest suitable first, failure-deprioritized`
+		);
+	}
+
+	for (let ci = 0; ci < effectiveChain.length; ci++) {
+		const tier = effectiveChain[ci]!;
+		let activePlan: IngestionStagePlan;
+		if (planMatchesCanonicalTier(plan, tier)) {
+			activePlan = plan;
+		} else {
 			try {
 				activePlan = await planIngestionStageWithExplicitModel(stage, planningContext, tier);
 				console.warn(
-					`  [FALLBACK] ${stage}: escalating to ${activePlan.provider}/${activePlan.model} after primary tier exhausted`
+					`  [FALLBACK] ${stage}: trying ${activePlan.provider}/${activePlan.model} (${ci + 1}/${effectiveChain.length} in chain)`
 				);
 			} catch (planErr) {
 				console.warn(
@@ -1784,40 +1893,15 @@ async function callStageModel(params: {
 				lastError = planErr instanceof Error ? planErr : new Error(String(planErr));
 				continue;
 			}
-			const t = await runInnerRetries(activePlan);
-			if (t !== null) return t;
 		}
-	} else {
-		for (let ci = idxInChain; ci < chain.length; ci++) {
-			const tier = chain[ci]!;
-			let activePlan: IngestionStagePlan;
-			if (ci === idxInChain && planMatchesCanonicalTier(plan, tier)) {
-				activePlan = plan;
-			} else {
-				try {
-					activePlan = await planIngestionStageWithExplicitModel(stage, planningContext, tier);
-					console.warn(
-						`  [FALLBACK] ${stage}: escalating to ${activePlan.provider}/${activePlan.model} after primary tier exhausted`
-					);
-				} catch (planErr) {
-					console.warn(
-						`  [FALLBACK] ${stage}: could not plan ${tier.provider}/${tier.modelId} — ${
-							planErr instanceof Error ? planErr.message : String(planErr)
-						}`
-					);
-					lastError = planErr instanceof Error ? planErr : new Error(String(planErr));
-					continue;
-				}
-			}
-			const t = await runInnerRetries(activePlan);
-			if (t !== null) return t;
-		}
+		const t = await runInnerRetries(activePlan);
+		if (t !== null) return t;
 	}
 
 	const detail =
 		lastError != null ? formatModelCallErrorDetails(lastError) : 'Unknown error';
 	throw new Error(
-		`[${stage}] Planned route and canonical fallbacks exhausted (${plan.provider}:${plan.model}): ${detail}. If this is Anthropic, check the model id is not retired (see https://docs.anthropic.com/en/docs/about-claude/model-deprecations).`
+		`[${stage}] Planned route and fallback chain exhausted (${plan.provider}:${plan.model}): ${detail}. If this is Anthropic, check the model id is not retired (see https://docs.anthropic.com/en/docs/about-claude/model-deprecations).`
 	);
 }
 
@@ -2713,8 +2797,9 @@ function applyIngestPinsJsonArg(argv: string[]): void {
 				v.provider.trim() &&
 				v.model.trim()
 			) {
-				process.env[`INGEST_PIN_PROVIDER_${suffix}`] = v.provider.trim();
-				process.env[`INGEST_PIN_MODEL_${suffix}`] = v.model.trim();
+				const prov = v.provider.trim();
+				process.env[`INGEST_PIN_PROVIDER_${suffix}`] = prov;
+				process.env[`INGEST_PIN_MODEL_${suffix}`] = normalizeIngestPinModelId(prov, v.model.trim());
 				applied++;
 			}
 		}

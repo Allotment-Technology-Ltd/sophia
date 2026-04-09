@@ -242,7 +242,7 @@ function buildStageRequest(stage: IngestionStage, context: IngestionPlanningCont
   };
 }
 
-function estimateStageUsage(stage: IngestionStage, context: IngestionPlanningContext): {
+export function estimateStageUsage(stage: IngestionStage, context: IngestionPlanningContext): {
   inputTokens: number;
   outputTokens: number;
 } {
