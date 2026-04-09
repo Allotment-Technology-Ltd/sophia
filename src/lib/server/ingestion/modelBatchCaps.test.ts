@@ -35,6 +35,25 @@ describe('capIngestBatchTargetForPlan', () => {
 		expect(r.value).toBe(8_000);
 		expect(r.capped).toBe(true);
 	});
+
+	it('allows larger relations batches for gpt-4o than gpt-4-turbo', () => {
+		const o = capIngestBatchTargetForPlan({
+			stage: 'relations',
+			requested: 40_000,
+			provider: 'openai',
+			model: 'gpt-4o'
+		});
+		expect(o.modelCeiling).toBe(36_000);
+		expect(o.value).toBe(36_000);
+		const t = capIngestBatchTargetForPlan({
+			stage: 'relations',
+			requested: 40_000,
+			provider: 'openai',
+			model: 'gpt-4-turbo'
+		});
+		expect(t.modelCeiling).toBe(28_000);
+		expect(t.value).toBe(28_000);
+	});
 });
 
 describe('isContextLengthExceededError', () => {

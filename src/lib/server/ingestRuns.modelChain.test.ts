@@ -34,6 +34,27 @@ describe('modelChainLabelsToEnv', () => {
     expect(env.INGEST_PIN_PROVIDER_VALIDATION).toBe('anthropic');
   });
 
+  it('does not emit pins for auto (Restormel + canonical defaults apply)', () => {
+    const env = modelChainLabelsToEnv({
+      extract: 'auto',
+      relate: 'auto',
+      group: 'auto',
+      validate: 'auto'
+    });
+    expect(Object.keys(env).length).toBe(0);
+  });
+
+  it('normalizes anthropic claude-3-5-haiku alias to dated API id', () => {
+    const env = modelChainLabelsToEnv({
+      extract: 'anthropic · claude-3-5-haiku',
+      relate: 'anthropic__claude-3-5-haiku',
+      group: 'auto',
+      validate: 'auto'
+    });
+    expect(env.INGEST_PIN_MODEL_EXTRACTION).toBe('claude-3-5-haiku-20241022');
+    expect(env.INGEST_PIN_MODEL_RELATIONS).toBe('claude-3-5-haiku-20241022');
+  });
+
   it('maps admin stable ids (provider__modelId) like the ingest wizard sends in JSON', () => {
     const env = modelChainLabelsToEnv({
       extract: 'anthropic__claude-sonnet-4-20250514',

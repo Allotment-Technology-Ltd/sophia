@@ -50,7 +50,8 @@ function maxBatchTargetForModel(stage: IngestReasoningStage, modelLower: string)
   // relations
   if (m.includes('gpt-3.5')) return 8_000;
   if (m.includes('gpt-4o-mini')) return 24_000;
-  if (m.includes('gpt-4-turbo') || m.includes('gpt-4o')) return 28_000;
+  if (m.includes('gpt-4o')) return 36_000;
+  if (m.includes('gpt-4-turbo')) return 28_000;
   if (m.startsWith('gpt-4') || m.includes('gpt-4')) return 22_000;
   if (m.includes('claude-3-haiku') || m.includes('claude-haiku')) return 14_000;
   if (m.includes('claude')) return 24_000;

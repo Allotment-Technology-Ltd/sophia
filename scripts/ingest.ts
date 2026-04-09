@@ -27,8 +27,10 @@ import {
 import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.js';
 import { z } from 'zod';
 import {
+	estimateStageUsage,
 	planIngestionStage,
 	planIngestionStageWithExplicitModel,
+	type IngestionStage,
 	type IngestionStagePlan,
 	type IngestProviderPreference,
 	type IngestionPlanningContext
@@ -46,6 +48,8 @@ import {
 	capIngestBatchTargetForPlan,
 	isContextLengthExceededError
 } from '../src/lib/server/ingestion/modelBatchCaps.js';
+import { normalizeIngestPinModelId } from '../src/lib/server/ingestPinNormalize.js';
+import type { IngestCatalogRoutingJson } from '../src/lib/server/ingestCatalogRouting.js';
 import { startSpinner } from './progress.js';
 
 // ─── Prompt imports (relative paths for standalone script) ─────────────────
@@ -153,13 +157,19 @@ const VALIDATION_TOKEN_ESTIMATE_MULTIPLIER = Math.max(
 // Chunking is enabled when RELATIONS_BATCH_TARGET_TOKENS > 0 (set to 0 to disable).
 const RELATIONS_BATCH_TARGET_TOKENS = (() => {
 	const raw = process.env.RELATIONS_BATCH_TARGET_TOKENS;
-	if (raw == null || raw.trim() === '') return 20_000;
+	// Lower default reduces OpenAI TPM blowups (then expensive cross-provider fallback).
+	if (raw == null || raw.trim() === '') return 12_000;
 	const n = Number(raw);
 	if (!Number.isFinite(n) || n <= 0) return 0;
 	return Math.trunc(n);
 })();
 const RELATIONS_BATCH_OVERLAP_CLAIMS =
 	parsePositiveInt(process.env.RELATIONS_BATCH_OVERLAP_CLAIMS) ?? 4;
+/** When >1, run independent extraction batches in parallel (ordered merge). Splits mid-batch disable parallelism for remaining work. */
+const INGEST_EXTRACTION_CONCURRENCY = Math.max(
+	1,
+	parsePositiveInt(process.env.INGEST_EXTRACTION_CONCURRENCY) ?? 2
+);
 const INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE =
 	(process.env.INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE || 'true').toLowerCase() !== 'false';
 const INGEST_SAVE_GROUPING_RAW =
@@ -259,6 +269,109 @@ interface IngestTimingPayload {
 }
 
 let activeIngestTiming: IngestTimingPayload | null = null;
+
+/** Full source text for Neon `ingest_staging_meta.source_text_snapshot` (not written to local *-partial.json). */
+let ingestSourceTextBodyForCheckpoint: string | undefined;
+
+/** Per-run failure counts for catalog-ordered fallback deprioritization (provider::model). */
+const ingestModelFailureCounts = new Map<string, number>();
+
+function ingestModelFailureKey(provider: string, model: string): string {
+	return `${provider.trim().toLowerCase()}::${model.trim()}`;
+}
+
+function recordIngestModelFailure(provider: string, model: string): void {
+	const k = ingestModelFailureKey(provider, model);
+	ingestModelFailureCounts.set(k, (ingestModelFailureCounts.get(k) ?? 0) + 1);
+}
+
+function loadIngestCatalogRoutingFromEnv(): IngestCatalogRoutingJson | null {
+	const raw = process.env.INGEST_CATALOG_ROUTING_JSON_B64?.trim();
+	if (!raw) return null;
+	try {
+		const json = Buffer.from(raw, 'base64url').toString('utf8');
+		const data = JSON.parse(json) as IngestCatalogRoutingJson;
+		return data && typeof data === 'object' ? data : null;
+	} catch {
+		return null;
+	}
+}
+
+function tierFitsEstimatedContext(
+	stage: IngestionStage,
+	tier: { provider: string; modelId: string },
+	ctx: IngestionPlanningContext
+): boolean {
+	const u = estimateStageUsage(stage, ctx);
+	const estIn = u.inputTokens + 2_000;
+	const m = tier.modelId.toLowerCase();
+	// Conservative ceilings (tokens) — avoids obvious context blowups before planning.
+	let maxIn = 200_000;
+	if (m.includes('gpt-4o-mini') || m.includes('gpt-3.5')) maxIn = 120_000;
+	else if (m.includes('haiku') && !m.includes('sonnet')) maxIn = 190_000;
+	else if (m.includes('gemini') && m.includes('flash')) maxIn = 950_000;
+	else if (m.includes('gemini')) maxIn = 950_000;
+	else if (m.includes('gpt-4')) maxIn = 120_000;
+	else if (m.includes('claude')) maxIn = 190_000;
+	return estIn <= maxIn;
+}
+
+/**
+ * Ordered fallback chain: catalog (cheapest suitable first, failure-deprioritized) ∪ canonical defaults, deduped.
+ */
+function buildEffectiveModelChainForStage(
+	stage: StageKey,
+	plan: IngestionStagePlan,
+	ctx: IngestionPlanningContext,
+	catalogRouting: IngestCatalogRoutingJson | null
+): { provider: string; modelId: string }[] {
+	const llmStage = stage as IngestionLlmStageKey;
+	const canonical = canonicalModelChainForStage(llmStage);
+	const out: { provider: string; modelId: string }[] = [];
+	const seen = new Set<string>();
+
+	const pushTier = (t: { provider: string; modelId: string }, front = false) => {
+		const prov = t.provider.trim().toLowerCase();
+		const mid = t.modelId.trim();
+		if (!prov || !mid) return;
+		const k = `${prov}::${mid}`;
+		if (seen.has(k)) return;
+		if (!tierFitsEstimatedContext(stage as IngestionStage, { provider: prov, modelId: mid }, ctx)) return;
+		seen.add(k);
+		if (front) out.unshift({ provider: prov, modelId: mid });
+		else out.push({ provider: prov, modelId: mid });
+	};
+
+	// 1) Restormel primary (may differ from canonical)
+	pushTier({ provider: plan.provider, modelId: plan.model }, true);
+
+	const catList = catalogRouting?.[llmStage];
+	if (Array.isArray(catList) && catList.length > 0) {
+		const scored = catList
+			.filter((t) => t && typeof t.provider === 'string' && typeof t.modelId === 'string')
+			.map((t) => ({
+				provider: t.provider.trim().toLowerCase(),
+				modelId: t.modelId.trim(),
+				fails: ingestModelFailureCounts.get(ingestModelFailureKey(t.provider, t.modelId)) ?? 0
+			}))
+			.filter((t) => t.provider && t.modelId);
+
+		scored.sort((a, b) => {
+			if (a.fails !== b.fails) return a.fails - b.fails;
+			return 0;
+		});
+
+		for (const t of scored) {
+			pushTier({ provider: t.provider, modelId: t.modelId });
+		}
+	}
+
+	for (const t of canonical) {
+		pushTier({ provider: t.provider, modelId: t.modelId });
+	}
+
+	return out;
+}
 
 function createEmptyTiming(): IngestTimingPayload {
 	return {
@@ -885,6 +998,22 @@ function buildGroupingBatches(
 	});
 }
 
+function splitGroupingBatchInHalf(batch: GroupingBatch): [GroupingBatch, GroupingBatch] | null {
+	if (batch.claims.length <= 1) return null;
+	const mid = Math.ceil(batch.claims.length / 2);
+	const firstClaims = batch.claims.slice(0, mid);
+	const secondClaims = batch.claims.slice(mid);
+	const rels = batch.relations;
+	const sub = (batchClaims: PhaseOneClaim[]): GroupingBatch => {
+		const claimPositions = new Set(batchClaims.map((c) => c.position_in_source));
+		const batchRelations = rels.filter(
+			(r) => claimPositions.has(r.from_position) && claimPositions.has(r.to_position)
+		);
+		return { claims: batchClaims, relations: batchRelations };
+	};
+	return [sub(firstClaims), sub(secondClaims)];
+}
+
 function buildRelationsBatches(
 	claims: PhaseOneClaim[],
 	targetTokens: number,
@@ -923,6 +1052,17 @@ function buildRelationsBatches(
 
 function relationDedupeKey(relation: PhaseOneRelation): string {
 	return `${relation.from_position}:${relation.to_position}:${relation.relation_type}`;
+}
+
+function estimateRelationsClaimsJsonTokens(claims: PhaseOneClaim[]): number {
+	return estimateTokens(JSON.stringify(claims, null, 2));
+}
+
+function isTpmOrRateLimitModelErrorMessage(msg: string): boolean {
+	return (
+		/\btpm\b|tokens per min|token.?per.?min/i.test(msg) ||
+		/rate limit|too many requests|429/i.test(msg)
+	);
 }
 
 function mergeRelationsDedup(
@@ -1214,6 +1354,18 @@ function mergeValidationOutputs(outputs: ValidationOutput[]): ValidationOutput {
 	};
 
 	return normalizeValidationOutput(merged);
+}
+
+function assertEmbeddingVectorsMatchConfig(vectors: number[][], label: string): void {
+	const prov = getEmbeddingProvider();
+	for (let i = 0; i < vectors.length; i++) {
+		const v = vectors[i];
+		if (!Array.isArray(v) || v.length !== EMBEDDING_DIMENSIONS) {
+			throw new Error(
+				`[INTEGRITY] ${label}: vector at index ${i} has length ${Array.isArray(v) ? v.length : 'n/a'}, expected ${EMBEDDING_DIMENSIONS} (${prov.name}:${EMBEDDING_MODEL}). Re-embed with a consistent model or clear checkpoints.`
+			);
+		}
+	}
 }
 
 function analyzeGroupingReferenceHealth(arguments_: GroupingOutput): {
@@ -1563,6 +1715,27 @@ function planMatchesCanonicalTier(
 	return plan.provider === tier.provider && plan.model === tier.modelId;
 }
 
+const PIN_SUFFIX_BY_STAGE: Partial<Record<StageKey, string>> = {
+	extraction: 'EXTRACTION',
+	relations: 'RELATIONS',
+	grouping: 'GROUPING',
+	validation: 'VALIDATION',
+	json_repair: 'JSON_REPAIR'
+};
+
+function isStageModelPinned(stage: StageKey): boolean {
+	const suf = PIN_SUFFIX_BY_STAGE[stage];
+	if (!suf) return false;
+	const p = process.env[`INGEST_PIN_PROVIDER_${suf}`]?.trim();
+	const m = process.env[`INGEST_PIN_MODEL_${suf}`]?.trim();
+	return Boolean(p && m);
+}
+
+function ingestModelFallbackDisabled(): boolean {
+	const v = (process.env.INGEST_NO_MODEL_FALLBACK ?? '').trim().toLowerCase();
+	return v === '1' || v === 'true' || v === 'yes';
+}
+
 async function callStageModel(params: {
 	stage: StageKey;
 	plan: IngestionStagePlan;
@@ -1585,9 +1758,9 @@ async function callStageModel(params: {
 		planningContext
 	} = params;
 
-	const llmStage = stage as IngestionLlmStageKey;
-	const chain = canonicalModelChainForStage(llmStage);
-	const idxInChain = chain.findIndex((t) => planMatchesCanonicalTier(plan, t));
+	const catalogRouting = loadIngestCatalogRoutingFromEnv();
+	const effectiveChain = buildEffectiveModelChainForStage(stage, plan, planningContext, catalogRouting);
+	const noFallback = ingestModelFallbackDisabled() || isStageModelPinned(stage);
 
 	let lastError: Error | null = null;
 
@@ -1671,7 +1844,8 @@ async function callStageModel(params: {
 					msg.includes('prompt_too_long') ||
 					msg.includes('context_length') ||
 					/resource exhausted/i.test(msg) ||
-					/rate limit|quota|too many requests/i.test(msg);
+					/rate limit|quota|too many requests/i.test(msg) ||
+					/\btpm\b|tokens per min|token.?per.?min/i.test(msg);
 				console.warn(
 					`  [WARN] ${stage} ${activePlan.provider}:${activePlan.model} failed: ${formatModelCallErrorDetails(error)}`
 				);
@@ -1679,20 +1853,36 @@ async function callStageModel(params: {
 				if (!retryable) break;
 			}
 		}
+		recordIngestModelFailure(activePlan.provider, activePlan.model);
 		return null;
 	}
 
-	if (idxInChain < 0) {
-		const primaryText = await runInnerRetries(plan);
-		if (primaryText !== null) return primaryText;
-		for (let ci = 0; ci < chain.length; ci++) {
-			const tier = chain[ci]!;
-			if (planMatchesCanonicalTier(plan, tier)) continue;
-			let activePlan: IngestionStagePlan;
+	if (noFallback) {
+		const only = await runInnerRetries(plan);
+		if (only !== null) return only;
+		const detail =
+			lastError != null ? formatModelCallErrorDetails(lastError) : 'Unknown error';
+		throw new Error(
+			`[${stage}] Model call failed and cross-model fallback is disabled (operator model pin or INGEST_NO_MODEL_FALLBACK): ${detail}`
+		);
+	}
+
+	if (catalogRouting && effectiveChain.length > 1) {
+		console.log(
+			`  [ROUTING] ${stage}: catalog-aware chain (${effectiveChain.length} candidate(s)) — cheapest suitable first, failure-deprioritized`
+		);
+	}
+
+	for (let ci = 0; ci < effectiveChain.length; ci++) {
+		const tier = effectiveChain[ci]!;
+		let activePlan: IngestionStagePlan;
+		if (planMatchesCanonicalTier(plan, tier)) {
+			activePlan = plan;
+		} else {
 			try {
 				activePlan = await planIngestionStageWithExplicitModel(stage, planningContext, tier);
 				console.warn(
-					`  [FALLBACK] ${stage}: escalating to ${activePlan.provider}/${activePlan.model} after primary tier exhausted`
+					`  [FALLBACK] ${stage}: trying ${activePlan.provider}/${activePlan.model} (${ci + 1}/${effectiveChain.length} in chain)`
 				);
 			} catch (planErr) {
 				console.warn(
@@ -1703,40 +1893,15 @@ async function callStageModel(params: {
 				lastError = planErr instanceof Error ? planErr : new Error(String(planErr));
 				continue;
 			}
-			const t = await runInnerRetries(activePlan);
-			if (t !== null) return t;
 		}
-	} else {
-		for (let ci = idxInChain; ci < chain.length; ci++) {
-			const tier = chain[ci]!;
-			let activePlan: IngestionStagePlan;
-			if (ci === idxInChain && planMatchesCanonicalTier(plan, tier)) {
-				activePlan = plan;
-			} else {
-				try {
-					activePlan = await planIngestionStageWithExplicitModel(stage, planningContext, tier);
-					console.warn(
-						`  [FALLBACK] ${stage}: escalating to ${activePlan.provider}/${activePlan.model} after primary tier exhausted`
-					);
-				} catch (planErr) {
-					console.warn(
-						`  [FALLBACK] ${stage}: could not plan ${tier.provider}/${tier.modelId} — ${
-							planErr instanceof Error ? planErr.message : String(planErr)
-						}`
-					);
-					lastError = planErr instanceof Error ? planErr : new Error(String(planErr));
-					continue;
-				}
-			}
-			const t = await runInnerRetries(activePlan);
-			if (t !== null) return t;
-		}
+		const t = await runInnerRetries(activePlan);
+		if (t !== null) return t;
 	}
 
 	const detail =
 		lastError != null ? formatModelCallErrorDetails(lastError) : 'Unknown error';
 	throw new Error(
-		`[${stage}] Planned route and canonical fallbacks exhausted (${plan.provider}:${plan.model}): ${detail}. If this is Anthropic, check the model id is not retired (see https://docs.anthropic.com/en/docs/about-claude/model-deprecations).`
+		`[${stage}] Planned route and fallback chain exhausted (${plan.provider}:${plan.model}): ${detail}. If this is Anthropic, check the model id is not retired (see https://docs.anthropic.com/en/docs/about-claude/model-deprecations).`
 	);
 }
 
@@ -1940,6 +2105,8 @@ type PhaseOneRelation = Relation & PhaseOneRelationMetadata;
 // ─── Partial Results (for crash recovery) ──────────────────────────────────
 interface PartialResults {
 	source: SourceMeta;
+	/** Full cleaned source text (Neon checkpoints only) — allows resume when data/sources is missing on the worker. */
+	source_text_snapshot?: string;
 	claims?: PhaseOneClaim[];
 	relations?: PhaseOneRelation[];
 	arguments?: GroupingOutput;
@@ -1972,6 +2139,8 @@ interface PartialResults {
 		relations_so_far: PhaseOneRelation[];
 		next_batch_index: number;
 		total_batches: number;
+		/** Adaptive TPM splits: linear queue of claim batches (replaces rebuild from RELATIONS_BATCH_TARGET_TOKENS when present). */
+		batch_claim_slices?: PhaseOneClaim[][];
 	};
 	// Mid-embedding checkpoint: resume after each successful Vertex batch (see embedTexts onBatchComplete)
 	embedding_progress?: {
@@ -1985,9 +2154,11 @@ async function savePartialResults(slug: string, results: PartialResults) {
 	if (runId && process.env.DATABASE_URL?.trim()) {
 		try {
 			const snapshot = parseFloat(estimateCostUsd());
+			const body = ingestSourceTextBodyForCheckpoint;
 			const withSnapshot: PartialResults = {
 				...results,
-				cost_usd_snapshot: Number.isFinite(snapshot) && snapshot >= 0 ? snapshot : results.cost_usd_snapshot
+				cost_usd_snapshot: Number.isFinite(snapshot) && snapshot >= 0 ? snapshot : results.cost_usd_snapshot,
+				...(typeof body === 'string' && body.length > 0 ? { source_text_snapshot: body } : {})
 			};
 			await saveIngestPartialToNeon({
 				runId,
@@ -2008,8 +2179,9 @@ async function savePartialResults(slug: string, results: PartialResults) {
 	const partialPath = path.join(INGESTED_DIR, `${slug}-partial.json`);
 	const tmpPath = `${partialPath}.tmp`;
 	const snapshot = parseFloat(estimateCostUsd());
+	const { source_text_snapshot: _omitSnap, ...forDisk } = results;
 	const withSnapshot: PartialResults = {
-		...results,
+		...forDisk,
 		cost_usd_snapshot: Number.isFinite(snapshot) && snapshot >= 0 ? snapshot : results.cost_usd_snapshot
 	};
 	// Write to temp file first, then atomic rename — prevents corruption on crash mid-write
@@ -2625,8 +2797,9 @@ function applyIngestPinsJsonArg(argv: string[]): void {
 				v.provider.trim() &&
 				v.model.trim()
 			) {
-				process.env[`INGEST_PIN_PROVIDER_${suffix}`] = v.provider.trim();
-				process.env[`INGEST_PIN_MODEL_${suffix}`] = v.model.trim();
+				const prov = v.provider.trim();
+				process.env[`INGEST_PIN_PROVIDER_${suffix}`] = prov;
+				process.env[`INGEST_PIN_MODEL_${suffix}`] = normalizeIngestPinModelId(prov, v.model.trim());
 				applied++;
 			}
 		}
@@ -2674,6 +2847,50 @@ function logIngestPinsWorkerSnapshot(phase: string, argv: string[]): void {
 	if (verbose) {
 		console.log(`[INGEST_PINS] ${phase} verbose:`, env);
 	}
+}
+
+async function loadSourceTextAndMeta(
+	filePathArg: string
+): Promise<{ txtPath: string; sourceText: string; sourceMeta: SourceMeta; slug: string }> {
+	const runId = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim();
+	const resolvedArg = path.resolve(filePathArg);
+	let txtPath = resolvedArg;
+	let sourceText: string;
+	let sourceMeta: SourceMeta;
+	const hintSlug = path.basename(resolvedArg, '.txt');
+
+	if (fs.existsSync(txtPath)) {
+		const metaPath = txtPath.replace(/\.txt$/, '.meta.json');
+		if (!fs.existsSync(metaPath)) {
+			console.error(`[ERROR] Source metadata not found: ${metaPath}`);
+			process.exit(1);
+		}
+		sourceText = fs.readFileSync(txtPath, 'utf-8');
+		sourceMeta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as SourceMeta;
+	} else if (runId && process.env.DATABASE_URL?.trim()) {
+		const fromNeon = await loadIngestPartialFromNeon(runId, hintSlug);
+		const snap = fromNeon?.source_text_snapshot;
+		const src = fromNeon?.source;
+		if (typeof snap !== 'string' || snap.length === 0 || !src || typeof src !== 'object' || Array.isArray(src)) {
+			console.error(`[ERROR] Source text not found: ${txtPath}`);
+			console.error(
+				'  Hint: On serverless workers the fetch output may be gone. Re-run fetch or ensure the latest deploy persists source_text_snapshot in Neon (ingest_staging_meta).'
+			);
+			process.exit(1);
+		}
+		sourceText = snap;
+		sourceMeta = src as SourceMeta;
+		txtPath = path.join(process.cwd(), 'data/sources', `${hintSlug}.txt`);
+		console.log(
+			`  [RESUME] Loaded source body from Neon checkpoint (local file missing) — slug ${hintSlug}`
+		);
+	} else {
+		console.error(`[ERROR] Source text not found: ${txtPath}`);
+		process.exit(1);
+	}
+
+	const slug = path.basename(txtPath, '.txt');
+	return { txtPath, sourceText, sourceMeta, slug };
 }
 
 async function main() {
@@ -2728,6 +2945,7 @@ async function main() {
 		console.error('  INGEST_PIN_PROVIDER_EXTRACTION, INGEST_PIN_MODEL_EXTRACTION (same for RELATIONS, GROUPING, VALIDATION, JSON_REPAIR)');
 		console.error('  --ingest-pins-json=<base64url JSON>  Preferred when spawned from admin (survives dotenv)');
 		console.error('  INGEST_LOG_PINS=1            Log pin + routing diagnostics (per-stage planning, dotenv restore)');
+		console.error('  INGEST_NO_MODEL_FALLBACK=1   When set, do not escalate to other providers/models after retries (pins imply strict mode)');
 		console.error('\nResume is automatic — re-run the same source to pick up where it left off.');
 		process.exit(1);
 	}
@@ -2746,22 +2964,9 @@ async function main() {
 		process.exit(1);
 	}
 
-	// Load source files
-	const txtPath = path.resolve(filePath);
-	const metaPath = txtPath.replace(/\.txt$/, '.meta.json');
-
-	if (!fs.existsSync(txtPath)) {
-		console.error(`[ERROR] Source text not found: ${txtPath}`);
-		process.exit(1);
-	}
-	if (!fs.existsSync(metaPath)) {
-		console.error(`[ERROR] Source metadata not found: ${metaPath}`);
-		process.exit(1);
-	}
-
-	const sourceText = fs.readFileSync(txtPath, 'utf-8');
-	const sourceMeta: SourceMeta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-	const slug = path.basename(txtPath, '.txt');
+	// Load source files (or full text from Neon when the worker has no local data/sources copy)
+	const { txtPath, sourceText, sourceMeta, slug } = await loadSourceTextAndMeta(filePath);
+	ingestSourceTextBodyForCheckpoint = sourceText;
 	assertValidSourceMetadata(sourceMeta);
 	const sectionTokenLimit = getSectionTokenLimit(sourceMeta.source_type);
 	const rawPassages = segmentArgumentativePassages(sourceText, {
@@ -3003,131 +3208,250 @@ async function main() {
 					}
 				}
 
-				for (let i = 0; i < batchQueue.length; i++) {
-					const batch = batchQueue[i];
-					batchLabel++;
-					const renderedBatch = renderPassageBatch(batch);
-					const queuePos = i + 1;
+				let i = 0;
+				while (i < batchQueue.length) {
+					const batch = batchQueue[i]!;
 					const queueTotal = batchQueue.length;
 					const passagesTotalSegmented = passages.length;
-					const passagesAfterThisBatch = batchQueue
-						.slice(i + 1)
-						.reduce((sum, b) => sum + b.length, 0);
-					const extractionProgressSuffix = ` · ${passagesAfterThisBatch} passage(s) left after this batch · ${passagesTotalSegmented} segmented total`;
-					console.log(
-						`\n  [BATCH ${batchLabel}] (${queuePos}/${queueTotal}) ${batch.length} passage(s) (~${estimateTokens(renderedBatch).toLocaleString()} tokens)${extractionProgressSuffix}`
-					);
 
-					const userMsg = EXTRACTION_USER(
-						`${sourceMeta.title} (Batch ${batchLabel})`,
-						sourceMeta.author.join(', ') || 'Unknown',
-						renderedBatch
-					);
-
-					let rawResponse: string;
-					try {
-						rawResponse = await callStageModelWithProgress({
-							stage: 'extraction',
-							plan: extractionPlan,
-							budget: extractionBudget,
-							tracker: extractionTracker,
-							systemPrompt: EXTRACTION_SYSTEM,
-							userMessage: userMsg,
-							label: `Extracting batch ${batchLabel} (${queuePos}/${queueTotal})`,
-							planningContext: basePlanningContext
-						});
-					} catch (apiError) {
-						const apiMsg = apiError instanceof Error ? apiError.message : String(apiError);
-						if (apiMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
-							if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
-							const mid = Math.ceil(batch.length / 2);
-							batchQueue.splice(i + 1, 0, batch.slice(0, mid), batch.slice(mid));
-							const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
-							console.warn(
-								`  [SPLIT] Batch ${batchLabel} truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
-							);
-							batchLabel--;
-							continue;
-						}
-						throw apiError;
-					}
-					logStageCost('Extraction', extractionTracker, extractionPlan);
-
-					try {
-						const parsed = parseJsonResponse(rawResponse);
-						const validated = ExtractionOutputSchema.parse(
-							normalizeExtractionPayload(parsed, domainOverride)
-						);
-						const offsetClaims = attachPassageMetadataToClaims(
-							validated,
-							batch,
-							allClaims.length,
-							sourceMeta
-						);
-
-						allClaims.push(...offsetClaims);
+					const runSequentialSingleBatch = async (): Promise<'done' | 'split'> => {
+						batchLabel++;
+						const renderedBatch = renderPassageBatch(batch);
+						const queuePos = i + 1;
+						const passagesAfterThisBatch = batchQueue
+							.slice(i + 1)
+							.reduce((sum, b) => sum + b.length, 0);
+						const extractionProgressSuffix = ` · ${passagesAfterThisBatch} passage(s) left after this batch · ${passagesTotalSegmented} segmented total`;
 						console.log(
-							`  [OK] Extracted ${validated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
+							`\n  [BATCH ${batchLabel}] (${queuePos}/${queueTotal}) ${batch.length} passage(s) (~${estimateTokens(renderedBatch).toLocaleString()} tokens)${extractionProgressSuffix}`
 						);
 
-						partial.extraction_progress = {
-							claims_so_far: [...allClaims],
-							remaining_batches: batchQueue.slice(i + 1)
-						};
-						await savePartialResults(slug, partial);
-					} catch (parseError) {
-						console.warn(
-							`  [WARN] JSON parse/validation failed for batch ${batchLabel}. Attempting fix...`
+						const userMsg = EXTRACTION_USER(
+							`${sourceMeta.title} (Batch ${batchLabel})`,
+							sourceMeta.author.join(', ') || 'Unknown',
+							renderedBatch
 						);
 
-						let fixedResponse: string;
+						let rawResponse: string;
 						try {
-							fixedResponse = await fixJsonWithModel(
-								jsonRepairPlan,
-								jsonRepairBudget,
-								repairTracker,
-								rawResponse,
-								parseError instanceof Error ? parseError.message : String(parseError),
-								'Array of { text, claim_type, domain, passage_id, section_context, position_in_source, confidence }',
-								basePlanningContext
-							);
-						} catch (fixError) {
-							const fixMsg = fixError instanceof Error ? fixError.message : String(fixError);
-							if (fixMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
+							rawResponse = await callStageModelWithProgress({
+								stage: 'extraction',
+								plan: extractionPlan,
+								budget: extractionBudget,
+								tracker: extractionTracker,
+								systemPrompt: EXTRACTION_SYSTEM,
+								userMessage: userMsg,
+								label: `Extracting batch ${batchLabel} (${queuePos}/${queueTotal})`,
+								planningContext: basePlanningContext
+							});
+						} catch (apiError) {
+							const apiMsg = apiError instanceof Error ? apiError.message : String(apiError);
+							if (apiMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
 								if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
 								const mid = Math.ceil(batch.length / 2);
 								batchQueue.splice(i + 1, 0, batch.slice(0, mid), batch.slice(mid));
 								const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
 								console.warn(
-									`  [SPLIT] Batch ${batchLabel} repair response truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
+									`  [SPLIT] Batch ${batchLabel} truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
 								);
 								batchLabel--;
-								continue;
+								return 'split';
 							}
-							throw fixError;
+							throw apiError;
 						}
+						logStageCost('Extraction', extractionTracker, extractionPlan);
 
-						const fixedParsed = parseJsonResponse(fixedResponse);
-						const fixedValidated = ExtractionOutputSchema.parse(
-							normalizeExtractionPayload(fixedParsed, domainOverride)
-						);
-						const fixedClaims = attachPassageMetadataToClaims(
-							fixedValidated,
-							batch,
-							allClaims.length,
-							sourceMeta
-						);
-						allClaims.push(...fixedClaims);
-						console.log(
-							`  [OK] Fixed and extracted ${fixedValidated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
-						);
+						try {
+							const parsed = parseJsonResponse(rawResponse);
+							const validated = ExtractionOutputSchema.parse(
+								normalizeExtractionPayload(parsed, domainOverride)
+							);
+							const offsetClaims = attachPassageMetadataToClaims(
+								validated,
+								batch,
+								allClaims.length,
+								sourceMeta
+							);
 
-						partial.extraction_progress = {
-							claims_so_far: [...allClaims],
-							remaining_batches: batchQueue.slice(i + 1)
-						};
-						await savePartialResults(slug, partial);
+							allClaims.push(...offsetClaims);
+							console.log(
+								`  [OK] Extracted ${validated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
+							);
+
+							partial.extraction_progress = {
+								claims_so_far: [...allClaims],
+								remaining_batches: batchQueue.slice(i + 1)
+							};
+							await savePartialResults(slug, partial);
+						} catch (parseError) {
+							console.warn(
+								`  [WARN] JSON parse/validation failed for batch ${batchLabel}. Attempting fix...`
+							);
+
+							let fixedResponse: string;
+							try {
+								fixedResponse = await fixJsonWithModel(
+									jsonRepairPlan,
+									jsonRepairBudget,
+									repairTracker,
+									rawResponse,
+									parseError instanceof Error ? parseError.message : String(parseError),
+									'Array of { text, claim_type, domain, passage_id, section_context, position_in_source, confidence }',
+									basePlanningContext
+								);
+							} catch (fixError) {
+								const fixMsg = fixError instanceof Error ? fixError.message : String(fixError);
+								if (fixMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
+									if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
+									const mid = Math.ceil(batch.length / 2);
+									batchQueue.splice(i + 1, 0, batch.slice(0, mid), batch.slice(mid));
+									const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
+									console.warn(
+										`  [SPLIT] Batch ${batchLabel} repair response truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
+									);
+									batchLabel--;
+									return 'split';
+								}
+								throw fixError;
+							}
+
+							const fixedParsed = parseJsonResponse(fixedResponse);
+							const fixedValidated = ExtractionOutputSchema.parse(
+								normalizeExtractionPayload(fixedParsed, domainOverride)
+							);
+							const fixedClaims = attachPassageMetadataToClaims(
+								fixedValidated,
+								batch,
+								allClaims.length,
+								sourceMeta
+							);
+							allClaims.push(...fixedClaims);
+							console.log(
+								`  [OK] Fixed and extracted ${fixedValidated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
+							);
+
+							partial.extraction_progress = {
+								claims_so_far: [...allClaims],
+								remaining_batches: batchQueue.slice(i + 1)
+							};
+							await savePartialResults(slug, partial);
+						}
+						return 'done';
+					};
+
+					if (INGEST_EXTRACTION_CONCURRENCY > 1 && batch.length === 1) {
+						const groupIndices: number[] = [];
+						let j = i;
+						while (
+							j < batchQueue.length &&
+							batchQueue[j]!.length === 1 &&
+							groupIndices.length < INGEST_EXTRACTION_CONCURRENCY
+						) {
+							groupIndices.push(j);
+							j++;
+						}
+						if (groupIndices.length >= 2) {
+							const parallelStartLabel = batchLabel + 1;
+							console.log(
+								`\n  [PARALLEL] Extracting ${groupIndices.length} single-passage batches concurrently (max ${INGEST_EXTRACTION_CONCURRENCY})`
+							);
+							type ParResult = {
+								order: number;
+								validated: ExtractionOutput;
+								batch: PassageRecord[];
+								batchOrd: number;
+								queuePos: number;
+							};
+							const parResults = await Promise.all(
+								groupIndices.map(async (qi, gidx) => {
+									const b = batchQueue[qi]!;
+									const batchOrd = parallelStartLabel + gidx;
+									const renderedBatch = renderPassageBatch(b);
+									const queuePos = qi + 1;
+									const passagesAfter = batchQueue
+										.slice(qi + 1)
+										.reduce((sum, bb) => sum + bb.length, 0);
+									const suffix = ` · ${passagesAfter} passage(s) left after this batch · ${passagesTotalSegmented} segmented total`;
+									console.log(
+										`\n  [BATCH ${batchOrd}] (${queuePos}/${queueTotal}) 1 passage(s) (~${estimateTokens(renderedBatch).toLocaleString()} tokens)${suffix}`
+									);
+									const userMsg = EXTRACTION_USER(
+										`${sourceMeta.title} (Batch ${batchOrd})`,
+										sourceMeta.author.join(', ') || 'Unknown',
+										renderedBatch
+									);
+									const rawResponse = await callStageModelWithProgress({
+										stage: 'extraction',
+										plan: extractionPlan,
+										budget: extractionBudget,
+										tracker: extractionTracker,
+										systemPrompt: EXTRACTION_SYSTEM,
+										userMessage: userMsg,
+										label: `Extracting batch ${batchOrd} (${queuePos}/${queueTotal})`,
+										planningContext: basePlanningContext
+									});
+									logStageCost('Extraction', extractionTracker, extractionPlan);
+									let validated: ExtractionOutput;
+									try {
+										const parsed = parseJsonResponse(rawResponse);
+										validated = ExtractionOutputSchema.parse(
+											normalizeExtractionPayload(parsed, domainOverride)
+										);
+									} catch (parseError) {
+										console.warn(
+											`  [WARN] JSON parse/validation failed for batch ${batchOrd}. Attempting fix...`
+										);
+										const fixedResponse = await fixJsonWithModel(
+											jsonRepairPlan,
+											jsonRepairBudget,
+											repairTracker,
+											rawResponse,
+											parseError instanceof Error ? parseError.message : String(parseError),
+											'Array of { text, claim_type, domain, passage_id, section_context, position_in_source, confidence }',
+											basePlanningContext
+										);
+										const fixedParsed = parseJsonResponse(fixedResponse);
+										validated = ExtractionOutputSchema.parse(
+											normalizeExtractionPayload(fixedParsed, domainOverride)
+										);
+									}
+									const order = b[0]?.order_in_source ?? qi;
+									return {
+										order,
+										validated,
+										batch: b,
+										batchOrd,
+										queuePos
+									} satisfies ParResult;
+								})
+							);
+							parResults.sort((a, b) => a.order - b.order);
+							for (const pr of parResults) {
+								const offsetClaims = attachPassageMetadataToClaims(
+									pr.validated,
+									pr.batch,
+									allClaims.length,
+									sourceMeta
+								);
+								allClaims.push(...offsetClaims);
+								console.log(
+									`  [OK] Extracted ${pr.validated.length} claims from batch ${pr.batchOrd} (${pr.queuePos}/${queueTotal} in queue)`
+								);
+							}
+							batchLabel = parallelStartLabel + groupIndices.length - 1;
+							partial.extraction_progress = {
+								claims_so_far: [...allClaims],
+								remaining_batches: batchQueue.slice(i + groupIndices.length)
+							};
+							await savePartialResults(slug, partial);
+							i += groupIndices.length;
+							continue;
+						}
 					}
+
+					const seqOutcome = await runSequentialSingleBatch();
+					if (seqOutcome === 'split') continue;
+					i += 1;
 				}
 
 				allClaims = normalizeSequentialClaimPositions(allClaims);
@@ -3224,12 +3548,23 @@ async function main() {
 				RELATIONS_BATCH_OVERLAP_CLAIMS
 			);
 
-			console.log(
-				`  [INFO] Relations in ${relationsBatches.length} batch(es), target ~${relationsBatchTarget.toLocaleString()} tokens (overlap ${RELATIONS_BATCH_OVERLAP_CLAIMS} claim(s))`
-			);
-
+			let workQueue: PhaseOneClaim[][] = relationsBatches.map((b) => [...b]);
 			let startBatchIndex = 0;
-			if (
+
+			const savedSlices = partial.relations_progress?.batch_claim_slices;
+			if (Array.isArray(savedSlices) && savedSlices.length > 0) {
+				workQueue = savedSlices.map((b) => [...b]);
+				relations = Array.isArray(partial.relations_progress?.relations_so_far)
+					? partial.relations_progress.relations_so_far
+					: [];
+				startBatchIndex = Math.min(
+					partial.relations_progress?.next_batch_index ?? 0,
+					workQueue.length
+				);
+				console.log(
+					`  [RESUME] Mid-relations checkpoint (adaptive queue) — ${relations.length} relations; batch ${startBatchIndex + 1}/${workQueue.length}`
+				);
+			} else if (
 				partial.relations_progress &&
 				Array.isArray(partial.relations_progress.relations_so_far) &&
 				partial.relations_progress.total_batches === relationsBatches.length &&
@@ -3237,70 +3572,109 @@ async function main() {
 			) {
 				relations = partial.relations_progress.relations_so_far;
 				startBatchIndex = Math.min(partial.relations_progress.next_batch_index, relationsBatches.length);
+				workQueue = relationsBatches.map((b) => [...b]);
 				console.log(
 					`  [RESUME] Mid-relations checkpoint — ${relations.length} relations so far; resuming at batch ${startBatchIndex + 1}/${relationsBatches.length}`
 				);
 			}
 
+			console.log(
+				`  [INFO] Relations in ${workQueue.length} batch(es), target ~${relationsBatchTarget.toLocaleString()} tokens (overlap ${RELATIONS_BATCH_OVERLAP_CLAIMS} claim(s)); TPM splits may increase batch count`
+			);
+
 			const relationsPlanningContext = {
 				...basePlanningContext,
 				claimCount: allClaims.length
 			};
-			for (let batchIndex = startBatchIndex; batchIndex < relationsBatches.length; batchIndex++) {
-				const batchClaims = relationsBatches[batchIndex]!;
-				const claimsJson = JSON.stringify(batchClaims, null, 2);
-				const relUserMsg = RELATIONS_USER(claimsJson);
 
-				console.log(
-					`  [BATCH ${batchIndex + 1}/${relationsBatches.length}] ${batchClaims.length} claims (~${estimateTokens(
-						claimsJson
-					).toLocaleString()} tokens claim JSON)`
-				);
+			for (let batchIndex = startBatchIndex; batchIndex < workQueue.length; batchIndex++) {
+					// Inner loop: on TPM/rate-limit, split this queue slot into two smaller slices before escalating provider.
+					while (true) {
+					const batchClaims = workQueue[batchIndex]!;
+					const claimsJson = JSON.stringify(batchClaims, null, 2);
+					const relUserMsg = RELATIONS_USER(claimsJson);
+					const tokEst = estimateRelationsClaimsJsonTokens(batchClaims);
 
-				const relRawResponse = await callStageModel({
-					stage: 'relations',
-					plan: relationPlan,
-					budget: relationBudget,
-					tracker: relationsTracker,
-					systemPrompt: RELATIONS_SYSTEM,
-					userMessage: relUserMsg,
-					planningContext: relationsPlanningContext
-				});
-				logStageCost('Relations', relationsTracker, relationPlan);
-
-				let batchRelations: PhaseOneRelation[] = [];
-				try {
-					const parsed = parseJsonResponse(relRawResponse);
-					batchRelations = attachRelationMetadata(RelationsOutputSchema.parse(parsed), allClaims);
-					console.log(`  [OK] Identified ${batchRelations.length} relations in batch ${batchIndex + 1}`);
-				} catch (parseError) {
-					console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
-					const fixedResponse = await fixJsonWithModel(
-						jsonRepairPlan,
-						jsonRepairBudget,
-						repairTracker,
-						relRawResponse,
-						parseError instanceof Error ? parseError.message : String(parseError),
-						'Array of { from_position, to_position, relation_type, strength, note? }',
-						relationsPlanningContext
-					);
-					const fixedParsed = parseJsonResponse(fixedResponse);
-					batchRelations = attachRelationMetadata(RelationsOutputSchema.parse(fixedParsed), allClaims);
 					console.log(
-						`  [OK] Fixed and identified ${batchRelations.length} relations in batch ${batchIndex + 1}`
+						`  [BATCH ${batchIndex + 1}/${workQueue.length}] ${batchClaims.length} claims (~${tokEst.toLocaleString()} tokens claim JSON)`
 					);
+
+					let relRawResponse: string;
+					try {
+						relRawResponse = await callStageModel({
+							stage: 'relations',
+							plan: relationPlan,
+							budget: relationBudget,
+							tracker: relationsTracker,
+							systemPrompt: RELATIONS_SYSTEM,
+							userMessage: relUserMsg,
+							planningContext: relationsPlanningContext
+						});
+					} catch (relErr) {
+						const msg = relErr instanceof Error ? relErr.message : String(relErr);
+						if (batchClaims.length > 1 && isTpmOrRateLimitModelErrorMessage(msg)) {
+							const mid = Math.ceil(batchClaims.length / 2);
+							workQueue.splice(
+								batchIndex,
+								1,
+								batchClaims.slice(0, mid),
+								batchClaims.slice(mid)
+							);
+							console.warn(
+								`  [SPLIT] Relations batch hit TPM/rate limit — splitting into 2 slices (queue now ${workQueue.length} batch(es))`
+							);
+							partial.relations = relations;
+							partial.relations_progress = {
+								relations_so_far: relations,
+								next_batch_index: batchIndex,
+								total_batches: workQueue.length,
+								batch_claim_slices: workQueue
+							};
+							partial.stage_completed = 'relating';
+							await savePartialResults(slug, partial);
+							continue;
+						}
+						throw relErr;
+					}
+
+					logStageCost('Relations', relationsTracker, relationPlan);
+
+					let batchRelations: PhaseOneRelation[] = [];
+					try {
+						const parsed = parseJsonResponse(relRawResponse);
+						batchRelations = attachRelationMetadata(RelationsOutputSchema.parse(parsed), allClaims);
+						console.log(`  [OK] Identified ${batchRelations.length} relations in batch ${batchIndex + 1}`);
+					} catch (parseError) {
+						console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
+						const fixedResponse = await fixJsonWithModel(
+							jsonRepairPlan,
+							jsonRepairBudget,
+							repairTracker,
+							relRawResponse,
+							parseError instanceof Error ? parseError.message : String(parseError),
+							'Array of { from_position, to_position, relation_type, strength, note? }',
+							relationsPlanningContext
+						);
+						const fixedParsed = parseJsonResponse(fixedResponse);
+						batchRelations = attachRelationMetadata(RelationsOutputSchema.parse(fixedParsed), allClaims);
+						console.log(
+							`  [OK] Fixed and identified ${batchRelations.length} relations in batch ${batchIndex + 1}`
+						);
+					}
+
+					relations = mergeRelationsDedup(relations, batchRelations);
+
+					partial.relations = relations;
+					partial.relations_progress = {
+						relations_so_far: relations,
+						next_batch_index: batchIndex + 1,
+						total_batches: workQueue.length,
+						batch_claim_slices: workQueue
+					};
+					partial.stage_completed = 'relating';
+					await savePartialResults(slug, partial);
+					break;
 				}
-
-				relations = mergeRelationsDedup(relations, batchRelations);
-
-				partial.relations = relations;
-				partial.relations_progress = {
-					relations_so_far: relations,
-					next_batch_index: batchIndex + 1,
-					total_batches: relationsBatches.length
-				};
-				partial.stage_completed = 'relating';
-				await savePartialResults(slug, partial);
 			}
 
 			// Print breakdown
@@ -3379,12 +3753,21 @@ async function main() {
 					);
 				}
 
-				const groupingBatches = buildGroupingBatches(allClaims, relations, groupingBatchTarget);
+				let groupingBatches = buildGroupingBatches(allClaims, relations, groupingBatchTarget);
 				console.log(
 					`  [INFO] Grouping in ${groupingBatches.length} batch(es), target ~${groupingBatchTarget.toLocaleString()} tokens`
 				);
 				let groupedOutputs: GroupingOutput[] = [];
 				let startGroupingBatchIndex = 0;
+				if (
+					partial.grouping_progress &&
+					partial.grouping_progress.total_batches !== groupingBatches.length
+				) {
+					console.warn(
+						`  [WARN] Grouping checkpoint batch count (${partial.grouping_progress.total_batches}) does not match current plan (${groupingBatches.length}) — restarting Stage 3 grouping from scratch`
+					);
+					partial.grouping_progress = undefined;
+				}
 				if (
 					partial.grouping_progress?.grouped_outputs_so_far &&
 					partial.grouping_progress.next_batch_index > 0 &&
@@ -3402,8 +3785,9 @@ async function main() {
 					claimCount: allClaims.length,
 					relationCount: relations.length
 				};
-				for (let batchIndex = startGroupingBatchIndex; batchIndex < groupingBatches.length; batchIndex++) {
-					const batch = groupingBatches[batchIndex];
+				let batchIndex = startGroupingBatchIndex;
+				while (batchIndex < groupingBatches.length) {
+					const batch = groupingBatches[batchIndex]!;
 					const claimsJson = JSON.stringify(batch.claims, null, 2);
 					const relationsJson = JSON.stringify(batch.relations, null, 2);
 					console.log(
@@ -3422,10 +3806,10 @@ async function main() {
 					saveGroupingDebugRaw(slug, batchIndex, grpRawResponse);
 					logStageCost('Grouping', groupingTracker, groupingPlan);
 
+					let batchArguments: GroupingOutput;
 					try {
 						const parsed = parseJsonResponse(grpRawResponse);
-						const batchArguments = GroupingOutputSchema.parse(normalizeGroupingPayload(parsed));
-						groupedOutputs.push(batchArguments);
+						batchArguments = GroupingOutputSchema.parse(normalizeGroupingPayload(parsed));
 						console.log(
 							`  [OK] Identified ${batchArguments.length} arguments in batch ${batchIndex + 1}`
 						);
@@ -3443,19 +3827,38 @@ async function main() {
 							groupingPlanningContext
 						);
 						const fixedParsed = parseJsonResponse(fixedResponse);
-						const fixedArguments = GroupingOutputSchema.parse(normalizeGroupingPayload(fixedParsed));
-						groupedOutputs.push(fixedArguments);
+						batchArguments = GroupingOutputSchema.parse(normalizeGroupingPayload(fixedParsed));
 						console.log(
-							`  [OK] Fixed and identified ${fixedArguments.length} arguments in batch ${batchIndex + 1}`
+							`  [OK] Fixed and identified ${batchArguments.length} arguments in batch ${batchIndex + 1}`
 						);
 					}
 
+					const batchHealth = analyzeGroupingReferenceHealth(batchArguments);
+					if (batchHealth.collapsed) {
+						const halves = splitGroupingBatchInHalf(batch);
+						if (halves) {
+							console.warn(
+								`  [SPLIT] Grouping batch ${batchIndex + 1} collapsed claim references (${batchHealth.uniquePositions} unique positions / ${batchHealth.totalReferences} refs) — splitting into two smaller batches`
+							);
+							groupingBatches.splice(batchIndex, 1, halves[0], halves[1]);
+							partial.grouping_progress = {
+								grouped_outputs_so_far: groupedOutputs,
+								next_batch_index: batchIndex,
+								total_batches: groupingBatches.length
+							};
+							await savePartialResults(slug, partial);
+							continue;
+						}
+					}
+
+					groupedOutputs.push(batchArguments);
 					partial.grouping_progress = {
 						grouped_outputs_so_far: groupedOutputs,
 						next_batch_index: batchIndex + 1,
 						total_batches: groupingBatches.length
 					};
 					await savePartialResults(slug, partial);
+					batchIndex += 1;
 				}
 
 				arguments_ = mergeGroupingOutputs(groupedOutputs);
@@ -3546,6 +3949,9 @@ async function main() {
 					'[INTEGRITY] Partial embedding vectors exceed claim count — clear Neon staging / remove *-partial.json or use --force-stage embedding'
 				);
 			}
+			if (priorEmbeddings.length > 0) {
+				assertEmbeddingVectorsMatchConfig(priorEmbeddings, 'Restored embedding checkpoint');
+			}
 			if (priorEmbeddings.length === claimTexts.length && priorEmbeddings.length > 0) {
 				console.log(
 					`  [RESUME] Embedding already complete on disk (${priorEmbeddings.length} vectors) — skipping API calls`
@@ -3587,6 +3993,8 @@ async function main() {
 				);
 				allEmbeddings = [...prefix, ...newVectors];
 			}
+
+			assertEmbeddingVectorsMatchConfig(allEmbeddings, 'Claim embeddings');
 
 			const embedMs = Date.now() - stageEmbedStart;
 			if (activeIngestTiming) {
@@ -3803,6 +4211,7 @@ async function main() {
 			console.log(
 				'\n  [PHASE] Stages 1–5 complete. Resume this source without --stop-before-store (or use admin Sync) to run Stage 6 (SurrealDB).'
 			);
+			console.log('[UI] Pipeline phases 1–5 finished; awaiting SurrealDB sync (Stage 6).');
 			await savePartialResults(slug, partial);
 			await updateIngestionLog(db, sourceMeta.url, {
 				status: 'validating',

@@ -3,6 +3,8 @@
  * INGEST_ORCHESTRATION_RUN_ID + DATABASE_URL are set on the worker).
  */
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { getDrizzleDb } from './neon';
 import {
@@ -12,6 +14,11 @@ import {
   ingestStagingRelations,
   ingestStagingValidation
 } from './schema';
+
+function sourceTextSnapshotFromPartial(partial: Record<string, unknown>): string | null {
+  const raw = partial.source_text_snapshot;
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
 import { isNeonIngestPersistenceEnabled } from '../neon/datastore';
 
 function orchestrationRunId(): string | null {
@@ -135,11 +142,14 @@ export async function saveIngestPartialToNeon(opts: {
         ? (partial.source as Record<string, unknown>)
         : null;
 
+    const textSnap = sourceTextSnapshotFromPartial(partial);
+
     await tx
       .insert(ingestStagingMeta)
       .values({
         runId,
         slug,
+        sourceTextSnapshot: textSnap,
         sourceJson,
         stageCompleted: typeof partial.stage_completed === 'string' ? partial.stage_completed : '',
         costUsdSnapshot:
@@ -161,6 +171,7 @@ export async function saveIngestPartialToNeon(opts: {
         target: ingestStagingMeta.runId,
         set: {
           slug,
+          ...(textSnap != null ? { sourceTextSnapshot: textSnap } : {}),
           sourceJson,
           stageCompleted: typeof partial.stage_completed === 'string' ? partial.stage_completed : '',
           costUsdSnapshot:
@@ -252,6 +263,9 @@ export async function loadIngestPartialFromNeon(
       : { title: slug, url: '', author: [], source_type: 'unknown', word_count: 0 };
   const partial: Record<string, unknown> = {
     source,
+    ...(meta.sourceTextSnapshot && meta.sourceTextSnapshot.length > 0
+      ? { source_text_snapshot: meta.sourceTextSnapshot }
+      : {}),
     stage_completed: meta.stageCompleted,
     cost_usd_snapshot: meta.costUsdSnapshot ?? undefined,
     claims: claims.length > 0 ? claims : undefined,
@@ -272,4 +286,59 @@ export async function loadIngestPartialFromNeon(
   }
 
   return partial;
+}
+
+/** True when staging has full source text (resume without local data/sources on the worker). */
+export async function neonHasIngestSourceTextSnapshot(runId: string): Promise<boolean> {
+  if (!isNeonIngestPersistenceEnabled()) return false;
+  const db = getDrizzleDb();
+  const meta = await db.query.ingestStagingMeta.findFirst({
+    where: eq(ingestStagingMeta.runId, runId),
+    columns: { sourceTextSnapshot: true }
+  });
+  const t = meta?.sourceTextSnapshot;
+  return typeof t === 'string' && t.length > 0;
+}
+
+/**
+ * Writes `slug.txt` + `slug.meta.json` under `data/sources` from Neon so `ingest.ts` can run
+ * when the container filesystem no longer has the fetch output (e.g. Cloud Run).
+ */
+export async function neonRestoreSourceTextToDataSources(
+  runId: string,
+  slugHint?: string
+): Promise<{ txtPath: string; restored: boolean; slug: string }> {
+  const hint = slugHint?.trim();
+  const fallbackSlug = hint
+    ? path.basename(hint, path.extname(hint) === '.txt' ? '.txt' : '')
+    : 'source';
+  const fallbackTxt = path.resolve(process.cwd(), 'data/sources', `${fallbackSlug}.txt`);
+  if (!isNeonIngestPersistenceEnabled()) {
+    return { txtPath: fallbackTxt, restored: false, slug: fallbackSlug };
+  }
+  const db = getDrizzleDb();
+  const metaRow = await db.query.ingestStagingMeta.findFirst({
+    where: eq(ingestStagingMeta.runId, runId)
+  });
+  const text = metaRow?.sourceTextSnapshot;
+  if (!metaRow || typeof text !== 'string' || text.length === 0) {
+    return { txtPath: fallbackTxt, restored: false, slug: fallbackSlug };
+  }
+
+  const slug =
+    metaRow.slug && metaRow.slug.trim().length > 0 ? metaRow.slug.trim() : fallbackSlug;
+
+  const sourcesDir = path.resolve(process.cwd(), 'data/sources');
+  fs.mkdirSync(sourcesDir, { recursive: true });
+  const txtPath = path.join(sourcesDir, `${slug}.txt`);
+  const metaPath = path.join(sourcesDir, `${slug}.meta.json`);
+
+  const sourceObj =
+    metaRow.sourceJson && typeof metaRow.sourceJson === 'object' && !Array.isArray(metaRow.sourceJson)
+      ? (metaRow.sourceJson as Record<string, unknown>)
+      : { title: slug, url: '', author: [], source_type: 'unknown', word_count: 0 };
+
+  fs.writeFileSync(txtPath, text, 'utf-8');
+  fs.writeFileSync(metaPath, JSON.stringify(sourceObj, null, 2), 'utf-8');
+  return { txtPath, restored: true, slug };
 }

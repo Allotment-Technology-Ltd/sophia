@@ -572,6 +572,36 @@ export type SurfaceAssignmentsValidationError =
 	| { code: 'surface_role_embedding_mismatch'; key: string; role: SurfaceRole }
 	| { code: 'surface_role_inquiries_ineligible'; key: string; role: SurfaceRole };
 
+/**
+ * Map admin PUT body keys to the same `providerType::modelId` strings as {@link catalogSurfaceStableKey}
+ * for each catalog row. The Model availability UI historically used raw `row.providerType` (e.g. `google`)
+ * while resolve/validate use normalized ids (`vertex` for Gemini), so saves could persist under the wrong
+ * key and appear to “revert” on reload.
+ */
+export function canonicalizeSurfaceAssignmentsForPut(
+	catalogPayload: unknown,
+	assignments: Record<string, SurfaceRole>
+): Record<string, SurfaceRole> {
+	const rows = listCatalogSurfaceCandidatesWithEmbeddingSupplement(catalogPayload);
+	const out: Record<string, SurfaceRole> = {};
+	for (const row of rows) {
+		const stable = catalogSurfaceStableKey(row.providerType, row.modelId);
+		const mid = row.modelId.trim();
+		const pt = row.providerType.trim().toLowerCase();
+		let role = assignments[stable];
+		if (role === undefined && (pt === 'google' || pt === 'vertex')) {
+			const g = catalogSurfaceStableKey('google', mid);
+			const v = catalogSurfaceStableKey('vertex', mid);
+			if (assignments[g] !== undefined) role = assignments[g];
+			if (role === undefined && assignments[v] !== undefined) role = assignments[v];
+		}
+		if (role !== undefined) {
+			out[stable] = role;
+		}
+	}
+	return out;
+}
+
 /** Validate PUT body: full key coverage and role semantics vs catalog rows. */
 export function validateSurfaceAssignmentsPut(
 	catalogPayload: unknown,

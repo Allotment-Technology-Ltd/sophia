@@ -7,6 +7,8 @@ import { REASONING_PROVIDER_ORDER } from '@restormel/contracts/providers';
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'child_process';
 import { randomBytes } from 'crypto';
 import { EventEmitter } from 'events';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { buildLocalTsxSpawnArgs, findFetchedSourceFile } from '$lib/server/adminOperations';
 import type { IngestionPipelinePreset } from '$lib/ingestionPipelineModelRequirements';
 import {
@@ -22,6 +24,11 @@ import { appendIssueFromLogLine, persistIngestRunReport, type IngestIssueRecord 
 import { buildOperatorByokProcessEnv } from '$lib/server/byok/buildOperatorIngestEnv';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 import { query as dbQuery } from '$lib/server/db';
+import {
+  neonHasIngestSourceTextSnapshot,
+  neonRestoreSourceTextToDataSources
+} from '$lib/server/db/ingestStaging';
+import { encodeIngestCatalogRoutingJsonB64 } from '$lib/server/ingestCatalogRouting';
 
 export interface IngestRunPayload {
   source_url: string;
@@ -43,6 +50,8 @@ export interface IngestRunPayload {
     embedBatchSize?: number;
     /** Claim overlap between adjacent relation batches (`scripts/ingest.ts`). */
     relationsBatchOverlapClaims?: number;
+    /** Parallel single-passage extraction batches (`INGEST_EXTRACTION_CONCURRENCY`). */
+    extractionConcurrency?: number;
     /** When false, disables strict grouping integrity exit (`INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE`). */
     failOnGroupingPositionCollapse?: boolean;
     /** Narrow provider preference for the worker (`INGEST_PROVIDER`). */
@@ -93,6 +102,7 @@ function batchOverridesToEnv(
     relationsTargetTokens,
     embedBatchSize,
     relationsBatchOverlapClaims,
+    extractionConcurrency,
     failOnGroupingPositionCollapse,
     ingestProvider,
     ingestLogPins,
@@ -118,6 +128,7 @@ function batchOverridesToEnv(
   const relations = asPositiveInt(relationsTargetTokens);
   const embed = asPositiveInt(embedBatchSize);
   const overlap = asPositiveInt(relationsBatchOverlapClaims);
+  const extractConc = asPositiveInt(extractionConcurrency);
 
   if (extraction != null) out.INGEST_EXTRACTION_MAX_TOKENS_PER_SECTION = String(extraction);
   if (grouping != null) out.GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS = String(grouping);
@@ -125,6 +136,7 @@ function batchOverridesToEnv(
   if (relations != null) out.RELATIONS_BATCH_TARGET_TOKENS = String(relations);
   if (embed != null) out.VERTEX_EMBED_BATCH_SIZE = String(embed);
   if (overlap != null) out.RELATIONS_BATCH_OVERLAP_CLAIMS = String(overlap);
+  if (extractConc != null) out.INGEST_EXTRACTION_CONCURRENCY = String(extractConc);
   if (typeof failOnGroupingPositionCollapse === 'boolean') {
     out.INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE = failOnGroupingPositionCollapse ? 'true' : 'false';
   }
@@ -181,6 +193,8 @@ function normalizePinnedModelId(provider: string, modelId: string): string {
   // Vertex/Google 1.5 IDs are retired in several environments; pin modern equivalents.
   if ((p === 'vertex' || p === 'google') && m === 'gemini-1.5-pro') return 'gemini-2.5-pro';
   if ((p === 'vertex' || p === 'google') && m === 'gemini-1.5-flash') return 'gemini-2.5-flash';
+  // Anthropic Messages API expects dated Haiku 3.5 ids; bare alias returns 404 from some gateways.
+  if (p === 'anthropic' && m === 'claude-3-5-haiku') return 'claude-3-5-haiku-20241022';
   return m;
 }
 
@@ -218,6 +232,8 @@ export function parseModelChainLabel(label: string): { providerRaw: string; mode
 export function modelChainLabelsToEnv(chain: IngestRunPayload['model_chain']): Record<string, string> {
   const out: Record<string, string> = {};
   const apply = (label: string, suffix: string) => {
+    const raw = label.trim().toLowerCase();
+    if (!raw || raw === 'auto') return;
     const parsed = parseModelChainLabel(label);
     if (!parsed) return;
     const provider = normalizePinProvider(parsed.providerRaw);
@@ -849,7 +865,18 @@ class IngestRunManager extends EventEmitter {
       state.completedAt = Date.now();
       state.lastFailureStageKey = state.currentStageKey ?? state.lastFailureStageKey ?? null;
       state.currentAction = `Failed: ${error}`;
+      const rid = state.id;
       state.resumable = Boolean(state.sourceFilePath);
+      if (!state.resumable && isNeonIngestPersistenceEnabled()) {
+        void neonHasIngestSourceTextSnapshot(rid).then((hasSnap) => {
+          const s = this.runs.get(rid);
+          if (!s || s.status !== 'error') return;
+          if (hasSnap) {
+            s.resumable = true;
+            this.flushNeonSnapshotPersist(rid);
+          }
+        });
+      }
       this.flushNeonSnapshotPersist(runId);
       this.schedulePersistReport(runId);
       if (state.payload.queue_record_id) {
@@ -870,7 +897,18 @@ class IngestRunManager extends EventEmitter {
     state.process = undefined;
     // Keep cancellation resumable when a checkpoint source file exists so operators can stop
     // noisy runs and restart from the closest completed stage.
+    const rid = state.id;
     state.resumable = Boolean(state.sourceFilePath);
+    if (!state.resumable && isNeonIngestPersistenceEnabled()) {
+      void neonHasIngestSourceTextSnapshot(rid).then((hasSnap) => {
+        const s = this.runs.get(rid);
+        if (!s || s.status !== 'error') return;
+        if (hasSnap) {
+          s.resumable = true;
+          this.flushNeonSnapshotPersist(rid);
+        }
+      });
+    }
 
     for (const key of Object.keys(state.stages)) {
       const st = state.stages[key];
@@ -953,7 +991,22 @@ class IngestRunManager extends EventEmitter {
     if (!state) return { ok: false, error: 'Run not found.' };
     if (state.status !== 'error') return { ok: false, error: 'Run is not in a failed state.' };
     if (!state.sourceFilePath) {
-      return { ok: false, error: 'No source file checkpoint was found for this run.' };
+      if (!isNeonIngestPersistenceEnabled()) {
+        return { ok: false, error: 'No source file checkpoint was found for this run.' };
+      }
+      try {
+        const { txtPath, restored } = await neonRestoreSourceTextToDataSources(state.id);
+        if (!restored) {
+          return { ok: false, error: 'No source file checkpoint was found for this run.' };
+        }
+        state.sourceFilePath = txtPath;
+        this.flushNeonSnapshotPersist(runId);
+      } catch (e) {
+        return {
+          ok: false,
+          error: `Could not restore source from Neon: ${e instanceof Error ? e.message : String(e)}`
+        };
+      }
     }
 
     if (options?.model_chain || options?.batch_overrides) {
@@ -1153,14 +1206,38 @@ class IngestRunManager extends EventEmitter {
 
     const pinEnvFlat = modelChainLabelsToEnv(payload.model_chain);
     const embeddingEnvOverrides = embeddingPreferenceToEnv(payload.embedding_model);
+    const operatorModelPins = Object.keys(pinEnvFlat).length > 0;
     const batchEnvOverrides = {
       ...batchOverridesToEnv(payload.batch_overrides),
       ...embeddingEnvOverrides,
-      ...pinEnvFlat
+      ...pinEnvFlat,
+      ...(operatorModelPins ? { INGEST_NO_MODEL_FALLBACK: '1' } : {})
     };
     const ingestPinsJsonCli = encodeIngestPinsJsonCliArg(pinEnvFlat);
     const forSync = options.forSyncOnly;
     const stopBeforeStore = forSync ? false : payload.stop_before_store !== false;
+    const orchestrationEnv = isNeonIngestPersistenceEnabled()
+      ? { INGEST_ORCHESTRATION_RUN_ID: runId }
+      : {};
+
+    let catalogRoutingEnv: Record<string, string> = {};
+    if (!operatorModelPins) {
+      try {
+        const b64 = await encodeIngestCatalogRoutingJsonB64();
+        if (b64) {
+          catalogRoutingEnv = { INGEST_CATALOG_ROUTING_JSON_B64: b64 };
+          this.addLog(
+            runId,
+            '[ingest] catalog-aware model fallback enabled (Model availability → ingestion-suitable models, cost-ordered)'
+          );
+        }
+      } catch (e) {
+        console.warn(
+          '[ingest-runs] Could not build INGEST_CATALOG_ROUTING_JSON_B64:',
+          e instanceof Error ? e.message : String(e)
+        );
+      }
+    }
 
     if (Object.keys(operatorByokEnv).length > 0) {
       this.addLog(
@@ -1179,15 +1256,23 @@ class IngestRunManager extends EventEmitter {
 
     if (!forSync) {
       if (options.resumeFromFailure) {
-        for (const stage of PIPELINE_STAGES) {
-          this.updateStageStatus(runId, stage, 'idle');
-        }
-        if (payload.validate) {
-          this.updateStageStatus(runId, 'validate', 'idle');
+        const st = this.runs.get(runId);
+        const failKey = st?.lastFailureStageKey;
+        const order = orderedStagesAfterFetch(payload.validate === true);
+        const failIdx = failKey ? order.indexOf(failKey) : -1;
+        if (st && failIdx >= 0) {
+          this.applyPipelineFocusFromLog(runId, failKey!, 'Resuming after failure…');
         } else {
-          this.updateStageStatus(runId, 'validate', 'skipped');
+          for (const stage of PIPELINE_STAGES) {
+            this.updateStageStatus(runId, stage, 'idle');
+          }
+          if (payload.validate) {
+            this.updateStageStatus(runId, 'validate', 'idle');
+          } else {
+            this.updateStageStatus(runId, 'validate', 'skipped');
+          }
+          this.updateStageStatus(runId, 'store', 'idle');
         }
-        this.updateStageStatus(runId, 'store', 'idle');
       } else {
         // Only the first ingest stage is active; others stay pending until logs advance focus.
         this.updateStageStatus(runId, 'extract', 'running');
@@ -1205,7 +1290,35 @@ class IngestRunManager extends EventEmitter {
       this.updateStageStatus(runId, 'store', 'running');
     }
 
-    const ingestTail: string[] = ['scripts/ingest.ts', sourceFile];
+    let resolvedSourceFile = sourceFile;
+    const orchestrationRunId = orchestrationEnv.INGEST_ORCHESTRATION_RUN_ID;
+    if (orchestrationRunId) {
+      try {
+        const absSource = path.isAbsolute(sourceFile)
+          ? sourceFile
+          : path.resolve(process.cwd(), sourceFile);
+        if (!fs.existsSync(absSource)) {
+          const { txtPath, restored } = await neonRestoreSourceTextToDataSources(
+            orchestrationRunId,
+            sourceFile
+          );
+          if (restored) {
+            resolvedSourceFile = txtPath;
+            this.addLog(
+              runId,
+              `[RESUME] Restored source .txt from Neon checkpoint (worker had no local copy) → ${txtPath}`
+            );
+          }
+        }
+      } catch (e) {
+        this.addLog(
+          runId,
+          `[WARN] Neon source restore attempt failed: ${e instanceof Error ? e.message : String(e)}`
+        );
+      }
+    }
+
+    const ingestTail: string[] = ['scripts/ingest.ts', resolvedSourceFile];
     if (ingestPinsJsonCli) {
       ingestTail.push(`--ingest-pins-json=${ingestPinsJsonCli}`);
     }
@@ -1218,13 +1331,9 @@ class IngestRunManager extends EventEmitter {
 
     const { command: ingestCmd, args: ingestArgs } = buildLocalTsxSpawnArgs(ingestTail);
 
-    const orchestrationEnv = isNeonIngestPersistenceEnabled()
-      ? { INGEST_ORCHESTRATION_RUN_ID: runId }
-      : {};
-
     const ingestChild = spawn(ingestCmd, ingestArgs, {
       cwd: process.cwd(),
-      env: { ...process.env, ...batchEnvOverrides, ...operatorByokEnv, ...orchestrationEnv },
+      env: { ...process.env, ...batchEnvOverrides, ...operatorByokEnv, ...orchestrationEnv, ...catalogRoutingEnv },
       stdio: 'pipe'
     }) as ChildProcessWithoutNullStreams;
 
@@ -1270,13 +1379,15 @@ class IngestRunManager extends EventEmitter {
 
       if (code === 0) {
         if (stopBeforeStore) {
-          for (const stage of PIPELINE_STAGES) {
-            this.updateStageStatus(runId, stage, 'done');
+          const order = orderedStagesAfterFetch(payload.validate === true);
+          for (const key of order) {
+            if (key === 'store') {
+              this.updateStageStatus(runId, 'store', 'idle');
+              continue;
+            }
+            if (s?.stages[key]?.status === 'skipped') continue;
+            this.updateStageStatus(runId, key, 'done');
           }
-          if (payload.validate) {
-            this.updateStageStatus(runId, 'validate', 'done');
-          }
-          this.updateStageStatus(runId, 'store', 'idle');
           if (s) s.status = 'awaiting_sync';
           this.addLog(runId, 'Run phases complete. Press “Sync to SurrealDB” to finish.');
           this.schedulePersistReport(runId);
@@ -1333,13 +1444,36 @@ class IngestRunManager extends EventEmitter {
             : `SurrealDB sync (ingest.ts) exited with code ${code ?? 1}`
         );
       } else {
-        const terminalStages = [
-          ...PIPELINE_STAGES,
-          ...(payload.validate ? (['validate'] as const) : []),
-          'store'
-        ] as const;
-        for (const stage of terminalStages) {
-          this.updateStageStatus(runId, stage, 'error');
+        const order = orderedStagesAfterFetch(payload.validate === true);
+        const failKey = s?.lastFailureStageKey;
+        const failIdx = failKey ? order.indexOf(failKey) : -1;
+        if (s && failIdx >= 0) {
+          for (let i = 0; i < failIdx; i++) {
+            const k = order[i]!;
+            if (s.stages[k]?.status === 'skipped') continue;
+            this.updateStageStatus(runId, k, 'done');
+          }
+          if (s.stages[failKey!]?.status !== 'skipped') {
+            this.updateStageStatus(runId, failKey!, 'error');
+          }
+          for (let i = failIdx + 1; i < order.length; i++) {
+            const k = order[i]!;
+            if (k === 'store' && payload.stop_before_store !== false) {
+              this.updateStageStatus(runId, 'store', 'idle');
+              continue;
+            }
+            if (s.stages[k]?.status === 'skipped') continue;
+            this.updateStageStatus(runId, k, 'idle');
+          }
+        } else {
+          const terminalStages = [
+            ...PIPELINE_STAGES,
+            ...(payload.validate ? (['validate'] as const) : []),
+            'store'
+          ] as const;
+          for (const stage of terminalStages) {
+            this.updateStageStatus(runId, stage, 'error');
+          }
         }
         const hint = s ? extractIngestWorkerFailureHint(s.logLines) : '';
         this.failRun(

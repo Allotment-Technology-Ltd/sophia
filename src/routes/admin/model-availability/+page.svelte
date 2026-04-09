@@ -19,6 +19,8 @@
     userQueryable: boolean;
     raw: Record<string, unknown>;
     ingestionPhaseSuitability?: Record<IngestionPipelineStageKey, IngestionPhaseSuitabilityLevel>;
+    /** Server canonical key for surfaceAssignments (google/vertex normalized). */
+    surfaceRowKey?: string;
   };
 
   type SurfaceRole =
@@ -59,7 +61,9 @@
 
   const PREVIEW_KEYS_MAX = 12;
 
-  function rowKey(r: Pick<CatalogRow, 'providerType' | 'modelId'>): string {
+  function rowKey(r: Pick<CatalogRow, 'providerType' | 'modelId' | 'surfaceRowKey'>): string {
+    const stable = r.surfaceRowKey?.trim();
+    if (stable) return stable;
     return `${r.providerType.trim().toLowerCase()}::${r.modelId.trim()}`;
   }
 

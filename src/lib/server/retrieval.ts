@@ -28,6 +28,20 @@ import {
 } from './hybridCandidateGeneration';
 import { constructSeedSet, type SeedBalanceStats } from './seedSetConstructor';
 
+/** SurrealDB KNN: `<|k,ef|>` — ef tunes HNSW/ANN search breadth (see Surreal vector docs). */
+function retrievalDenseKnnEf(): number {
+	const raw = (process.env.RETRIEVAL_KNN_EF ?? '64').trim();
+	const n = parseInt(raw, 10);
+	if (!Number.isFinite(n)) return 64;
+	return Math.max(16, Math.min(512, n));
+}
+
+function surrealKnnOperator(k: number): string {
+	const kk = Math.max(1, Math.trunc(k));
+	const ef = retrievalDenseKnnEf();
+	return `<|${kk},${ef}|>`;
+}
+
 // ─── Result interfaces ─────────────────────────────────────────────────────
 
 export interface RetrievedClaim {
@@ -511,7 +525,7 @@ export async function retrieveContext(
 		}
 
 		// ── Step 2: Hybrid candidate generation (dense + lexical) ───
-		// Dense path: MTREE vector search.
+		// Dense path: vector index (HNSW or MTREE) + KNN `<|k,ef|>`.
 		// Lexical path: exact-term matching for philosophy-specific phrases.
 		// Fusion: reciprocal-rank fusion + lightweight rerank.
 		const densePool = domain || minConfidence > 0 ? topK * 4 : topK * 3;
@@ -616,21 +630,32 @@ export async function retrieveContext(
 		let lexicalSeedClaims: SeedRow[] = [];
 
 		try {
-			console.log('[RETRIEVAL] Dense candidate generation topK=', topK);
-			denseSeedClaims = await query<SeedRow[]>(
+			const knnOp = surrealKnnOperator(densePool);
+			console.log('[RETRIEVAL] Dense candidate generation topK=', topK, 'knn=', knnOp);
+			const denseSurql = (op: string) =>
 				`${rowProjection}
 				FROM (
 					SELECT *
 					FROM claim
-					WHERE embedding <|${densePool}|> $query_embedding
+					WHERE embedding ${op} $query_embedding
 				)
 				${postWhere}
-				LIMIT ${densePool}`,
-				{
-					query_embedding: queryEmbedding,
-					...sharedParams
-				}
-			);
+				LIMIT ${densePool}`;
+			const denseParams = {
+				query_embedding: queryEmbedding,
+				...sharedParams
+			};
+			try {
+				denseSeedClaims = await query<SeedRow[]>(denseSurql(knnOp), denseParams);
+			} catch (knnErr) {
+				const legacyOp = `<|${Math.max(1, Math.trunc(densePool))}|>`;
+				console.warn(
+					'[RETRIEVAL] KNN two-arg operator failed; retrying legacy',
+					legacyOp,
+					knnErr instanceof Error ? knnErr.message : knnErr
+				);
+				denseSeedClaims = await query<SeedRow[]>(denseSurql(legacyOp), denseParams);
+			}
 			console.log('[RETRIEVAL] ✓ Dense candidates:', denseSeedClaims?.length || 0);
 		} catch (dbErr) {
 			if (isDatabaseUnavailable(dbErr)) {
