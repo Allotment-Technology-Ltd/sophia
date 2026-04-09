@@ -66,6 +66,7 @@ SOPHIA remains the concrete app that proves these ideas in product form. Use [..
 - [Restormel Graph Compilation and Rendering Boundary](04-delivery/restormel-graph-compilation-rendering-note.md)
 - [Restormel Graph Core and Observability Extraction Note](04-delivery/restormel-graph-core-observability-extraction-note.md)
 - [Restormel Graph-Aware Evaluation Primitives](04-delivery/restormel-graph-evaluation-primitives-note.md)
+- [Restormel Graph — SOPHIA extraction artefacts](04-delivery/restormel-graph-sophia-extraction-artifacts.md)
 - [Restormel Migration Ledger](04-delivery/restormel-migration-ledger.md)
 - [Restormel Reasoning Compare Diff Note](04-delivery/restormel-reasoning-compare-diff-note.md)
 - [Restormel Reasoning-Object Core](04-delivery/restormel-reasoning-object-core-note.md)
