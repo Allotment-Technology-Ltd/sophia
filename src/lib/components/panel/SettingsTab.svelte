@@ -1067,12 +1067,6 @@
     color: var(--color-muted);
   }
 
-  .byok-journey-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
   .byok-native-shell {
     display: grid;
     gap: 12px;
@@ -1189,14 +1183,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-  }
-
-  .billing-actions-note {
-    width: 100%;
-    margin: 2px 0 4px;
-    font-size: 0.72rem;
-    color: var(--color-muted);
-    line-height: 1.35;
   }
 
   .billing-purpose {

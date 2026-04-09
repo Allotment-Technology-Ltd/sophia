@@ -317,16 +317,16 @@ export async function neonRestoreSourceTextToDataSources(
     return { txtPath: fallbackTxt, restored: false, slug: fallbackSlug };
   }
   const db = getDrizzleDb();
-  const meta = await db.query.ingestStagingMeta.findFirst({
+  const metaRow = await db.query.ingestStagingMeta.findFirst({
     where: eq(ingestStagingMeta.runId, runId)
   });
-  const text = meta?.sourceTextSnapshot;
-  if (typeof text !== 'string' || text.length === 0) {
+  const text = metaRow?.sourceTextSnapshot;
+  if (!metaRow || typeof text !== 'string' || text.length === 0) {
     return { txtPath: fallbackTxt, restored: false, slug: fallbackSlug };
   }
 
   const slug =
-    meta.slug && meta.slug.trim().length > 0 ? meta.slug.trim() : fallbackSlug;
+    metaRow.slug && metaRow.slug.trim().length > 0 ? metaRow.slug.trim() : fallbackSlug;
 
   const sourcesDir = path.resolve(process.cwd(), 'data/sources');
   fs.mkdirSync(sourcesDir, { recursive: true });
@@ -334,8 +334,8 @@ export async function neonRestoreSourceTextToDataSources(
   const metaPath = path.join(sourcesDir, `${slug}.meta.json`);
 
   const sourceObj =
-    meta.sourceJson && typeof meta.sourceJson === 'object' && !Array.isArray(meta.sourceJson)
-      ? (meta.sourceJson as Record<string, unknown>)
+    metaRow.sourceJson && typeof metaRow.sourceJson === 'object' && !Array.isArray(metaRow.sourceJson)
+      ? (metaRow.sourceJson as Record<string, unknown>)
       : { title: slug, url: '', author: [], source_type: 'unknown', word_count: 0 };
 
   fs.writeFileSync(txtPath, text, 'utf-8');
