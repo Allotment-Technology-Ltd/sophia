@@ -16,6 +16,7 @@ export default defineConfig({
   test: {
     include: [
       'src/**/*.test.ts',
+      'scripts/**/*.test.ts',
       'packages/contracts/src/**/*.test.ts',
       'packages/graph-core/src/**/*.test.ts',
       'packages/observability/src/**/*.test.ts'
