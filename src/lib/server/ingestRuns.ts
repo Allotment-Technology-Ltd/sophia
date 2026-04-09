@@ -28,6 +28,7 @@ import {
   neonHasIngestSourceTextSnapshot,
   neonRestoreSourceTextToDataSources
 } from '$lib/server/db/ingestStaging';
+import { encodeIngestCatalogRoutingJsonB64 } from '$lib/server/ingestCatalogRouting';
 
 export interface IngestRunPayload {
   source_url: string;
@@ -1219,6 +1220,25 @@ class IngestRunManager extends EventEmitter {
       ? { INGEST_ORCHESTRATION_RUN_ID: runId }
       : {};
 
+    let catalogRoutingEnv: Record<string, string> = {};
+    if (!operatorModelPins) {
+      try {
+        const b64 = await encodeIngestCatalogRoutingJsonB64();
+        if (b64) {
+          catalogRoutingEnv = { INGEST_CATALOG_ROUTING_JSON_B64: b64 };
+          this.addLog(
+            runId,
+            '[ingest] catalog-aware model fallback enabled (Model availability → ingestion-suitable models, cost-ordered)'
+          );
+        }
+      } catch (e) {
+        console.warn(
+          '[ingest-runs] Could not build INGEST_CATALOG_ROUTING_JSON_B64:',
+          e instanceof Error ? e.message : String(e)
+        );
+      }
+    }
+
     if (Object.keys(operatorByokEnv).length > 0) {
       this.addLog(
         runId,
@@ -1313,7 +1333,7 @@ class IngestRunManager extends EventEmitter {
 
     const ingestChild = spawn(ingestCmd, ingestArgs, {
       cwd: process.cwd(),
-      env: { ...process.env, ...batchEnvOverrides, ...operatorByokEnv, ...orchestrationEnv },
+      env: { ...process.env, ...batchEnvOverrides, ...operatorByokEnv, ...orchestrationEnv, ...catalogRoutingEnv },
       stdio: 'pipe'
     }) as ChildProcessWithoutNullStreams;
 
