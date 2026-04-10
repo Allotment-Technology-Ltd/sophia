@@ -25,7 +25,8 @@ For **declarative GCP** in future, prefer **OpenTofu** (open source, no vendor l
 
 ## Cloud Run
 
-- **Service** `sophia` (`gcloud run services describe sophia --region europe-west2`): SvelteKit app, VPC connector `sophia-connector`, `private-ranges-only` egress to reach SurrealDB.
+- **Service** `sophia` (`gcloud run services describe sophia --region europe-west2`): SvelteKit app, VPC connector `sophia-connector`, `private-ranges-only` egress to reach SurrealDB. **Sizing** (CPU/memory/concurrency) is set in [`.github/workflows/deploy.yml`](../../.github/workflows/deploy.yml) — currently **2Gi / 2 vCPU**, **`--concurrency=8`**, **`NODE_OPTIONS=--max-old-space-size=1536`** so co-located `tsx` ingest children are less likely to OOM the instance.
+- **Service** `sophia-ingest-worker`: same image, **4Gi / 2 vCPU**, **`--concurrency=2`** — deployed automatically after the poller on each main **app-deploy**; manual override via [`scripts/gcp/deploy-sophia-ingest-worker-service.sh`](../../scripts/gcp/deploy-sophia-ingest-worker-service.sh). See [gcp-ingest-worker.md](./gcp-ingest-worker.md) for regional affinity (Neon, Vertex), OAuth on a second `*.run.app` URL, and when to use the worker vs the main service.
 
 ### Neon Postgres migrations (CI/CD)
 
@@ -45,7 +46,7 @@ On each **main** deploy that builds the app image, [`.github/workflows/deploy.ym
 - **`sophia-nightly-link-ingest`** — nightly link ingestion (`pnpm exec tsx scripts/ingest-nightly-links.ts`).
 - **Scheduler** (e.g. `sophia-nightly-link-ingest-0200` in `europe-west2`): HTTP POST to Cloud Run Jobs API (OAuth service account).
 
-Exact CPU/memory/env for the `sophia` service are set in **deploy.yml**; console-only drift may still exist until aligned manually.
+Exact CPU/memory/env for the `sophia` service and `sophia-ingest-worker` are set in **deploy.yml** / the worker script; console-only drift may still exist until aligned manually.
 
 ### First-time / recovery checklist (operator)
 
@@ -93,6 +94,7 @@ gcloud scheduler jobs describe sophia-nightly-link-ingest-0200 --location=europe
 
 ## Related docs
 
+- [GCP ingest worker — sizing, region, separation](./gcp-ingest-worker.md)
 - [Runbooks — monitoring & ingestion](../reference/operations/runbooks.md)
 - [Nightly link ingestion runbook](../reference/operations/runbooks/nightly-link-ingestion-runbook.md)
 - [Neon migration walkthrough](./neon-migration-walkthrough.md)

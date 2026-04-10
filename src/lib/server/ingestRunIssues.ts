@@ -358,6 +358,7 @@ export interface IngestRunSnapshotForReport {
       validationTargetTokens?: number;
       relationsTargetTokens?: number;
       embedBatchSize?: number;
+      embedBatchDelayMs?: number;
       ingestModelTimeoutMs?: number;
       validationModelTimeoutMs?: number;
       ingestStageValidationTimeoutMs?: number;

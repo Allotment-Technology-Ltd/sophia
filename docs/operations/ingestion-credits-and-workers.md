@@ -23,6 +23,16 @@ Admin API:
 
 UI: `/admin/ingest/jobs` and `/admin/ingest/jobs/[id]` (retry actions when `summary.error > 0`).
 
+**Automatic retry:** failed items are moved back to **`pending`** until **`INGEST_JOB_ITEM_MAX_ATTEMPTS`** (default **2** total starts per URL) is reached — **only when the error is classified as retryable** (429, timeouts, overload, `ingest_stuck_timeout`, etc.). **Permanent** failures (e.g. 404) stay in **`error`**. Unclassified errors stay in **`error`** unless **`INGEST_JOB_REQUEUE_UNKNOWN=1`**. Events: `item_requeued_auto`, `item_launch_throttled` (concurrency cap → exponential backoff via **`blocked_until`**), `item_stuck` (optional wall-clock / stale log detection).
+
+**Launch throttle:** `createRun` failures that match “too many concurrent ingest workers” re-queue the item as **`pending`** with **`blocked_until`** (no extra **`attempts`** charge) so the poller does not hot-loop.
+
+**Stuck runner (optional):** set **`INGEST_JOB_ITEM_MAX_WALL_MS`** (absolute time since child run `createdAt`) and/or **`INGEST_JOB_ITEM_STALE_MS`** (no log activity vs `lastOutputAt` / `createdAt`). Non-terminal runs past the threshold are marked **`error`** with `ingest_stuck_timeout` (retryable auto-requeue when attempts allow).
+
+**Preflight (optional):** **`INGEST_JOB_PREFLIGHT=1`** before creating a job calls Restormel **`/providers/health`** (requires **`RESTORMEL_DASHBOARD_API_BASE`** + **`RESTORMEL_DASHBOARD_API_KEY`**).
+
+**Store idempotency:** `scripts/ingest.ts` can persist **`ingest_source_text_sha256`** on Surreal `source` (default on) and **`INGEST_STORE_ENFORCE_TEXT_HASH=1`** aborts if an existing row’s hash disagrees with the current `data/sources` body (same canonical URL).
+
 ## SEP URL manifest
 
 Generate a JSON list of `plato.stanford.edu` entry URLs (one HTTP GET to the public contents page; see script header for etiquette):
@@ -34,6 +44,13 @@ pnpm sep:catalog -- --out data/sep-entry-urls.json
 ## Worker / poller
 
 **Admin UI (no extra infra):** `/admin/ingest/jobs` list refresh and `/admin/ingest/jobs/[id]` detail polling call the server, which runs **`tickIngestionJob`** (detail) or **`tickAllRunningIngestionJobs`** (list). Keeping a tab open is enough to advance jobs; closing every tab stops ticks until something else runs the poller.
+
+### Production operator checklist
+
+1. **`pnpm db:migrate`** (or CI `db:migrate:ci`) has applied latest `drizzle/*.sql` — including optional **`ingest_concurrency_gate`** / **`ingest_phase_gate`** if you use global or phase limits.
+2. **Poller** runs without an open browser: Cloud Scheduler → Cloud Run Job `sophia-ingestion-job-poller` (or `pnpm ingestion:job-poller` in CI). Logs should show `[poller] Ticked N job(s)` when work exists.
+3. **Quotas and alerts:** Vertex TPM, embedding APIs, and Neon — see [ingestion-gcp-quotas.md](./ingestion-gcp-quotas.md).
+4. **Optional multi-instance:** set **`INGEST_GLOBAL_CONCURRENCY_GATE=1`** so concurrent child processes are counted in Neon across app replicas (same cap as `ADMIN_INGEST_MAX_CONCURRENT`).
 
 **Production (GCP, no browser):** CI deploys Cloud Run Job **`sophia-ingestion-job-poller`** on every app deploy (same image as `sophia`; one `tick` per execution). Enable automatic ticks with **`pnpm gcp:setup-ingestion-poller-scheduler`** (Cloud Scheduler every 2 minutes). See [`gcp-infrastructure.md`](./gcp-infrastructure.md).
 

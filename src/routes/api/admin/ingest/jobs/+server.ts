@@ -7,6 +7,7 @@ import {
 	tickAllRunningIngestionJobs
 } from '$lib/server/ingestionJobs';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
+import { MAX_DURABLE_INGEST_JOB_CONCURRENCY } from '$lib/ingestionJobConcurrency';
 
 export const GET: RequestHandler = async ({ locals, url }) => {
 	try {
@@ -53,10 +54,11 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		if (urls.length === 0) {
 			return json({ error: 'No valid URL strings in urls[]' }, { status: 400 });
 		}
-		const concurrency =
+		const rawConcurrency =
 			typeof payload.concurrency === 'number' && Number.isFinite(payload.concurrency)
 				? Math.trunc(payload.concurrency)
 				: 2;
+		const concurrency = Math.max(1, Math.min(MAX_DURABLE_INGEST_JOB_CONCURRENCY, rawConcurrency));
 		const notes = typeof payload.notes === 'string' ? payload.notes : null;
 		const validate = payload.validate === true;
 		const created = await createIngestionJob({

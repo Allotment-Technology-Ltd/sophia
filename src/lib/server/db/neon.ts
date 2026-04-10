@@ -11,7 +11,14 @@ export function getNeonPool(): Pool {
     throw new Error('DATABASE_URL is not set');
   }
   if (!pool) {
-    pool = new Pool({ connectionString: url });
+    const max = process.env.NEON_POOL_MAX?.trim() ?? process.env.DATABASE_POOL_MAX?.trim();
+    const maxConnections = max ? Number(max) : undefined;
+    pool = new Pool({
+      connectionString: url,
+      ...(maxConnections != null && Number.isFinite(maxConnections) && maxConnections > 0
+        ? { max: Math.min(64, Math.trunc(maxConnections)) }
+        : {})
+    });
   }
   return pool;
 }

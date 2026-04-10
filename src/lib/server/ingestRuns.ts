@@ -35,6 +35,12 @@ import {
   normalizePinnedModelId,
   summarizeIngestPinsForLog
 } from './ingestPinNormalization.js';
+import { DEFAULT_ADMIN_INGEST_MAX_CONCURRENT } from '$lib/ingestionJobConcurrency';
+import {
+	isIngestGlobalConcurrencyGateEnabled,
+	releaseGlobalIngestSlot,
+	tryAcquireGlobalIngestSlot
+} from './ingestGlobalConcurrencyGate.js';
 
 export { normalizePinnedModelId, summarizeIngestPinsForLog };
 
@@ -64,6 +70,8 @@ export interface IngestRunPayload {
     validationTargetTokens?: number;
     relationsTargetTokens?: number;
     embedBatchSize?: number;
+    /** Maps to `VERTEX_EMBED_BATCH_DELAY_MS` (ms between embedding API batches; 0 = no delay). */
+    embedBatchDelayMs?: number;
     /** Claim overlap between adjacent relation batches (`scripts/ingest.ts`). */
     relationsBatchOverlapClaims?: number;
     /** Parallel single-passage extraction batches (`INGEST_EXTRACTION_CONCURRENCY`). */
@@ -90,6 +98,18 @@ export interface IngestRunPayload {
     ingestStageEmbeddingTimeoutMs?: number;
     /** Per-run JSON repair stage timeout (`INGEST_STAGE_JSON_REPAIR_TIMEOUT_MS`). */
     ingestStageJsonRepairTimeoutMs?: number;
+    /** Per-run remediation stage timeout (`INGEST_STAGE_REMEDIATION_TIMEOUT_MS`). */
+    ingestStageRemediationTimeoutMs?: number;
+    /** `INGEST_REMEDIATION_FAITHFULNESS_MIN` (0–100). */
+    remediationFaithfulnessMin?: number;
+    /** `INGEST_REMEDIATION_MAX_CLAIMS`. */
+    remediationMaxClaims?: number;
+    /** When false, sets `INGEST_REMEDIATION=0` for the worker. */
+    ingestRemediationEnabled?: boolean;
+    /** `INGEST_REMEDIATION_REVALIDATE=1` for a second validation pass after repair. */
+    ingestRemediationRevalidate?: boolean;
+    /** `INGEST_REMEDIATION_FORCE_RELATIONS_RERUN=1`. */
+    ingestRemediationForceRelationsRerun?: boolean;
   };
   model_chain: {
     extract: string;
@@ -120,6 +140,7 @@ function batchOverridesToEnv(
     validationTargetTokens,
     relationsTargetTokens,
     embedBatchSize,
+    embedBatchDelayMs,
     relationsBatchOverlapClaims,
     extractionConcurrency,
     failOnGroupingPositionCollapse,
@@ -132,7 +153,13 @@ function batchOverridesToEnv(
     ingestStageRelationsTimeoutMs,
     ingestStageGroupingTimeoutMs,
     ingestStageEmbeddingTimeoutMs,
-    ingestStageJsonRepairTimeoutMs
+    ingestStageJsonRepairTimeoutMs,
+    ingestStageRemediationTimeoutMs,
+    remediationFaithfulnessMin,
+    remediationMaxClaims,
+    ingestRemediationEnabled,
+    ingestRemediationRevalidate,
+    ingestRemediationForceRelationsRerun
   } = overrides;
 
   const asPositiveInt = (v: unknown): number | null => {
@@ -146,6 +173,10 @@ function batchOverridesToEnv(
   const validation = asPositiveInt(validationTargetTokens);
   const relations = asPositiveInt(relationsTargetTokens);
   const embed = asPositiveInt(embedBatchSize);
+  const embedDelay =
+    typeof embedBatchDelayMs === 'number' && Number.isFinite(embedBatchDelayMs)
+      ? Math.max(0, Math.trunc(embedBatchDelayMs))
+      : null;
   const overlap = asPositiveInt(relationsBatchOverlapClaims);
   const extractConc = asPositiveInt(extractionConcurrency);
 
@@ -154,6 +185,7 @@ function batchOverridesToEnv(
   if (validation != null) out.VALIDATION_BATCH_TARGET_TOKENS = String(validation);
   if (relations != null) out.RELATIONS_BATCH_TARGET_TOKENS = String(relations);
   if (embed != null) out.VERTEX_EMBED_BATCH_SIZE = String(embed);
+  if (embedDelay != null) out.VERTEX_EMBED_BATCH_DELAY_MS = String(embedDelay);
   if (overlap != null) out.RELATIONS_BATCH_OVERLAP_CLAIMS = String(overlap);
   if (extractConc != null) out.INGEST_EXTRACTION_CONCURRENCY = String(extractConc);
   if (typeof failOnGroupingPositionCollapse === 'boolean') {
@@ -187,6 +219,25 @@ function batchOverridesToEnv(
   if (grpT != null) out.INGEST_STAGE_GROUPING_TIMEOUT_MS = String(grpT);
   if (embT != null) out.INGEST_STAGE_EMBEDDING_TIMEOUT_MS = String(embT);
   if (jrT != null) out.INGEST_STAGE_JSON_REPAIR_TIMEOUT_MS = String(jrT);
+
+  const remT = asPositiveInt(ingestStageRemediationTimeoutMs);
+  if (remT != null) out.INGEST_STAGE_REMEDIATION_TIMEOUT_MS = String(remT);
+
+  const rfMin = asPositiveInt(remediationFaithfulnessMin);
+  if (rfMin != null && rfMin <= 100) out.INGEST_REMEDIATION_FAITHFULNESS_MIN = String(rfMin);
+
+  const rmc = asPositiveInt(remediationMaxClaims);
+  if (rmc != null) out.INGEST_REMEDIATION_MAX_CLAIMS = String(rmc);
+
+  if (typeof ingestRemediationEnabled === 'boolean') {
+    out.INGEST_REMEDIATION = ingestRemediationEnabled ? '1' : '0';
+  }
+  if (typeof ingestRemediationRevalidate === 'boolean') {
+    out.INGEST_REMEDIATION_REVALIDATE = ingestRemediationRevalidate ? '1' : '0';
+  }
+  if (typeof ingestRemediationForceRelationsRerun === 'boolean') {
+    out.INGEST_REMEDIATION_FORCE_RELATIONS_RERUN = ingestRemediationForceRelationsRerun ? '1' : '0';
+  }
 
   return out;
 }
@@ -348,6 +399,8 @@ export interface IngestRunState {
   issues: IngestIssueRecord[];
   /** Throttle for merging live run state into Firestore `ingestion_run_reports` while still running. */
   lastReportPersistAt?: number;
+  /** When true, a row in `ingest_concurrency_gate` was acquired (see INGEST_GLOBAL_CONCURRENCY_GATE). */
+  globalConcurrencySlotHeld?: boolean;
   /** Durable payload revision (Neon); incremented when resume merges model_chain / batch_overrides. */
   payloadVersion?: number;
 }
@@ -525,6 +578,13 @@ class IngestRunManager extends EventEmitter {
     this.startQueuePollingIfEnabled();
   }
 
+  private releaseGlobalSlotIfHeld(runId: string): void {
+    const s = this.runs.get(runId);
+    if (!s?.globalConcurrencySlotHeld) return;
+    s.globalConcurrencySlotHeld = false;
+    void releaseGlobalIngestSlot();
+  }
+
   private startQueuePollingIfEnabled(): void {
     if (!neonQueueEnabled()) return;
     if (this.queuePollTimer) return;
@@ -542,12 +602,29 @@ class IngestRunManager extends EventEmitter {
     try {
       await this.promoteApprovedLinkQueueRows();
       const raw = (process.env.ADMIN_INGEST_MAX_CONCURRENT ?? '').trim();
-      const parsed = parseInt(raw || '3', 10);
-      const maxConcurrent = Number.isFinite(parsed) ? Math.max(1, Math.min(20, parsed)) : 3;
-      if (this.activeChildProcessCount() >= maxConcurrent) return;
+      const parsed = parseInt(raw || String(DEFAULT_ADMIN_INGEST_MAX_CONCURRENT), 10);
+      const maxConcurrent = Number.isFinite(parsed)
+        ? Math.max(1, Math.min(20, parsed))
+        : DEFAULT_ADMIN_INGEST_MAX_CONCURRENT;
+
+      let acquiredGlobal = false;
+      if (ingestRunUsesRealChildProcess()) {
+        if (isIngestGlobalConcurrencyGateEnabled() && isNeonIngestPersistenceEnabled()) {
+          acquiredGlobal = await tryAcquireGlobalIngestSlot(maxConcurrent);
+          if (!acquiredGlobal) return;
+        } else if (this.activeChildProcessCount() >= maxConcurrent) {
+          return;
+        }
+      } else if (this.activeChildProcessCount() >= maxConcurrent) {
+        return;
+      }
 
       const claimed = await neonClaimNextQueuedRun();
-      if (!claimed) return;
+      if (!claimed) {
+        if (acquiredGlobal) void releaseGlobalIngestSlot();
+        return;
+      }
+      if (acquiredGlobal) claimed.globalConcurrencySlotHeld = true;
       this.runs.set(claimed.id, claimed);
       this.addLog(claimed.id, '[QUEUE] Claimed queued run for worker execution.');
       this.spawnIngestionProcess(claimed.id, claimed.payload, claimed.actorEmail || 'system');
@@ -659,11 +736,23 @@ class IngestRunManager extends EventEmitter {
   }
 
   async createRun(payload: IngestRunPayload, actorEmail: string): Promise<string> {
+    const rawConc = (process.env.ADMIN_INGEST_MAX_CONCURRENT ?? '').trim();
+    const parsedConc = parseInt(rawConc || String(DEFAULT_ADMIN_INGEST_MAX_CONCURRENT), 10);
+    const maxConcurrent = Number.isFinite(parsedConc)
+      ? Math.max(1, Math.min(20, parsedConc))
+      : DEFAULT_ADMIN_INGEST_MAX_CONCURRENT;
+
+    let holdGlobalSlot = false;
     if (ingestRunUsesRealChildProcess() && !neonQueueEnabled()) {
-      const raw = (process.env.ADMIN_INGEST_MAX_CONCURRENT ?? '').trim();
-      const parsed = parseInt(raw || '3', 10);
-      const maxConcurrent = Number.isFinite(parsed) ? Math.max(1, Math.min(20, parsed)) : 3;
-      if (this.activeChildProcessCount() >= maxConcurrent) {
+      if (isIngestGlobalConcurrencyGateEnabled() && isNeonIngestPersistenceEnabled()) {
+        const ok = await tryAcquireGlobalIngestSlot(maxConcurrent);
+        if (!ok) {
+          throw new Error(
+            `Too many concurrent ingest workers (${maxConcurrent} max). Wait for a run to finish or raise ADMIN_INGEST_MAX_CONCURRENT.`
+          );
+        }
+        holdGlobalSlot = true;
+      } else if (this.activeChildProcessCount() >= maxConcurrent) {
         throw new Error(
           `Too many concurrent ingest workers (${maxConcurrent} max). Wait for a run to finish or raise ADMIN_INGEST_MAX_CONCURRENT.`
         );
@@ -704,7 +793,8 @@ class IngestRunManager extends EventEmitter {
       actorEmail,
       issues: [],
       lastReportPersistAt: undefined,
-      payloadVersion: 1
+      payloadVersion: 1,
+      globalConcurrencySlotHeld: holdGlobalSlot
     };
 
     this.runs.set(runId, state);
@@ -713,6 +803,7 @@ class IngestRunManager extends EventEmitter {
         await neonCreateIngestRun(state);
       } catch (e) {
         this.runs.delete(runId);
+        if (holdGlobalSlot) void releaseGlobalIngestSlot();
         throw e;
       }
     }
@@ -850,6 +941,7 @@ class IngestRunManager extends EventEmitter {
   completeRun(runId: string): void {
     const state = this.runs.get(runId);
     if (state) {
+      this.releaseGlobalSlotIfHeld(runId);
       state.process = undefined;
       state.status = 'done';
       state.completedAt = Date.now();
@@ -865,6 +957,7 @@ class IngestRunManager extends EventEmitter {
   failRun(runId: string, error: string): void {
     const state = this.runs.get(runId);
     if (state) {
+      this.releaseGlobalSlotIfHeld(runId);
       state.process = undefined;
       state.status = 'error';
       state.error = error;
@@ -896,6 +989,7 @@ class IngestRunManager extends EventEmitter {
     if (!state) return;
     if (state.status === 'done' || state.status === 'error') return;
 
+    this.releaseGlobalSlotIfHeld(runId);
     state.status = 'error';
     state.error = 'Ingestion cancelled by operator.';
     state.completedAt = Date.now();

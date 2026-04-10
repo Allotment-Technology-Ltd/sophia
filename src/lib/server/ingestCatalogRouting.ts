@@ -26,6 +26,7 @@ const STAGE_TO_PIPELINE_KEY: Record<IngestionLlmStageKey, string> = {
   relations: 'ingestion_relations',
   grouping: 'ingestion_grouping',
   validation: 'ingestion_validation',
+  remediation: 'ingestion_remediation',
   json_repair: 'ingestion_json_repair'
 };
 
@@ -138,6 +139,7 @@ export async function buildIngestCatalogRoutingJson(): Promise<IngestCatalogRout
     'relations',
     'grouping',
     'validation',
+    'remediation',
     'json_repair'
   ];
   const out = {} as IngestCatalogRoutingJson;
@@ -157,6 +159,7 @@ export async function encodeIngestCatalogRoutingJsonB64(): Promise<string | null
     'relations',
     'grouping',
     'validation',
+    'remediation',
     'json_repair'
   ];
   if (!keys.some((k) => routing[k]?.length)) return null;

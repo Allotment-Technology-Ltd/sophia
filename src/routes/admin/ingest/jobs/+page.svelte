@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import { getIdToken } from '$lib/authClient';
+	import { MAX_DURABLE_INGEST_JOB_CONCURRENCY } from '$lib/ingestionJobConcurrency';
 
 	type JobSummary = {
 		total?: number;
@@ -104,7 +105,10 @@
 				headers: await authHeaders(true),
 				body: JSON.stringify({
 					urls,
-					concurrency: Math.max(1, Math.min(8, Math.trunc(concurrency) || 2)),
+					concurrency: Math.max(
+						1,
+						Math.min(MAX_DURABLE_INGEST_JOB_CONCURRENCY, Math.trunc(concurrency) || 2)
+					),
 					notes: notes.trim() || null,
 					validate: validateLlm
 				})
@@ -182,7 +186,12 @@
 
 	<section class="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5" aria-labelledby="new-job-heading">
 		<h2 id="new-job-heading" class="font-serif text-lg text-sophia-dark-text">Start job</h2>
-		<p class="mt-2 text-sm text-sophia-dark-muted">One URL per line. Concurrency is capped at 8.</p>
+		<p class="mt-2 text-sm text-sophia-dark-muted">
+			One URL per line (many URLs queue; workers drain the list). Concurrency is capped at {MAX_DURABLE_INGEST_JOB_CONCURRENCY}
+			to match the default global ingest worker limit (<code class="rounded bg-black/20 px-1 py-0.5 font-mono text-[11px]"
+				>ADMIN_INGEST_MAX_CONCURRENT</code
+			>).
+		</p>
 		<div class="mt-4 flex flex-col gap-4">
 			<label class="block">
 				<span class="font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-dim">URLs</span>
@@ -200,7 +209,7 @@
 					<input
 						type="number"
 						min="1"
-						max="8"
+						max={MAX_DURABLE_INGEST_JOB_CONCURRENCY}
 						class="mt-2 w-24 rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)]"
 						bind:value={concurrency}
 					/>

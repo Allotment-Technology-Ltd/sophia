@@ -8,6 +8,7 @@ export const INGEST_PIN_STAGE_SUFFIXES = [
 	'RELATIONS',
 	'GROUPING',
 	'VALIDATION',
+	'REMEDIATION',
 	'JSON_REPAIR'
 ] as const;
 

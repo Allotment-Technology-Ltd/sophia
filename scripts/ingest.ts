@@ -16,6 +16,7 @@
  * normal per-stage retries exhaust, for bounded backoff + one extra attempt on transient errors only.
  */
 
+import { createHash } from 'node:crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Surreal } from 'surrealdb';
@@ -27,6 +28,17 @@ import {
 	EMBEDDING_MODEL,
 	getEmbeddingProvider
 } from '../src/lib/server/embeddings.js';
+import { withEmbedPhaseSlot } from '../src/lib/server/ingestion/ingestPhaseSlot.js';
+import {
+	assertSepPresetDiscipline,
+	buildSepPresetFingerprint,
+	parsePresetDisciplineMode
+} from '../src/lib/server/ingestion/presetDiscipline.js';
+import {
+	resolvePostStoreClaimReviewState,
+	resolvePostStoreVerificationState,
+	type ReviewState as PostStoreReviewState
+} from '../src/lib/server/ingestion/postStoreReview.js';
 import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.js';
 import { z } from 'zod';
 import {
@@ -75,7 +87,8 @@ import {
 	consultIngestionRecoveryAgent,
 	effectiveRecoverySleepMs,
 	ingestRecoveryAgentEnabled,
-	isRetryableIngestModelErrorMessage
+	isRetryableIngestModelErrorMessage,
+	parseRetryAfterMsFromProviderMessage
 } from '../src/lib/server/ingestion/recoveryAgent.js';
 import { formatIngestSelfHealLine } from '../src/lib/server/ingestion/selfHealLog.js';
 import { startSpinner } from './progress.js';
@@ -112,6 +125,19 @@ import {
 	type ValidationOutput
 } from '../src/lib/server/prompts/validation.js';
 import {
+	REMEDIATION_REPAIR_SYSTEM,
+	REMEDIATION_REPAIR_USER,
+	normalizeRemediationRepairOutput
+} from '../src/lib/server/prompts/remediation.js';
+import {
+	dropRelationsByValidation,
+	selectRemediationPositions,
+	sliceSourceAroundClaim,
+	shouldRerunRelationsAfterRemediation
+} from '../src/lib/server/ingestion/remediationLogic.js';
+import { parseRemediationPolicyJson } from '../src/lib/server/ingestion/remediationPolicy.js';
+import { rerunRelationsAndGroupingForRemediation } from './ingestRemediationRerunHelper.js';
+import {
 	buildPassageBatches,
 	renderPassageBatch,
 	segmentArgumentativePassages,
@@ -135,7 +161,14 @@ import type {
 	ReviewState
 } from '../src/lib/server/ingestion/contracts.js';
 
-type StageKey = 'extraction' | 'relations' | 'grouping' | 'validation' | 'embedding' | 'json_repair';
+type StageKey =
+	| 'extraction'
+	| 'relations'
+	| 'grouping'
+	| 'validation'
+	| 'remediation'
+	| 'embedding'
+	| 'json_repair';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 const ingestTpmGuard = createIngestProviderTpmGuard();
@@ -159,6 +192,48 @@ const INGEST_PREFILTER_ENABLED = process.env.INGEST_PREFILTER_ENABLED !== 'false
 const INGEST_VALIDATION_SAMPLE_RATE = Math.max(0, Math.min(1,
 	Number(process.env.INGEST_VALIDATION_SAMPLE_RATE || '1.0')
 ));
+
+/** Default `cli` respects `--validate`; `off` skips validation; `full`/`sampled` force validation (sampled uses INGEST_VALIDATION_SAMPLE_RATE). */
+function resolveShouldValidate(cliFlag: boolean): boolean {
+	const mode = (process.env.INGEST_VALIDATION_MODE ?? 'cli').trim().toLowerCase();
+	if (mode === 'off' || mode === 'none' || mode === 'skip') return false;
+	if (mode === 'full' || mode === 'on' || mode === 'always' || mode === 'sampled') return true;
+	return cliFlag;
+}
+
+/** Aliases so operators can set INGEST_EMBED_* without remembering VERTEX_* names. */
+function applyIngestEmbeddingEnvOverrides(): void {
+	const bs = process.env.INGEST_EMBED_BATCH_SIZE?.trim();
+	if (bs) process.env.VERTEX_EMBED_BATCH_SIZE = bs;
+	const bd = process.env.INGEST_EMBED_BATCH_DELAY_MS?.trim();
+	if (bd) process.env.VERTEX_EMBED_BATCH_DELAY_MS = bd;
+}
+
+/** Post-store: queue low faithfulness claims for human review (see docs/operations/ingestion-sep-preset-discipline.md). */
+const INGEST_POST_STORE_LOW_VALIDATION_THRESHOLD = (() => {
+	const raw = process.env.INGEST_POST_STORE_LOW_VALIDATION_REVIEW_THRESHOLD?.trim();
+	if (!raw) return null;
+	const n = Number(raw);
+	if (!Number.isFinite(n)) return null;
+	return Math.max(0, Math.min(100, n));
+})();
+const INGEST_POST_STORE_LOW_VALIDATION_SAMPLE_RATE = Math.max(
+	0,
+	Math.min(1, Number(process.env.INGEST_POST_STORE_LOW_VALIDATION_SAMPLE_RATE || '1'))
+);
+const INGEST_POST_STORE_FLAG_VERIFICATION_LOW_VALIDATION =
+	(process.env.INGEST_POST_STORE_FLAG_VERIFICATION_LOW_VALIDATION ?? '').trim() === '1' ||
+	(process.env.INGEST_POST_STORE_FLAG_VERIFICATION_LOW_VALIDATION ?? '').trim().toLowerCase() === 'true';
+
+/** Persist SHA-256 of raw source text on Surreal `source` (optional field; helps idempotency audits). */
+const INGEST_STORE_RECORD_TEXT_HASH = (() => {
+	const v = (process.env.INGEST_STORE_RECORD_TEXT_HASH ?? '1').trim().toLowerCase();
+	return v !== '0' && v !== 'false' && v !== 'no';
+})();
+/** Abort store if an existing row has a different text hash (same canonical URL). */
+const INGEST_STORE_ENFORCE_TEXT_HASH =
+	(process.env.INGEST_STORE_ENFORCE_TEXT_HASH ?? '').trim() === '1' ||
+	(process.env.INGEST_STORE_ENFORCE_TEXT_HASH ?? '').trim().toLowerCase() === 'true';
 const INGEST_EXTRACTOR_VERSION =
 	process.env.INGEST_EXTRACTOR_VERSION || 'phase1-passage-grounding-v1';
 const LOW_CONFIDENCE_REVIEW_THRESHOLD = Number(
@@ -188,6 +263,35 @@ const VALIDATION_BATCH_SOURCE_CONTEXT_CHARS =
 const VALIDATION_TOKEN_ESTIMATE_MULTIPLIER = Math.max(
 	1,
 	Number(process.env.VALIDATION_TOKEN_ESTIMATE_MULTIPLIER || '2.2')
+);
+/** Post-validation repair: enabled when --validate unless INGEST_REMEDIATION=0 */
+function ingestRemediationEnabled(): boolean {
+	const v = (process.env.INGEST_REMEDIATION ?? '').trim().toLowerCase();
+	if (v === '0' || v === 'false' || v === 'no') return false;
+	return true;
+}
+const INGEST_REMEDIATION_FAITHFULNESS_MIN = Math.max(
+	0,
+	Math.min(100, Number(process.env.INGEST_REMEDIATION_FAITHFULNESS_MIN ?? '80') || 80)
+);
+const INGEST_REMEDIATION_MAX_CLAIMS = (() => {
+	const raw = Number(process.env.INGEST_REMEDIATION_MAX_CLAIMS ?? '24');
+	if (!Number.isFinite(raw) || raw <= 0) return 24;
+	return Math.max(1, Math.trunc(raw));
+})();
+const INGEST_REMEDIATION_VALIDITY_MIN = Math.max(
+	0,
+	Math.min(100, Number(process.env.INGEST_REMEDIATION_VALIDITY_MIN ?? '80') || 80)
+);
+const INGEST_REMEDIATION_REVALIDATE =
+	(process.env.INGEST_REMEDIATION_REVALIDATE ?? '').trim().toLowerCase() === '1' ||
+	(process.env.INGEST_REMEDIATION_REVALIDATE ?? '').trim().toLowerCase() === 'true';
+const INGEST_REMEDIATION_FORCE_RELATIONS_RERUN =
+	(process.env.INGEST_REMEDIATION_FORCE_RELATIONS_RERUN ?? '').trim().toLowerCase() === '1' ||
+	(process.env.INGEST_REMEDIATION_FORCE_RELATIONS_RERUN ?? '').trim().toLowerCase() === 'true';
+const INGEST_REMEDIATION_RERUN_SHARE = Math.max(
+	0,
+	Math.min(1, Number(process.env.INGEST_REMEDIATION_RERUN_SHARE ?? '0.12') || 0.12)
 );
 // Relations can be expensive and trigger quota/rate exhaustion on large claim graphs.
 // Chunking is enabled when RELATIONS_BATCH_TARGET_TOKENS > 0 (set to 0 to disable).
@@ -222,7 +326,15 @@ const INGEST_SAVE_GROUPING_RAW =
 	(process.env.INGEST_SAVE_GROUPING_RAW || 'false').toLowerCase() === 'true';
 
 // ─── Stage ordering for resume logic ──────────────────────────────────────
-const STAGES_ORDER = ['extracting', 'relating', 'grouping', 'embedding', 'validating', 'storing'];
+const STAGES_ORDER = [
+	'extracting',
+	'relating',
+	'grouping',
+	'embedding',
+	'validating',
+	'remediating',
+	'storing'
+];
 
 function shouldRunStage(stage: string, lastCompleted: string | null | undefined): boolean {
 	if (!lastCompleted) return true;
@@ -804,7 +916,8 @@ function shouldFoldSystemPromptIntoUserForProvider(provider: string | undefined)
 
 function makeStageBudget(stage: StageKey): StageBudget {
 	const upper = stage.toUpperCase();
-	const timeoutFallback = stage === 'validation' ? VALIDATION_MODEL_TIMEOUT_MS : INGEST_MODEL_TIMEOUT_MS;
+	const timeoutFallback =
+		stage === 'validation' || stage === 'remediation' ? VALIDATION_MODEL_TIMEOUT_MS : INGEST_MODEL_TIMEOUT_MS;
 	return {
 		maxInputTokens: parsePositiveInt(process.env[`INGEST_STAGE_${upper}_MAX_INPUT_TOKENS`]),
 		maxOutputTokens: parsePositiveInt(process.env[`INGEST_STAGE_${upper}_MAX_OUTPUT_TOKENS`]),
@@ -1838,6 +1951,7 @@ const PIN_SUFFIX_BY_STAGE: Partial<Record<StageKey, string>> = {
 	relations: 'RELATIONS',
 	grouping: 'GROUPING',
 	validation: 'VALIDATION',
+	remediation: 'REMEDIATION',
 	json_repair: 'JSON_REPAIR'
 };
 
@@ -2006,7 +2120,9 @@ async function callStageModel(params: {
 				stage,
 				provider: activePlan.provider,
 				model: activePlan.model,
-				errorMessage: lastError.message
+				errorMessage: lastError.message,
+				innerAttempt: attempt,
+				suggestedRetryAfterMs: parseRetryAfterMsFromProviderMessage(lastError.message)
 			});
 			if (activeIngestTiming) {
 				activeIngestTiming.recovery_agent_invocations += 1;
@@ -2347,6 +2463,11 @@ interface PartialResults {
 	// Mid-embedding checkpoint: resume after each successful Vertex batch (see embedTexts onBatchComplete)
 	embedding_progress?: {
 		embeddings_so_far: number[][];
+		next_index: number;
+	};
+	/** Mid-remediation checkpoint: ordered claim positions to repair */
+	remediation_progress?: {
+		positions: number[];
 		next_index: number;
 	};
 }
@@ -2998,11 +3119,11 @@ function normalizeResumeStage(
 		Array.isArray(partial.claims) &&
 		emb.length > 0 &&
 		emb.length < partial.claims.length;
-	if (embPartial && ['embedding', 'validating', 'storing'].includes(lastCompleted)) {
+	if (embPartial && ['embedding', 'validating', 'remediating', 'storing'].includes(lastCompleted)) {
 		return 'grouping';
 	}
 
-	if (!hasEmbeddings && ['embedding', 'validating', 'storing'].includes(lastCompleted)) {
+	if (!hasEmbeddings && ['embedding', 'validating', 'remediating', 'storing'].includes(lastCompleted)) {
 		return 'grouping';
 	}
 
@@ -3116,10 +3237,11 @@ async function loadSourceTextAndMeta(
 
 async function main() {
 	const args = process.argv.slice(2);
+	applyIngestEmbeddingEnvOverrides();
 	applyIngestPinsJsonArg(args);
 	logIngestPinsWorkerSnapshot('after_cli_json', args);
 	const filePath = args.find((a) => !a.startsWith('--'));
-	const shouldValidate = args.includes('--validate');
+	const shouldValidate = resolveShouldValidate(args.includes('--validate'));
 	const ingestProviderFlagIdx = args.findIndex((a) => a === '--ingest-provider');
 	const ingestProviderFlag = ingestProviderFlagIdx !== -1 ? args[ingestProviderFlagIdx + 1] : undefined;
 	const ingestProvider = parseIngestProvider(ingestProviderFlag ?? INGEST_PROVIDER_DEFAULT);
@@ -3127,6 +3249,7 @@ async function main() {
 	const relationBudget = makeStageBudget('relations');
 	const groupingBudget = makeStageBudget('grouping');
 	const validationBudget = makeStageBudget('validation');
+	const remediationBudget = makeStageBudget('remediation');
 	const embeddingBudget = makeStageBudget('embedding');
 	const jsonRepairBudget = makeStageBudget('json_repair');
 	// Pipeline mode: exit after stages 1-4 so the batch can start the next source's
@@ -3159,6 +3282,9 @@ async function main() {
 		console.error('  --force-stage <stage>   Re-run from this stage onwards, ignoring saved progress');
 		console.error(`                          Valid stages: ${STAGES_ORDER.join(', ')}`);
 		console.error('  --stop-before-store     Exit after validation; re-run the same source to execute Stage 6 (store)');
+		console.error('\nEnv (optional):');
+		console.error('  INGEST_VALIDATION_MODE=off|cli|full|sampled   Default cli; off ignores --validate; full/sampled forces validation');
+		console.error('  INGEST_EMBED_BATCH_SIZE / INGEST_EMBED_BATCH_DELAY_MS   Aliases for VERTEX_EMBED_* (embedding throughput)');
 		console.error('\nRestormel route env vars (optional):');
 		console.error('  RESTORMEL_INGEST_ROUTE_ID, RESTORMEL_INGEST_VALIDATION_ROUTE_ID');
 		console.error('  RESTORMEL_INGEST_EXTRACTION_ROUTE_ID, RESTORMEL_INGEST_RELATIONS_ROUTE_ID, RESTORMEL_INGEST_GROUPING_ROUTE_ID, RESTORMEL_INGEST_JSON_REPAIR_ROUTE_ID');
@@ -3202,6 +3328,13 @@ async function main() {
 		}
 	}
 	assertValidSourceMetadata(sourceMeta);
+	assertSepPresetDiscipline({
+		sourceType: sourceMeta.source_type,
+		mode: parsePresetDisciplineMode(process.env.INGEST_PRESET_DISCIPLINE),
+		profile: process.env.INGEST_PRESET_PROFILE,
+		fingerprint: buildSepPresetFingerprint(process.env),
+		logLine: (line) => console.log(line)
+	});
 	const sectionTokenLimit = getSectionTokenLimit(sourceMeta.source_type);
 	const rawPassages = segmentArgumentativePassages(sourceText, {
 		maxTokensPerPassage: Math.min(sectionTokenLimit, 900)
@@ -3333,6 +3466,7 @@ async function main() {
 	let relationPlan: IngestionStagePlan;
 	let groupingPlan: IngestionStagePlan;
 	let validationPlan: IngestionStagePlan;
+	let remediationPlan: IngestionStagePlan;
 	let embeddingPlan: IngestionStagePlan;
 	let jsonRepairPlan: IngestionStagePlan;
 	const planInitialStart = Date.now();
@@ -3342,6 +3476,7 @@ async function main() {
 		relationPlan,
 		groupingPlan,
 		validationPlan,
+		remediationPlan,
 		embeddingPlan,
 		jsonRepairPlan
 	] = await Promise.all([
@@ -3349,6 +3484,7 @@ async function main() {
 		planIngestionStage('relations', basePlanningContext),
 		planIngestionStage('grouping', basePlanningContext),
 		planIngestionStage('validation', basePlanningContext),
+		planIngestionStage('remediation', basePlanningContext),
 		planIngestionStage('embedding', basePlanningContext),
 		planIngestionStage('json_repair', basePlanningContext)
 	]);
@@ -3369,6 +3505,7 @@ async function main() {
 	console.log(`Relations route:  ${relationPlan.provider}:${relationPlan.model} (${relationPlan.routingSource}) step=${relationPlan.selectedStepId ?? '—'} switch=${relationPlan.switchReasonCode ?? '—'}`);
 	console.log(`Grouping route:   ${groupingPlan.provider}:${groupingPlan.model} (${groupingPlan.routingSource}) step=${groupingPlan.selectedStepId ?? '—'} switch=${groupingPlan.switchReasonCode ?? '—'}`);
 	console.log(`Validation route: ${validationPlan.provider}:${validationPlan.model} (${validationPlan.routingSource}) step=${validationPlan.selectedStepId ?? '—'} switch=${validationPlan.switchReasonCode ?? '—'}`);
+	console.log(`Remediation route: ${remediationPlan.provider}:${remediationPlan.model} (${remediationPlan.routingSource}) step=${remediationPlan.selectedStepId ?? '—'} switch=${remediationPlan.switchReasonCode ?? '—'}`);
 	console.log(`Embedding route:  ${embeddingPlan.provider}:${embeddingPlan.model} (${embeddingPlan.routingSource}) step=${embeddingPlan.selectedStepId ?? '—'} switch=${embeddingPlan.switchReasonCode ?? '—'}`);
 	console.log(`Repair route:     ${jsonRepairPlan.provider}:${jsonRepairPlan.model} (${jsonRepairPlan.routingSource}) step=${jsonRepairPlan.selectedStepId ?? '—'} switch=${jsonRepairPlan.switchReasonCode ?? '—'}`);
 	console.log(
@@ -3723,7 +3860,7 @@ async function main() {
 
 			assertClaimIntegrity(allClaims);
 			const planPostExStart = Date.now();
-			[relationPlan, groupingPlan, validationPlan, embeddingPlan] = await Promise.all([
+			[relationPlan, groupingPlan, validationPlan, remediationPlan, embeddingPlan] = await Promise.all([
 				planIngestionStage('relations', {
 					...basePlanningContext,
 					claimCount: allClaims.length
@@ -3735,6 +3872,11 @@ async function main() {
 				planIngestionStage('validation', {
 					...basePlanningContext,
 					claimCount: allClaims.length
+				}),
+				planIngestionStage('remediation', {
+					...basePlanningContext,
+					claimCount: allClaims.length,
+					claimTextChars: allClaims.reduce((sum, claim) => sum + claim.text.length, 0)
 				}),
 				planIngestionStage('embedding', {
 					...basePlanningContext,
@@ -4206,26 +4348,28 @@ async function main() {
 					}...`
 				);
 
-				const embedPromise = embedTexts(remainingTexts, {
-					onBatchComplete: async ({ cumulativeEmbeddings }) => {
-						partial.embeddings = [...prefix, ...cumulativeEmbeddings];
-						partial.embedding_progress = {
-							embeddings_so_far: partial.embeddings,
-							next_index: partial.embeddings.length
-						};
-						// Keep stage_completed at 'grouping' until every claim has a vector (Surreal log uses stage_completed for resume).
-						await savePartialResults(slug, partial);
-						console.log(
-							`  [SAVE] Embedding checkpoint: ${partial.embeddings.length}/${claimTexts.length} vectors`
-						);
-					}
-				});
+				const newVectors = await withEmbedPhaseSlot(async () => {
+					const embedPromise = embedTexts(remainingTexts, {
+						onBatchComplete: async ({ cumulativeEmbeddings }) => {
+							partial.embeddings = [...prefix, ...cumulativeEmbeddings];
+							partial.embedding_progress = {
+								embeddings_so_far: partial.embeddings,
+								next_index: partial.embeddings.length
+							};
+							// Keep stage_completed at 'grouping' until every claim has a vector (Surreal log uses stage_completed for resume).
+							await savePartialResults(slug, partial);
+							console.log(
+								`  [SAVE] Embedding checkpoint: ${partial.embeddings.length}/${claimTexts.length} vectors`
+							);
+						}
+					});
 
-				const newVectors = await withTimeout(
-					embedPromise,
-					embeddingBudget.timeoutMs,
-					`embedding ${embeddingPlan.model}`
-				);
+					return await withTimeout(
+						embedPromise,
+						embeddingBudget.timeoutMs,
+						`embedding ${embeddingPlan.model}`
+					);
+				});
 				allEmbeddings = [...prefix, ...newVectors];
 			}
 
@@ -4442,6 +4586,246 @@ async function main() {
 			validationResult = partial.validation ?? null;
 		}
 
+		// ═══════════════════════════════════════════════════════════════
+		// STAGE 5b: REMEDIATION (optional — between validation and store)
+		// ═══════════════════════════════════════════════════════════════
+		if (shouldRunStage('remediating', resumeFromStage)) {
+			const stageRemStart = Date.now();
+			const policy = parseRemediationPolicyJson(process.env.INGEST_REMEDIATION_POLICY_JSON);
+			const remediatedPositions = new Set<number>();
+			let droppedBefore = relations.length;
+
+			if (shouldValidate && validationResult) {
+				droppedBefore = relations.length;
+				relations = dropRelationsByValidation(
+					relations,
+					validationResult,
+					INGEST_REMEDIATION_VALIDITY_MIN
+				) as PhaseOneRelation[];
+				if (droppedBefore !== relations.length) {
+					console.log(
+						`  [REMEDIATION] Dropped ${droppedBefore - relations.length} relation edge(s) (quarantine or validity < ${INGEST_REMEDIATION_VALIDITY_MIN})`
+					);
+				}
+				assertRelationIntegrity(relations, allClaims);
+			}
+
+			if (
+				shouldValidate &&
+				validationResult &&
+				ingestRemediationEnabled() &&
+				!policy?.skip_repair
+			) {
+				console.log('\n┌──────────────────────────────────────────────────────────┐');
+				console.log('│ STAGE 5b: REMEDIATION (passage-bounded repair)          │');
+				console.log('└──────────────────────────────────────────────────────────┘');
+				const remediationTracker = startStageUsage('remediation');
+				const preRemediationValidation = validationResult;
+
+				let positions = selectRemediationPositions(validationResult, {
+					faithfulnessMin: INGEST_REMEDIATION_FAITHFULNESS_MIN,
+					maxClaims: INGEST_REMEDIATION_MAX_CLAIMS
+				});
+				let startIdx = 0;
+				if (
+					partial.remediation_progress?.positions?.length &&
+					typeof partial.remediation_progress.next_index === 'number'
+				) {
+					positions = partial.remediation_progress.positions;
+					startIdx = partial.remediation_progress.next_index;
+					console.log(
+						`  [RESUME] Mid-remediation — ${startIdx}/${positions.length} claim(s) already repaired`
+					);
+				}
+
+				const remediationPlanningContext: IngestionPlanningContext = {
+					...basePlanningContext,
+					claimCount: allClaims.length,
+					relationCount: relations.length,
+					argumentCount: arguments_.length,
+					claimTextChars: allClaims.reduce((sum, c) => sum + (c.text?.length ?? 0), 0)
+				};
+
+				for (let i = startIdx; i < positions.length; i++) {
+					const pos = positions[i]!;
+					const claim = allClaims.find((c) => c.position_in_source === pos);
+					if (!claim) continue;
+					const excerpt = sliceSourceAroundClaim(
+						sourceText,
+						claim.source_span_start,
+						claim.source_span_end
+					);
+					const vc = validationResult?.claims?.find((c) => c.position_in_source === pos);
+					const issues: string[] = [];
+					for (const label of [
+						['faithfulness', vc?.faithfulness_issue],
+						['atomicity', vc?.atomicity_issue],
+						['classification', vc?.classification_issue],
+						['domain', vc?.domain_issue]
+					] as const) {
+						if (label[1]) issues.push(`${label[0]}: ${label[1]}`);
+					}
+					if (vc?.quarantine) issues.push('quarantine: true');
+					const claimSubset = {
+						position_in_source: claim.position_in_source,
+						text: claim.text,
+						claim_type: claim.claim_type,
+						domain: claim.domain
+					};
+					const userMsg = REMEDIATION_REPAIR_USER({
+						position_in_source: pos,
+						passage_excerpt: excerpt,
+						claim_json: JSON.stringify(claimSubset, null, 2),
+						validation_issues: issues
+					});
+					const raw = await callStageModel({
+						stage: 'remediation',
+						plan: remediationPlan,
+						budget: remediationBudget,
+						tracker: remediationTracker,
+						systemPrompt: REMEDIATION_REPAIR_SYSTEM,
+						userMessage: userMsg,
+						maxTokens: 8192,
+						planningContext: remediationPlanningContext
+					});
+					const parsed = parseJsonResponse(raw);
+					const out = normalizeRemediationRepairOutput(parsed, pos);
+					claim.text = out.revised_claim_text;
+					remediatedPositions.add(pos);
+					partial.remediation_progress = { positions, next_index: i + 1 };
+					await savePartialResults(slug, partial);
+				}
+				partial.remediation_progress = undefined;
+
+				if (remediatedPositions.size > 0) {
+					const pairs: { idx: number; text: string }[] = [];
+					for (const pos of remediatedPositions) {
+						const idx = allClaims.findIndex((c) => c.position_in_source === pos);
+						if (idx >= 0 && idx < allEmbeddings.length) {
+							pairs.push({ idx, text: allClaims[idx]!.text });
+						}
+					}
+					if (pairs.length > 0) {
+						const vecs = await embedTexts(
+							pairs.map((p) => p.text),
+							{}
+						);
+						for (let j = 0; j < pairs.length; j++) {
+							allEmbeddings[pairs[j]!.idx] = vecs[j]!;
+							trackEmbeddingCost(pairs[j]!.text.length);
+						}
+					}
+				}
+
+				if (INGEST_REMEDIATION_REVALIDATE && validationResult) {
+					const validationTracker2 = startStageUsage('validation');
+					const validationPlanningContext: IngestionPlanningContext = {
+						...basePlanningContext,
+						claimCount: allClaims.length,
+						relationCount: relations.length,
+						argumentCount: arguments_.length,
+						claimTextChars: allClaims.reduce((sum, c) => sum + (c.text?.length ?? 0), 0)
+					};
+					const validationExecCtx: ValidationBatchExecContext = {
+						validationPlan,
+						validationBudget,
+						validationTracker: validationTracker2,
+						jsonRepairPlan,
+						jsonRepairBudget,
+						repairTracker,
+						relations,
+						arguments_,
+						sourceText,
+						sourceTitle: sourceMeta.title,
+						planningContext: validationPlanningContext
+					};
+					const validationCap = capIngestBatchTargetForPlan({
+						stage: 'validation',
+						requested: VALIDATION_BATCH_TARGET_TOKENS,
+						provider: validationPlan.provider,
+						model: validationPlan.model
+					});
+					const validationBatches = buildValidationBatches(
+						allClaims,
+						relations,
+						arguments_,
+						sourceText,
+						sourceMeta.title,
+						validationCap.value
+					);
+					const batchOutputs2: ValidationOutput[] = [];
+					for (let bi = 0; bi < validationBatches.length; bi++) {
+						const merged = await runValidationBatchWithContextSplitting(
+							validationBatches[bi]!,
+							validationExecCtx,
+							0,
+							`Remediation revalidation ${bi + 1}/${validationBatches.length}`
+						);
+						if (merged) batchOutputs2.push(merged);
+					}
+					if (batchOutputs2.length > 0) {
+						const secondPass = mergeValidationOutputs(batchOutputs2);
+						validationResult = mergeValidationOutputs([preRemediationValidation, secondPass]);
+					}
+					logStageCost('Validation (remediation revalidate)', validationTracker2, validationPlan);
+				}
+
+				const needsRerun = shouldRerunRelationsAfterRemediation({
+					remediatedPositions,
+					droppedRelationCount: droppedBefore - relations.length,
+					claimCount: allClaims.length,
+					forceEnv: INGEST_REMEDIATION_FORCE_RELATIONS_RERUN || policy?.force_relations_rerun === true,
+					remediatedShareThreshold: INGEST_REMEDIATION_RERUN_SHARE
+				});
+				if (needsRerun) {
+					const relationsRt = startStageUsage('relations');
+					const groupingRt = startStageUsage('grouping');
+					const out = await rerunRelationsAndGroupingForRemediation({
+						allClaims,
+						relationPlan,
+						groupingPlan,
+						relationBudget,
+						groupingBudget,
+						jsonRepairPlan,
+						jsonRepairBudget,
+						repairTracker,
+						relationsTracker: relationsRt,
+						groupingTracker: groupingRt,
+						basePlanningContext,
+						relationsBatchTarget: RELATIONS_BATCH_TARGET_TOKENS,
+						relationsOverlap: RELATIONS_BATCH_OVERLAP_CLAIMS,
+						groupingBatchTarget: GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS,
+						attachRelationMetadata,
+						callStageModel,
+						fixJsonWithModel,
+						logStageCost,
+						ingestFailOnGroupingPositionCollapse: INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE,
+						saveGroupingDebugRaw,
+						slug
+					});
+					relations = out.relations;
+					arguments_ = out.arguments_;
+					assertRelationIntegrity(relations, allClaims);
+				}
+
+				partial.validation = validationResult;
+				partial.relations = relations;
+				partial.arguments = arguments_;
+				partial.embeddings = allEmbeddings;
+				console.log(`  [OK] Remediation complete (${remediatedPositions.size} claim(s) repaired)`);
+			} else if (shouldValidate && validationResult && policy?.skip_repair) {
+				console.log('\n  [SKIP] Remediation: INGEST_REMEDIATION_POLICY_JSON skip_repair');
+			}
+
+			bumpStageMs('remediating', Date.now() - stageRemStart);
+			partial.stage_completed = 'remediating';
+			await savePartialResults(slug, partial);
+			await updateIngestionLog(db, sourceMeta.url, {
+				stage_completed: 'remediating',
+				cost_usd: parseFloat(estimateCostUsd())
+			});
+		}
+
 		if (stopBeforeStore) {
 			console.log(
 				'\n  [PHASE] Stages 1–5 complete. Resume this source without --stop-before-store (or use admin Sync) to run Stage 6 (SurrealDB).'
@@ -4450,7 +4834,7 @@ async function main() {
 			await savePartialResults(slug, partial);
 			await updateIngestionLog(db, sourceMeta.url, {
 				status: 'validating',
-				stage_completed: 'validating',
+				stage_completed: 'remediating',
 				cost_usd: parseFloat(estimateCostUsd())
 			});
 			await closeSurrealIfOpen(db);
@@ -4485,6 +4869,17 @@ async function main() {
 
 			// 6a. Remove any existing source data for this URL (idempotent re-run safety)
 			console.log('  Checking for existing source data...');
+			const sourceTextSha256 = createHash('sha256').update(sourceText, 'utf8').digest('hex');
+			try {
+				await db.query(
+					'DEFINE FIELD IF NOT EXISTS ingest_source_text_sha256 ON source TYPE option<string>'
+				);
+			} catch (e) {
+				console.warn(
+					'  [WARN] Could not DEFINE FIELD ingest_source_text_sha256 on source (set INGEST_STORE_RECORD_TEXT_HASH=0 to skip):',
+					e instanceof Error ? e.message : String(e)
+				);
+			}
 			const RELATION_TABLES_ALL = [
 				'supports',
 				'contradicts',
@@ -4502,6 +4897,27 @@ async function main() {
 			const existingSourceId = Array.isArray(existingSources) && existingSources.length > 0
 				? Array.isArray(existingSources[0]) ? existingSources[0][0]?.id : (existingSources[0] as any)?.id
 				: null;
+				if (existingSourceId && INGEST_STORE_ENFORCE_TEXT_HASH) {
+					const prevHashRows = await db.query<[{ ingest_source_text_sha256?: string }[]]>(
+						'SELECT ingest_source_text_sha256 FROM source WHERE id = $sid LIMIT 1',
+						{ sid: existingSourceId }
+					);
+					const prevRow =
+						Array.isArray(prevHashRows) && prevHashRows.length > 0
+							? Array.isArray(prevHashRows[0])
+								? prevHashRows[0][0]
+								: (prevHashRows[0] as { ingest_source_text_sha256?: string })
+							: null;
+					const prevHash =
+						prevRow && typeof prevRow === 'object' && 'ingest_source_text_sha256' in prevRow
+							? (prevRow as { ingest_source_text_sha256?: string }).ingest_source_text_sha256
+							: undefined;
+					if (typeof prevHash === 'string' && prevHash.length > 0 && prevHash !== sourceTextSha256) {
+						throw new Error(
+							'[INTEGRITY] INGEST_STORE_ENFORCE_TEXT_HASH: existing source row has a different ingest_source_text_sha256 than the current source text. Resolve the mismatch before re-store.'
+						);
+					}
+				}
 				if (existingSourceId) {
 					console.log(`  [CLEANUP] Removing existing source (${existingSourceId}) and its claims/arguments...`);
 				// Remove relation edges among claims of this source
@@ -4523,6 +4939,10 @@ async function main() {
 
 			// 6b. Create source record
 			console.log('  Creating source record...');
+			const sourceContentFields = INGEST_STORE_RECORD_TEXT_HASH
+				? `,
+					ingest_source_text_sha256: $ingest_source_text_sha256`
+				: '';
 			const sourceRecord = await db.query<[{ id: string }[]]>(
 				`CREATE source CONTENT {
 					title: $title,
@@ -4536,7 +4956,7 @@ async function main() {
 					deletion_state: $deletion_state,
 					ingested_at: time::now(),
 					claim_count: $claim_count,
-					status: $status
+					status: $status${sourceContentFields}
 				}`,
 				{
 					title: sourceMeta.title,
@@ -4549,7 +4969,8 @@ async function main() {
 					visibility_scope: sourceMeta.visibility_scope ?? undefined,
 					deletion_state: sourceMeta.deletion_state ?? undefined,
 					claim_count: allClaims.length,
-					status: shouldValidate ? 'validated' : 'ingested'
+					status: shouldValidate ? 'validated' : 'ingested',
+					...(INGEST_STORE_RECORD_TEXT_HASH ? { ingest_source_text_sha256: sourceTextSha256 } : {})
 				}
 			);
 
@@ -4656,21 +5077,48 @@ async function main() {
 				// 6d. Create claim records with embeddings
 				console.log(`  Creating ${allClaims.length} claim records...`);
 				const claimIdMap: Map<number, string> = new Map(); // position_in_source → claim ID
+				const validationRanForPostStore = Boolean(shouldValidate && validationResult);
+				let postStoreAuditCount = 0;
+				const CLAIM_INSERT_CONCURRENCY = Math.max(
+					1,
+					Math.min(24, parseInt(process.env.INGEST_CLAIM_INSERT_CONCURRENCY || '8', 10) || 8)
+				);
 
-			for (let i = 0; i < allClaims.length; i++) {
-				// Re-check DB connection every 25 claims to catch session expiry early
-				if (i > 0 && i % 25 === 0) {
-					await ensureDbConnected(db);
-				}
+				for (let i = 0; i < allClaims.length; i += CLAIM_INSERT_CONCURRENCY) {
+					if (i > 0 && i % 48 === 0) {
+						await ensureDbConnected(db);
+					}
+					const chunk = allClaims.slice(i, i + CLAIM_INSERT_CONCURRENCY);
+					await Promise.all(
+						chunk.map(async (claim, chunkIdx) => {
+							const idx = i + chunkIdx;
+							const embedding = allEmbeddings[idx] || null;
+							const validationClaim = validationResult?.claims?.find(
+								(c) => c.position_in_source === claim.position_in_source
+							);
 
-					const claim = allClaims[i];
-					const embedding = allEmbeddings[i] || null;
-					const validationClaim = validationResult?.claims?.find(
-						(c) => c.position_in_source === claim.position_in_source
-					);
+							const faithAt80 =
+								validationClaim != null && validationClaim.faithfulness_score >= 80;
+							const postStore = resolvePostStoreClaimReviewState({
+								baseReviewState: claim.review_state as PostStoreReviewState,
+								faithfulnessScore: validationRanForPostStore
+									? validationClaim?.faithfulness_score
+									: undefined,
+								threshold: INGEST_POST_STORE_LOW_VALIDATION_THRESHOLD,
+								sampleRate: INGEST_POST_STORE_LOW_VALIDATION_SAMPLE_RATE,
+								slug,
+								position: claim.position_in_source
+							});
+							if (postStore.auditApplied) postStoreAuditCount += 1;
+							const effectiveVerificationState = resolvePostStoreVerificationState({
+								baseVerificationState: claim.verification_state,
+								faithfulnessAtLeast80: faithAt80,
+								auditApplied: postStore.auditApplied,
+								flagOnLowValidation: INGEST_POST_STORE_FLAG_VERIFICATION_LOW_VALIDATION
+							});
 
-					const result = await db.query<[{ id: string }[]]>(
-						`CREATE claim CONTENT {
+							const result = await db.query<[{ id: string }[]]>(
+								`CREATE claim CONTENT {
 							text: $text,
 							claim_type: $claim_type,
 							domain: $domain,
@@ -4698,59 +5146,70 @@ async function main() {
 							extractor_version: $extractor_version,
 							contested_terms: $contested_terms
 						}`,
-						{
-							text: claim.text,
-							claim_type: claim.claim_type,
-							domain: domainOverride ?? claim.domain,
-							source: sourceId,
-							passage: claim.passage_id
-								? passageRecordIdMap.get(claim.passage_id) ?? undefined
-								: undefined,
-							passage_order: claim.passage_order ?? undefined,
-							passage_role: claim.passage_role ?? undefined,
-							section_context: claim.section_context ?? undefined,
-							position_in_source: claim.position_in_source,
-							source_span_start: claim.source_span_start ?? undefined,
-							source_span_end: claim.source_span_end ?? undefined,
-							confidence: claim.confidence,
-							embedding: embedding,
-							validation_score: validationClaim?.faithfulness_score ?? undefined,
-							claim_origin: claim.claim_origin,
-							subdomain: claim.subdomain ?? undefined,
-							thinker: claim.thinker ?? undefined,
-							tradition: claim.tradition ?? undefined,
-							era: claim.era ?? undefined,
-							claim_scope: claim.claim_scope,
-							attributed_to: claim.attributed_to.length > 0 ? claim.attributed_to : undefined,
-							concept_tags: claim.concept_tags.length > 0 ? claim.concept_tags : undefined,
-							review_state: claim.review_state,
-							verification_state:
-								validationClaim && validationClaim.faithfulness_score >= 80
-									? 'validated'
-									: claim.verification_state,
-							extractor_version: claim.extractor_version,
-							contested_terms: claim.contested_terms.length > 0 ? claim.contested_terms : undefined
-						}
+								{
+									text: claim.text,
+									claim_type: claim.claim_type,
+									domain: domainOverride ?? claim.domain,
+									source: sourceId,
+									passage: claim.passage_id
+										? passageRecordIdMap.get(claim.passage_id) ?? undefined
+										: undefined,
+									passage_order: claim.passage_order ?? undefined,
+									passage_role: claim.passage_role ?? undefined,
+									section_context: claim.section_context ?? undefined,
+									position_in_source: claim.position_in_source,
+									source_span_start: claim.source_span_start ?? undefined,
+									source_span_end: claim.source_span_end ?? undefined,
+									confidence: claim.confidence,
+									embedding: embedding,
+									validation_score: validationClaim?.faithfulness_score ?? undefined,
+									claim_origin: claim.claim_origin,
+									subdomain: claim.subdomain ?? undefined,
+									thinker: claim.thinker ?? undefined,
+									tradition: claim.tradition ?? undefined,
+									era: claim.era ?? undefined,
+									claim_scope: claim.claim_scope,
+									attributed_to: claim.attributed_to.length > 0 ? claim.attributed_to : undefined,
+									concept_tags: claim.concept_tags.length > 0 ? claim.concept_tags : undefined,
+									review_state: postStore.reviewState,
+									verification_state: effectiveVerificationState,
+									extractor_version: claim.extractor_version,
+									contested_terms: claim.contested_terms.length > 0 ? claim.contested_terms : undefined
+								}
+							);
+
+							const claimId =
+								Array.isArray(result) && result.length > 0
+									? Array.isArray(result[0])
+										? result[0][0]?.id
+										: (result[0] as any)?.id
+									: null;
+
+							if (claimId) {
+								claimIdMap.set(claim.position_in_source, claimId);
+							}
+						})
 					);
 
-				const claimId =
-					Array.isArray(result) && result.length > 0
-						? Array.isArray(result[0])
-							? result[0][0]?.id
-							: (result[0] as any)?.id
-						: null;
-
-				if (claimId) {
-					claimIdMap.set(claim.position_in_source, claimId);
+					const done = Math.min(i + chunk.length, allClaims.length);
+					if (done % 20 === 0 || done === allClaims.length) {
+						process.stdout.write(`\r  [CLAIMS] ${done}/${allClaims.length}`);
+					}
 				}
-
-				// Progress indicator
-				if ((i + 1) % 20 === 0 || i === allClaims.length - 1) {
-					process.stdout.write(`\r  [CLAIMS] ${i + 1}/${allClaims.length}`);
-				}
-			}
 				console.log('');
 				console.log(`  [OK] Created ${claimIdMap.size} claim records`);
+				if (
+					postStoreAuditCount > 0 &&
+					INGEST_POST_STORE_LOW_VALIDATION_THRESHOLD != null
+				) {
+					const pct =
+						INGEST_POST_STORE_LOW_VALIDATION_SAMPLE_RATE < 1
+							? ` (sampled ${(INGEST_POST_STORE_LOW_VALIDATION_SAMPLE_RATE * 100).toFixed(0)}%)`
+							: '';
+					console.log(
+						`  [POST_STORE_AUDIT] ${postStoreAuditCount} claim(s) → needs_review (faithfulness < ${INGEST_POST_STORE_LOW_VALIDATION_THRESHOLD}${pct}). Admin quarantine queue: GET /api/admin/quarantine/queue`
+					);
+				}
 
 				// 6d2. Connect claims to subject/period/work graph nodes
 				let claimGraphEdges = 0;

@@ -61,6 +61,9 @@ secrets/*
 .env.paddle.generated.production
 
 # Source texts and ingested data (copyrighted material — do not publish)
+# Local fetch cache (raw HTML by URL hash; optional; see FETCH_SOURCE_CACHE)
+data/cache/
+
 data/sources/*.txt
 data/sources/*.meta.json
 data/ingested/*.json

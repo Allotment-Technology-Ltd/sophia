@@ -32,4 +32,5 @@ Each completed run stores `sourceType`, `pipelinePreset` (budget / balanced / co
 ## Related
 
 - [ingestion-benchmarks.md](./ingestion-benchmarks.md) — wall time and release-style comparisons
+- [ingestion-sep-preset-discipline.md](./ingestion-sep-preset-discipline.md) — SEP fingerprint logging, named profiles, post-store review queue
 - [docs/sophia/roadmap.md](../sophia/roadmap.md) — deferred stability knobs and golden-set gates
