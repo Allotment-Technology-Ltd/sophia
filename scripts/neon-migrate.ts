@@ -1,10 +1,13 @@
 /**
  * Apply SQL files in drizzle/ to Neon in lexical order, tracked in schema_migrations.
  * Usage: pnpm db:migrate  (requires DATABASE_URL)
+ *
+ * Uses `pg` (TCP) instead of `@neondatabase/serverless` so migrations work in GitHub Actions
+ * and other Node environments where the serverless driver's WebSocket path fails.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { Pool } from '@neondatabase/serverless';
+import { Pool } from 'pg';
 
 async function main() {
   const url = process.env.DATABASE_URL?.trim();
@@ -17,7 +20,12 @@ async function main() {
     .readdirSync(drizzleDir)
     .filter((f) => f.endsWith('.sql'))
     .sort();
-  const pool = new Pool({ connectionString: url });
+  const pool = new Pool({
+    connectionString: url,
+    max: 1,
+    connectionTimeoutMillis: 60_000,
+    idleTimeoutMillis: 10_000
+  });
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
