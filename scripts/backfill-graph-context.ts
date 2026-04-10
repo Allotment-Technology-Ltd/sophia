@@ -1,4 +1,5 @@
 import { Surreal } from 'surrealdb';
+import { SOURCE_ID_STRING_SQL, recordKeyForTable } from '../src/lib/server/surrealRecordSql.js';
 import { startSpinner, startStageTimer } from './progress.js';
 
 const SURREAL_URL = process.env.SURREAL_URL || 'http://localhost:8000/rpc';
@@ -183,11 +184,16 @@ async function upsertWorkNode(
 			db,
 			`UPSERT type::record('work', $rid) CONTENT {
 				title: $title,
-				source_id: $source_id,
+				source_id: ${SOURCE_ID_STRING_SQL},
 				source_url: $source_url,
 				imported_at: time::now()
 			}`,
-			{ rid, title, source_id: normalizedSourceId, source_url: url || undefined }
+			{
+				rid,
+				title,
+				source_row_key: recordKeyForTable(normalizedSourceId, 'source'),
+				source_url: url || undefined
+			}
 		);
 	}
 	workCache.add(id);

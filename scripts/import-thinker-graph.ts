@@ -1,4 +1,5 @@
 import { Surreal } from 'surrealdb';
+import { recordKeyForTable } from '../src/lib/server/surrealRecordSql.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { startSpinner, startStageTimer } from './progress.js';
@@ -765,8 +766,8 @@ async function main(): Promise<void> {
 										status = if status = 'resolved' then status else 'queued' end,
 										seen_count = if seen_count = NONE then 1 else seen_count + 1 end,
 										source_ids = if source_ids = NONE
-											then [$source_id]
-											else array::distinct(source_ids + [$source_id])
+											then [string::concat('source:', $source_row_key)]
+											else array::distinct(source_ids + [string::concat('source:', $source_row_key)])
 										end,
 										contexts = if contexts = NONE then [] else contexts end,
 										proposed_qids = if proposed_qids = NONE then [] else proposed_qids end,
@@ -777,7 +778,7 @@ async function main(): Promise<void> {
 										rid: unresolvedRecordId(canonicalName),
 										raw_name: author,
 										canonical_name: canonicalName,
-										source_id: sourceId
+										source_row_key: recordKeyForTable(sourceId, 'source')
 									}
 								);
 							} catch {

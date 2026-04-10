@@ -1,4 +1,5 @@
 import { Surreal } from 'surrealdb';
+import { recordKeyForTable } from '../src/lib/server/surrealRecordSql.js';
 import {
 	canonicalizeThinkerName,
 	estimateThinkerNameConfidence,
@@ -330,7 +331,7 @@ async function main(): Promise<void> {
 				for (const sourceId of sourceIds) {
 					await db.query(
 						`LET $from = type::record('thinker', $wikidata_id);
-						 LET $to = type::record('source', $source_id);
+						 LET $to = type::record('source', $source_row_key);
 						 LET $existing = (SELECT id FROM authored WHERE in = $from AND out = $to LIMIT 1);
 						 IF array::len($existing) = 0 {
 						 	RELATE $from->authored->$to
@@ -340,7 +341,7 @@ async function main(): Promise<void> {
 						 }`,
 						{
 							wikidata_id: chosen.wikidata_id,
-							source_id: sourceId,
+							source_row_key: recordKeyForTable(sourceId, 'source'),
 							confidence: chosen.confidence
 						}
 					);

@@ -57,6 +57,13 @@ import {
 	loadIngestLlmFailureCountsFromDb,
 	noteIngestModelSuccessInDb
 } from '../src/lib/server/db/ingestModelHealth.js';
+import {
+	SOURCE_ID_STRING_ARRAY_ONE_SQL,
+	SOURCE_ID_STRING_SQL,
+	recordKeyForTable,
+	splitRecordTableAndKey,
+	toSurrealRecordIdStr
+} from '../src/lib/server/surrealRecordSql.js';
 import { createIngestProviderTpmGuard } from './lib/ingestProviderTpm.js';
 import { startSpinner } from './progress.js';
 
@@ -2272,36 +2279,6 @@ function slugifyGraphLabel(value: string): string {
 		.slice(0, 96);
 }
 
-/** Normalize SDK RecordId or string to `table:id` for literal positions in SurrealQL (RELATE / comparisons). */
-function toSurrealRecordIdStr(id: unknown): string {
-	if (typeof id === 'string' && id.includes(':')) return id.trim();
-	if (id && typeof id === 'object') {
-		const o = id as { tb?: unknown; id?: unknown };
-		if (typeof o.tb === 'string' && o.id !== undefined && String(o.id)) {
-			return `${o.tb}:${String(o.id)}`;
-		}
-	}
-	return String(id ?? '').trim();
-}
-
-/** Record id part after the first colon (e.g. source row key). */
-function recordIdKeyPart(id: unknown): string {
-	const full = toSurrealRecordIdStr(id);
-	const i = full.indexOf(':');
-	return i >= 0 ? full.slice(i + 1) : full;
-}
-
-/** Split `table:key` on first colon; key may contain underscores (e.g. subject slugs). */
-function splitRecordTableAndKey(id: unknown): { tb: string; key: string } | null {
-	const full = toSurrealRecordIdStr(id);
-	const i = full.indexOf(':');
-	if (i <= 0) return null;
-	const tb = full.slice(0, i);
-	const key = full.slice(i + 1);
-	if (!tb || !key) return null;
-	return { tb, key };
-}
-
 const RELATE_GRAPH_ALLOWED_TABLES = new Set([
 	'about_subject',
 	'in_period',
@@ -2468,14 +2445,14 @@ async function runThinkerIdentityLinking(args: {
 							raw_name: $raw_name,
 							canonical_name: $canonical_name,
 							action: 'auto_skip_ambiguous',
-							source_id: $source_id,
+							source_id: ${SOURCE_ID_STRING_SQL},
 							notes: $notes,
 							created_at: time::now()
 						}`,
 						{
 							raw_name: rawName,
 							canonical_name: canonical,
-							source_id: sourceId,
+							source_row_key: recordKeyForTable(sourceId, 'source'),
 							notes: `Ambiguous match (min_delta=${THINKER_AUTO_LINK_MIN_DELTA})`
 						}
 					);
@@ -2493,7 +2470,7 @@ async function runThinkerIdentityLinking(args: {
 					confidence: $confidence,
 					resolved_by: 'heuristic',
 					status: 'active',
-					source_contexts: [$source_context],
+					source_contexts: ${SOURCE_ID_STRING_ARRAY_ONE_SQL},
 					updated_at: time::now(),
 					created_at: time::now()
 				}`,
@@ -2504,12 +2481,12 @@ async function runThinkerIdentityLinking(args: {
 					wikidata_id: winner.wikidata_id,
 					label: winner.name,
 					confidence: winner.confidence,
-					source_context: `source:${sourceId}`
+					source_row_key: recordKeyForTable(sourceId, 'source')
 				}
 			);
 			await db.query(
 				`LET $from = type::record('thinker', $wikidata_id);
-				 LET $to = type::thing($source);
+				 LET $to = type::record('source', $source_row_key);
 				 LET $existing = (SELECT id FROM authored WHERE in = $from AND out = $to LIMIT 1);
 				 IF array::len($existing) = 0 {
 				 	RELATE $from->authored->$to
@@ -2519,7 +2496,7 @@ async function runThinkerIdentityLinking(args: {
 				 }`,
 				{
 					wikidata_id: winner.wikidata_id,
-					source: sourceId,
+					source_row_key: recordKeyForTable(sourceId, 'source'),
 					confidence: winner.confidence
 				}
 			);
@@ -2531,7 +2508,7 @@ async function runThinkerIdentityLinking(args: {
 					label: $label,
 					action: 'auto_resolve',
 					confidence: $confidence,
-					source_id: $source_id,
+					source_id: ${SOURCE_ID_STRING_SQL},
 					created_at: time::now()
 				}`,
 				{
@@ -2540,7 +2517,7 @@ async function runThinkerIdentityLinking(args: {
 					wikidata_id: winner.wikidata_id,
 					label: winner.name,
 					confidence: winner.confidence,
-					source_id: sourceId
+					source_row_key: recordKeyForTable(sourceId, 'source')
 				}
 			);
 			authoredInserted += 1;
@@ -2552,8 +2529,8 @@ async function runThinkerIdentityLinking(args: {
 			`UPSERT type::record('unresolved_thinker_reference', $rid) CONTENT {
 				raw_name: $raw_name,
 				canonical_name: $canonical_name,
-				source_ids: [$source_id],
-				contexts: [$source_context],
+				source_ids: ${SOURCE_ID_STRING_ARRAY_ONE_SQL},
+				contexts: ${SOURCE_ID_STRING_ARRAY_ONE_SQL},
 				status: 'queued',
 				seen_count: 1,
 				proposed_qids: [],
@@ -2565,8 +2542,7 @@ async function runThinkerIdentityLinking(args: {
 				rid: queueId,
 				raw_name: rawName,
 				canonical_name: canonical,
-				source_id: sourceId,
-				source_context: `source:${sourceId}`
+				source_row_key: recordKeyForTable(sourceId, 'source')
 			}
 		);
 		await db.query(
@@ -2574,14 +2550,14 @@ async function runThinkerIdentityLinking(args: {
 				raw_name: $raw_name,
 				canonical_name: $canonical_name,
 				action: 'auto_queue',
-				source_id: $source_id,
+				source_id: ${SOURCE_ID_STRING_SQL},
 				queue_record_id: $queue_record_id,
 				created_at: time::now()
 			}`,
 			{
 				raw_name: rawName,
 				canonical_name: canonical,
-				source_id: sourceId,
+				source_row_key: recordKeyForTable(sourceId, 'source'),
 				queue_record_id: queueId
 			}
 		);
@@ -4409,22 +4385,19 @@ async function main() {
 				}
 				console.log(`  [OK] Source record: ${sourceId}`);
 
-				// work.source_id is SCHEMAFULL option<string>. Bound parameters that look like record ids are
-				// typed as records — build a string with string::concat so the field stays plain string.
-				const workSourceKey = recordIdKeyPart(sourceId);
-
+				// work.source_id is SCHEMAFULL option<string> — see surrealRecordSql.ts
 				const workSlug = slugifyGraphLabel(sourceMeta.canonical_url_hash || sourceMeta.url || sourceMeta.title);
 				const workRecordResult = await db.query<[{ id: string }[]]>(
 					`UPSERT type::record('work', $rid) CONTENT {
 						title: $title,
-						source_id: string::concat('source:', $work_source_key),
+						source_id: ${SOURCE_ID_STRING_SQL},
 						source_url: $source_url,
 						imported_at: time::now()
 					} RETURN AFTER`,
 					{
 						rid: workSlug || `source_${Date.now()}`,
 						title: sourceMeta.title,
-						work_source_key: workSourceKey,
+						source_row_key: recordKeyForTable(sourceId, 'source'),
 						source_url: sourceMeta.url
 					}
 				);

@@ -208,6 +208,9 @@ jobs:
       - name: Type check
         run: pnpm check
 
+      - name: Surreal SCHEMAFULL write lint
+        run: pnpm check:surreal-writes
+
       - name: Minimal TS project (ingest CLI)
         run: pnpm exec tsc -p tsconfig.json --noEmit
 
