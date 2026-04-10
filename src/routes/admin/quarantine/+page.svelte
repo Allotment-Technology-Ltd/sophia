@@ -174,7 +174,10 @@
 									<input
 										type="checkbox"
 										checked={selected.has(row.id)}
-										onclick={() => toggle(row.id)}
+										onclick={(e) => {
+											e.preventDefault();
+											toggle(row.id);
+										}}
 										class="h-5 w-5 rounded border-[var(--color-border)]"
 										aria-label={`Select claim ${row.id}`}
 									/>
