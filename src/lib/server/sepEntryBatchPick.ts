@@ -1,11 +1,13 @@
 /**
  * Pick SEP entry URLs from the repo catalog by topic keywords / presets,
- * optionally excluding URLs already completed in Neon (ingest_runs + durable job items).
+ * optionally excluding URLs already completed in Neon (ingest_runs + durable job items)
+ * and/or Surreal `ingestion_log` (status `complete`).
  */
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
+import { query } from '$lib/server/db';
 import { canonicalizeSourceUrl } from '$lib/server/sourceIdentity';
 import { getDrizzleDb } from '$lib/server/db/neon';
 import { ingestRuns, ingestionJobItems } from '$lib/server/db/schema';
@@ -75,27 +77,56 @@ function slugMatchesKeywords(slug: string, keywords: string[]): boolean {
 	});
 }
 
+async function loadIngestedUrlsFromSurrealIngestionLog(): Promise<Set<string>> {
+	const out = new Set<string>();
+	if (!process.env.SURREAL_URL?.trim()) return out;
+	try {
+		const rows = await query<Array<{ source_url?: string; canonical_url?: string }>>(
+			`SELECT source_url, canonical_url FROM ingestion_log WHERE status = 'complete';`,
+			{}
+		);
+		if (!Array.isArray(rows)) return out;
+		for (const r of rows) {
+			for (const u of [r.source_url, r.canonical_url]) {
+				if (typeof u === 'string' && u.trim()) {
+					const c = canonicalizeSourceUrl(u);
+					if (c) out.add(c);
+				}
+			}
+		}
+	} catch (e) {
+		console.warn('[sepEntryBatchPick] Surreal ingestion_log exclude failed:', e);
+	}
+	return out;
+}
+
 async function loadIngestedUrlSet(): Promise<Set<string>> {
 	const out = new Set<string>();
-	if (!isNeonIngestPersistenceEnabled()) return out;
-	const db = getDrizzleDb();
 
-	const runs = await db
-		.select({ sourceUrl: ingestRuns.sourceUrl })
-		.from(ingestRuns)
-		.where(eq(ingestRuns.status, 'done'));
-	for (const r of runs) {
-		const c = canonicalizeSourceUrl(r.sourceUrl);
-		if (c) out.add(c);
+	if (isNeonIngestPersistenceEnabled()) {
+		const db = getDrizzleDb();
+
+		const runs = await db
+			.select({ sourceUrl: ingestRuns.sourceUrl })
+			.from(ingestRuns)
+			.where(eq(ingestRuns.status, 'done'));
+		for (const r of runs) {
+			const c = canonicalizeSourceUrl(r.sourceUrl);
+			if (c) out.add(c);
+		}
+
+		const items = await db
+			.select({ url: ingestionJobItems.url })
+			.from(ingestionJobItems)
+			.where(eq(ingestionJobItems.status, 'done'));
+		for (const r of items) {
+			const c = canonicalizeSourceUrl(r.url);
+			if (c) out.add(c);
+		}
 	}
 
-	const items = await db
-		.select({ url: ingestionJobItems.url })
-		.from(ingestionJobItems)
-		.where(eq(ingestionJobItems.status, 'done'));
-	for (const r of items) {
-		const c = canonicalizeSourceUrl(r.url);
-		if (c) out.add(c);
+	for (const u of await loadIngestedUrlsFromSurrealIngestionLog()) {
+		out.add(u);
 	}
 
 	return out;
@@ -129,9 +160,13 @@ function parseCustomKeywords(raw: string | null | undefined): string[] {
 }
 
 export async function pickSepEntryUrlsForBatch(args: PickSepUrlsArgs): Promise<PickSepUrlsResult> {
-	if (args.excludeIngested && !isNeonIngestPersistenceEnabled()) {
+	if (
+		args.excludeIngested &&
+		!isNeonIngestPersistenceEnabled() &&
+		!process.env.SURREAL_URL?.trim()
+	) {
 		throw new Error(
-			'Excluding already-ingested URLs requires Neon ingest persistence (DATABASE_URL). Turn off “Exclude already ingested” or enable Neon.'
+			'Excluding already-ingested URLs needs Neon (DATABASE_URL) and/or SURREAL_URL for ingestion_log. Turn off “Exclude already ingested” or set one of these.'
 		);
 	}
 	const catalog = loadSepCatalogUrls();

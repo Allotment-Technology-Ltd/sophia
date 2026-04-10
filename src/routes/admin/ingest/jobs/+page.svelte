@@ -278,10 +278,10 @@
 			</h3>
 			<p class="text-sm leading-6 text-sophia-dark-muted">
 				Build a batch from <span class="font-mono text-xs">data/sep-entry-urls.json</span> by topic preset (slug
-				substrings) and optional extra keywords. “Exclude already ingested” uses Neon
-				<span class="font-mono text-xs">ingest_runs</span> + durable job items with status
-				<span class="font-mono text-xs">done</span> — not Surreal’s legacy
-				<span class="font-mono text-xs">ingestion_log</span>.
+				substrings) and optional extra keywords. “Exclude already ingested” merges Neon
+				<span class="font-mono text-xs">ingest_runs</span> / job items (<span class="font-mono text-xs">done</span>)
+				with Surreal <span class="font-mono text-xs">ingestion_log</span> rows where
+				<span class="font-mono text-xs">status = complete</span>.
 			</p>
 			<div class="flex flex-wrap items-end gap-4">
 				<label class="block min-w-[200px] flex-1">
