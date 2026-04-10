@@ -36,15 +36,16 @@ export type IngestionLlmStageKey =
 export type CanonicalModelRef = { provider: ModelProvider; modelId: string };
 
 /**
- * Primary models tuned for: structured JSON at extract/relate/group, cost-aware validation,
- * fast reliable JSON repair on Vertex (Gemini Flash).
+ * Primary models tuned for: structured JSON at extract/relate/group, cross-vendor validation
+ * (Vertex reviews OpenAI pipeline output by default), fast JSON repair on Vertex (Gemini Flash).
  */
 export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, CanonicalModelRef> = {
 	extraction: { provider: 'openai', modelId: 'gpt-4o-mini' },
 	/** gpt-4o: large context + better TPM headroom than gpt-4-turbo for big claim JSON graphs */
 	relations: { provider: 'openai', modelId: 'gpt-4o' },
 	grouping: { provider: 'openai', modelId: 'gpt-4o' },
-	validation: { provider: 'openai', modelId: 'gpt-4o-mini' },
+	/** Distinct from extraction (mini): second opinion from another provider improves faithfulness checks. */
+	validation: { provider: 'vertex', modelId: 'gemini-2.5-flash' },
 	json_repair: { provider: 'vertex', modelId: 'gemini-2.5-flash' }
 };
 
@@ -67,7 +68,8 @@ export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, C
 	],
 	validation: [
 		{ provider: 'openai', modelId: 'gpt-4o' },
-		{ provider: 'vertex', modelId: 'gemini-2.5-flash' }
+		{ provider: 'openai', modelId: 'gpt-4o-mini' },
+		{ provider: 'vertex', modelId: 'gemini-2.5-pro' }
 	],
 	json_repair: [
 		{ provider: 'openai', modelId: 'gpt-4o-mini' },

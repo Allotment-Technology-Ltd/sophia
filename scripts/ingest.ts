@@ -4353,6 +4353,10 @@ async function main() {
 				}
 				console.log(`  [OK] Source record: ${sourceId}`);
 
+				// work.source_id is SCHEMAFULL option<string>; SurrealDB.js may return a RecordId object.
+				const sourceIdStr =
+					typeof sourceId === 'string' ? sourceId : String(sourceId);
+
 				const workSlug = slugifyGraphLabel(sourceMeta.canonical_url_hash || sourceMeta.url || sourceMeta.title);
 				const workRecordResult = await db.query<[{ id: string }[]]>(
 					`UPSERT type::record('work', $rid) CONTENT {
@@ -4364,7 +4368,7 @@ async function main() {
 					{
 						rid: workSlug || `source_${Date.now()}`,
 						title: sourceMeta.title,
-						source_id: sourceId,
+						source_id: sourceIdStr,
 						source_url: sourceMeta.url
 					}
 				);
