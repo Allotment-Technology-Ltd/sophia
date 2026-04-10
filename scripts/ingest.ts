@@ -117,7 +117,10 @@ import {
 	segmentArgumentativePassages,
 	filterBoilerplatePassages
 } from '../src/lib/server/ingestion/passageSegmentation.js';
-import { buildValidationSourceSnippet } from '../src/lib/server/ingestion/buildValidationSourceSnippet.js';
+import {
+	buildValidationSourceSnippet,
+	splitClaimsForValidationSnippetBudget
+} from '../src/lib/server/ingestion/buildValidationSourceSnippet.js';
 import { deriveClaimTypingMetadata } from '../src/lib/server/ingestion/claimTyping.js';
 import {
 	canonicalizeThinkerName,
@@ -1318,7 +1321,20 @@ function buildValidationBatches(
 	sourceTitle: string,
 	targetTokens: number
 ): ValidationBatch[] {
-	const seedBatches = splitClaimsIntoGroupingBatches(claims, targetTokens);
+	const tokenSeedBatches = splitClaimsIntoGroupingBatches(claims, targetTokens);
+	const snippetOpts = {
+		maxChars: VALIDATION_BATCH_SOURCE_MAX_CHARS,
+		contextChars: VALIDATION_BATCH_SOURCE_CONTEXT_CHARS
+	};
+	const tokenBatchCount = tokenSeedBatches.length;
+	const seedBatches = tokenSeedBatches.flatMap((batch) =>
+		splitClaimsForValidationSnippetBudget(batch, sourceText, snippetOpts)
+	);
+	if (seedBatches.length > tokenBatchCount) {
+		console.log(
+			`  [INFO] Validation span-window split: ${tokenBatchCount} token batch(es) → ${seedBatches.length} batch(es) (source window ≤${snippetOpts.maxChars.toLocaleString()} chars per batch)`
+		);
+	}
 	const queue = [...seedBatches];
 	const result: ValidationBatch[] = [];
 

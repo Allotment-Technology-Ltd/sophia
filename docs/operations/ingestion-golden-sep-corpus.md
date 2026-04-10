@@ -32,7 +32,7 @@ Faithfulness scores are only comparable when **validation** (and, for stability,
 
 Legacy Vertex Gemini IDs in pins are normalized at parse time ([`src/lib/server/ingestPinNormalization.ts`](../../src/lib/server/ingestPinNormalization.ts)) (e.g. `gemini-1.5-flash` → `gemini-2.5-flash`).
 
-**Long entries:** validation feeds an excerpt built from claim spans (see `buildValidationSourceSnippet` and `VALIDATION_BATCH_SOURCE_MAX_CHARS` / `VALIDATION_BATCH_SOURCE_CONTEXT_CHARS`). Tune those only when benchmarking very long span unions; default behavior uses center-weighted truncation inside the span window.
+**Long entries:** validation feeds an excerpt built from claim spans (see `buildValidationSourceSnippet` and `VALIDATION_BATCH_SOURCE_MAX_CHARS` / `VALIDATION_BATCH_SOURCE_CONTEXT_CHARS`). The pipeline **splits validation batches** when the span-union window would exceed the char cap, so each batch’s excerpt includes the text for its claims (avoiding false “ungrounded” scores when claims span a long article). Center-weighted truncation still applies only when a **single** claim’s passage window exceeds the cap.
 
 After a run, Firestore / Neon `ingestion_run_reports` include **`timingTelemetry.stage_models`** — last successful `provider/model` per stage from `[INGEST_TIMING]` — so you can confirm which model produced validation scores.
 
