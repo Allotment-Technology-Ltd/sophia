@@ -32,6 +32,20 @@ function repoDataPath(...segments: string[]): string {
 	return join(process.cwd(), 'data', ...segments);
 }
 
+/** Stanford Encyclopedia of Philosophy public site (HTTPS). */
+const SEP_CATALOG_HOST = 'plato.stanford.edu';
+
+function isSepCatalogHttpsUrl(u: string): boolean {
+	try {
+		const parsed = new URL(u.trim());
+		if (parsed.protocol !== 'https:') return false;
+		// Host must match exactly; no substring tricks (e.g. evil.plato.stanford.edu.evil.com).
+		return parsed.hostname === SEP_CATALOG_HOST;
+	} catch {
+		return false;
+	}
+}
+
 function loadSepCatalogUrls(): string[] {
 	const now = Date.now();
 	if (cachedCatalog && now - cachedCatalog.loadedAt < CACHE_MS) {
@@ -40,7 +54,7 @@ function loadSepCatalogUrls(): string[] {
 	const raw = readFileSync(repoDataPath('sep-entry-urls.json'), 'utf-8');
 	const parsed = JSON.parse(raw) as { urls?: unknown };
 	const urls = Array.isArray(parsed.urls)
-		? parsed.urls.filter((u): u is string => typeof u === 'string' && u.includes('plato.stanford.edu'))
+		? parsed.urls.filter((u): u is string => typeof u === 'string' && isSepCatalogHttpsUrl(u))
 		: [];
 	cachedCatalog = { urls, loadedAt: now };
 	return urls;
