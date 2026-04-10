@@ -182,6 +182,10 @@ const INGEST_EXTRACTION_CONCURRENCY = Math.max(
 );
 const INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE =
 	(process.env.INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE || 'true').toLowerCase() !== 'false';
+/** When migrating from Vertex (768) to Voyage (1024), legacy rows may remain until a full re-embed. Default: block embed if any existing claim has a different dimension. */
+const INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM = ['1', 'true', 'yes'].includes(
+	(process.env.INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM || '').trim().toLowerCase()
+);
 const INGEST_SAVE_GROUPING_RAW =
 	(process.env.INGEST_SAVE_GROUPING_RAW || 'false').toLowerCase() === 'true';
 
@@ -3937,14 +3941,23 @@ async function main() {
 
 			const claimTexts = allClaims.map((c) => c.text);
 			if (db) {
-				const dimProbe = await db.query<Array<{ dim?: number }> | { dim?: number }[]>(
-					'SELECT array::len(embedding) AS dim FROM claim WHERE embedding IS NOT NONE LIMIT 1'
-				);
-				const existingDim = Array.isArray(dimProbe?.[0]) ? (dimProbe[0][0]?.dim ?? null) : null;
-				if (typeof existingDim === 'number' && existingDim > 0 && existingDim !== EMBEDDING_DIMENSIONS) {
-					throw new Error(
-						`[INTEGRITY] Existing claim embeddings are ${existingDim}-dim, but configured embedding output is ${EMBEDDING_DIMENSIONS}-dim (${configuredEmbeddingProvider.name}:${EMBEDDING_MODEL}). Migrate or restore vectors/index before re-embedding this corpus.`
+				if (INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM) {
+					console.warn(
+						'  [WARN] INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM is set — skipping global claim embedding dimension check. ' +
+							'Some rows may still be legacy-sized until you run a full re-embed; hybrid retrieval can be wrong until then. ' +
+							'See docs/operations/ingestion-embedding-lock.md.'
 					);
+				} else {
+					const dimProbe = await db.query<Array<{ dim?: number }> | { dim?: number }[]>(
+						'SELECT array::len(embedding) AS dim FROM claim WHERE embedding IS NOT NONE LIMIT 1'
+					);
+					const existingDim = Array.isArray(dimProbe?.[0]) ? (dimProbe[0][0]?.dim ?? null) : null;
+					if (typeof existingDim === 'number' && existingDim > 0 && existingDim !== EMBEDDING_DIMENSIONS) {
+						throw new Error(
+							`[INTEGRITY] Existing claim embeddings are ${existingDim}-dim, but configured embedding output is ${EMBEDDING_DIMENSIONS}-dim (${configuredEmbeddingProvider.name}:${EMBEDDING_MODEL}). ` +
+								`Run a full corpus re-embed / index migration (see docs/operations/ingestion-embedding-lock.md), or temporarily set INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM=1 on the ingest worker while you migrate (accepts mixed corpus risk).`
+						);
+					}
 				}
 			}
 			if (embeddingPlan.provider !== configuredEmbeddingProvider.name) {

@@ -11,6 +11,16 @@ Set **`EMBEDDING_PROVIDER`** to either:
 
 Do not flip providers without a **re-embed** plan; mixed dimensions in the same index break retrieval.
 
+### Migrating without stopping all ingests
+
+`scripts/ingest.ts` checks Surreal for **any** existing claim embedding dimension before Stage 4. If the corpus is still **768** but `EMBEDDING_PROVIDER=voyage` (**1024**), ingestion fails at embed with `[INTEGRITY] Existing claim embeddings are 768-dim…`.
+
+To **allow new sources to complete** while you run a full `reembed-corpus` (or index migration) in parallel, set on the **ingest worker** (Cloud Run service / job env):
+
+`INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM=1`
+
+This **skips** the global probe and logs a warning. Dense retrieval can behave poorly until the corpus is uniform again — remove the flag after migration.
+
 ## Surreal
 
 After any provider or model change:
