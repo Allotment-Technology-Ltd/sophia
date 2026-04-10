@@ -4,7 +4,8 @@
 # `gcloud run deploy` with `--set-secrets` / `--set-env-vars`. There is no Pulumi or other
 # paid IaC runtime in-repo; GCP layout is documented in `docs/operations/gcp-infrastructure.md`.
 #
-#   src/**, scripts/**, docs/**, Dockerfile, repomix*.config.json, .gitignore, etc.  →  app-deploy
+#   src/**, scripts/**, docs/**, Dockerfile, repomix*.config.json, .gitignore, etc.  →
+#   deploy-neon-migrate + deploy-container-image (parallel) + app-deploy (Cloud Run + poller + health)
 #
 # TARGET REGION: europe-west2 (London) — all resources are in this region.
 # Region drift was resolved in March 2026: the live us-central1 service was
@@ -15,7 +16,8 @@
 #   google-ai-api-key, surreal-db-url, surreal-db-user, surreal-db-pass,
 #   surreal-db-namespace, surreal-db-database, admin-uids, owner-uids (maps to env OWNER_UIDS),
 #   neon-database-url → DATABASE_URL (required; ingest + sophia_documents / sophiaDocumentsDb).
-#   The deploy job runs `pnpm db:migrate:ci` against this secret before Cloud Run deploy so
+#   deploy-neon-migrate runs `pnpm db:migrate:ci` against this secret in parallel with the Docker
+#   build; app-deploy runs only after both succeed, so schema is ready before new revisions serve.
 #   `drizzle/*.sql` (including ingestion_jobs) are applied. WIF deploy SA needs
 #   secretmanager.versions.access on neon-database-url.
 # ─ Neon ingest persistence: enabled whenever DATABASE_URL is set (Cloud Run mounts neon-database-url).
@@ -28,8 +30,8 @@
 # ─ GitHub secret: NEON_AUTH_BASE_URL (same value for VITE_NEON_AUTH_URL at build + runtime JWT verify)
 # ─ Workload Identity Federation configured for this GitHub repo
 #
-# Secret → Cloud Run binding: every app-deploy runs `gcloud run deploy … --set-secrets=…`
-# (see app-deploy job). Rotated GCP secrets with no repo diff: run this workflow via
+# Secret → Cloud Run binding: app-deploy runs `gcloud run deploy … --set-secrets=…`.
+# Rotated GCP secrets with no repo diff: run this workflow via
 # workflow_dispatch with force_app_deploy=true.
 # ─ GitHub repository secrets:
 #     WIF_PROVIDER        projects/{N}/locations/global/workloadIdentityPools/{P}/providers/{ID}
@@ -54,8 +56,14 @@
 #
 # SPEED (main merge path):
 #   - app-deploy does not wait on CodeQL (security gate still required); CodeQL runs in parallel.
+#   - deploy-neon-migrate and deploy-container-image run in parallel after security (migrate no longer
+#     blocks Docker build; wall clock ≈ max(migrate, image) + Cloud Run deploy + poller + health).
 #   - Docker Buildx + registry cache (Artifact Registry) replaces `docker build --no-cache --pull`.
 #   - Redundant `gcloud run services update-traffic --to-latest` removed (deploy already shifts traffic).
+# PR path:
+#   - pnpm uses --frozen-lockfile for faster, cache-friendly installs (same as deploy + Docker).
+# Main push (non-app paths only):
+#   - CodeQL skips when paths-filter says no app-related paths (saves ~1min; deploy does not wait on CodeQL).
 #
 # AIKIDO: https://app.aikido.dev/ — GitHub App posts PR checks; Settings → GitHub Apps → Aikido.
 # AIKIDO: Configure in https://app.aikido.dev/ (PR gating, AutoFix). On GitHub: Settings →
@@ -170,7 +178,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Assert Restormel staging verification secrets
         if: github.event_name == 'pull_request'
@@ -218,6 +226,13 @@ jobs:
 
   # ── 2b. CodeQL scan (in unified pipeline) ──────────────────────────────────
   codeql:
+    needs: [changes]
+    if: >
+      success() &&
+      (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.app == 'true')
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -230,8 +245,8 @@ jobs:
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
 
-  # ── 3. Build & deploy app ──────────────────────────────────────────────────
-  app-deploy:
+  # ── 3a. Neon migrations (parallel with container image; must finish before Cloud Run) ──
+  deploy-neon-migrate:
     if: >
       success() &&
       github.ref == 'refs/heads/main' &&
@@ -241,17 +256,10 @@ jobs:
       )
     needs: [changes, security]
     runs-on: ubuntu-latest
-    env:
-      RESTORMEL_GATEWAY_KEY: ${{ secrets.RESTORMEL_GATEWAY_KEY_PRODUCTION || secrets.RESTORMEL_GATEWAY_KEY_STAGING }}
-      RESTORMEL_PROJECT_ID: ${{ secrets.RESTORMEL_PROJECT_ID_PRODUCTION || secrets.RESTORMEL_PROJECT_ID_STAGING }}
-      RESTORMEL_ENVIRONMENT_ID: ${{ secrets.RESTORMEL_ENVIRONMENT_ID_PRODUCTION || secrets.RESTORMEL_ENVIRONMENT_ID_STAGING }}
-      RESTORMEL_KEYS_BASE: ${{ secrets.RESTORMEL_KEYS_BASE_PRODUCTION || secrets.RESTORMEL_KEYS_BASE_STAGING || 'https://restormel.dev/keys/dashboard' }}
-      RESTORMEL_BASE_URL: ${{ secrets.RESTORMEL_BASE_URL_PRODUCTION || secrets.RESTORMEL_KEYS_BASE_PRODUCTION || secrets.RESTORMEL_KEYS_BASE_STAGING || 'https://restormel.dev/keys/dashboard' }}
-      RESTORMEL_ANALYSE_ROUTE_ID: ${{ secrets.RESTORMEL_ANALYSE_ROUTE_ID_PRODUCTION || secrets.RESTORMEL_ANALYSE_ROUTE_ID_STAGING }}
-      RESTORMEL_VERIFY_ROUTE_ID: ${{ secrets.RESTORMEL_VERIFY_ROUTE_ID_PRODUCTION || secrets.RESTORMEL_VERIFY_ROUTE_ID_STAGING }}
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 1
           clean: true
 
       - id: auth
@@ -271,7 +279,7 @@ jobs:
           node-version: 20
           cache: pnpm
 
-      - name: Install dependencies (Neon migrate + build context)
+      - name: Install dependencies (Neon migrate)
         run: pnpm install --frozen-lockfile
 
       - name: Run Neon database migrations
@@ -285,8 +293,33 @@ jobs:
           export DATABASE_URL="$DB_URL"
           pnpm db:migrate:ci
 
+  # ── 3b. Docker build + push (parallel with Neon migrate; no host pnpm — build is in Dockerfile) ──
+  deploy-container-image:
+    if: >
+      success() &&
+      github.ref == 'refs/heads/main' &&
+      (
+        (github.event_name == 'push' && needs.changes.outputs.app == 'true') ||
+        (github.event_name == 'workflow_dispatch' && inputs.force_app_deploy == true)
+      )
+    needs: [changes, security]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.REGISTRY }}
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
 
       - name: Require NEON_AUTH_BASE_URL for Docker build
         env:
@@ -314,6 +347,39 @@ jobs:
             VITE_NEON_AUTH_URL=${{ secrets.NEON_AUTH_BASE_URL }}
           cache-from: type=registry,ref=${{ env.IMAGE_BASE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_BASE }}:buildcache,mode=max
+
+  # ── 3c. Cloud Run service + poller + health (after migrate + image) ─────────
+  app-deploy:
+    if: >
+      success() &&
+      github.ref == 'refs/heads/main' &&
+      (
+        (github.event_name == 'push' && needs.changes.outputs.app == 'true') ||
+        (github.event_name == 'workflow_dispatch' && inputs.force_app_deploy == true)
+      )
+    needs: [changes, security, deploy-neon-migrate, deploy-container-image]
+    runs-on: ubuntu-latest
+    env:
+      RESTORMEL_GATEWAY_KEY: ${{ secrets.RESTORMEL_GATEWAY_KEY_PRODUCTION || secrets.RESTORMEL_GATEWAY_KEY_STAGING }}
+      RESTORMEL_PROJECT_ID: ${{ secrets.RESTORMEL_PROJECT_ID_PRODUCTION || secrets.RESTORMEL_PROJECT_ID_STAGING }}
+      RESTORMEL_ENVIRONMENT_ID: ${{ secrets.RESTORMEL_ENVIRONMENT_ID_PRODUCTION || secrets.RESTORMEL_ENVIRONMENT_ID_STAGING }}
+      RESTORMEL_KEYS_BASE: ${{ secrets.RESTORMEL_KEYS_BASE_PRODUCTION || secrets.RESTORMEL_KEYS_BASE_STAGING || 'https://restormel.dev/keys/dashboard' }}
+      RESTORMEL_BASE_URL: ${{ secrets.RESTORMEL_BASE_URL_PRODUCTION || secrets.RESTORMEL_KEYS_BASE_PRODUCTION || secrets.RESTORMEL_KEYS_BASE_STAGING || 'https://restormel.dev/keys/dashboard' }}
+      RESTORMEL_ANALYSE_ROUTE_ID: ${{ secrets.RESTORMEL_ANALYSE_ROUTE_ID_PRODUCTION || secrets.RESTORMEL_ANALYSE_ROUTE_ID_STAGING }}
+      RESTORMEL_VERIFY_ROUTE_ID: ${{ secrets.RESTORMEL_VERIFY_ROUTE_ID_PRODUCTION || secrets.RESTORMEL_VERIFY_ROUTE_ID_STAGING }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
 
       - name: Deploy to Cloud Run (europe-west2)
         run: |
