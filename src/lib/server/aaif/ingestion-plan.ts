@@ -163,10 +163,8 @@ function readPinnedModel(
   );
   if (disableCanonical || preferred !== 'auto') return {};
 
-  if (stage !== 'embedding') {
-    const canon = CANONICAL_INGESTION_PRIMARY_MODELS[stage as IngestionLlmStageKey];
-    if (canon) return { provider: canon.provider, modelId: canon.modelId };
-  }
+  const canon = CANONICAL_INGESTION_PRIMARY_MODELS[stage as IngestionLlmStageKey];
+  if (canon) return { provider: canon.provider, modelId: canon.modelId };
   return {};
 }
 

@@ -28,7 +28,7 @@ describe('remediationLogic', () => {
 				from_position: 1,
 				to_position: 2,
 				relation_type: 'supports',
-				strength: 'medium',
+				strength: 'moderate',
 				note: ''
 			}
 		];
