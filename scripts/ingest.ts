@@ -2756,7 +2756,7 @@ async function runThinkerIdentityLinking(args: {
 
 		if (winner) {
 			await db.query(
-				`UPSERT thinker_alias:$rid CONTENT {
+				`UPSERT type::record('thinker_alias', $rid) CONTENT {
 					canonical_name: $canonical_name,
 					raw_name: $raw_name,
 					wikidata_id: $wikidata_id,

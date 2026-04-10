@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "description": "SEP entry slugs (path segment after /entries/) are matched with substring OR logic. Tune lists as needed; operators can add custom keywords in the UI.",
+  "presets": [
+    {
+      "id": "epistemology",
+      "label": "Epistemology",
+      "slugContainsAny": [
+        "epistemology",
+        "metaepistemology",
+        "formal-epistemology",
+        "skepticism",
+        "justification",
+        "reliabilism",
+        "coherentism",
+        "contextualism",
+        "warrant",
+        "testimony",
+        "naturalized",
+        "virtue-",
+        "knowledge",
+        "a-priori",
+        "aPosteriori",
+        "disagreement",
+        "evidence",
+        "perception"
+      ]
+    },
+    {
+      "id": "philosophy_of_science",
+      "label": "Philosophy of science",
+      "slugContainsAny": [
+        "philscience",
+        "scientific",
+        "experiment",
+        "confirmation",
+        "underdetermination",
+        "realism",
+        "reduction",
+        "supervenience",
+        "induction",
+        "explanation",
+        "hypothesis",
+        "measurement",
+        "prediction",
+        "law",
+        "model",
+        "physics",
+        "biology",
+        "chemistry",
+        "causation",
+        "probability",
+        "statistics"
+      ]
+    },
+    {
+      "id": "ethics",
+      "label": "Ethics / moral philosophy",
+      "slugContainsAny": [
+        "ethics",
+        "moral",
+        "consequentialism",
+        "deontology",
+        "utilitarian",
+        "virtue",
+        "contractarian",
+        "rights",
+        "justice",
+        "obligation",
+        "well-being",
+        "autonomy"
+      ]
+    },
+    {
+      "id": "philosophy_of_mind",
+      "label": "Philosophy of mind",
+      "slugContainsAny": [
+        "mind",
+        "consciousness",
+        "qualia",
+        "mental",
+        "cognitive",
+        "intentionality",
+        "perception",
+        "emotion",
+        "free-will",
+        "personal-identity",
+        "embodied"
+      ]
+    },
+    {
+      "id": "metaphysics",
+      "label": "Metaphysics",
+      "slugContainsAny": [
+        "metaphysics",
+        "ontology",
+        "modality",
+        "causation",
+        "substance",
+        "identity",
+        "universals",
+        "properties",
+        "possible-worlds",
+        "grounding"
+      ]
+    },
+    {
+      "id": "logic",
+      "label": "Logic & philosophy of logic",
+      "slugContainsAny": [
+        "logic",
+        "logical-",
+        "validity",
+        "proof",
+        "paradox",
+        "computability",
+        "semantics",
+        "set-theory",
+        "truth"
+      ]
+    }
+  ]
+}

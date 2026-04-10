@@ -3,6 +3,10 @@ import { isIP } from 'node:net';
 import { Timestamp } from '$lib/server/fsCompat';
 import { query as dbQuery } from '$lib/server/db';
 import { neonGetReportEnvelope } from '$lib/server/db/ingestRunRepository';
+import {
+	computeLaunchThrottleBackoffMs,
+	isLaunchThrottleError
+} from '$lib/server/ingestion/ingestionJobErrorClassify';
 import { ingestRunManager, type IngestRunPayload } from '$lib/server/ingestRuns';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
@@ -53,6 +57,9 @@ type BatchItem = {
 	reuseMode: ReuseMode;
 	sourceType: IngestRunPayload['source_type'];
 	attempts: number;
+	/** When set and in the future, maybeLaunchQueuedItems skips this row (launch throttled). */
+	blockedUntilMs?: number;
+	launchThrottleCount?: number;
 };
 
 type BatchRunDoc = {
@@ -1089,7 +1096,14 @@ async function maybeLaunchQueuedItems(batch: StoaBatchRunView): Promise<StoaBatc
 	const slots = Math.max(0, batch.concurrency - runningCount);
 	if (slots <= 0) return batch;
 
-	const pendingItems = batch.items.filter((i) => i.status === 'pending').slice(0, slots);
+	const now = nowMs();
+	const pendingItems = batch.items
+		.filter(
+			(i) =>
+				i.status === 'pending' &&
+				(i.blockedUntilMs === undefined || i.blockedUntilMs <= now)
+		)
+		.slice(0, slots);
 	for (const item of pendingItems) {
 		item.status = 'launching';
 		item.lastUpdatedAtMs = nowMs();
@@ -1132,6 +1146,8 @@ async function maybeLaunchQueuedItems(batch: StoaBatchRunView): Promise<StoaBatc
 			item.status = 'running';
 			item.attempts += 1;
 			item.error = null;
+			item.blockedUntilMs = undefined;
+			item.launchThrottleCount = undefined;
 			item.lastUpdatedAtMs = nowMs();
 			logBatch('info', 'child_run_started', {
 				batchId: batch.id,
@@ -1141,15 +1157,34 @@ async function maybeLaunchQueuedItems(batch: StoaBatchRunView): Promise<StoaBatc
 				attempts: item.attempts
 			});
 		} catch (error) {
-			item.status = 'error';
-			item.error = error instanceof Error ? error.message : String(error);
-			item.lastUpdatedAtMs = nowMs();
-			logBatch('error', 'child_run_start_error', {
-				batchId: batch.id,
-				queueRecordId: item.queueRecordId,
-				url: item.url,
-				error: item.error
-			});
+			const msg = error instanceof Error ? error.message : String(error);
+			if (isLaunchThrottleError(msg)) {
+				await reopenQueueRowForRetry(item.queueRecordId);
+				item.status = 'pending';
+				item.error = null;
+				const tc = (item.launchThrottleCount ?? 0) + 1;
+				item.launchThrottleCount = tc;
+				item.blockedUntilMs = nowMs() + computeLaunchThrottleBackoffMs(tc);
+				item.lastUpdatedAtMs = nowMs();
+				logBatch('info', 'child_run_launch_throttled', {
+					batchId: batch.id,
+					queueRecordId: item.queueRecordId,
+					url: item.url,
+					error: msg,
+					blockedUntilMs: item.blockedUntilMs,
+					launchThrottleCount: tc
+				});
+			} else {
+				item.status = 'error';
+				item.error = msg;
+				item.lastUpdatedAtMs = nowMs();
+				logBatch('error', 'child_run_start_error', {
+					batchId: batch.id,
+					queueRecordId: item.queueRecordId,
+					url: item.url,
+					error: item.error
+				});
+			}
 		}
 	}
 	return batch;

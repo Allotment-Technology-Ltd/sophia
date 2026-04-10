@@ -75,7 +75,13 @@ export function shouldAutoRequeueIngestJobItem(lastError: string | null | undefi
 
 export function isLaunchThrottleError(message: string): boolean {
 	const m = message.toLowerCase();
-	return m.includes('too many concurrent ingest') || m.includes('concurrent ingest workers');
+	return (
+		m.includes('too many concurrent ingest') ||
+		m.includes('concurrent ingest workers') ||
+		m.includes('admin_ingest_max_concurrent') ||
+		m.includes('wait for a run to finish') ||
+		(m.includes('global ingest') && m.includes('slot'))
+	);
 }
 
 /** Exponential backoff for launch throttle (ms); capped. */
