@@ -2291,7 +2291,23 @@ function recordIdKeyPart(id: unknown): string {
 	return i >= 0 ? full.slice(i + 1) : full;
 }
 
-const SAFE_EMBEDDED_RECORD_ID_RE = /^[a-z_][a-z0-9_]*:[^\s]+$/i;
+/** Split `table:key` on first colon; key may contain underscores (e.g. subject slugs). */
+function splitRecordTableAndKey(id: unknown): { tb: string; key: string } | null {
+	const full = toSurrealRecordIdStr(id);
+	const i = full.indexOf(':');
+	if (i <= 0) return null;
+	const tb = full.slice(0, i);
+	const key = full.slice(i + 1);
+	if (!tb || !key) return null;
+	return { tb, key };
+}
+
+const RELATE_GRAPH_ALLOWED_TABLES = new Set([
+	'about_subject',
+	'in_period',
+	'cites_work',
+	'authored_work'
+]);
 
 async function upsertGraphNamedNode(db: Surreal, table: 'subject' | 'period', name: string): Promise<string | null> {
 	const trimmed = name.trim();
@@ -2316,20 +2332,36 @@ async function relateGraphIfAbsent(
 	toId: unknown,
 	setClause: string
 ): Promise<boolean> {
-	const fromStr = toSurrealRecordIdStr(fromId);
-	const toStr = toSurrealRecordIdStr(toId);
-	if (!SAFE_EMBEDDED_RECORD_ID_RE.test(fromStr) || !SAFE_EMBEDDED_RECORD_ID_RE.test(toStr)) {
-		console.warn(`  [WARN] relateGraphIfAbsent: skip unsafe record ids from=${fromStr} to=${toStr}`);
+	if (!RELATE_GRAPH_ALLOWED_TABLES.has(table)) {
+		console.warn(`  [WARN] relateGraphIfAbsent: disallowed relation table ${table}`);
 		return false;
 	}
-	// Embed ids in the query string — SurrealDB 2 parameter binding for RELATE can mis-handle record refs
-	// (see scripts/backfill-graph-context.ts relateIfAbsent).
+	const from = splitRecordTableAndKey(fromId);
+	const to = splitRecordTableAndKey(toId);
+	if (!from || !to) {
+		console.warn(
+			`  [WARN] relateGraphIfAbsent: could not parse record ids from=${toSurrealRecordIdStr(fromId)} to=${toSurrealRecordIdStr(toId)}`
+		);
+		return false;
+	}
+	// Use type::thing($tb, $key) — embedded literals like subject:philosophy_of_science break the parser
+	// (underscores / path-like ids); parameters avoid that (see surrealdb/surrealdb#3369-style workarounds).
+	const edgeVars = {
+		from_tb: from.tb,
+		from_key: from.key,
+		to_tb: to.tb,
+		to_key: to.key
+	};
 	const existing = await db.query<[{ id: string }[]]>(
-		`SELECT id FROM ${table} WHERE in = ${fromStr} AND out = ${toStr} LIMIT 1`
+		`SELECT id FROM ${table} WHERE in = type::thing($from_tb, $from_key) AND out = type::thing($to_tb, $to_key) LIMIT 1`,
+		edgeVars
 	);
 	const hasExisting = Array.isArray(existing?.[0]) && existing[0].length > 0;
 	if (hasExisting) return false;
-	await db.query(`RELATE ${fromStr}->${table}->${toStr} ${setClause}`);
+	await db.query(
+		`RELATE type::thing($from_tb, $from_key)->${table}->type::thing($to_tb, $to_key) ${setClause}`,
+		edgeVars
+	);
 	return true;
 }
 
