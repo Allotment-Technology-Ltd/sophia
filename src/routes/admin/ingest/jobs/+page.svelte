@@ -38,6 +38,16 @@
 	let notes = $state('');
 	let validateLlm = $state(false);
 
+	/** SEP catalog helper: topic presets + un-ingested filter (Neon). */
+	let sepPresetId = $state('');
+	let sepCustomKeywords = $state('');
+	let sepBatchCount = $state(10);
+	let sepExcludeIngested = $state(true);
+	let sepPresets = $state<{ id: string; label: string }[]>([]);
+	let sepSuggestLoading = $state(false);
+	let sepSuggestMessage = $state('');
+	let sepLastStats = $state('');
+
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 	async function authHeaders(json = false): Promise<Record<string, string>> {
@@ -88,6 +98,71 @@
 			jobs = [];
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function loadSepPresets(): Promise<void> {
+		try {
+			const res = await fetch('/api/admin/ingest/sep-suggest?presetsOnly=1', {
+				headers: await authHeaders()
+			});
+			const body = await res.json().catch(() => ({}));
+			if (res.ok && Array.isArray(body?.presets)) {
+				sepPresets = body.presets as { id: string; label: string }[];
+			}
+		} catch {
+			sepPresets = [];
+		}
+	}
+
+	async function fillUrlsFromSepCatalog(): Promise<void> {
+		sepSuggestMessage = '';
+		sepLastStats = '';
+		if (!sepPresetId.trim() && !sepCustomKeywords.trim()) {
+			sepSuggestMessage = 'Choose a topic preset and/or enter custom keywords (entry slug fragments).';
+			return;
+		}
+		if (sepExcludeIngested && neonDisabled) {
+			sepSuggestMessage =
+				'Turn off “Exclude already ingested” while Neon is unavailable, or enable DATABASE_URL for this environment.';
+			return;
+		}
+		sepSuggestLoading = true;
+		try {
+			const params = new URLSearchParams();
+			if (sepPresetId.trim()) params.set('preset', sepPresetId.trim());
+			if (sepCustomKeywords.trim()) params.set('keywords', sepCustomKeywords.trim());
+			const n = Math.max(1, Math.min(200, Math.trunc(sepBatchCount) || 10));
+			params.set('limit', String(n));
+			params.set('excludeIngested', sepExcludeIngested && !neonDisabled ? '1' : '0');
+			const res = await fetch(`/api/admin/ingest/sep-suggest?${params.toString()}`, {
+				headers: await authHeaders()
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				throw new Error(typeof body?.error === 'string' ? body.error : 'Suggestion request failed.');
+			}
+			const urls = Array.isArray(body?.urls) ? (body.urls as string[]) : [];
+			const stats = body?.stats as
+				| {
+						catalogSize?: number;
+						matchedBeforeExclude?: number;
+						excludedIngested?: number;
+						returned?: number;
+				  }
+				| undefined;
+			urlsInput = urls.join('\n');
+			sepLastStats = stats
+				? `Catalog ${stats.catalogSize ?? '—'} · matched ${stats.matchedBeforeExclude ?? '—'} · skipped ingested ${stats.excludedIngested ?? 0} · filled ${stats.returned ?? urls.length}`
+				: '';
+			sepSuggestMessage =
+				urls.length === 0
+					? 'No URLs matched. Try different keywords or disable “Exclude already ingested”.'
+					: `Placed ${urls.length} URL(s) in the list below.`;
+		} catch (e) {
+			sepSuggestMessage = e instanceof Error ? e.message : 'Failed to suggest URLs.';
+		} finally {
+			sepSuggestLoading = false;
 		}
 	}
 
@@ -149,6 +224,7 @@
 
 	onMount(() => {
 		void loadJobs();
+		void loadSepPresets();
 		pollTimer = setInterval(() => void loadJobs(), 8000);
 	});
 
@@ -192,6 +268,87 @@
 				>ADMIN_INGEST_MAX_CONCURRENT</code
 			>).
 		</p>
+
+		<div
+			class="mt-5 rounded-lg border border-[var(--color-border)] bg-black/10 p-4 sophia-stack-default"
+			aria-labelledby="sep-helper-heading"
+		>
+			<h3 id="sep-helper-heading" class="font-serif text-base text-sophia-dark-text">
+				SEP catalog helper
+			</h3>
+			<p class="text-sm leading-6 text-sophia-dark-muted">
+				Build a batch from <span class="font-mono text-xs">data/sep-entry-urls.json</span> by topic preset (slug
+				substrings) and optional extra keywords. “Exclude already ingested” uses Neon
+				<span class="font-mono text-xs">ingest_runs</span> + durable job items with status
+				<span class="font-mono text-xs">done</span> — not Surreal’s legacy
+				<span class="font-mono text-xs">ingestion_log</span>.
+			</p>
+			<div class="flex flex-wrap items-end gap-4">
+				<label class="block min-w-[200px] flex-1">
+					<span class="font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-dim">Topic preset</span>
+					<select
+						class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 text-sm text-sophia-dark-text focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)]"
+						bind:value={sepPresetId}
+					>
+						<option value="">— Optional —</option>
+						{#each sepPresets as p (p.id)}
+							<option value={p.id}>{p.label}</option>
+						{/each}
+					</select>
+				</label>
+				<label class="block min-w-[200px] flex-[2]">
+					<span class="font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-dim"
+						>Custom keywords (slug fragments)</span
+					>
+					<input
+						type="text"
+						class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)]"
+						bind:value={sepCustomKeywords}
+						placeholder="e.g. bayesian, confirmation"
+						autocomplete="off"
+					/>
+				</label>
+				<label class="block w-28">
+					<span class="font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-dim">Count</span>
+					<input
+						type="number"
+						min="1"
+						max="200"
+						class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)]"
+						bind:value={sepBatchCount}
+					/>
+				</label>
+			</div>
+			<label class="flex cursor-pointer items-center gap-3">
+				<input
+					type="checkbox"
+					bind:checked={sepExcludeIngested}
+					class="h-5 w-5 rounded border-[var(--color-border)]"
+				/>
+				<span class="text-sm text-sophia-dark-text">Exclude URLs already ingested (Neon)</span>
+			</label>
+			{#if sepLastStats}
+				<p class="font-mono text-xs text-sophia-dark-muted">{sepLastStats}</p>
+			{/if}
+			{#if sepSuggestMessage}
+				<p class="text-sm text-amber-100" role="status">{sepSuggestMessage}</p>
+			{/if}
+			<button
+				type="button"
+				class="inline-flex min-h-[44px] max-w-md items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--color-blue)_35%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-blue)_12%,var(--color-surface))] px-5 py-3 font-mono text-sm font-medium text-sophia-dark-text transition hover:border-[var(--color-blue)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+				disabled={sepSuggestLoading}
+				onclick={() => void fillUrlsFromSepCatalog()}
+			>
+				{sepSuggestLoading ? 'Building list…' : 'Fill URL list from catalog'}
+			</button>
+			{#if neonDisabled}
+				<p class="text-sm text-sophia-dark-muted">
+					Neon is off in this environment: turn off “Exclude already ingested” to fill from the catalog, or paste
+					URLs manually. Starting a job still requires Neon.
+				</p>
+			{/if}
+		</div>
+
 		<div class="mt-4 flex flex-col gap-4">
 			<label class="block">
 				<span class="font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-dim">URLs</span>
