@@ -24,4 +24,6 @@ Publish an **`ingestion_embedding`** route whose model matches the runtime provi
 
 ## Health check
 
-`GET /api/admin/ingest/embedding-health` compares Restormel route metadata with the active embedding provider.
+`GET /api/admin/ingest/embedding-health` compares Restormel route metadata with the active embedding provider and samples up to 64 existing `claim` vectors in Surreal.
+
+If **drift** appears while the runtime is already Voyage (1024) or Vertex (768), the database usually still holds **legacy** vectors from a prior provider or model. Retrying failed ingests only re-embeds claims touched by those runs; clearing drift for the whole corpus requires `reembed-corpus` / index work above, not retries alone.
