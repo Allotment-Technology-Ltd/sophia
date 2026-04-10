@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { parseIngestTimingFromLogLines } from './ingestRunIssues';
+import { classifyIngestLogLine, parseIngestTimingFromLogLines } from './ingestRunIssues';
+import { formatIngestSelfHealLine } from './ingestion/selfHealLog';
 
 describe('parseIngestTimingFromLogLines', () => {
 	it('returns null when no timing line', () => {
@@ -22,5 +23,33 @@ describe('parseIngestTimingFromLogLines', () => {
 
 	it('returns null for non-object JSON', () => {
 		expect(parseIngestTimingFromLogLines(['[INGEST_TIMING] [1,2]'])).toBeNull();
+	});
+});
+
+describe('classifyIngestLogLine self-heal', () => {
+	it('classifies recovery_agent signal', () => {
+		const line = formatIngestSelfHealLine({
+			v: 1,
+			signal: 'recovery_agent',
+			stage: 'extraction',
+			provider: 'vertex',
+			model: 'gemini-2.5-flash',
+			outcome: 'sleep_retry',
+			detail: 'after transient 429'
+		});
+		const issue = classifyIngestLogLine(line, 0);
+		expect(issue?.kind).toBe('recovery_agent');
+		expect(issue?.stageHint).toBe('extraction');
+		expect(issue?.message).toContain('recovery_agent');
+	});
+
+	it('classifies circuit_open signal', () => {
+		const line = formatIngestSelfHealLine({
+			v: 1,
+			signal: 'circuit_open',
+			stage: 'validation',
+			outcome: 'skipped_tier'
+		});
+		expect(classifyIngestLogLine(line, 1)?.kind).toBe('circuit_open');
 	});
 });

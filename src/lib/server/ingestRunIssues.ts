@@ -12,6 +12,7 @@ import {
 } from '$lib/server/db/ingestRunRepository';
 import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
+import { parseIngestSelfHealLine } from '$lib/server/ingestion/selfHealLog';
 
 export type IngestIssueKind =
   | 'warning'
@@ -28,6 +29,9 @@ export type IngestIssueKind =
   | 'ingest_retry'
   | 'cancelled'
   | 'routing_degraded'
+  | 'recovery_agent'
+  | 'circuit_open'
+  | 'stage_health_bump'
   | 'other_signal';
 
 export type IngestIssueSeverity = 'info' | 'low' | 'medium' | 'high';
@@ -57,6 +61,9 @@ function truncateLine(line: string): string {
 }
 
 function inferStageFromLine(line: string): string | null {
+  const selfHeal = parseIngestSelfHealLine(line);
+  if (selfHeal?.stage) return selfHeal.stage;
+
   const m =
     line.match(/\[ROUTE\]\s+([a-z_]+)/i) ||
     line.match(/\[RETRY\]\s+([a-z_]+)/i) ||
@@ -80,6 +87,50 @@ function inferStageFromLine(line: string): string | null {
 export function classifyIngestLogLine(line: string, seq: number): IngestIssueRecord | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
+
+  const selfHeal = parseIngestSelfHealLine(trimmed);
+  if (selfHeal) {
+    const stageHint = selfHeal.stage ?? inferStageFromLine(trimmed);
+    const rawLine = truncateLine(trimmed);
+    const parts = [
+      selfHeal.signal,
+      selfHeal.outcome && `outcome=${selfHeal.outcome}`,
+      selfHeal.provider && selfHeal.model && `${selfHeal.provider}/${selfHeal.model}`,
+      selfHeal.detail
+    ].filter(Boolean);
+    const baseMessage = parts.join(' — ');
+    if (selfHeal.signal === 'recovery_agent') {
+      return {
+        seq,
+        ts: Date.now(),
+        kind: 'recovery_agent',
+        severity: 'medium',
+        stageHint,
+        message: baseMessage || 'Recovery agent signal.',
+        rawLine
+      };
+    }
+    if (selfHeal.signal === 'circuit_open') {
+      return {
+        seq,
+        ts: Date.now(),
+        kind: 'circuit_open',
+        severity: 'high',
+        stageHint,
+        message: baseMessage || 'Circuit open or tier skipped.',
+        rawLine
+      };
+    }
+    return {
+      seq,
+      ts: Date.now(),
+      kind: 'stage_health_bump',
+      severity: 'low',
+      stageHint,
+      message: baseMessage || 'Stage-scoped model health update.',
+      rawLine
+    };
+  }
 
   const stageHint = inferStageFromLine(trimmed);
   const rawLine = truncateLine(trimmed);
