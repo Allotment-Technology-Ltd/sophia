@@ -2272,6 +2272,27 @@ function slugifyGraphLabel(value: string): string {
 		.slice(0, 96);
 }
 
+/** Normalize SDK RecordId or string to `table:id` for literal positions in SurrealQL (RELATE / comparisons). */
+function toSurrealRecordIdStr(id: unknown): string {
+	if (typeof id === 'string' && id.includes(':')) return id.trim();
+	if (id && typeof id === 'object') {
+		const o = id as { tb?: unknown; id?: unknown };
+		if (typeof o.tb === 'string' && o.id !== undefined && String(o.id)) {
+			return `${o.tb}:${String(o.id)}`;
+		}
+	}
+	return String(id ?? '').trim();
+}
+
+/** Record id part after the first colon (e.g. source row key). */
+function recordIdKeyPart(id: unknown): string {
+	const full = toSurrealRecordIdStr(id);
+	const i = full.indexOf(':');
+	return i >= 0 ? full.slice(i + 1) : full;
+}
+
+const SAFE_EMBEDDED_RECORD_ID_RE = /^[a-z_][a-z0-9_]*:[^\s]+$/i;
+
 async function upsertGraphNamedNode(db: Surreal, table: 'subject' | 'period', name: string): Promise<string | null> {
 	const trimmed = name.trim();
 	if (!trimmed) return null;
@@ -2291,21 +2312,24 @@ async function upsertGraphNamedNode(db: Surreal, table: 'subject' | 'period', na
 async function relateGraphIfAbsent(
 	db: Surreal,
 	table: string,
-	fromId: string,
-	toId: string,
+	fromId: unknown,
+	toId: unknown,
 	setClause: string
 ): Promise<boolean> {
+	const fromStr = toSurrealRecordIdStr(fromId);
+	const toStr = toSurrealRecordIdStr(toId);
+	if (!SAFE_EMBEDDED_RECORD_ID_RE.test(fromStr) || !SAFE_EMBEDDED_RECORD_ID_RE.test(toStr)) {
+		console.warn(`  [WARN] relateGraphIfAbsent: skip unsafe record ids from=${fromStr} to=${toStr}`);
+		return false;
+	}
+	// Embed ids in the query string — SurrealDB 2 parameter binding for RELATE can mis-handle record refs
+	// (see scripts/backfill-graph-context.ts relateIfAbsent).
 	const existing = await db.query<[{ id: string }[]]>(
-		`SELECT id FROM ${table} WHERE in = $from AND out = $to LIMIT 1`,
-		{ from: fromId, to: toId }
+		`SELECT id FROM ${table} WHERE in = ${fromStr} AND out = ${toStr} LIMIT 1`
 	);
 	const hasExisting = Array.isArray(existing?.[0]) && existing[0].length > 0;
 	if (hasExisting) return false;
-	await db.query(
-		`RELATE $from->${table}->$to
-		 ${setClause}`,
-		{ from: fromId, to: toId }
-	);
+	await db.query(`RELATE ${fromStr}->${table}->${toStr} ${setClause}`);
 	return true;
 }
 
@@ -4353,22 +4377,22 @@ async function main() {
 				}
 				console.log(`  [OK] Source record: ${sourceId}`);
 
-				// work.source_id is SCHEMAFULL option<string>; SurrealDB.js may return a RecordId object.
-				const sourceIdStr =
-					typeof sourceId === 'string' ? sourceId : String(sourceId);
+				// work.source_id is SCHEMAFULL option<string>. Bound parameters that look like record ids are
+				// typed as records — build a string with string::concat so the field stays plain string.
+				const workSourceKey = recordIdKeyPart(sourceId);
 
 				const workSlug = slugifyGraphLabel(sourceMeta.canonical_url_hash || sourceMeta.url || sourceMeta.title);
 				const workRecordResult = await db.query<[{ id: string }[]]>(
 					`UPSERT type::record('work', $rid) CONTENT {
 						title: $title,
-						source_id: $source_id,
+						source_id: string::concat('source:', $work_source_key),
 						source_url: $source_url,
 						imported_at: time::now()
 					} RETURN AFTER`,
 					{
 						rid: workSlug || `source_${Date.now()}`,
 						title: sourceMeta.title,
-						source_id: sourceIdStr,
+						work_source_key: workSourceKey,
 						source_url: sourceMeta.url
 					}
 				);
