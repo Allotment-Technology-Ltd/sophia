@@ -4,8 +4,9 @@
 # `gcloud run deploy` with `--set-secrets` / `--set-env-vars`. There is no Pulumi or other
 # paid IaC runtime in-repo; GCP layout is documented in `docs/operations/gcp-infrastructure.md`.
 #
-#   src/**, scripts/**, docs/**, Dockerfile, repomix*.config.json, .gitignore, etc.  →
-#   deploy-neon-migrate + deploy-container-image (parallel) + app-deploy (Cloud Run + poller + health)
+#   deploy paths (src, scripts, drizzle, Docker, lockfile, …)  →
+#   deploy-neon-migrate + deploy-container-image (parallel) + app-deploy (Cloud Run + poller + health).
+#   docs/**, .gitignore, repomix*.json  →  no image build or Cloud Run deploy (workflow_dispatch --force still works).
 #
 # TARGET REGION: europe-west2 (London) — all resources are in this region.
 # Region drift was resolved in March 2026: the live us-central1 service was
@@ -62,8 +63,8 @@
 #   - Redundant `gcloud run services update-traffic --to-latest` removed (deploy already shifts traffic).
 # PR path:
 #   - pnpm uses --frozen-lockfile for faster, cache-friendly installs (same as deploy + Docker).
-# Main push (non-app paths only):
-#   - CodeQL skips when paths-filter says no app-related paths (saves ~1min; deploy does not wait on CodeQL).
+# Main push (deploy paths unchanged):
+#   - CodeQL skips when paths-filter says no deploy-related paths (saves ~1min; deploy does not wait on CodeQL).
 #
 # AIKIDO: https://app.aikido.dev/ — GitHub App posts PR checks; Settings → GitHub Apps → Aikido.
 # AIKIDO: Configure in https://app.aikido.dev/ (PR gating, AutoFix). On GitHub: Settings →
@@ -114,7 +115,7 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      app: ${{ steps.filter.outputs.app }}
+      deploy: ${{ steps.filter.outputs.deploy }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -124,25 +125,21 @@ jobs:
         id: filter
         with:
           filters: |
-            app:
+            deploy:
               - 'src/**'
               - 'scripts/**'
+              - 'packages/**'
               - 'drizzle/**'
               - 'static/**'
-              - 'docs/**'
               - 'Dockerfile'
               - 'package.json'
               - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
               - 'svelte.config.js'
               - 'vite.config.js'
               - 'postcss.config.js'
               - 'tailwind.config.js'
               - '.github/workflows/deploy.yml'
-              - '.gitignore'
-              - 'repomix.config.json'
-              - 'repomix.config.json5'
-              - 'repomix.config.jsonc'
-              - 'repomix.knowledge-base.config.json'
 
   # ── 2. Security & quality gate (always runs) ───────────────────────────────
   security:
@@ -231,7 +228,7 @@ jobs:
       success() &&
       (
         github.event_name == 'pull_request' ||
-        (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.app == 'true')
+        (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.deploy == 'true')
       )
     runs-on: ubuntu-latest
     steps:
@@ -251,7 +248,7 @@ jobs:
       success() &&
       github.ref == 'refs/heads/main' &&
       (
-        (github.event_name == 'push' && needs.changes.outputs.app == 'true') ||
+        (github.event_name == 'push' && needs.changes.outputs.deploy == 'true') ||
         (github.event_name == 'workflow_dispatch' && inputs.force_app_deploy == true)
       )
     needs: [changes, security]
@@ -299,7 +296,7 @@ jobs:
       success() &&
       github.ref == 'refs/heads/main' &&
       (
-        (github.event_name == 'push' && needs.changes.outputs.app == 'true') ||
+        (github.event_name == 'push' && needs.changes.outputs.deploy == 'true') ||
         (github.event_name == 'workflow_dispatch' && inputs.force_app_deploy == true)
       )
     needs: [changes, security]
@@ -354,7 +351,7 @@ jobs:
       success() &&
       github.ref == 'refs/heads/main' &&
       (
-        (github.event_name == 'push' && needs.changes.outputs.app == 'true') ||
+        (github.event_name == 'push' && needs.changes.outputs.deploy == 'true') ||
         (github.event_name == 'workflow_dispatch' && inputs.force_app_deploy == true)
       )
     needs: [changes, security, deploy-neon-migrate, deploy-container-image]
