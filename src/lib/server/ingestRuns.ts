@@ -631,14 +631,21 @@ class IngestRunManager extends EventEmitter {
     if (s && isNeonIngestPersistenceEnabled()) void neonPersistIngestRunSnapshot(s);
   }
 
-  /** Count child processes still attached (fetch or ingest worker). */
+  /**
+   * Count OS child processes that should consume an ADMIN_INGEST_MAX_CONCURRENT slot.
+   * Terminal runs (`done` / `error`) must not count: failed batches stay in `runs` for UI/history
+   * and restarts create new run ids — the old ChildProcess can still report `exitCode === null`
+   * when the child exited on a signal, which previously inflated this count and blocked restarts.
+   */
   private activeChildProcessCount(): number {
     let n = 0;
     for (const s of this.runs.values()) {
+      if (s.status === 'done' || s.status === 'error') continue;
       const p = s.process;
-      if (p && typeof p.exitCode !== 'number' && !p.killed) {
-        n += 1;
-      }
+      if (!p || p.killed) continue;
+      if (typeof p.exitCode === 'number') continue;
+      if (p.signalCode) continue;
+      n += 1;
     }
     return n;
   }
@@ -835,6 +842,7 @@ class IngestRunManager extends EventEmitter {
   completeRun(runId: string): void {
     const state = this.runs.get(runId);
     if (state) {
+      state.process = undefined;
       state.status = 'done';
       state.completedAt = Date.now();
       state.resumable = false;
@@ -849,6 +857,7 @@ class IngestRunManager extends EventEmitter {
   failRun(runId: string, error: string): void {
     const state = this.runs.get(runId);
     if (state) {
+      state.process = undefined;
       state.status = 'error';
       state.error = error;
       state.completedAt = Date.now();
