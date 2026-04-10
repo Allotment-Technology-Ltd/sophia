@@ -106,17 +106,27 @@ async function fetchUrl(url: string, options?: { cacheKey?: string }): Promise<s
 function extractSepEntry(html: string): { text: string; title: string; author: string[] } {
 	const root = parseHTML(html);
 
-	// Find main article content
-	let mainContent = root.querySelector('#main-text');
-	if (!mainContent) {
-		mainContent = root.querySelector('.entry-content');
-	}
-	if (!mainContent) {
-		mainContent = root.querySelector('article');
+	// Find main article content (SEP has used #main-text, #article-content, .entry-content, etc.)
+	const mainSelectors = [
+		'#main-text',
+		'#article-content',
+		'.entry-content',
+		'article#article',
+		'#article',
+		'main',
+		'[role="main"]',
+		'article'
+	];
+	let mainContent: ReturnType<typeof root.querySelector> = null;
+	for (const sel of mainSelectors) {
+		mainContent = root.querySelector(sel);
+		if (mainContent) break;
 	}
 
 	if (!mainContent) {
-		throw new Error('Could not find main article content (expected #main-text or .entry-content)');
+		throw new Error(
+			'Could not find main article content (expected #main-text, #article-content, .entry-content, or article/main)'
+		);
 	}
 
 	// Extract title - try multiple selectors

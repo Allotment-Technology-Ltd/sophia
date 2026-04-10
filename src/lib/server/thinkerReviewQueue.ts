@@ -165,7 +165,7 @@ export async function resolveUnresolvedThinkerReference(params: {
 	);
 
 	await query(
-		`UPSERT thinker_alias:$alias_id CONTENT {
+		`UPSERT type::record('thinker_alias', $alias_id) CONTENT {
 			canonical_name: $canonical_name,
 			raw_name: $raw_name,
 			wikidata_id: $wikidata_id,
@@ -243,7 +243,7 @@ export async function rejectUnresolvedThinkerReference(params: {
 	const canonicalName = canonicalizeThinkerName(rawName);
 
 	await query(
-		`UPSERT thinker_alias:$alias_id CONTENT {
+		`UPSERT type::record('thinker_alias', $alias_id) CONTENT {
 			canonical_name: $canonical_name,
 			raw_name: $raw_name,
 			wikidata_id: '',
