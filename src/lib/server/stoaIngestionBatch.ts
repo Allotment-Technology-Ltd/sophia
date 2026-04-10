@@ -1123,7 +1123,7 @@ async function maybeLaunchQueuedItems(batch: StoaBatchRunView): Promise<StoaBatc
 				source_url: item.url,
 				source_type: item.sourceType,
 				validate: false,
-				stop_before_store: true,
+				stop_before_store: false,
 				model_chain: { extract: 'auto', relate: 'auto', group: 'auto', validate: 'auto' },
 				queue_record_id: item.queueRecordId
 			};

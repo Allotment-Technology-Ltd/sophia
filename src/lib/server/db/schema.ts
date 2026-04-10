@@ -247,3 +247,67 @@ export const ingestLlmModelHealth = pgTable(
   })
 );
 
+/** Multi-source ingestion job (admin); items spawn child `ingest_runs`. */
+export const ingestionJobs = pgTable(
+  'ingestion_jobs',
+  {
+    id: text('id').primaryKey(),
+    status: text('status').notNull().default('running'),
+    concurrency: integer('concurrency').notNull().default(2),
+    actorUid: text('actor_uid'),
+    actorEmail: text('actor_email'),
+    notes: text('notes'),
+    validateLlm: boolean('validate_llm').notNull().default(false),
+    summary: jsonb('summary').notNull().$type<Record<string, unknown>>().default({}),
+    pipelineVersion: text('pipeline_version'),
+    embeddingFingerprint: text('embedding_fingerprint'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true })
+  },
+  (t) => ({
+    updatedIdx: index('idx_ingestion_jobs_updated').on(t.updatedAt),
+    statusIdx: index('idx_ingestion_jobs_status').on(t.status)
+  })
+);
+
+export const ingestionJobItems = pgTable(
+  'ingestion_job_items',
+  {
+    id: text('id').primaryKey(),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => ingestionJobs.id, { onDelete: 'cascade' }),
+    url: text('url').notNull(),
+    sourceType: text('source_type').notNull().default('institutional'),
+    status: text('status').notNull().default('pending'),
+    childRunId: text('child_run_id'),
+    lastError: text('last_error'),
+    attempts: integer('attempts').notNull().default(0),
+    queueRecordId: text('queue_record_id'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (t) => ({
+    jobIdx: index('idx_ingestion_job_items_job').on(t.jobId),
+    jobStatusIdx: index('idx_ingestion_job_items_job_status').on(t.jobId, t.status)
+  })
+);
+
+export const ingestionJobEvents = pgTable(
+  'ingestion_job_events',
+  {
+    id: serial('id').primaryKey(),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => ingestionJobs.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    eventType: text('event_type').notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown> | null>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (t) => ({
+    jobSeqUq: uniqueIndex('ingestion_job_events_job_seq_unique').on(t.jobId, t.seq),
+    jobSeqIdx: index('idx_ingestion_job_events_job_seq').on(t.jobId, t.seq)
+  })
+);
+
