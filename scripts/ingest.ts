@@ -2344,8 +2344,8 @@ async function relateGraphIfAbsent(
 		);
 		return false;
 	}
-	// Use type::thing($tb, $key) — embedded literals like subject:philosophy_of_science break the parser
-	// (underscores / path-like ids); parameters avoid that (see surrealdb/surrealdb#3369-style workarounds).
+	// Use type::record($tb, $key) — this Surreal build rejects type::thing; slugs with underscores
+	// are unsafe as bare record literals in RELATE/SELECT.
 	const edgeVars = {
 		from_tb: from.tb,
 		from_key: from.key,
@@ -2353,13 +2353,13 @@ async function relateGraphIfAbsent(
 		to_key: to.key
 	};
 	const existing = await db.query<[{ id: string }[]]>(
-		`SELECT id FROM ${table} WHERE in = type::thing($from_tb, $from_key) AND out = type::thing($to_tb, $to_key) LIMIT 1`,
+		`SELECT id FROM ${table} WHERE in = type::record($from_tb, $from_key) AND out = type::record($to_tb, $to_key) LIMIT 1`,
 		edgeVars
 	);
 	const hasExisting = Array.isArray(existing?.[0]) && existing[0].length > 0;
 	if (hasExisting) return false;
 	await db.query(
-		`RELATE type::thing($from_tb, $from_key)->${table}->type::thing($to_tb, $to_key) ${setClause}`,
+		`RELATE type::record($from_tb, $from_key)->${table}->type::record($to_tb, $to_key) ${setClause}`,
 		edgeVars
 	);
 	return true;
