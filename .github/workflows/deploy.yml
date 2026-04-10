@@ -6,7 +6,8 @@
 #
 #   deploy paths (src, scripts, drizzle, Docker, lockfile, …)  →
 #   deploy-neon-migrate + deploy-container-image (parallel) + app-deploy (Cloud Run + poller + health).
-#   docs/**, .gitignore, repomix*.json  →  no image build or Cloud Run deploy (workflow_dispatch --force still works).
+#   docs/**, repomix*.json  →  no image build or Cloud Run deploy (workflow_dispatch --force still works).
+#   .gitignore alone  →  no deploy; but data/*.json baked into the image (SEP catalog) must match deploy paths.
 #
 # TARGET REGION: europe-west2 (London) — all resources are in this region.
 # Region drift was resolved in March 2026: the live us-central1 service was
@@ -150,6 +151,9 @@ jobs:
               - 'postcss.config.js'
               - 'tailwind.config.js'
               - '.github/workflows/deploy.yml'
+              # Copied into runtime image (see Dockerfile); changing catalog must rebuild the image.
+              - 'data/sep-entry-urls.json'
+              - 'data/sep-topic-presets.json'
 
   # ── 2. Security & quality gate (always runs) ───────────────────────────────
   security:
