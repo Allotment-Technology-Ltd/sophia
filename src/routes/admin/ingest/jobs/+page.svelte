@@ -325,7 +325,7 @@
 					bind:checked={sepExcludeIngested}
 					class="h-5 w-5 rounded border-[var(--color-border)]"
 				/>
-				<span class="text-sm text-sophia-dark-text">Exclude URLs already ingested (Neon)</span>
+				<span class="text-sm text-sophia-dark-text">Exclude URLs already ingested (Neon + Surreal)</span>
 			</label>
 			{#if sepLastStats}
 				<p class="font-mono text-xs text-sophia-dark-muted">{sepLastStats}</p>
