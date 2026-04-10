@@ -21,6 +21,8 @@ To **allow new sources to complete** while you run a full `reembed-corpus` (or i
 
 This **skips** the global probe and logs a warning. Dense retrieval can behave poorly until the corpus is uniform again — remove the flag after migration.
 
+Production deploys (`.github/workflows/deploy.yml` and `scripts/gcp/deploy-sophia-ingestion-poller-job.sh`) currently set this to **`1`** so admin ingests do not fail on the legacy-dimension check; delete that env entry from both after the corpus is fully re-embedded.
+
 ## Surreal
 
 After any provider or model change:
