@@ -121,6 +121,8 @@ export const ingestStagingMeta = pgTable('ingest_staging_meta', {
   validationProgress: jsonb('validation_progress').$type<Record<string, unknown> | null>(),
   relationsProgress: jsonb('relations_progress').$type<Record<string, unknown> | null>(),
   embeddingProgress: jsonb('embedding_progress').$type<Record<string, unknown> | null>(),
+  /** Mid-remediation checkpoint (ingest orchestration) */
+  remediationProgress: jsonb('remediation_progress').$type<Record<string, unknown> | null>(),
   validationFull: jsonb('validation_full').$type<Record<string, unknown> | null>(),
   embeddingsJson: jsonb('embeddings_json').$type<number[][] | null>(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
@@ -267,6 +269,18 @@ export const ingestLlmStageModelHealth = pgTable(
   })
 );
 
+/** Optional cluster-wide cap for concurrent ingest children (see INGEST_GLOBAL_CONCURRENCY_GATE). */
+export const ingestConcurrencyGate = pgTable('ingest_concurrency_gate', {
+  id: integer('id').primaryKey().default(1),
+  slotsInUse: integer('slots_in_use').notNull().default(0)
+});
+
+/** Optional per-pipeline-phase caps across processes (embed / store). */
+export const ingestPhaseGate = pgTable('ingest_phase_gate', {
+  phase: text('phase').primaryKey(),
+  slotsInUse: integer('slots_in_use').notNull().default(0)
+});
+
 /** Multi-source ingestion job (admin); items spawn child `ingest_runs`. */
 export const ingestionJobs = pgTable(
   'ingestion_jobs',
@@ -304,6 +318,10 @@ export const ingestionJobItems = pgTable(
     childRunId: text('child_run_id'),
     lastError: text('last_error'),
     attempts: integer('attempts').notNull().default(0),
+    /** When set, pending item is not eligible for launch until this time (launch throttle backoff). */
+    blockedUntil: timestamp('blocked_until', { withTimezone: true }),
+    /** Count of “too many concurrent workers” style launch throttles (separate from ingest attempts). */
+    launchThrottleCount: integer('launch_throttle_count').notNull().default(0),
     queueRecordId: text('queue_record_id'),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },

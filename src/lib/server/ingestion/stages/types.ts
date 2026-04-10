@@ -20,6 +20,7 @@ export type StageKey =
 	| 'relations'
 	| 'grouping'
 	| 'validation'
+	| 'remediation'
 	| 'embedding'
 	| 'json_repair';
 
@@ -101,6 +102,11 @@ export interface PartialResults {
 		next_batch_index: number;
 		total_batches: number;
 		should_validate: boolean;
+	};
+	/** Mid-remediation checkpoint (ordered positions to repair; resume index). */
+	remediation_progress?: {
+		positions: number[];
+		next_index: number;
 	};
 	relations_progress?: {
 		relations_so_far: PhaseOneRelation[];

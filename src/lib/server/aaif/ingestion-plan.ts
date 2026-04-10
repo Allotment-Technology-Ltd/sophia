@@ -17,6 +17,7 @@ export type IngestionStage =
   | 'relations'
   | 'grouping'
   | 'validation'
+  | 'remediation'
   | 'embedding'
   | 'json_repair';
 
@@ -111,6 +112,9 @@ function stageLatency(stage: IngestionStage, context: IngestionPlanningContext):
     if (isBookSource(context.sourceType) && claims > 55) return 'high';
     return claims > 60 ? 'high' : 'balanced';
   }
+  if (stage === 'remediation') {
+    return claims > 40 ? 'high' : 'balanced';
+  }
   if (stage === 'extraction') {
     if (isBookSource(context.sourceType)) {
       return tokens > 10_000 ? 'balanced' : 'low';
@@ -123,6 +127,7 @@ function stageLatency(stage: IngestionStage, context: IngestionPlanningContext):
 function stagePass(stage: Exclude<IngestionStage, 'embedding'>): 'analysis' | 'synthesis' | 'verification' | 'generic' {
   if (stage === 'grouping') return 'synthesis';
   if (stage === 'validation') return 'verification';
+  if (stage === 'remediation') return 'synthesis';
   if (stage === 'json_repair') return 'generic';
   return 'analysis';
 }
@@ -138,6 +143,7 @@ const PIN_ENV_SUFFIX: Record<Exclude<IngestionStage, 'embedding'>, string> = {
   relations: 'RELATIONS',
   grouping: 'GROUPING',
   validation: 'VALIDATION',
+  remediation: 'REMEDIATION',
   json_repair: 'JSON_REPAIR'
 };
 
@@ -157,8 +163,10 @@ function readPinnedModel(
   );
   if (disableCanonical || preferred !== 'auto') return {};
 
-  const canon = CANONICAL_INGESTION_PRIMARY_MODELS[stage as IngestionLlmStageKey];
-  if (canon) return { provider: canon.provider, modelId: canon.modelId };
+  if (stage !== 'embedding') {
+    const canon = CANONICAL_INGESTION_PRIMARY_MODELS[stage as IngestionLlmStageKey];
+    if (canon) return { provider: canon.provider, modelId: canon.modelId };
+  }
   return {};
 }
 
@@ -271,6 +279,13 @@ export function estimateStageUsage(stage: IngestionStage, context: IngestionPlan
         inputTokens: Math.max(2_000, context.estimatedTokens + claims * 90 + relations * 40),
         outputTokens: Math.max(700, claims * 32)
       };
+    case 'remediation': {
+      const capped = Math.min(claims, 24);
+      return {
+        inputTokens: Math.max(1_800, capped * 420 + 900),
+        outputTokens: Math.max(400, capped * 180)
+      };
+    }
     case 'json_repair':
       return {
         inputTokens: 1_400,
@@ -299,6 +314,7 @@ export function buildIngestionStageUsageEstimates(
     'relations',
     'grouping',
     'validation',
+    'remediation',
     'embedding',
     'json_repair'
   ];

@@ -65,6 +65,21 @@ function truncate(s: string, max: number): string {
 	return s.slice(0, max - 3) + '...';
 }
 
+/** Parse Retry-After style hints from provider error text (seconds → ms). */
+export function parseRetryAfterMsFromProviderMessage(message: string): number | undefined {
+	const m = message.match(/retry[_-]?after[:\s=]+(\d+)/i);
+	if (m) {
+		const sec = parseInt(m[1], 10);
+		if (Number.isFinite(sec) && sec > 0) return Math.min(sec * 1000, 600_000);
+	}
+	const secWord = message.match(/(\d+)\s*seconds?\s+(?:to|before|until)/i);
+	if (secWord) {
+		const sec = parseInt(secWord[1], 10);
+		if (Number.isFinite(sec) && sec > 0) return Math.min(sec * 1000, 600_000);
+	}
+	return undefined;
+}
+
 /**
  * Ask the recovery agent what to do after deterministic retries are exhausted.
  * On parse/network failure returns `proceed_to_next_step` (safe default).
@@ -74,8 +89,30 @@ export async function consultIngestionRecoveryAgent(params: {
 	provider: string;
 	model: string;
 	errorMessage: string;
+	/** 0-based inner attempt index after last successful model call */
+	innerAttempt?: number;
+	/** Soft circuit open for this tier */
+	circuitOpen?: boolean;
+	/** Human-readable chain position, e.g. "2/5" */
+	chainStep?: string;
+	/** Optional TPM / quota hint extracted upstream */
+	tpmHint?: string;
+	/** Prefer this sleep before consulting (e.g. from Retry-After) */
+	suggestedRetryAfterMs?: number;
 }): Promise<IngestionRecoveryDecision> {
-	const { stage, provider, model, errorMessage } = params;
+	const {
+		stage,
+		provider,
+		model,
+		errorMessage,
+		innerAttempt,
+		circuitOpen,
+		chainStep,
+		tpmHint,
+		suggestedRetryAfterMs
+	} = params;
+	const retryAfterFromMsg =
+		suggestedRetryAfterMs ?? parseRetryAfterMsFromProviderMessage(errorMessage);
 
 	const route = await resolveReasoningModelRoute({
 		depthMode: 'quick',
@@ -90,13 +127,23 @@ export async function consultIngestionRecoveryAgent(params: {
 	});
 
 	const maxSleep = maxAgentSleepMs();
+	const extra = [
+		innerAttempt != null ? `inner_attempt: ${innerAttempt}` : null,
+		circuitOpen != null ? `circuit_open: ${circuitOpen}` : null,
+		chainStep ? `chain_step: ${chainStep}` : null,
+		tpmHint ? `tpm_hint: ${truncate(tpmHint, 400)}` : null,
+		retryAfterFromMsg != null ? `retry_after_ms_hint: ${retryAfterFromMsg}` : null
+	]
+		.filter(Boolean)
+		.join('\n');
+
 	const userPrompt = `You are an ingestion recovery planner. Normal retries for this pipeline stage already failed.
 
 Context:
 - stage: ${stage}
 - provider: ${provider}
 - model: ${model}
-- error (truncated): ${truncate(errorMessage, 1800)}
+${extra ? extra + '\n' : ''}- error (truncated): ${truncate(errorMessage, 1800)}
 
 Choose exactly one action:
 - "proceed_to_next_step" — give up on this model tier; the operator chain should try fallbacks or fail clearly (auth, bad request, invalid model, non-retryable).

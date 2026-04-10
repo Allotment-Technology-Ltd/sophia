@@ -31,6 +31,16 @@ Use this checklist to compare **before/after** throughput work: telemetry in the
 - **Ship** when median wall time improves on medium corpus **without** a proportional rise in `json_repair` / failed stages, and failure/retry rates stay within prior band.
 - **Hold** if large-corpus runs show unstable store stage or rising truncation splits without a documented tuning follow-up.
 
+## Regression gate (prompts, models, or extraction boundaries)
+
+When you change **prompts**, **Restormel route steps**, **pinned models**, or **passage / validation env** (`INGEST_EXTRACTION_MAX_TOKENS_PER_SECTION`, `VALIDATION_BATCH_*`, etc.):
+
+1. Set **`INGEST_PRESET_DISCIPLINE=warn`** (or `strict` with **`INGEST_PRESET_PROFILE`**) for SEP sources — see [ingestion-sep-preset-discipline.md](./ingestion-sep-preset-discipline.md).
+2. Re-run the **golden SEP subset** from [ingestion-golden-sep-corpus.md](./ingestion-golden-sep-corpus.md) with the **same** benchmark pins (`INGEST_PIN_*`, optional `INGEST_NO_MODEL_FALLBACK=1`).
+3. Compare **`[INGEST_PRESET_FINGERPRINT]`** digests — any drift without a profile bump means runs are not apples-to-apples.
+4. Compare **`[INGEST_TIMING]`**, **`json_repair` / `batch_split` counts**, and **average faithfulness** (when validation is on).
+5. **Hold** a catalog or prompt promotion if golden faithfulness drops materially or `json_repair` spikes versus the stored baseline in [ingestion-per-stage-model-matrix.md](./ingestion-per-stage-model-matrix.md) / [ingestion-preset-evidence.md](./ingestion-preset-evidence.md).
+
 ## Related env knobs
 
 | Variable | Purpose |

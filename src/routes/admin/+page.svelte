@@ -8,6 +8,13 @@
       emphasis: true
     },
     {
+      href: '/admin/quarantine',
+      title: 'Quarantine review',
+      description:
+        'Queue of claims with low validation scores or review flags; select rows and run the same passage-bounded remediation model used after ingest validation.',
+      emphasis: false
+    },
+    {
       href: '/admin/ingest/runs',
       title: 'Ingestion runs',
       description:

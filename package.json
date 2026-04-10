@@ -53,6 +53,7 @@
     "gcp:enable-apis": "bash scripts/gcp/enable-required-apis.sh",
     "gcp:ensure-wif-neon-access": "bash scripts/gcp/ensure-wif-neon-secret-access.sh",
     "gcp:deploy-ingestion-poller": "bash scripts/gcp/deploy-sophia-ingestion-poller-job.sh",
+    "gcp:deploy-ingest-worker-service": "bash scripts/gcp/deploy-sophia-ingest-worker-service.sh",
     "gcp:setup-ingestion-poller-scheduler": "bash scripts/gcp/setup-ingestion-poller-scheduler.sh",
     "repomix:kb": "npx --yes repomix --config repomix.knowledge-base.config.json",
     "tauri:dev": "tauri dev",

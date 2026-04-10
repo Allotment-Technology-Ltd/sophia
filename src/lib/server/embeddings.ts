@@ -28,10 +28,18 @@ interface EmbeddingProvider {
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
-const EMBED_BATCH_SIZE = Number(process.env.VERTEX_EMBED_BATCH_SIZE || process.env.EMBED_BATCH_SIZE || '250');
-const EMBED_BATCH_DELAY_MS = Number(process.env.VERTEX_EMBED_BATCH_DELAY_MS || process.env.EMBED_BATCH_DELAY_MS || '80');
 const EMBED_MAX_RETRIES = Number(process.env.VERTEX_EMBED_MAX_RETRIES || process.env.EMBED_MAX_RETRIES || '6');
 const EMBED_RETRY_BASE_MS = Number(process.env.VERTEX_EMBED_RETRY_BASE_MS || process.env.EMBED_RETRY_BASE_MS || '1500');
+
+/** Read fresh each batch so workers can tune VERTEX_EMBED_* / INGEST_EMBED_* without re-importing this module. */
+function readEmbedBatchConfig(): { batchSize: number; delayMs: number } {
+	const rawSize = Number(process.env.VERTEX_EMBED_BATCH_SIZE || process.env.EMBED_BATCH_SIZE || '250');
+	const rawDelay = Number(process.env.VERTEX_EMBED_BATCH_DELAY_MS || process.env.EMBED_BATCH_DELAY_MS || '80');
+	return {
+		batchSize: Math.max(1, Number.isFinite(rawSize) ? Math.trunc(rawSize) : 250),
+		delayMs: Math.max(0, Number.isFinite(rawDelay) ? Math.trunc(rawDelay) : 80)
+	};
+}
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -307,12 +315,14 @@ export async function embedTexts(
 		onBatchComplete?: (progress: EmbedTextsBatchProgress) => void | Promise<void>;
 	}
 ): Promise<number[][]> {
-	const BATCH_SIZE = Math.max(1, EMBED_BATCH_SIZE);
 	const embeddings: number[][] = [];
 	const provider = resolveProvider();
 
 	try {
-		console.log(`[EMBED] Embedding ${texts.length} texts via ${provider.name} in batches of ${BATCH_SIZE}...`);
+		const firstCfg = readEmbedBatchConfig();
+		console.log(
+			`[EMBED] Embedding ${texts.length} texts via ${provider.name} in batches of up to ${firstCfg.batchSize}...`
+		);
 
 		let sessionToken: string | null = null;
 		if (provider.acquireSessionToken) {
@@ -322,9 +332,12 @@ export async function embedTexts(
 			}
 		}
 
-		for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+		let i = 0;
+		let batchNum = 0;
+		while (i < texts.length) {
+			const { batchSize: BATCH_SIZE, delayMs: batchDelayMs } = readEmbedBatchConfig();
 			const batch = texts.slice(i, i + BATCH_SIZE);
-			const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+			batchNum += 1;
 			console.log(`[EMBED] Batch ${batchNum}: embedding ${batch.length} texts`);
 
 			let batchEmbeddings: number[][] | null = null;
@@ -367,8 +380,9 @@ export async function embedTexts(
 				});
 			}
 
-			if (EMBED_BATCH_DELAY_MS > 0 && i + BATCH_SIZE < texts.length) {
-				await sleep(EMBED_BATCH_DELAY_MS);
+			i += batch.length;
+			if (batchDelayMs > 0 && i < texts.length) {
+				await sleep(batchDelayMs);
 			}
 		}
 

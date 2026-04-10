@@ -5,27 +5,14 @@
  * Usage: npx tsx --env-file=.env scripts/ingestion-job-poller.ts [--once] [--interval 5]
  */
 
-import { eq } from 'drizzle-orm';
 import { loadServerEnv } from '../src/lib/server/env.ts';
-import { getDrizzleDb } from '../src/lib/server/db/neon.ts';
-import { ingestionJobs } from '../src/lib/server/db/schema.ts';
-import { tickIngestionJob } from '../src/lib/server/ingestionJobs.ts';
+import { tickAllRunningIngestionJobs } from '../src/lib/server/ingestionJobs.ts';
 import { isNeonIngestPersistenceEnabled } from '../src/lib/server/neon/datastore.ts';
 
 loadServerEnv();
 
 function sleep(seconds: number): Promise<void> {
 	return new Promise((r) => setTimeout(r, seconds * 1000));
-}
-
-async function listRunningJobIds(): Promise<string[]> {
-	if (!isNeonIngestPersistenceEnabled()) return [];
-	const db = getDrizzleDb();
-	const rows = await db
-		.select({ id: ingestionJobs.id })
-		.from(ingestionJobs)
-		.where(eq(ingestionJobs.status, 'running'));
-	return rows.map((r) => r.id);
 }
 
 async function main(): Promise<void> {
@@ -46,12 +33,9 @@ async function main(): Promise<void> {
 
 	do {
 		try {
-			const ids = await listRunningJobIds();
-			for (const id of ids) {
-				await tickIngestionJob(id);
-			}
-			if (ids.length > 0) {
-				console.log(`[poller] Ticked ${ids.length} job(s)`);
+			const n = await tickAllRunningIngestionJobs();
+			if (n > 0) {
+				console.log(`[poller] Ticked ${n} job(s)`);
 			}
 		} catch (e) {
 			console.error('[poller]', e instanceof Error ? e.message : e);

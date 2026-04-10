@@ -12,9 +12,13 @@ Exact URLs are operator-chosen; keep them stable for regression comparison.
 
 ## Procedure
 
-1. Follow [ingestion-benchmarks.md](./ingestion-benchmarks.md).
-2. Capture `[INGEST_TIMING]`, issue counts, and cost estimates.
-3. **Hold** a preset or catalog promotion if `json_repair` or failure rates spike versus the prior baseline.
+1. Follow [ingestion-benchmarks.md](./ingestion-benchmarks.md) and [ingestion-sep-preset-discipline.md](./ingestion-sep-preset-discipline.md) (`INGEST_PRESET_DISCIPLINE` + optional `INGEST_PRESET_PROFILE` for traceability).
+2. Capture `[INGEST_TIMING]`, `[INGEST_PRESET_FINGERPRINT]` (when discipline is warn/strict), issue counts, and cost estimates.
+3. **Hold** a preset or catalog promotion if `json_repair` or failure rates spike versus the prior baseline, or if the **fingerprint digest** changes without an intentional boundary/pin change.
+
+## Expanding the golden set
+
+When prompts or models change, **add at least one** new fixed URL that stresses the change (e.g. long bibliography, unusual sectioning) and keep prior URLs **unchanged** so history stays comparable. Record the list in operator notes or a versioned JSON slice of `data/sep-entry-urls.json` (see `pnpm sep:catalog`).
 
 ## Comparable runs (benchmark env)
 

@@ -49,6 +49,8 @@
 	let eventsTimer: ReturnType<typeof setInterval> | null = null;
 	let retryBusy = $state(false);
 	let retryMessage = $state('');
+	/** From API — max starts per URL (INGEST_JOB_ITEM_MAX_ATTEMPTS). */
+	let itemMaxAttempts = $state(2);
 
 	function currentJobId(): string {
 		return page.params.id?.trim() ?? '';
@@ -83,6 +85,10 @@
 			}
 			job = (body?.job as JobRow) ?? null;
 			items = Array.isArray(body?.items) ? (body.items as ItemRow[]) : [];
+			itemMaxAttempts =
+				typeof body?.itemMaxAttempts === 'number' && Number.isFinite(body.itemMaxAttempts)
+					? body.itemMaxAttempts
+					: 2;
 		} catch (e) {
 			loadError = e instanceof Error ? e.message : 'Failed to load job.';
 			job = null;
@@ -125,6 +131,13 @@
 
 	const failedCount = $derived(
 		job ? (typeof job.summary?.error === 'number' ? job.summary.error : 0) : 0
+	);
+
+	const launchCapErrorCount = $derived(
+		items.filter(
+			(i) =>
+				typeof i.lastError === 'string' && /too many concurrent ingest/i.test(i.lastError)
+		).length
 	);
 
 	async function postJobRetry(mode: 'restart' | 'resume', itemId?: string): Promise<void> {
@@ -238,6 +251,20 @@
 				Summary: total {job.summary?.total ?? '—'}, pending {job.summary?.pending ?? '—'}, running
 				{job.summary?.running ?? '—'}, done {job.summary?.done ?? '—'}, error {job.summary?.error ?? '—'}
 			</p>
+			<p class="mt-2 text-sm text-sophia-dark-muted">
+				Automatic retry: each URL may start up to <span class="font-mono text-sophia-dark-text">{itemMaxAttempts}</span>
+				time(s) (server <code class="rounded bg-black/20 px-1 py-0.5 font-mono text-[11px]">INGEST_JOB_ITEM_MAX_ATTEMPTS</code>).
+				Failures are re-queued to the back of the list until the cap is reached.
+			</p>
+			{#if launchCapErrorCount > 0}
+				<p
+					class="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+					role="status"
+				>
+					{launchCapErrorCount} URL(s) failed with a concurrent worker cap. They are re-tried automatically when
+					slots free (up to {itemMaxAttempts} attempts). Raise ADMIN_INGEST_MAX_CONCURRENT if the host allows.
+				</p>
+			{/if}
 
 			{#if failedCount > 0}
 				<div class="mt-6 border-t border-[var(--color-border)] pt-5" role="region" aria-label="Retry failed URLs">
@@ -281,6 +308,7 @@
 						<tr class="border-b border-[var(--color-border)] font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-dim">
 							<th class="py-3 pr-3">URL</th>
 							<th class="py-3 pr-3">Status</th>
+							<th class="py-3 pr-3">Attempts</th>
 							<th class="py-3 pr-3">Run</th>
 							<th class="py-3 pr-3">Retry</th>
 							<th class="py-3">Error</th>
@@ -293,6 +321,9 @@
 									{it.url}
 								</td>
 								<td class="py-3 pr-3">{it.status}</td>
+								<td class="py-3 pr-3 font-mono text-xs text-sophia-dark-muted">
+									{typeof it.attempts === 'number' ? it.attempts : 0}/{itemMaxAttempts}
+								</td>
 								<td class="py-3 pr-3 font-mono text-xs">
 									{#if it.childRunId}
 										<button

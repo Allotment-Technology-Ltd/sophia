@@ -31,6 +31,7 @@ export type IngestionLlmStageKey =
 	| 'relations'
 	| 'grouping'
 	| 'validation'
+	| 'remediation'
 	| 'json_repair';
 
 export type CanonicalModelRef = { provider: ModelProvider; modelId: string };
@@ -46,6 +47,8 @@ export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, Ca
 	grouping: { provider: 'openai', modelId: 'gpt-4o' },
 	/** Distinct from extraction (mini): second opinion from another provider improves faithfulness checks. */
 	validation: { provider: 'vertex', modelId: 'gemini-2.5-flash' },
+	/** Passage-bounded rewrite; prefer strong model (aligned with ingestion_remediation floor). */
+	remediation: { provider: 'vertex', modelId: 'gemini-2.5-pro' },
 	json_repair: { provider: 'vertex', modelId: 'gemini-2.5-flash' }
 };
 
@@ -70,6 +73,11 @@ export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, C
 		{ provider: 'openai', modelId: 'gpt-4o' },
 		{ provider: 'openai', modelId: 'gpt-4o-mini' },
 		{ provider: 'vertex', modelId: 'gemini-2.5-pro' }
+	],
+	remediation: [
+		{ provider: 'openai', modelId: 'gpt-4o' },
+		{ provider: 'vertex', modelId: 'gemini-2.5-flash' },
+		{ provider: 'openai', modelId: 'gpt-4-turbo' }
 	],
 	json_repair: [
 		{ provider: 'openai', modelId: 'gpt-4o-mini' },

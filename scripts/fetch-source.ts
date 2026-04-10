@@ -6,6 +6,40 @@ import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.j
 const VALID_SOURCE_TYPES = ['sep_entry', 'iep_entry', 'book', 'paper', 'institutional'];
 const DATA_SOURCES_DIR = './data/sources';
 
+/** Raw HTML cache: keyed by canonical URL hash; default off (set FETCH_SOURCE_CACHE=1). Respects TTL; reuse reduces flaky HTTP on retry/re-ingest. */
+const FETCH_SOURCE_CACHE_ENABLED =
+	(process.env.FETCH_SOURCE_CACHE ?? '').trim() === '1' ||
+	(process.env.FETCH_SOURCE_CACHE ?? '').toLowerCase() === 'true';
+const FETCH_SOURCE_CACHE_TTL_MS = Math.max(
+	0,
+	Number(process.env.FETCH_SOURCE_CACHE_TTL_HOURS || '24') * 3600 * 1000
+);
+const FETCH_SOURCE_CACHE_DIR = path.join(process.cwd(), 'data', 'cache', 'fetch-source');
+
+function readFetchCacheIfFresh(cachePath: string): string | null {
+	try {
+		if (!fs.existsSync(cachePath)) return null;
+		const st = fs.statSync(cachePath);
+		if (FETCH_SOURCE_CACHE_TTL_MS > 0 && Date.now() - st.mtimeMs > FETCH_SOURCE_CACHE_TTL_MS) {
+			return null;
+		}
+		return fs.readFileSync(cachePath, 'utf-8');
+	} catch {
+		return null;
+	}
+}
+
+function writeFetchCache(cachePath: string, html: string): void {
+	try {
+		fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+		fs.writeFileSync(cachePath, html, 'utf-8');
+	} catch (error) {
+		console.warn(
+			`[FETCH CACHE] Could not write ${cachePath}: ${error instanceof Error ? error.message : String(error)}`
+		);
+	}
+}
+
 /**
  * Create a URL-safe slug from text
  */
@@ -20,7 +54,21 @@ function createSlug(text: string): string {
 /**
  * Fetch URL content
  */
-async function fetchUrl(url: string): Promise<string> {
+async function fetchUrl(url: string, options?: { cacheKey?: string }): Promise<string> {
+	const cacheKey = options?.cacheKey;
+	const cachePath =
+		cacheKey && FETCH_SOURCE_CACHE_ENABLED
+			? path.join(FETCH_SOURCE_CACHE_DIR, `${cacheKey}.html`)
+			: null;
+
+	if (cachePath) {
+		const cached = readFetchCacheIfFresh(cachePath);
+		if (cached != null) {
+			console.log(`[FETCH] Using cached HTML (${cached.length.toLocaleString()} bytes) for ${url}`);
+			return cached;
+		}
+	}
+
 	console.log(`[FETCH] Downloading from ${url}...`);
 	try {
 		const response = await fetch(url, {
@@ -43,6 +91,9 @@ async function fetchUrl(url: string): Promise<string> {
 			);
 		}
 		console.log(`[FETCH] Downloaded ${html.length.toLocaleString()} bytes`);
+		if (cachePath) {
+			writeFetchCache(cachePath, html);
+		}
 		return html;
 	} catch (error) {
 		throw new Error(`Failed to fetch URL: ${error instanceof Error ? error.message : String(error)}`);
@@ -337,8 +388,10 @@ async function main() {
 			throw new Error(`Unsupported or invalid source URL: ${url}`);
 		}
 
-		// Fetch the URL
-		const html = await fetchUrl(sourceIdentity.canonicalUrl);
+		// Fetch the URL (optional disk cache by canonical hash — polite reuse on retry/re-ingest)
+		const html = await fetchUrl(sourceIdentity.canonicalUrl, {
+			cacheKey: sourceIdentity.canonicalUrlHash
+		});
 
 		// Clean and extract
 		const { text, title, author } = cleanSourceText(html, sourceType);

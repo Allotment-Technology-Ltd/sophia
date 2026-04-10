@@ -161,6 +161,7 @@ export async function saveIngestPartialToNeon(opts: {
         validationProgress: asRecord(partial.validation_progress) ?? null,
         relationsProgress: asRecord(partial.relations_progress) ?? null,
         embeddingProgress: asRecord(partial.embedding_progress) ?? null,
+        remediationProgress: asRecord(partial.remediation_progress) ?? null,
         validationFull: asRecord(partial.validation) ?? null,
         embeddingsJson: Array.isArray(partial.embeddings)
           ? (partial.embeddings as number[][])
@@ -183,6 +184,7 @@ export async function saveIngestPartialToNeon(opts: {
           validationProgress: asRecord(partial.validation_progress) ?? null,
           relationsProgress: asRecord(partial.relations_progress) ?? null,
           embeddingProgress: asRecord(partial.embedding_progress) ?? null,
+          remediationProgress: asRecord(partial.remediation_progress) ?? null,
           validationFull: asRecord(partial.validation) ?? null,
           embeddingsJson: Array.isArray(partial.embeddings)
             ? (partial.embeddings as number[][])
@@ -278,7 +280,8 @@ export async function loadIngestPartialFromNeon(
     grouping_progress: meta.groupingProgress ?? undefined,
     validation_progress: meta.validationProgress ?? undefined,
     relations_progress: meta.relationsProgress ?? undefined,
-    embedding_progress: meta.embeddingProgress ?? undefined
+    embedding_progress: meta.embeddingProgress ?? undefined,
+    remediation_progress: meta.remediationProgress ?? undefined
   };
 
   if (slug && meta.slug && meta.slug !== slug) {

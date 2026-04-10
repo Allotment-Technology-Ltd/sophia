@@ -3,16 +3,78 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { and, desc, eq, gt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, lte, or, sql } from 'drizzle-orm';
 import type { InferSelectModel } from 'drizzle-orm';
 import { getDrizzleDb } from './db/neon';
 import { ingestionJobEvents, ingestionJobItems, ingestionJobs } from './db/schema';
 import { neonLoadIngestRun } from './db/ingestRunRepository';
 import { isNeonIngestPersistenceEnabled } from './neon/datastore';
-import { inferSourceTypeFromUrl, ingestRunManager, type IngestRunPayload } from './ingestRuns';
+import {
+	computeLaunchThrottleBackoffMs,
+	isLaunchThrottleError,
+	shouldAutoRequeueIngestJobItem
+} from './ingestion/ingestionJobErrorClassify';
+import { runIngestionJobPreflightOrThrow } from './ingestion/ingestionJobPreflight';
+import {
+	inferSourceTypeFromUrl,
+	ingestRunManager,
+	type IngestRunPayload,
+	type IngestRunState
+} from './ingestRuns';
 import { resolveEmbeddingFingerprint, resolvePipelineVersion } from './ingestionPipelineMetadata';
+import { MAX_DURABLE_INGEST_JOB_CONCURRENCY } from '$lib/ingestionJobConcurrency';
 
 const ADV_LOCK_JOB_EVENTS = 5_849_273;
+
+function sleepMs(ms: number): Promise<void> {
+	return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Random 0..max ms delay between spawning child runs (spread load). Env INGEST_JOB_LAUNCH_JITTER_MS. */
+function ingestJobLaunchJitterMs(): number {
+	const r = parseInt(process.env.INGEST_JOB_LAUNCH_JITTER_MS ?? '0', 10);
+	return Number.isFinite(r) && r > 0 ? Math.min(30_000, r) : 0;
+}
+
+/** Max total starts per job item (initial + retries). Env `INGEST_JOB_ITEM_MAX_ATTEMPTS`, default 2. */
+export function getIngestionJobItemMaxAttempts(): number {
+	const r = parseInt(process.env.INGEST_JOB_ITEM_MAX_ATTEMPTS ?? '2', 10);
+	return Number.isFinite(r) && r >= 1 ? Math.min(20, r) : 2;
+}
+
+function canAutoRequeueAfterFailure(attemptsAfterFailure: number): boolean {
+	return attemptsAfterFailure < getIngestionJobItemMaxAttempts();
+}
+
+/** Convert eligible `error` rows to `pending` (back of queue via newer `updatedAt`). */
+async function applyAutoRequeueForJobErrors(jobId: string): Promise<void> {
+	const db = getDrizzleDb();
+	const maxA = getIngestionJobItemMaxAttempts();
+	const rows = await db
+		.select()
+		.from(ingestionJobItems)
+		.where(and(eq(ingestionJobItems.jobId, jobId), eq(ingestionJobItems.status, 'error')));
+	for (const it of rows) {
+		if (!canAutoRequeueAfterFailure(it.attempts)) continue;
+		if (!shouldAutoRequeueIngestJobItem(it.lastError)) continue;
+		await db
+			.update(ingestionJobItems)
+			.set({
+				status: 'pending',
+				childRunId: null,
+				blockedUntil: null,
+				updatedAt: new Date()
+			})
+			.where(eq(ingestionJobItems.id, it.id));
+		await appendIngestionJobEvent(jobId, 'item_requeued_auto', {
+			itemId: it.id,
+			url: it.url,
+			attempts: it.attempts,
+			maxAttempts: maxA,
+			reason: 'retry_after_failure'
+		});
+	}
+}
 
 export type IngestionJobItemStatus =
 	| 'pending'
@@ -66,11 +128,18 @@ export async function createIngestionJob(args: CreateIngestionJobArgs): Promise<
 	if (!isNeonIngestPersistenceEnabled()) return null;
 	const db = getDrizzleDb();
 	const id = buildJobId();
-	const concurrency = Math.max(1, Math.min(8, args.concurrency ?? 2));
+	const concurrency = Math.max(
+		1,
+		Math.min(MAX_DURABLE_INGEST_JOB_CONCURRENCY, args.concurrency ?? 2)
+	);
 	const pipelineVersion = resolvePipelineVersion();
 	const embeddingFingerprint = resolveEmbeddingFingerprint();
 	const urls = [...new Set(args.urls.map((u) => u.trim()).filter(Boolean))];
 	if (urls.length === 0) throw new Error('At least one URL is required');
+
+	if ((process.env.INGEST_JOB_PREFLIGHT ?? '').trim() === '1') {
+		await runIngestionJobPreflightOrThrow();
+	}
 
 	await db.insert(ingestionJobs).values({
 		id,
@@ -127,57 +196,108 @@ function mapChildRunToItemStatus(status: string): IngestionJobItemStatus {
 	return 'running';
 }
 
+async function loadChildIngestRunState(runId: string): Promise<IngestRunState | null> {
+	const mem = await ingestRunManager.getStateAsync(runId);
+	if (mem) return mem;
+	return neonLoadIngestRun(runId);
+}
+
+function isStuckIngestRun(run: IngestRunState): boolean {
+	const wallMs = parseInt(process.env.INGEST_JOB_ITEM_MAX_WALL_MS ?? '0', 10);
+	const staleMs = parseInt(process.env.INGEST_JOB_ITEM_STALE_MS ?? '0', 10);
+	if ((!Number.isFinite(wallMs) || wallMs <= 0) && (!Number.isFinite(staleMs) || staleMs <= 0)) {
+		return false;
+	}
+	const now = Date.now();
+	if (Number.isFinite(wallMs) && wallMs > 0 && now - run.createdAt > wallMs) return true;
+	if (Number.isFinite(staleMs) && staleMs > 0) {
+		const last = run.lastOutputAt ?? run.createdAt;
+		if (now - last > staleMs) return true;
+	}
+	return false;
+}
+
 export async function tickIngestionJob(jobId: string): Promise<void> {
 	if (!isNeonIngestPersistenceEnabled()) return;
 	const db = getDrizzleDb();
-	const job = await db.query.ingestionJobs.findFirst({
+	let job = await db.query.ingestionJobs.findFirst({
 		where: eq(ingestionJobs.id, jobId)
 	});
-	if (!job || job.status !== 'running') return;
+	if (!job) return;
+
+	if (job.status === 'done') {
+		const open = await db
+			.select({ id: ingestionJobItems.id })
+			.from(ingestionJobItems)
+			.where(
+				and(
+					eq(ingestionJobItems.jobId, jobId),
+					or(eq(ingestionJobItems.status, 'pending'), eq(ingestionJobItems.status, 'running'))
+				)
+			)
+			.limit(1);
+		if (open.length === 0) return;
+		await db
+			.update(ingestionJobs)
+			.set({ status: 'running', completedAt: null, updatedAt: new Date() })
+			.where(eq(ingestionJobs.id, jobId));
+		job = { ...job, status: 'running', completedAt: null };
+	}
+
+	if (job.status !== 'running') return;
 
 	const items = await db
 		.select()
 		.from(ingestionJobItems)
 		.where(eq(ingestionJobItems.jobId, jobId));
 
-	// Refresh running items from child runs
+	// Refresh running items from child runs (terminal, or stuck → error)
 	for (const it of items) {
 		if (it.status !== 'running' || !it.childRunId) continue;
-		let nextStatus: IngestionJobItemStatus | null = null;
-		let err: string | null = null;
+		const run = await loadChildIngestRunState(it.childRunId);
+		if (!run) continue;
 
-		const mem = await ingestRunManager.getStateAsync(it.childRunId);
-		if (mem) {
-			if (terminalRunStatus(mem.status)) {
-				nextStatus = mapChildRunToItemStatus(mem.status);
-				err = mem.status === 'error' ? mem.error ?? 'Run failed' : null;
+		if (!terminalRunStatus(run.status)) {
+			if (isStuckIngestRun(run)) {
+				const errMsg = `ingest_stuck_timeout: child run still non-terminal after ${Math.round((Date.now() - run.createdAt) / 60_000)}m (INGEST_JOB_ITEM_MAX_WALL_MS / INGEST_JOB_ITEM_STALE_MS)`;
+				await db
+					.update(ingestionJobItems)
+					.set({
+						status: 'error',
+						lastError: errMsg,
+						updatedAt: new Date()
+					})
+					.where(eq(ingestionJobItems.id, it.id));
+				await appendIngestionJobEvent(jobId, 'item_stuck', {
+					itemId: it.id,
+					url: it.url,
+					childRunId: it.childRunId,
+					error: errMsg
+				});
 			}
-		} else {
-			const durable = await neonLoadIngestRun(it.childRunId);
-			if (durable && terminalRunStatus(durable.status)) {
-				nextStatus = mapChildRunToItemStatus(durable.status);
-				err = durable.status === 'error' ? durable.error ?? 'Run failed' : null;
-			}
+			continue;
 		}
 
-		if (nextStatus) {
-			await db
-				.update(ingestionJobItems)
-				.set({
-					status: nextStatus,
-					lastError: err,
-					updatedAt: new Date()
-				})
-				.where(eq(ingestionJobItems.id, it.id));
-			await appendIngestionJobEvent(jobId, 'item_terminal', {
-				itemId: it.id,
-				url: it.url,
+		const nextStatus = mapChildRunToItemStatus(run.status);
+		const err = run.status === 'error' ? run.error ?? 'Run failed' : null;
+		await db
+			.update(ingestionJobItems)
+			.set({
 				status: nextStatus,
-				childRunId: it.childRunId,
-				error: err
-			});
-		}
+				lastError: err,
+				updatedAt: new Date()
+			})
+			.where(eq(ingestionJobItems.id, it.id));
+		await appendIngestionJobEvent(jobId, 'item_terminal', {
+			itemId: it.id,
+			url: it.url,
+			status: nextStatus,
+			childRunId: it.childRunId,
+			error: err
+		});
 	}
+
+	await applyAutoRequeueForJobErrors(jobId);
 
 	const refreshed = await db
 		.select()
@@ -196,9 +316,23 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 
 	const runningCount = summary.running;
 	const slots = Math.max(0, job.concurrency - runningCount);
-	const pendingItems = refreshed.filter((r) => r.status === 'pending');
+	const pendingItems = await db
+		.select()
+		.from(ingestionJobItems)
+		.where(
+			and(
+				eq(ingestionJobItems.jobId, jobId),
+				eq(ingestionJobItems.status, 'pending'),
+				or(isNull(ingestionJobItems.blockedUntil), lte(ingestionJobItems.blockedUntil, new Date()))
+			)
+		)
+		.orderBy(asc(ingestionJobItems.updatedAt));
 
 	for (let i = 0; i < slots && i < pendingItems.length; i++) {
+		if (i > 0) {
+			const j = ingestJobLaunchJitterMs();
+			if (j > 0) await sleepMs(Math.floor(Math.random() * (j + 1)));
+		}
 		const it = pendingItems[i]!;
 		const payload: IngestRunPayload = {
 			source_url: it.url,
@@ -219,6 +353,8 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 					childRunId,
 					attempts: it.attempts + 1,
 					lastError: null,
+					blockedUntil: null,
+					launchThrottleCount: 0,
 					updatedAt: new Date()
 				})
 				.where(eq(ingestionJobItems.id, it.id));
@@ -229,22 +365,46 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 			});
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
-			await db
-				.update(ingestionJobItems)
-				.set({
-					status: 'error',
-					lastError: msg,
-					attempts: it.attempts + 1,
-					updatedAt: new Date()
-				})
-				.where(eq(ingestionJobItems.id, it.id));
-			await appendIngestionJobEvent(jobId, 'item_launch_error', {
-				itemId: it.id,
-				url: it.url,
-				error: msg
-			});
+			if (isLaunchThrottleError(msg)) {
+				const throttleCount = (it.launchThrottleCount ?? 0) + 1;
+				const until = new Date(Date.now() + computeLaunchThrottleBackoffMs(throttleCount));
+				await db
+					.update(ingestionJobItems)
+					.set({
+						status: 'pending',
+						blockedUntil: until,
+						lastError: msg,
+						launchThrottleCount: throttleCount,
+						updatedAt: new Date()
+					})
+					.where(eq(ingestionJobItems.id, it.id));
+				await appendIngestionJobEvent(jobId, 'item_launch_throttled', {
+					itemId: it.id,
+					url: it.url,
+					error: msg,
+					blockedUntil: until.toISOString(),
+					launchThrottleCount: throttleCount
+				});
+			} else {
+				await db
+					.update(ingestionJobItems)
+					.set({
+						status: 'error',
+						lastError: msg,
+						attempts: it.attempts + 1,
+						updatedAt: new Date()
+					})
+					.where(eq(ingestionJobItems.id, it.id));
+				await appendIngestionJobEvent(jobId, 'item_launch_error', {
+					itemId: it.id,
+					url: it.url,
+					error: msg
+				});
+			}
 		}
 	}
+
+	await applyAutoRequeueForJobErrors(jobId);
 
 	const finalItems = await db
 		.select()
@@ -282,16 +442,37 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 }
 
 /** One pass equivalent to `scripts/ingestion-job-poller.ts --once` (all running jobs). */
-export async function tickAllRunningIngestionJobs(): Promise<void> {
-	if (!isNeonIngestPersistenceEnabled()) return;
+/** Jobs that are `running`, or `done` but still have pending/running items (heal edge cases). */
+async function listJobIdsNeedingTick(): Promise<string[]> {
 	const db = getDrizzleDb();
-	const rows = await db
+	const running = await db
 		.select({ id: ingestionJobs.id })
 		.from(ingestionJobs)
 		.where(eq(ingestionJobs.status, 'running'));
-	for (const r of rows) {
-		await tickIngestionJob(r.id);
+	const doneWithWork = await db
+		.select({ id: ingestionJobs.id })
+		.from(ingestionJobs)
+		.innerJoin(ingestionJobItems, eq(ingestionJobItems.jobId, ingestionJobs.id))
+		.where(
+			and(
+				eq(ingestionJobs.status, 'done'),
+				or(eq(ingestionJobItems.status, 'pending'), eq(ingestionJobItems.status, 'running'))
+			)
+		);
+	const ids = new Set<string>();
+	for (const r of running) ids.add(r.id);
+	for (const r of doneWithWork) ids.add(r.id);
+	return [...ids];
+}
+
+/** Advance all jobs that need ticking. Returns how many job ids were processed. */
+export async function tickAllRunningIngestionJobs(): Promise<number> {
+	if (!isNeonIngestPersistenceEnabled()) return 0;
+	const ids = await listJobIdsNeedingTick();
+	for (const id of ids) {
+		await tickIngestionJob(id);
 	}
+	return ids.length;
 }
 
 export type IngestionJobRetryMode = 'restart' | 'resume';
@@ -352,6 +533,7 @@ export async function retryIngestionJob(
 					status: 'pending',
 					childRunId: null,
 					lastError: null,
+					blockedUntil: null,
 					updatedAt: new Date()
 				})
 				.where(eq(ingestionJobItems.id, it.id));

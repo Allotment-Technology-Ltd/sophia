@@ -44,12 +44,15 @@ export interface Relation {
 
 export interface BatchOptions {
 	batchSize?: number; // Default: 50
+	/** Max concurrent CREATE claim queries per flush (default 12; caps Promise.all fan-out). */
+	claimInsertConcurrency?: number;
 	verbose?: boolean;
 }
 
 export class BatchInserter {
 	private db: Surreal;
 	private batchSize: number;
+	private claimInsertConcurrency: number;
 	private verbose: boolean;
 	private pendingClaims: Array<{ content: ClaimRecord }> = [];
 	private claimIdMap: Map<number, string> = new Map();
@@ -57,6 +60,13 @@ export class BatchInserter {
 	constructor(db: Surreal, options: BatchOptions = {}) {
 		this.db = db;
 		this.batchSize = options.batchSize || 50;
+		const envConc = Number(process.env.SURREAL_CLAIM_INSERT_CONCURRENCY || '');
+		const fromEnv =
+			Number.isFinite(envConc) && envConc > 0 ? Math.min(64, Math.trunc(envConc)) : null;
+		this.claimInsertConcurrency = Math.max(
+			1,
+			Math.min(64, options.claimInsertConcurrency ?? fromEnv ?? 12)
+		);
 		this.verbose = options.verbose || false;
 	}
 
@@ -99,10 +109,13 @@ export class BatchInserter {
 				console.log(`  [BATCH] Creating ${batch.length} claims...`);
 			}
 
-			// Create all claims in parallel
-			const createPromises = batch.map(async (item) => {
-				const result = await this.db.query<[{ id: string }[]]>(
-					`CREATE claim CONTENT {
+			const conc = this.claimInsertConcurrency;
+			for (let j = 0; j < batch.length; j += conc) {
+				const slice = batch.slice(j, j + conc);
+				await Promise.all(
+					slice.map(async (item) => {
+						const result = await this.db.query<[{ id: string }[]]>(
+							`CREATE claim CONTENT {
 						text: $text,
 						claim_type: $claim_type,
 						domain: $domain,
@@ -113,34 +126,34 @@ export class BatchInserter {
 						embedding: $embedding,
 						validation_score: $validation_score
 					}`,
-					{
-						text: item.content.text,
-						claim_type: item.content.claim_type,
-						domain: item.content.domain || undefined,
-						source: item.content.source,
-						section_context: item.content.section_context || undefined,
-						position_in_source: item.content.position_in_source,
-						confidence: item.content.confidence,
-						embedding: item.content.embedding || undefined,
-						validation_score: item.content.validation_score || undefined
-					}
+							{
+								text: item.content.text,
+								claim_type: item.content.claim_type,
+								domain: item.content.domain || undefined,
+								source: item.content.source,
+								section_context: item.content.section_context || undefined,
+								position_in_source: item.content.position_in_source,
+								confidence: item.content.confidence,
+								embedding: item.content.embedding || undefined,
+								validation_score: item.content.validation_score || undefined
+							}
+						);
+
+						const claimId =
+							Array.isArray(result) && result.length > 0
+								? Array.isArray(result[0])
+									? result[0][0]?.id
+									: (result[0] as any)?.id
+								: null;
+
+						if (claimId) {
+							this.claimIdMap.set(item.content.position_in_source, claimId);
+						}
+
+						return claimId;
+					})
 				);
-
-				const claimId =
-					Array.isArray(result) && result.length > 0
-						? Array.isArray(result[0])
-							? result[0][0]?.id
-							: (result[0] as any)?.id
-						: null;
-
-				if (claimId) {
-					this.claimIdMap.set(item.content.position_in_source, claimId);
-				}
-
-				return claimId;
-			});
-
-			await Promise.all(createPromises);
+			}
 
 			if (this.verbose) {
 				console.log(`  [BATCH] ✓ Created ${batch.length} claims\n`);

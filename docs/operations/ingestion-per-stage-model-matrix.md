@@ -12,10 +12,21 @@ Canonical code defaults live in [`src/lib/ingestionCanonicalPipeline.ts`](../../
 | `ingestion_relations` | OpenAI `gpt-4o` | `gpt-4-turbo`, Vertex `gemini-2.5-pro` | Large claim graphs; TPM headroom. |
 | `ingestion_grouping` | OpenAI `gpt-4o` | `gpt-4-turbo`, Vertex `gemini-2.5-pro` | Argument grouping batches. |
 | `ingestion_validation` | Vertex `gemini-2.5-flash` | `gpt-4o`, `gpt-4o-mini`, `gemini-2.5-pro` | Cross-vendor check vs extraction path. |
+| `ingestion_remediation` | Vertex `gemini-2.5-pro` | `gpt-4o`, Vertex `gemini-2.5-flash`, `gpt-4-turbo` | Post-validation passage-bounded claim repair; strong-tier floor in catalog gates. |
 | `ingestion_json_repair` | Vertex `gemini-2.5-flash` | `gpt-4o-mini`, `gemini-2.5-pro` | Fast repair on malformed JSON. |
 | Embeddings (`EMBEDDING_PROVIDER`) | **One** of: Vertex `text-embedding-005` (768-d) or Voyage voyage-4 family (1024-d) | N/A | Not Restormel execution routing today; lock doc: [ingestion-embedding-lock.md](./ingestion-embedding-lock.md). |
 
 Catalog-aware fallback chains for workers when pins are off: [`src/lib/server/ingestCatalogRouting.ts`](../../src/lib/server/ingestCatalogRouting.ts) (Model availability → cost-ordered).
+
+## Bulk SEP (many URLs)
+
+For durable jobs over large lists (e.g. Stanford Encyclopedia), prefer documented env and validation strategy in [ingestion-sep-bulk-preset.md](./ingestion-sep-bulk-preset.md) so cost and quotas stay predictable. For **comparable** SEP benchmark runs and fingerprint logging, see [ingestion-sep-preset-discipline.md](./ingestion-sep-preset-discipline.md).
+
+### Right-sizing models (cheap vs pro)
+
+- **Keep cheap by default:** extraction (`gpt-4o-mini` or matrix primary), JSON repair (`gemini-2.5-flash`), and embeddings (Vertex `text-embedding-005` or Voyage lite) unless benchmarks show regressions.
+- **Spend where evidence shows lift:** relations and grouping (`gpt-4o` tier), validation (cross-model `gemini-2.5-flash` or pinned equivalent), remediation (`gemini-2.5-pro` when repair is on).
+- **Restormel pins:** use route steps + admin pins so bulk jobs do not inherit “pro everywhere”; re-benchmark after pin changes ([ingestion-benchmarks.md](./ingestion-benchmarks.md)).
 
 ## Vertex lifecycle
 

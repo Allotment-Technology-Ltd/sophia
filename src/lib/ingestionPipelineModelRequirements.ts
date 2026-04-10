@@ -120,6 +120,7 @@ const PRODUCTION_MIN_QUALITY: Record<string, IngestionQualityTier> = {
 	ingestion_relations: 'strong',
 	ingestion_grouping: 'strong',
 	ingestion_validation: 'capable',
+	ingestion_remediation: 'strong',
 	ingestion_embedding: 'capable',
 	ingestion_json_repair: 'capable'
 };
@@ -172,7 +173,7 @@ export function passesStructuralStageGate(
 		if (stageKey === 'ingestion_extraction' || stageKey === 'ingestion_relations') {
 			return false;
 		}
-		if (stageKey === 'ingestion_grouping' || stageKey === 'ingestion_validation') {
+		if (stageKey === 'ingestion_grouping' || stageKey === 'ingestion_validation' || stageKey === 'ingestion_remediation') {
 			return false;
 		}
 		if (stageKey === 'ingestion_json_repair') {
