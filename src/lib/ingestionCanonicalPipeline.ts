@@ -4,6 +4,10 @@
  *
  * Env pins (`INGEST_PIN_*`) still override these defaults. Restormel may still steer routes
  * when the operator uses ingest-provider `auto` without pins.
+ *
+ * Vertex Gemini IDs must stay aligned with current GA / lifecycle:
+ * https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions
+ * https://cloud.google.com/vertex-ai/generative-ai/docs/migrate
  */
 import type { ModelProvider } from '@restormel/contracts/providers';
 

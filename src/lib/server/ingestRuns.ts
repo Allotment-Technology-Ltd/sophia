@@ -29,6 +29,7 @@ import {
   neonRestoreSourceTextToDataSources
 } from '$lib/server/db/ingestStaging';
 import { encodeIngestCatalogRoutingJsonB64 } from '$lib/server/ingestCatalogRouting';
+import { resolveEmbeddingFingerprint, resolvePipelineVersion } from '$lib/server/ingestionPipelineMetadata';
 
 export interface IngestRunPayload {
   source_url: string;
@@ -87,6 +88,9 @@ export interface IngestRunPayload {
   queue_record_id?: string;
   /** Optional queue attempt counter carried from link_ingestion_queue. */
   queue_attempt_count?: number;
+  /** Durable metadata (auto-filled in createRun when omitted). */
+  pipeline_version?: string;
+  embedding_fingerprint?: string;
 }
 
 function batchOverridesToEnv(
@@ -378,7 +382,7 @@ function neonQueueEnabled(): boolean {
   return ingestRunUsesRealChildProcess() && isNeonIngestPersistenceEnabled();
 }
 
-function inferSourceTypeFromUrl(sourceUrl: string): string {
+export function inferSourceTypeFromUrl(sourceUrl: string): string {
   try {
     const url = new URL(sourceUrl);
     const host = url.hostname.toLowerCase();
@@ -600,7 +604,7 @@ class IngestRunManager extends EventEmitter {
               source_url: row.canonical_url,
               source_type: inferSourceTypeFromUrl(row.canonical_url),
               validate: false,
-              stop_before_store: true,
+              stop_before_store: false,
               model_chain: {
                 extract: 'auto',
                 relate: 'auto',
@@ -672,7 +676,9 @@ class IngestRunManager extends EventEmitter {
     const initialStatus: IngestRunState['status'] = neonQueueEnabled() ? 'queued' : 'running';
     const snapshot: IngestRunPayload = {
       ...payload,
-      stop_before_store: payload.stop_before_store !== false
+      stop_before_store: payload.stop_before_store !== false,
+      pipeline_version: payload.pipeline_version ?? resolvePipelineVersion(),
+      embedding_fingerprint: payload.embedding_fingerprint ?? resolveEmbeddingFingerprint()
     };
 
     const state: IngestRunState = {

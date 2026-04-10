@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Deploy or update Cloud Run Job "sophia-ingestion-job-poller".
+# Uses the SAME image as the sophia web service; each execution runs one tick (--once).
+#
+# Required env (match production / deploy.yml):
+#   IMAGE_REF            e.g. europe-west2-docker.pkg.dev/PROJECT/sophia/app:SHA
+#   NEON_AUTH_BASE_URL
+#   RESTORMEL_GATEWAY_KEY, RESTORMEL_PROJECT_ID, RESTORMEL_ENVIRONMENT_ID
+#   RESTORMEL_KEYS_BASE, RESTORMEL_BASE_URL
+#   RESTORMEL_ANALYSE_ROUTE_ID, RESTORMEL_VERIFY_ROUTE_ID (may be empty)
+#
+# Optional:
+#   GCP_PROJECT_ID / PROJECT_ID   (default sophia-488807)
+#   REGION                        (default europe-west2)
+#   JOB_SERVICE_ACCOUNT             runtime SA (default sophia-app@PROJECT_ID.iam.gserviceaccount.com)
+#
+set -euo pipefail
+
+PROJECT_ID="${GCP_PROJECT_ID:-${PROJECT_ID:-sophia-488807}}"
+REGION="${REGION:-europe-west2}"
+JOB_NAME="${INGESTION_POLLER_JOB_NAME:-sophia-ingestion-job-poller}"
+JOB_SA="${JOB_SERVICE_ACCOUNT:-sophia-app@${PROJECT_ID}.iam.gserviceaccount.com}"
+
+: "${IMAGE_REF:?Set IMAGE_REF to the sophia app image (same as Cloud Run service)}"
+: "${NEON_AUTH_BASE_URL:?Set NEON_AUTH_BASE_URL}"
+: "${RESTORMEL_GATEWAY_KEY:?Set RESTORMEL_GATEWAY_KEY}"
+: "${RESTORMEL_PROJECT_ID:?Set RESTORMEL_PROJECT_ID}"
+: "${RESTORMEL_ENVIRONMENT_ID:?Set RESTORMEL_ENVIRONMENT_ID}"
+
+RESTORMEL_KEYS_BASE="${RESTORMEL_KEYS_BASE:-https://restormel.dev/keys/dashboard}"
+RESTORMEL_BASE_URL="${RESTORMEL_BASE_URL:-${RESTORMEL_KEYS_BASE}}"
+RESTORMEL_ANALYSE_ROUTE_ID="${RESTORMEL_ANALYSE_ROUTE_ID:-}"
+RESTORMEL_VERIFY_ROUTE_ID="${RESTORMEL_VERIFY_ROUTE_ID:-}"
+
+ALLOWED_EMAILS="${ALLOWED_EMAILS:-adam.boon1984@gmail.com,adam.boon1984@googlemail.com,admin@usesophia.app}"
+OWNER_EMAILS="${OWNER_EMAILS:-adam.boon1984@gmail.com,adam.boon1984@googlemail.com,admin@usesophia.app}"
+
+# Same secret bindings as Cloud Run service sophia (deploy.yml) so ticks can spawn full ingest children.
+SECRETS="ANTHROPIC_API_KEY=anthropic-api-key:latest,SURREAL_URL=surreal-db-url:latest,SURREAL_USER=surreal-db-user:latest,SURREAL_PASS=surreal-db-pass:latest,SURREAL_NAMESPACE=surreal-db-namespace:latest,SURREAL_DATABASE=surreal-db-database:latest,VOYAGE_API_KEY=voyage-api-key:latest,GOOGLE_AI_API_KEY=google-ai-api-key:latest,DATABASE_URL=neon-database-url:latest,ADMIN_UIDS=admin-uids:latest,OWNER_UIDS=owner-uids:latest,PADDLE_API_KEY_PRODUCTION=PADDLE_API_KEY_PRODUCTION:latest,PADDLE_WEBHOOK_SECRET_PRODUCTION=PADDLE_WEBHOOK_SECRET_PRODUCTION:latest,PADDLE_PRICE_PRO_GBP_PRODUCTION=PADDLE_PRICE_PRO_GBP_PRODUCTION:latest,PADDLE_PRICE_PRO_USD_PRODUCTION=PADDLE_PRICE_PRO_USD_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_GBP_PRODUCTION=PADDLE_PRICE_PREMIUM_GBP_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_USD_PRODUCTION=PADDLE_PRICE_PREMIUM_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION:latest,PUBLIC_PADDLE_CLIENT_TOKEN_PRODUCTION=PADDLE_CLIENT_TOKEN:latest"
+
+# Delimiter ^|^ avoids commas inside ALLOWED_EMAILS breaking gcloud parsing.
+ENV_BLOCK="^|^ADMIN_INGEST_RUN_REAL=1|INGEST_QUEUE_ENABLED=0|SOPHIA_DATA_BACKEND=neon|USE_NEON_AUTH=1|NEON_AUTH_BASE_URL=${NEON_AUTH_BASE_URL}|PUBLIC_NEON_AUTH_URL=${NEON_AUTH_BASE_URL}|GCP_PROJECT_ID=${PROJECT_ID}|GCP_LOCATION=${REGION}|GOOGLE_VERTEX_LOCATION=us-central1|ALLOWED_EMAILS=${ALLOWED_EMAILS}|OWNER_EMAILS=${OWNER_EMAILS}|PADDLE_RUNTIME=production|BYOK_DISABLE_CLOUD_KMS_ENCRYPT=1|RESTORMEL_GATEWAY_KEY=${RESTORMEL_GATEWAY_KEY}|RESTORMEL_PROJECT_ID=${RESTORMEL_PROJECT_ID}|RESTORMEL_ENVIRONMENT_ID=${RESTORMEL_ENVIRONMENT_ID}|RESTORMEL_KEYS_BASE=${RESTORMEL_KEYS_BASE}|RESTORMEL_BASE_URL=${RESTORMEL_BASE_URL}|RESTORMEL_ANALYSE_ROUTE_ID=${RESTORMEL_ANALYSE_ROUTE_ID}|RESTORMEL_VERIFY_ROUTE_ID=${RESTORMEL_VERIFY_ROUTE_ID}|RESTORMEL_PROJECT_MODEL_REGISTRY_BINDINGS=1"
+
+echo "Deploying Cloud Run Job ${JOB_NAME} (image ${IMAGE_REF})…"
+
+gcloud run jobs deploy "${JOB_NAME}" \
+	--project="${PROJECT_ID}" \
+	--region="${REGION}" \
+	--image="${IMAGE_REF}" \
+	--cpu=1 \
+	--memory=1Gi \
+	--tasks=1 \
+	--parallelism=1 \
+	--max-retries=2 \
+	--task-timeout=45m \
+	--vpc-connector=sophia-connector \
+	--vpc-egress=private-ranges-only \
+	--service-account="${JOB_SA}" \
+	--command=pnpm \
+	--args=exec,tsx,scripts/ingestion-job-poller.ts,--once \
+	--set-secrets="${SECRETS}" \
+	--set-env-vars="${ENV_BLOCK}"
+
+echo "OK: ${JOB_NAME} updated. Execute once: gcloud run jobs execute ${JOB_NAME} --region=${REGION} --project=${PROJECT_ID}"

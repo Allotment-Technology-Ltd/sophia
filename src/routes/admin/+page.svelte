@@ -22,6 +22,13 @@
       emphasis: false
     },
     {
+      href: '/admin/ingest/jobs',
+      title: 'Durable ingestion jobs',
+      description:
+        'Neon-backed multi-URL jobs with full Surreal store, live status, and append-only timeline. Use with the ingestion job poller on GCP for SEP-scale batches.',
+      emphasis: false
+    },
+    {
       href: '/admin/operator-byok',
       title: 'Operator BYOK',
       description:

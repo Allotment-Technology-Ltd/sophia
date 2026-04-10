@@ -2,6 +2,8 @@
 
 Source of truth for names: [`.github/workflows/deploy.yml`](../../.github/workflows/deploy.yml) (`gcloud run deploy … --set-secrets=…`).
 
+**Bootstrap (production):** enable APIs (`pnpm gcp:enable-apis`), grant WIF deploy SA access to `neon-database-url` (`pnpm gcp:ensure-wif-neon-access`), then rely on CI to migrate Neon, deploy `sophia`, and update job `sophia-ingestion-job-poller`. Optional scheduler: `pnpm gcp:setup-ingestion-poller-scheduler`. Details: [`gcp-infrastructure.md`](./gcp-infrastructure.md).
+
 **Important:** Google Secret Manager stores **one payload per secret name**. Cloud Run maps each secret to **one** environment variable. There is no supported “upload one file and auto-split” for this deploy path—you create **one secret per row** below (or use your own automation that calls the API once per secret).
 
 **Not in Secret Manager (GitHub Actions / plain env on deploy):** `NEON_AUTH_BASE_URL`, optional `SURREAL_RPC_URL`, Restormel vars, Workload Identity, etc.—see deploy workflow `set-env-vars` and repository **Settings → Secrets and variables → Actions**.
@@ -47,6 +49,8 @@ Source of truth for names: [`.github/workflows/deploy.yml`](../../.github/workfl
 ## Grant Cloud Run access
 
 The Cloud Run service account (e.g. `sophia-app@PROJECT_ID.iam.gserviceaccount.com`) needs **`roles/secretmanager.secretAccessor`** on each secret (or project-wide, as you prefer).
+
+The **GitHub Actions deploy** service account (Workload Identity — e.g. `github-deploy@PROJECT_ID.iam.gserviceaccount.com`) also needs **`secretmanager.secretAccessor` on `neon-database-url`** so the deploy workflow can run `pnpm db:migrate:ci` before pushing a new revision.
 
 ---
 
