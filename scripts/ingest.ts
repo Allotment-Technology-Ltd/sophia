@@ -11,6 +11,9 @@
  * Resume: The pipeline is automatically resumable. If a previous run failed or was
  * interrupted, re-running with the same source will pick up where it left off.
  * Progress is tracked in the ingestion_log table in SurrealDB.
+ *
+ * Self-healing (optional): set INGEST_RECOVERY_AGENT=1 to consult a small routed model after
+ * normal per-stage retries exhaust, for bounded backoff + one extra attempt on transient errors only.
  */
 
 import * as fs from 'fs';
@@ -54,8 +57,11 @@ import {
 import type { IngestCatalogRoutingJson } from '../src/lib/server/ingestCatalogRouting.js';
 import {
 	bumpIngestModelFailureInDb,
+	bumpIngestStageModelFailureInDb,
 	loadIngestLlmFailureCountsFromDb,
-	noteIngestModelSuccessInDb
+	loadIngestLlmStageFailureCountsFromDb,
+	noteIngestModelSuccessInDb,
+	noteIngestStageModelSuccessInDb
 } from '../src/lib/server/db/ingestModelHealth.js';
 import {
 	SOURCE_ID_STRING_ARRAY_ONE_SQL,
@@ -65,6 +71,13 @@ import {
 	toSurrealRecordIdStr
 } from '../src/lib/server/surrealRecordSql.js';
 import { createIngestProviderTpmGuard } from './lib/ingestProviderTpm.js';
+import {
+	consultIngestionRecoveryAgent,
+	effectiveRecoverySleepMs,
+	ingestRecoveryAgentEnabled,
+	isRetryableIngestModelErrorMessage
+} from '../src/lib/server/ingestion/recoveryAgent.js';
+import { formatIngestSelfHealLine } from '../src/lib/server/ingestion/selfHealLog.js';
 import { startSpinner } from './progress.js';
 
 // ─── Prompt imports (relative paths for standalone script) ─────────────────
@@ -117,6 +130,8 @@ import type {
 	PhaseOneRelationMetadata,
 	ReviewState
 } from '../src/lib/server/ingestion/contracts.js';
+
+type StageKey = 'extraction' | 'relations' | 'grouping' | 'validation' | 'embedding' | 'json_repair';
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 const ingestTpmGuard = createIngestProviderTpmGuard();
@@ -291,6 +306,10 @@ interface IngestTimingPayload {
 	retry_backoff_ms_total: number;
 	batch_splits: number;
 	json_repair_invocations: number;
+	/** Recovery agent consults (INGEST_RECOVERY_AGENT=1). */
+	recovery_agent_invocations: number;
+	/** Extra backoff ms from recovery agent-sponsored sleeps. */
+	recovery_agent_backoff_ms_total: number;
 	embed_wall_ms: number;
 	store_wall_ms: number;
 }
@@ -302,15 +321,64 @@ let ingestSourceTextBodyForCheckpoint: string | undefined;
 
 /** Per-run failure counts for catalog-ordered fallback deprioritization (provider::model). */
 const ingestModelFailureCounts = new Map<string, number>();
+/** Per-stage failure counts (stage::provider::model) — merged from Neon at startup + in-run bumps. */
+const ingestStageModelFailureCounts = new Map<string, number>();
+
+/** Consecutive failures per stage+model in this process; opens soft circuit at threshold. */
+const ingestCircuitFailureCounts = new Map<string, number>();
+const ingestCircuitBlocked = new Set<string>();
 
 function ingestModelFailureKey(provider: string, model: string): string {
 	return `${provider.trim().toLowerCase()}::${model.trim()}`;
 }
 
-function recordIngestModelFailure(provider: string, model: string): void {
-	const k = ingestModelFailureKey(provider, model);
-	ingestModelFailureCounts.set(k, (ingestModelFailureCounts.get(k) ?? 0) + 1);
+function ingestStageModelFailureKey(stage: StageKey, provider: string, model: string): string {
+	return `${stage}::${provider.trim().toLowerCase()}::${model.trim()}`;
+}
+
+function stageModelCircuitKey(stage: StageKey, provider: string, model: string): string {
+	return ingestStageModelFailureKey(stage, provider, model);
+}
+
+function ingestCircuitFailureThreshold(): number {
+	const raw = parseInt(process.env.INGEST_CIRCUIT_FAILURE_THRESHOLD ?? '0', 10);
+	return Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
+
+function recordIngestModelFailure(stage: StageKey, provider: string, model: string): void {
+	const gk = ingestModelFailureKey(provider, model);
+	ingestModelFailureCounts.set(gk, (ingestModelFailureCounts.get(gk) ?? 0) + 1);
 	void bumpIngestModelFailureInDb(provider, model);
+
+	const sk = ingestStageModelFailureKey(stage, provider, model);
+	ingestStageModelFailureCounts.set(sk, (ingestStageModelFailureCounts.get(sk) ?? 0) + 1);
+	void bumpIngestStageModelFailureInDb(stage, provider, model);
+
+	const ck = stageModelCircuitKey(stage, provider, model);
+	const prev = ingestCircuitFailureCounts.get(ck) ?? 0;
+	const next = prev + 1;
+	ingestCircuitFailureCounts.set(ck, next);
+	const thr = ingestCircuitFailureThreshold();
+	if (thr > 0 && next >= thr && !ingestCircuitBlocked.has(ck)) {
+		ingestCircuitBlocked.add(ck);
+		console.log(
+			formatIngestSelfHealLine({
+				v: 1,
+				signal: 'circuit_open',
+				stage,
+				provider,
+				model,
+				outcome: 'skip_tier',
+				detail: `failures_in_run=${next} threshold=${thr}`
+			})
+		);
+	}
+}
+
+function clearIngestCircuitSuccess(stage: StageKey, provider: string, model: string): void {
+	const ck = stageModelCircuitKey(stage, provider, model);
+	ingestCircuitFailureCounts.delete(ck);
+	ingestCircuitBlocked.delete(ck);
 }
 
 function loadIngestCatalogRoutingFromEnv(): IngestCatalogRoutingJson | null {
@@ -377,11 +445,15 @@ function buildEffectiveModelChainForStage(
 	if (Array.isArray(catList) && catList.length > 0) {
 		const scored = catList
 			.filter((t) => t && typeof t.provider === 'string' && typeof t.modelId === 'string')
-			.map((t) => ({
-				provider: t.provider.trim().toLowerCase(),
-				modelId: t.modelId.trim(),
-				fails: ingestModelFailureCounts.get(ingestModelFailureKey(t.provider, t.modelId)) ?? 0
-			}))
+			.map((t) => {
+				const provider = t.provider.trim().toLowerCase();
+				const modelId = t.modelId.trim();
+				const gk = ingestModelFailureKey(provider, modelId);
+				const sk = ingestStageModelFailureKey(stage as StageKey, provider, modelId);
+				const fails =
+					(ingestStageModelFailureCounts.get(sk) ?? 0) + (ingestModelFailureCounts.get(gk) ?? 0);
+				return { provider, modelId, fails };
+			})
 			.filter((t) => t.provider && t.modelId);
 
 		scored.sort((a, b) => {
@@ -413,6 +485,8 @@ function createEmptyTiming(): IngestTimingPayload {
 		retry_backoff_ms_total: 0,
 		batch_splits: 0,
 		json_repair_invocations: 0,
+		recovery_agent_invocations: 0,
+		recovery_agent_backoff_ms_total: 0,
 		embed_wall_ms: 0,
 		store_wall_ms: 0
 	};
@@ -660,7 +734,6 @@ function isModelUnavailableError(error: unknown): boolean {
 }
 
 type IngestProvider = IngestProviderPreference;
-type StageKey = 'extraction' | 'relations' | 'grouping' | 'validation' | 'embedding' | 'json_repair';
 
 interface StageBudget {
 	maxInputTokens?: number;
@@ -1793,6 +1866,67 @@ async function callStageModel(params: {
 	let lastError: Error | null = null;
 
 	async function runInnerRetries(activePlan: IngestionStagePlan): Promise<string | null> {
+		async function invokeModelCallOnce(): Promise<string> {
+			if (!activePlan.route) {
+				throw new Error(`No executable route available for ${stage}`);
+			}
+
+			const callStarted = Date.now();
+			const routingProvider = activePlan.route.provider ?? activePlan.provider;
+			const foldSystem = shouldFoldSystemPromptIntoUserForProvider(routingProvider);
+			const estTpmTokens =
+				estimateTokens(systemPrompt) + estimateTokens(userMessage) + maxTokens;
+			await ingestTpmGuard.waitForBudget(routingProvider, estTpmTokens);
+			const result = await withTimeout(
+				generateText(
+					foldSystem
+						? {
+								model: activePlan.route.model,
+								messages: [
+									{
+										role: 'user',
+										content: `${systemPrompt}\n\n${userMessage}`
+									}
+								],
+								temperature: 0.1,
+								maxOutputTokens: maxTokens
+							}
+						: {
+								model: activePlan.route.model,
+								system: systemPrompt,
+								messages: [{ role: 'user', content: userMessage }],
+								temperature: 0.1,
+								maxOutputTokens: maxTokens
+							}
+				),
+				budget.timeoutMs,
+				`${stage} ${activePlan.provider}:${activePlan.model}`
+			);
+			if (activeIngestTiming) {
+				const wall = Date.now() - callStarted;
+				activeIngestTiming.model_calls[stage] = (activeIngestTiming.model_calls[stage] ?? 0) + 1;
+				activeIngestTiming.model_call_wall_ms[stage] =
+					(activeIngestTiming.model_call_wall_ms[stage] ?? 0) + wall;
+			}
+			const inputTokens = result.usage?.inputTokens ?? 0;
+			const outputTokens = result.usage?.outputTokens ?? 0;
+			ingestTpmGuard.recordUsage(routingProvider, inputTokens + outputTokens);
+			const usageCostUsd = trackReasoningCost(activePlan.model, inputTokens, outputTokens);
+			if (result.finishReason === 'length') {
+				throw new Error('Model output was truncated (max_tokens reached)');
+			}
+			console.log(
+				`  [ROUTE] ${stage}: ${activePlan.provider}/${activePlan.model} source=${activePlan.routingSource} step=${activePlan.selectedStepId ?? '—'} order=${activePlan.selectedOrderIndex ?? '—'} switch=${activePlan.switchReasonCode ?? '—'} cost~$${usageCostUsd.toFixed(4)}`
+			);
+			if ((process.env.INGEST_LLM_HEALTH_RECORD_SUCCESS || '').trim() === '1') {
+				void noteIngestModelSuccessInDb(activePlan.provider, activePlan.model);
+				void noteIngestStageModelSuccessInDb(stage, activePlan.provider, activePlan.model);
+			}
+			clearIngestCircuitSuccess(stage, activePlan.provider, activePlan.model);
+			assertStageBudget(budget, tracker);
+			return result.text;
+		}
+
 		for (let attempt = 0; attempt <= budget.maxRetries; attempt++) {
 			try {
 				if (attempt > 0) {
@@ -1811,62 +1945,7 @@ async function callStageModel(params: {
 					await sleep(delayMs);
 				}
 
-				if (!activePlan.route) {
-					throw new Error(`No executable route available for ${stage}`);
-				}
-
-				const callStarted = Date.now();
-				const routingProvider = activePlan.route.provider ?? activePlan.provider;
-				const foldSystem = shouldFoldSystemPromptIntoUserForProvider(routingProvider);
-				const estTpmTokens =
-					estimateTokens(systemPrompt) + estimateTokens(userMessage) + maxTokens;
-				await ingestTpmGuard.waitForBudget(routingProvider, estTpmTokens);
-				const result = await withTimeout(
-					generateText(
-						foldSystem
-							? {
-									model: activePlan.route.model,
-									messages: [
-										{
-											role: 'user',
-											content: `${systemPrompt}\n\n${userMessage}`
-										}
-									],
-									temperature: 0.1,
-									maxOutputTokens: maxTokens
-								}
-							: {
-									model: activePlan.route.model,
-									system: systemPrompt,
-									messages: [{ role: 'user', content: userMessage }],
-									temperature: 0.1,
-									maxOutputTokens: maxTokens
-								}
-					),
-					budget.timeoutMs,
-					`${stage} ${activePlan.provider}:${activePlan.model}`
-				);
-				if (activeIngestTiming) {
-					const wall = Date.now() - callStarted;
-					activeIngestTiming.model_calls[stage] = (activeIngestTiming.model_calls[stage] ?? 0) + 1;
-					activeIngestTiming.model_call_wall_ms[stage] =
-						(activeIngestTiming.model_call_wall_ms[stage] ?? 0) + wall;
-				}
-				const inputTokens = result.usage?.inputTokens ?? 0;
-				const outputTokens = result.usage?.outputTokens ?? 0;
-				ingestTpmGuard.recordUsage(routingProvider, inputTokens + outputTokens);
-				const usageCostUsd = trackReasoningCost(activePlan.model, inputTokens, outputTokens);
-				if (result.finishReason === 'length') {
-					throw new Error('Model output was truncated (max_tokens reached)');
-				}
-				console.log(
-					`  [ROUTE] ${stage}: ${activePlan.provider}/${activePlan.model} source=${activePlan.routingSource} step=${activePlan.selectedStepId ?? '—'} order=${activePlan.selectedOrderIndex ?? '—'} switch=${activePlan.switchReasonCode ?? '—'} cost~$${usageCostUsd.toFixed(4)}`
-				);
-				if ((process.env.INGEST_LLM_HEALTH_RECORD_SUCCESS || '').trim() === '1') {
-					void noteIngestModelSuccessInDb(activePlan.provider, activePlan.model);
-				}
-				assertStageBudget(budget, tracker);
-				return result.text;
+				return await invokeModelCallOnce();
 			} catch (error) {
 				lastError = error instanceof Error ? error : new Error(String(error));
 				const msg = lastError.message;
@@ -1888,7 +1967,70 @@ async function callStageModel(params: {
 				if (!retryable) break;
 			}
 		}
-		recordIngestModelFailure(activePlan.provider, activePlan.model);
+
+		if (
+			ingestRecoveryAgentEnabled() &&
+			lastError &&
+			isRetryableIngestModelErrorMessage(lastError.message)
+		) {
+			console.log(
+				formatIngestSelfHealLine({
+					v: 1,
+					signal: 'recovery_agent',
+					stage,
+					provider: activePlan.provider,
+					model: activePlan.model,
+					outcome: 'consult',
+					detail: 'after inner retries exhausted'
+				})
+			);
+			const decision = await consultIngestionRecoveryAgent({
+				stage,
+				provider: activePlan.provider,
+				model: activePlan.model,
+				errorMessage: lastError.message
+			});
+			if (activeIngestTiming) {
+				activeIngestTiming.recovery_agent_invocations += 1;
+			}
+			const sleepMs = effectiveRecoverySleepMs(decision);
+			const outcomeLabel =
+				decision.action === 'sleep_and_retry_once' ? 'sleep_retry' : 'proceed_to_fallback';
+			console.log(
+				formatIngestSelfHealLine({
+					v: 1,
+					signal: 'recovery_agent',
+					stage,
+					provider: activePlan.provider,
+					model: activePlan.model,
+					outcome: outcomeLabel,
+					detail: decision.rationale?.slice(0, 500)
+				})
+			);
+			if (decision.action === 'sleep_and_retry_once') {
+				if (activeIngestTiming) {
+					activeIngestTiming.recovery_agent_backoff_ms_total += sleepMs;
+					activeIngestTiming.retry_backoff_ms_total += sleepMs;
+				}
+				if (sleepMs > 0) {
+					console.log(
+						`  [RECOVERY_AGENT] ${stage} ${activePlan.provider}:${activePlan.model} sleeping ${sleepMs}ms before one sponsored retry`
+					);
+					await sleep(sleepMs);
+				}
+				try {
+					return await invokeModelCallOnce();
+				} catch (agentRetryErr) {
+					lastError =
+						agentRetryErr instanceof Error ? agentRetryErr : new Error(String(agentRetryErr));
+					console.warn(
+						`  [WARN] ${stage} ${activePlan.provider}:${activePlan.model} recovery retry failed: ${formatModelCallErrorDetails(agentRetryErr)}`
+					);
+				}
+			}
+		}
+
+		recordIngestModelFailure(stage, activePlan.provider, activePlan.model);
 		return null;
 	}
 
@@ -1910,6 +2052,13 @@ async function callStageModel(params: {
 
 	for (let ci = 0; ci < effectiveChain.length; ci++) {
 		const tier = effectiveChain[ci]!;
+		const circuitCk = stageModelCircuitKey(stage, tier.provider, tier.modelId);
+		if (ingestCircuitBlocked.has(circuitCk)) {
+			console.warn(
+				`  [CIRCUIT] ${stage}: skipping ${tier.provider}/${tier.modelId} (soft circuit open for this process)`
+			);
+			continue;
+		}
 		let activePlan: IngestionStagePlan;
 		if (planMatchesCanonicalTier(plan, tier)) {
 			activePlan = plan;
@@ -3000,6 +3149,9 @@ async function main() {
 		console.error('  --ingest-pins-json=<base64url JSON>  Preferred when spawned from admin (survives dotenv)');
 		console.error('  INGEST_LOG_PINS=1            Log pin + routing diagnostics (per-stage planning, dotenv restore)');
 		console.error('  INGEST_NO_MODEL_FALLBACK=1   When set, do not escalate to other providers/models after retries (pins imply strict mode)');
+		console.error('  INGEST_RECOVERY_AGENT=1      Optional: after inner retries, consult routed model for bounded backoff + one extra attempt (transient errors)');
+		console.error('  INGEST_RECOVERY_AGENT_MAX_SLEEP_MS, INGEST_RECOVERY_AGENT_TIMEOUT_MS');
+		console.error('  INGEST_CIRCUIT_FAILURE_THRESHOLD   Soft circuit: after N failures on same stage+model in one run, skip tier (0=disabled)');
 		console.error('\nResume is automatic — re-run the same source to pick up where it left off.');
 		process.exit(1);
 	}
@@ -3025,6 +3177,10 @@ async function main() {
 		const persistedFails = await loadIngestLlmFailureCountsFromDb();
 		for (const [k, v] of persistedFails) {
 			ingestModelFailureCounts.set(k, v);
+		}
+		const persistedStageFails = await loadIngestLlmStageFailureCountsFromDb();
+		for (const [k, v] of persistedStageFails) {
+			ingestStageModelFailureCounts.set(k, v);
 		}
 	}
 	assertValidSourceMetadata(sourceMeta);

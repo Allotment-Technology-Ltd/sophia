@@ -379,10 +379,38 @@ function summarizeRoutingFromLogLines(logLines: string[]): {
   return { routeCalls, routingSources, orderCounts, degradedRouteCount, fallbackUsedCount };
 }
 
+function summarizeSelfHealFromIssues(issues: IngestIssueRecord[]): {
+  recovery_agent: number;
+  circuit_open: number;
+  stage_health_bump: number;
+} {
+  let recovery_agent = 0;
+  let circuit_open = 0;
+  let stage_health_bump = 0;
+  for (const i of issues) {
+    if (i.kind === 'recovery_agent') recovery_agent += 1;
+    if (i.kind === 'circuit_open') circuit_open += 1;
+    if (i.kind === 'stage_health_bump') stage_health_bump += 1;
+  }
+  return { recovery_agent, circuit_open, stage_health_bump };
+}
+
 function buildIngestRunReportEnvelope(state: IngestRunSnapshotForReport): Record<string, unknown> {
   const payload = state.payload;
   const routingStats = summarizeRoutingFromLogLines(state.logLines);
   const timingTelemetry = parseIngestTimingFromLogLines(state.logLines);
+  const issueSelfHealSummary = summarizeSelfHealFromIssues(state.issues);
+  const selfHealTelemetry = {
+    recoveryAgentInvocations:
+      typeof timingTelemetry?.recovery_agent_invocations === 'number'
+        ? timingTelemetry.recovery_agent_invocations
+        : null,
+    recoveryAgentBackoffMsTotal:
+      typeof timingTelemetry?.recovery_agent_backoff_ms_total === 'number'
+        ? timingTelemetry.recovery_agent_backoff_ms_total
+        : null,
+    issueSelfHealSummary
+  };
   return {
     runId: state.id,
     actorEmail: state.actorEmail ?? null,
@@ -397,6 +425,7 @@ function buildIngestRunReportEnvelope(state: IngestRunSnapshotForReport): Record
     batchOverrides: payload.batch_overrides ?? null,
     routingStats,
     timingTelemetry,
+    selfHealTelemetry,
     createdAtMs: state.createdAt,
     completedAtMs: state.completedAt ?? Date.now(),
     terminalError: state.error ?? null,
@@ -434,6 +463,18 @@ export async function persistIngestRunReport(state: IngestRunSnapshotForReport):
     const payload = state.payload;
     const routingStats = summarizeRoutingFromLogLines(state.logLines);
     const timingTelemetry = parseIngestTimingFromLogLines(state.logLines);
+    const issueSelfHealSummaryFs = summarizeSelfHealFromIssues(state.issues);
+    const selfHealTelemetry = {
+      recoveryAgentInvocations:
+        typeof timingTelemetry?.recovery_agent_invocations === 'number'
+          ? timingTelemetry.recovery_agent_invocations
+          : null,
+      recoveryAgentBackoffMsTotal:
+        typeof timingTelemetry?.recovery_agent_backoff_ms_total === 'number'
+          ? timingTelemetry.recovery_agent_backoff_ms_total
+          : null,
+      issueSelfHealSummary: issueSelfHealSummaryFs
+    };
     await ref.set(
       {
         runId: state.id,
@@ -449,6 +490,7 @@ export async function persistIngestRunReport(state: IngestRunSnapshotForReport):
         batchOverrides: payload.batch_overrides ?? null,
         routingStats,
         timingTelemetry,
+        selfHealTelemetry,
         createdAt: Timestamp.fromMillis(state.createdAt),
         completedAt: Timestamp.fromMillis(state.completedAt ?? Date.now()),
         terminalError: state.error ?? null,

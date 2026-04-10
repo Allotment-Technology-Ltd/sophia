@@ -247,6 +247,26 @@ export const ingestLlmModelHealth = pgTable(
   })
 );
 
+/** Per-stage LLM failure/success tallies for ingestion routing (deprioritize bad stage+model pairs). */
+export const ingestLlmStageModelHealth = pgTable(
+  'ingest_llm_stage_model_health',
+  {
+    stage: text('stage').notNull(),
+    provider: text('provider').notNull(),
+    modelId: text('model_id').notNull(),
+    failureCount: integer('failure_count').notNull().default(0),
+    successCount: integer('success_count').notNull().default(0),
+    lastFailureAt: timestamp('last_failure_at', { withTimezone: true }),
+    lastSuccessAt: timestamp('last_success_at', { withTimezone: true }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.stage, t.provider, t.modelId] }),
+    stageIdx: index('idx_ingest_llm_stage_model_health_stage').on(t.stage),
+    updatedIdx: index('idx_ingest_llm_stage_model_health_updated').on(t.updatedAt)
+  })
+);
+
 /** Multi-source ingestion job (admin); items spawn child `ingest_runs`. */
 export const ingestionJobs = pgTable(
   'ingestion_jobs',

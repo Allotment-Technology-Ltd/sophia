@@ -5,6 +5,10 @@
 - **GCP** (`sophia-488807` or your billing project): primary for **Vertex** (Gemini + `text-embedding-005`) and **compute** for workers. Burn soonest-expiring credit tranches first; set Billing budgets/alerts.
 - **AWS Activate / Azure free tiers**: optional burst or experiments; not required for the reference pipeline.
 
+## Admin Expand (single URL)
+
+Single-URL runs from `/admin/ingest` default to **full pipeline including Surreal store**. Pass `stop_before_store: true` on `POST /api/admin/ingest/run` only when you want preview mode (same run skips store; use sync later).
+
 ## Durable jobs (Neon)
 
 Multi-URL jobs live in Postgres (`ingestion_jobs`, `ingestion_job_items`, `ingestion_job_events`). Production applies all `drizzle/*.sql` automatically **before each Cloud Run deploy** (`pnpm db:migrate:ci` in [`.github/workflows/deploy.yml`](../../.github/workflows/deploy.yml)). Local/staging: `pnpm db:migrate` with `DATABASE_URL` set.

@@ -1,7 +1,12 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
-import { getIngestExecutionInfo, ingestRunManager, type IngestRunPayload } from '$lib/server/ingestRuns';
+import {
+	getIngestExecutionInfo,
+	ingestOptInStopBeforeStore,
+	ingestRunManager,
+	type IngestRunPayload
+} from '$lib/server/ingestRuns';
 
 export const POST: RequestHandler = async ({ locals, request }) => {
   const actor = assertAdminAccess(locals);
@@ -27,7 +32,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
   const normalized: IngestRunPayload = {
     ...(payload as IngestRunPayload),
-    stop_before_store: (payload as Partial<IngestRunPayload>).stop_before_store !== false
+    stop_before_store: ingestOptInStopBeforeStore(payload as Partial<IngestRunPayload>)
   };
 
   try {

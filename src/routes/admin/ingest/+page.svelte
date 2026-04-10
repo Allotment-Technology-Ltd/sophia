@@ -2545,7 +2545,6 @@
           source_url: sourceUrl.trim(),
           source_type: sourceType,
           validate: runValidate,
-          stop_before_store: true,
           pipeline_preset: INGESTION_PIPELINE_PRESET,
           embedding_model: stageModelIds.ingestion_embedding,
           batch_overrides: mergedBatchOverrides,

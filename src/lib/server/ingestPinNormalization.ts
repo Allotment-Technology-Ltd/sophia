@@ -17,6 +17,10 @@ export function normalizePinnedModelId(provider: string, modelId: string): strin
 	const m = modelId.trim();
 	if ((p === 'vertex' || p === 'google') && m === 'gemini-1.5-pro') return 'gemini-2.5-pro';
 	if ((p === 'vertex' || p === 'google') && m === 'gemini-1.5-flash') return 'gemini-2.5-flash';
+	// Retiring / legacy Vertex Gemini 2.x → current GA Flash (see Vertex model lifecycle docs).
+	if ((p === 'vertex' || p === 'google') && (m === 'gemini-2.0-flash' || m === 'gemini-2.0-flash-001')) {
+		return 'gemini-2.5-flash';
+	}
 	if (p === 'anthropic' && m === 'claude-3-5-haiku') return 'claude-3-5-haiku-20241022';
 	return m;
 }

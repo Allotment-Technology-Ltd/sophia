@@ -38,11 +38,19 @@ import {
 
 export { normalizePinnedModelId, summarizeIngestPinsForLog };
 
+/**
+ * Preview mode: no Surreal write in the same run (operator syncs later). Default is **full store**
+ * in one run (`stop_before_store` omitted or false).
+ */
+export function ingestOptInStopBeforeStore(payload: { stop_before_store?: boolean }): boolean {
+  return payload.stop_before_store === true;
+}
+
 export interface IngestRunPayload {
   source_url: string;
   source_type: string;
   validate: boolean;
-  /** When true (default), ingest stops after Stage 5 until the operator runs SurrealDB sync. */
+  /** When true, ingest stops before Surreal store (preview); omit or false for full pipeline including store. */
   stop_before_store?: boolean;
   /** Preferred embedding profile (wizard / Restormel); pipeline may still use server defaults. */
   embedding_model?: string;
@@ -666,7 +674,7 @@ class IngestRunManager extends EventEmitter {
     const initialStatus: IngestRunState['status'] = neonQueueEnabled() ? 'queued' : 'running';
     const snapshot: IngestRunPayload = {
       ...payload,
-      stop_before_store: payload.stop_before_store !== false,
+      stop_before_store: ingestOptInStopBeforeStore(payload),
       pipeline_version: payload.pipeline_version ?? resolvePipelineVersion(),
       embedding_fingerprint: payload.embedding_fingerprint ?? resolveEmbeddingFingerprint()
     };
@@ -1081,7 +1089,7 @@ class IngestRunManager extends EventEmitter {
     if (payload.embedding_model?.trim()) {
       this.addLog(runId, `Embedding preference: ${payload.embedding_model.trim()}`);
     }
-    if (payload.stop_before_store !== false) {
+    if (ingestOptInStopBeforeStore(payload)) {
       this.addLog(runId, 'SurrealDB store is deferred until you press Sync.');
     }
 
@@ -1213,7 +1221,7 @@ class IngestRunManager extends EventEmitter {
     };
     const ingestPinsJsonCli = encodeIngestPinsJsonCliArg(pinEnvFlat);
     const forSync = options.forSyncOnly;
-    const stopBeforeStore = forSync ? false : payload.stop_before_store !== false;
+    const stopBeforeStore = forSync ? false : ingestOptInStopBeforeStore(payload);
     const orchestrationEnv = isNeonIngestPersistenceEnabled()
       ? { INGEST_ORCHESTRATION_RUN_ID: runId }
       : {};
@@ -1456,7 +1464,7 @@ class IngestRunManager extends EventEmitter {
           }
           for (let i = failIdx + 1; i < order.length; i++) {
             const k = order[i]!;
-            if (k === 'store' && payload.stop_before_store !== false) {
+            if (k === 'store' && ingestOptInStopBeforeStore(payload)) {
               this.updateStageStatus(runId, 'store', 'idle');
               continue;
             }
@@ -1491,7 +1499,7 @@ class IngestRunManager extends EventEmitter {
     const state = this.runs.get(runId);
     if (!state) return;
 
-    const stopBeforeStore = state.payload.stop_before_store !== false;
+    const stopBeforeStore = ingestOptInStopBeforeStore(state.payload);
     const validateOn = state.payload.validate === true;
     const order = orderedStagesAfterFetch(validateOn);
     const idx = order.indexOf(activeKey);
@@ -1587,7 +1595,7 @@ class IngestRunManager extends EventEmitter {
   }
 
   private simulateIngestionProgress(runId: string, payload: IngestRunPayload): void {
-    const stopBeforeStore = payload.stop_before_store !== false;
+    const stopBeforeStore = ingestOptInStopBeforeStore(payload);
     const stages = [
       'fetch',
       ...PIPELINE_STAGES,
