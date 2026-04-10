@@ -182,10 +182,16 @@ const INGEST_EXTRACTION_CONCURRENCY = Math.max(
 );
 const INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE =
 	(process.env.INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE || 'true').toLowerCase() !== 'false';
-/** When migrating from Vertex (768) to Voyage (1024), legacy rows may remain until a full re-embed. Default: block embed if any existing claim has a different dimension. */
-const INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM = ['1', 'true', 'yes'].includes(
-	(process.env.INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM || '').trim().toLowerCase()
-);
+/**
+ * When false, Stage 4 probes Surreal for any existing claim embedding dim and throws if it ≠ configured output (e.g. legacy 768 vs Voyage 1024).
+ * Default true so ingest is not blocked if Cloud Run env is stale; set INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM=0 after the corpus is uniformly re-embedded.
+ */
+const INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM = (() => {
+	const raw = (process.env.INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM ?? '').trim().toLowerCase();
+	if (raw === '0' || raw === 'false' || raw === 'no') return false;
+	if (raw === '1' || raw === 'true' || raw === 'yes') return true;
+	return true;
+})();
 const INGEST_SAVE_GROUPING_RAW =
 	(process.env.INGEST_SAVE_GROUPING_RAW || 'false').toLowerCase() === 'true';
 
@@ -3940,24 +3946,16 @@ async function main() {
 			console.log('└──────────────────────────────────────────────────────────┘');
 
 			const claimTexts = allClaims.map((c) => c.text);
-			if (db) {
-				if (INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM) {
-					console.warn(
-						'  [WARN] INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM is set — skipping global claim embedding dimension check. ' +
-							'Some rows may still be legacy-sized until you run a full re-embed; hybrid retrieval can be wrong until then. ' +
-							'See docs/operations/ingestion-embedding-lock.md.'
+			if (db && !INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM) {
+				const dimProbe = await db.query<Array<{ dim?: number }> | { dim?: number }[]>(
+					'SELECT array::len(embedding) AS dim FROM claim WHERE embedding IS NOT NONE LIMIT 1'
+				);
+				const existingDim = Array.isArray(dimProbe?.[0]) ? (dimProbe[0][0]?.dim ?? null) : null;
+				if (typeof existingDim === 'number' && existingDim > 0 && existingDim !== EMBEDDING_DIMENSIONS) {
+					throw new Error(
+						`[INTEGRITY] Existing claim embeddings are ${existingDim}-dim, but configured embedding output is ${EMBEDDING_DIMENSIONS}-dim (${configuredEmbeddingProvider.name}:${EMBEDDING_MODEL}). ` +
+							`Run a full corpus re-embed / index migration (see docs/operations/ingestion-embedding-lock.md), or unset strict mode: leave INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM unset/default during migration.`
 					);
-				} else {
-					const dimProbe = await db.query<Array<{ dim?: number }> | { dim?: number }[]>(
-						'SELECT array::len(embedding) AS dim FROM claim WHERE embedding IS NOT NONE LIMIT 1'
-					);
-					const existingDim = Array.isArray(dimProbe?.[0]) ? (dimProbe[0][0]?.dim ?? null) : null;
-					if (typeof existingDim === 'number' && existingDim > 0 && existingDim !== EMBEDDING_DIMENSIONS) {
-						throw new Error(
-							`[INTEGRITY] Existing claim embeddings are ${existingDim}-dim, but configured embedding output is ${EMBEDDING_DIMENSIONS}-dim (${configuredEmbeddingProvider.name}:${EMBEDDING_MODEL}). ` +
-								`Run a full corpus re-embed / index migration (see docs/operations/ingestion-embedding-lock.md), or temporarily set INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM=1 on the ingest worker while you migrate (accepts mixed corpus risk).`
-						);
-					}
 				}
 			}
 			if (embeddingPlan.provider !== configuredEmbeddingProvider.name) {

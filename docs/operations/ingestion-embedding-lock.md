@@ -15,13 +15,13 @@ Do not flip providers without a **re-embed** plan; mixed dimensions in the same 
 
 `scripts/ingest.ts` checks Surreal for **any** existing claim embedding dimension before Stage 4. If the corpus is still **768** but `EMBEDDING_PROVIDER=voyage` (**1024**), ingestion fails at embed with `[INTEGRITY] Existing claim embeddings are 768-dim…`.
 
-To **allow new sources to complete** while you run a full `reembed-corpus` (or index migration) in parallel, set on the **ingest worker** (Cloud Run service / job env):
+`scripts/ingest.ts` **defaults** to skipping the global “existing claim dimension” probe so new ingests are not blocked when legacy **768**-dim rows remain (Cloud Run env drift no longer matters). A warning is logged when the skip path runs.
 
-`INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM=1`
+After the corpus is **fully** re-embedded to one dimension, set on the ingest worker:
 
-This **skips** the global probe and logs a warning. Dense retrieval can behave poorly until the corpus is uniform again — remove the flag after migration.
+`INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM=0`
 
-Production deploys (`.github/workflows/deploy.yml` and `scripts/gcp/deploy-sophia-ingestion-poller-job.sh`) currently set this to **`1`** so admin ingests do not fail on the legacy-dimension check; delete that env entry from both after the corpus is fully re-embedded.
+to **re-enable** the strict check (fail embed if Surreal still has a different dimension than the configured provider).
 
 ## Surreal
 
