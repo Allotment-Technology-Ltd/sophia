@@ -2321,22 +2321,28 @@ async function relateGraphIfAbsent(
 		);
 		return false;
 	}
-	// Use type::record($tb, $key) — this Surreal build rejects type::thing; slugs with underscores
-	// are unsafe as bare record literals in RELATE/SELECT.
+	// SurrealDB 2.x: `type::thing` is invalid; `type::record` works in LET but not as the first token
+	// after `RELATE` (parser: "Unexpected token `::`"). Match the `authored` pattern: LET … then
+	// `RELATE $from->table->$to`. Slugs with underscores stay safe via split table/key params.
 	const edgeVars = {
 		from_tb: from.tb,
 		from_key: from.key,
 		to_tb: to.tb,
 		to_key: to.key
 	};
-	const existing = await db.query<[{ id: string }[]]>(
-		`SELECT id FROM ${table} WHERE in = type::record($from_tb, $from_key) AND out = type::record($to_tb, $to_key) LIMIT 1`,
+	const existing = await db.query<Array<{ id: string }[]>>(
+		`LET $from = type::record($from_tb, $from_key);
+		 LET $to = type::record($to_tb, $to_key);
+		 SELECT id FROM ${table} WHERE in = $from AND out = $to LIMIT 1`,
 		edgeVars
 	);
-	const hasExisting = Array.isArray(existing?.[0]) && existing[0].length > 0;
+	const selectRows = Array.isArray(existing) ? existing[existing.length - 1] : undefined;
+	const hasExisting = Array.isArray(selectRows) && selectRows.length > 0;
 	if (hasExisting) return false;
 	await db.query(
-		`RELATE type::record($from_tb, $from_key)->${table}->type::record($to_tb, $to_key) ${setClause}`,
+		`LET $from = type::record($from_tb, $from_key);
+		 LET $to = type::record($to_tb, $to_key);
+		 RELATE $from->${table}->$to ${setClause}`,
 		edgeVars
 	);
 	return true;

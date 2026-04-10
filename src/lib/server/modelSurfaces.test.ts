@@ -5,11 +5,13 @@ import {
 	computeEffectiveOperationsBindings,
 	isDeniedProjectModelPutModelId,
 	isRestormelProjectModelPutProvider,
+	mergeSurfaceAssignmentsWithDefaults,
+	resolveSurfaceRole,
 	supplementBindableKeysWithCatalogVertexEmbeddings,
 	type ModelSurfacesStored,
 	type SurfaceRole
 } from './modelSurfaces';
-import { catalogSurfaceStableKey } from './restormelCatalogRows';
+import { catalogSurfaceStableKey, type CatalogSurfaceRow } from './restormelCatalogRows';
 
 describe('isDeniedProjectModelPutModelId', () => {
 	it('flags known Keys catalog variant gaps', () => {
@@ -364,5 +366,60 @@ describe('canonicalizeSurfaceAssignmentsForPut', () => {
 		});
 		expect(fromVertexOnly[kGoogle]).toBe('ingestion_only');
 		expect(fromVertexOnly[kVertex]).toBeUndefined();
+	});
+
+	it('forces retired Anthropic snapshots to off even when the client sends ingestion roles', () => {
+		const kRetired = catalogSurfaceStableKey('anthropic', 'claude-3-5-sonnet-20241022');
+		const payload = {
+			data: {
+				models: [{ providerType: 'anthropic', modelId: 'claude-3-5-sonnet-20241022' }]
+			}
+		};
+		const out = canonicalizeSurfaceAssignmentsForPut(payload, {
+			[kRetired]: 'ingestion_only',
+			[catalogSurfaceStableKey('openai', 'gpt-4o')]: 'ingestion_only'
+		});
+		expect(out[kRetired]).toBe('off');
+	});
+});
+
+describe('Sophia ingestion denylist (retired Anthropic API ids)', () => {
+	const retiredAnthropicRow = (modelId: string): CatalogSurfaceRow => ({
+		providerType: 'anthropic',
+		modelId,
+		isEmbedding: false,
+		catalogUsable: true,
+		detailsSufficient: true,
+		eligibleForSurfaces: true,
+		raw: { providerType: 'anthropic', modelId }
+	});
+
+	it('resolveSurfaceRole returns off for denylisted ids even when Firestore had ingestion', () => {
+		const row = retiredAnthropicRow('claude-3-5-sonnet-20241022');
+		const k = catalogSurfaceStableKey('anthropic', 'claude-3-5-sonnet-20241022');
+		const config: ModelSurfacesStored = {
+			operationsMode: 'default',
+			userQueriesMode: 'default',
+			surfaceAssignments: { [k]: 'ingestion_only' },
+			lastRestormelSyncError: null
+		};
+		expect(resolveSurfaceRole(row, config)).toBe('off');
+	});
+
+	it('mergeSurfaceAssignmentsWithDefaults surfaces denylisted rows as off', () => {
+		const payload = {
+			data: {
+				models: [{ providerType: 'anthropic', modelId: 'claude-3-5-sonnet-20241022' }]
+			}
+		};
+		const k = catalogSurfaceStableKey('anthropic', 'claude-3-5-sonnet-20241022');
+		const stored: ModelSurfacesStored = {
+			operationsMode: 'default',
+			userQueriesMode: 'default',
+			surfaceAssignments: { [k]: 'ingestion_only' },
+			lastRestormelSyncError: null
+		};
+		const merged = mergeSurfaceAssignmentsWithDefaults(payload, stored);
+		expect(merged[k]).toBe('off');
 	});
 });

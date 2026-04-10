@@ -54,7 +54,7 @@ async function upsertRecords(db: Surreal, records: Record<string, unknown>[]): P
 		if (!id) continue;
 		const parsed = splitRecordId(id);
 		if (!parsed) continue;
-		await db.query('UPSERT type::thing($table, $idPart) CONTENT $content', {
+		await db.query('UPSERT type::record($table, $idPart) CONTENT $content', {
 			table: parsed.table,
 			idPart: parsed.idPart,
 			content: stripId(record)

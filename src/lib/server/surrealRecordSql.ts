@@ -8,9 +8,12 @@
  *    the id segment bound, or build the string in SurrealQL.
  *
  * 2. **Record references in RELATE / WHERE** — bare literals like `subject:foo_bar` break
- *    the lexer for some ids. Prefer `type::record($tb, $key)` with split table + key.
- *    (This codebase’s Surreal build rejects `type::thing` in these positions; use
- *    `type::record`.)
+ *    the lexer for some ids. Use `type::record($tb, $key)` inside `LET`, then
+ *    `RELATE $from->edge->$to` — SurrealDB 2.x rejects `RELATE type::record(...)->…`
+ *    (`type::thing` is also invalid; use `type::record` only via LET or in expressions).
+ *
+ * 3. **CI** — Before merging changes to ingest / graph Surreal writes, run
+ *    `pnpm check:surreal-writes` (also runs in the deploy workflow).
  *
  * @see scripts/check-surreal-write-lint.ts
  */

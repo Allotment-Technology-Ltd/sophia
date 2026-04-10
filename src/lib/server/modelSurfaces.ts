@@ -17,6 +17,7 @@ import {
 	normalizeKeysProviderType,
 	type CatalogSurfaceRow
 } from '$lib/server/restormelCatalogRows';
+import { isSophiaIngestionOperationsDenylisted } from '$lib/server/sophiaIngestionModelDenylist';
 import { isReasoningProvider, type ReasoningProvider } from '@restormel/contracts/providers';
 
 const COLLECTION = 'admin_config';
@@ -71,25 +72,84 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;
 }
 
+function sanitizeSurfaceRoleAssignments(
+	raw: Record<string, SurfaceRole> | undefined
+): Record<string, SurfaceRole> | undefined {
+	if (!raw) return undefined;
+	const out: Record<string, SurfaceRole> = {};
+	for (const [k, v] of Object.entries(raw)) {
+		const p = surfaceRoleSchema.safeParse(v);
+		if (p.success) out[k] = p.data;
+	}
+	return Object.keys(out).length ? out : undefined;
+}
+
+function coerceModelRefArray(raw: unknown): ModelRef[] | undefined {
+	if (!Array.isArray(raw)) return undefined;
+	const out: ModelRef[] = [];
+	for (const item of raw) {
+		if (!isRecord(item)) continue;
+		const pt = item.providerType ?? (item as { provider_type?: unknown }).provider_type;
+		const mid = item.modelId ?? (item as { model_id?: unknown }).model_id;
+		if (typeof pt !== 'string' || typeof mid !== 'string') continue;
+		const p = modelRefSchema.safeParse({ providerType: pt, modelId: mid });
+		if (p.success) out.push(p.data);
+	}
+	return out.length ? out : undefined;
+}
+
 export async function loadModelSurfacesConfig(): Promise<ModelSurfacesStored> {
 	const snap = await docRef().get();
 	if (!snap.exists) return { ...DEFAULT_STORED };
 	const d = snap.data();
 	if (!isRecord(d)) return { ...DEFAULT_STORED };
-	const parsed = modelSurfacesStoredSchema.safeParse({
-		surfaceAssignments: parseSurfaceAssignmentsFromDoc(d.surfaceAssignments),
-		operationsMode: d.operationsMode,
-		operationsExplicit: d.operationsExplicit,
-		userQueriesMode: d.userQueriesMode,
-		userQueriesExplicit: d.userQueriesExplicit,
+
+	const surfaceAssignments = sanitizeSurfaceRoleAssignments(
+		parseSurfaceAssignmentsFromDoc(d.surfaceAssignments)
+	);
+
+	const candidate: Record<string, unknown> = {
+		surfaceAssignments,
+		operationsMode: typeof d.operationsMode === 'string' ? d.operationsMode : undefined,
+		operationsExplicit: coerceModelRefArray(d.operationsExplicit),
+		userQueriesMode: typeof d.userQueriesMode === 'string' ? d.userQueriesMode : undefined,
+		userQueriesExplicit: coerceModelRefArray(d.userQueriesExplicit),
 		updatedByUid: typeof d.updatedByUid === 'string' ? d.updatedByUid : undefined,
 		lastRestormelSyncError:
 			d.lastRestormelSyncError === null || typeof d.lastRestormelSyncError === 'string'
 				? d.lastRestormelSyncError
 				: undefined
+	};
+
+	const parsed = modelSurfacesStoredSchema.safeParse(candidate);
+	if (parsed.success) {
+		return { ...DEFAULT_STORED, ...parsed.data };
+	}
+
+	const minimal = modelSurfacesStoredSchema.safeParse({
+		surfaceAssignments,
+		operationsMode: 'default',
+		userQueriesMode: 'default',
+		lastRestormelSyncError: null
 	});
-	if (!parsed.success) return { ...DEFAULT_STORED };
-	return { ...DEFAULT_STORED, ...parsed.data };
+	if (minimal.success) {
+		return {
+			...DEFAULT_STORED,
+			...minimal.data,
+			updatedByUid: candidate.updatedByUid as string | undefined
+		};
+	}
+
+	if (surfaceAssignments && Object.keys(surfaceAssignments).length > 0) {
+		return {
+			...DEFAULT_STORED,
+			surfaceAssignments,
+			lastRestormelSyncError: null,
+			updatedByUid: typeof d.updatedByUid === 'string' ? d.updatedByUid : undefined
+		};
+	}
+
+	return { ...DEFAULT_STORED };
 }
 
 function parseSurfaceAssignmentsFromDoc(raw: unknown): Record<string, SurfaceRole> | undefined {
@@ -189,6 +249,9 @@ export function migrateLegacySurfaceRole(row: CatalogSurfaceRow, config: ModelSu
  * Effective role for a catalog row: stored assignment, or legacy migration, or `off` when assignments exist but this key is missing.
  */
 export function resolveSurfaceRole(row: CatalogSurfaceRow, config: ModelSurfacesStored): SurfaceRole {
+	if (!row.isEmbedding && isSophiaIngestionOperationsDenylisted(row.providerType, row.modelId)) {
+		return 'off';
+	}
 	const key = catalogSurfaceStableKey(row.providerType, row.modelId);
 	const stored = config.surfaceAssignments?.[key];
 	if (stored && surfaceRoleSchema.safeParse(stored).success) {
@@ -545,6 +608,7 @@ export function modelAllowedForInquiries(
 	provider: ReasoningProvider,
 	modelId: string
 ): boolean {
+	if (isSophiaIngestionOperationsDenylisted(provider, modelId)) return false;
 	const key = userQueryExplicitKey(provider, modelId);
 	const stored = surfaces.surfaceAssignments?.[key];
 	if (stored === 'ingestion_and_inquiries' || stored === 'app_inquiries_only') return true;
@@ -570,7 +634,8 @@ export type SurfaceAssignmentsValidationError =
 	| { code: 'surface_assignments_unknown_keys'; keys: string[] }
 	| { code: 'surface_role_ineligible_row'; key: string; role: SurfaceRole }
 	| { code: 'surface_role_embedding_mismatch'; key: string; role: SurfaceRole }
-	| { code: 'surface_role_inquiries_ineligible'; key: string; role: SurfaceRole };
+	| { code: 'surface_role_inquiries_ineligible'; key: string; role: SurfaceRole }
+	| { code: 'surface_role_policy_denied'; key: string; role: SurfaceRole };
 
 /**
  * Map admin PUT body keys to the same `providerType::modelId` strings as {@link catalogSurfaceStableKey}
@@ -599,6 +664,12 @@ export function canonicalizeSurfaceAssignmentsForPut(
 			out[stable] = role;
 		}
 	}
+	for (const row of rows) {
+		const stable = catalogSurfaceStableKey(row.providerType, row.modelId);
+		if (!row.isEmbedding && isSophiaIngestionOperationsDenylisted(row.providerType, row.modelId)) {
+			out[stable] = 'off';
+		}
+	}
 	return out;
 }
 
@@ -621,6 +692,12 @@ export function validateSurfaceAssignmentsPut(
 	for (const [key, role] of Object.entries(assignments)) {
 		const row = byKey.get(key);
 		if (!row) continue;
+		if (!row.isEmbedding && isSophiaIngestionOperationsDenylisted(row.providerType, row.modelId)) {
+			if (role !== 'off') {
+				return { ok: false, error: { code: 'surface_role_policy_denied', key, role } };
+			}
+			continue;
+		}
 		if (!row.eligibleForSurfaces && role !== 'off') {
 			return { ok: false, error: { code: 'surface_role_ineligible_row', key, role } };
 		}

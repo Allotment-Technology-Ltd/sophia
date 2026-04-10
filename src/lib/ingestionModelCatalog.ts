@@ -378,24 +378,6 @@ const INGESTION_MODEL_CATALOG_ROWS: CatalogRow[] = [
 	// ─── OpenRouter (routed slugs) ───────────────────────────────────────
 	[
 		'openrouter',
-		'anthropic/claude-3.5-sonnet',
-		'medium',
-		'strong',
-		'balanced',
-		'200k',
-		'OpenRouter → Claude 3.5 Sonnet.'
-	],
-	[
-		'openrouter',
-		'anthropic/claude-3.5-haiku',
-		'low',
-		'capable',
-		'fast',
-		'200k',
-		'OpenRouter → Claude 3.5 Haiku.'
-	],
-	[
-		'openrouter',
 		'anthropic/claude-sonnet-4',
 		'high',
 		'frontier',
