@@ -26,3 +26,5 @@ Pin normalization maps legacy pins to GA IDs (see [`src/lib/server/ingestPinNorm
 ## Golden corpus
 
 Run matrix updates against the same sources as [ingestion-golden-sep-corpus.md](./ingestion-golden-sep-corpus.md).
+
+For **comparable** faithfulness numbers across runs, pin validation (and optionally extraction) via env — see **Comparable runs (benchmark env)** in that doc. Run reports surface `timingTelemetry.stage_models` (from `[INGEST_TIMING]`) so analytics can filter by the actual validation model used.

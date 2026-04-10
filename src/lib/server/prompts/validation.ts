@@ -32,7 +32,8 @@ Output contract (strict):
 Critical requirements:
 - summary MUST be a plain string, never an object or array.
 - scores MUST be numeric 0-100.
-- positions MUST be positive integers.`;
+- positions MUST be positive integers.
+- The source_text may be a focused excerpt around the claims (not always the full document). Judge faithfulness only against the excerpt text provided; if evidence is not present in this excerpt, score faithfulness low and quarantine when appropriate.`;
 
 export interface ValidationUserInput {
 	sourceTitle: string;

@@ -24,6 +24,16 @@ describe('parseIngestTimingFromLogLines', () => {
 	it('returns null for non-object JSON', () => {
 		expect(parseIngestTimingFromLogLines(['[INGEST_TIMING] [1,2]'])).toBeNull();
 	});
+
+	it('preserves stage_models for validation comparability', () => {
+		const timing = {
+			stage_models: { validation: 'vertex/gemini-2.5-flash', extraction: 'openai/gpt-4o-mini' }
+		};
+		const parsed = parseIngestTimingFromLogLines([
+			`[INGEST_TIMING] ${JSON.stringify(timing)}`
+		]);
+		expect(parsed?.stage_models).toEqual(timing.stage_models);
+	});
 });
 
 describe('classifyIngestLogLine self-heal', () => {

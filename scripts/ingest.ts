@@ -117,6 +117,7 @@ import {
 	segmentArgumentativePassages,
 	filterBoilerplatePassages
 } from '../src/lib/server/ingestion/passageSegmentation.js';
+import { buildValidationSourceSnippet } from '../src/lib/server/ingestion/buildValidationSourceSnippet.js';
 import { deriveClaimTypingMetadata } from '../src/lib/server/ingestion/claimTyping.js';
 import {
 	canonicalizeThinkerName,
@@ -302,6 +303,11 @@ interface IngestTimingPayload {
 	stage_ms: Record<string, number>;
 	model_calls: Record<string, number>;
 	model_call_wall_ms: Record<string, number>;
+	/**
+	 * Last successful `provider/model` per pipeline stage (batch N overwrites — comparable when pins prevent fallback).
+	 * Used for analytics; e.g. `stage_models.validation` for faithfulness score comparability.
+	 */
+	stage_models: Record<string, string>;
 	model_retries: number;
 	retry_backoff_ms_total: number;
 	batch_splits: number;
@@ -481,6 +487,7 @@ function createEmptyTiming(): IngestTimingPayload {
 		stage_ms: {},
 		model_calls: {},
 		model_call_wall_ms: {},
+		stage_models: {},
 		model_retries: 0,
 		retry_backoff_ms_total: 0,
 		batch_splits: 0,
@@ -1248,29 +1255,6 @@ function mergeGroupingOutputs(outputs: GroupingOutput[]): GroupingOutput {
 	return Array.from(merged.values());
 }
 
-function buildValidationSourceSnippet(claims: PhaseOneClaim[], sourceText: string): string {
-	if (!sourceText || sourceText.length === 0) return '';
-	if (claims.length === 0) {
-		return sourceText.slice(0, VALIDATION_BATCH_SOURCE_MAX_CHARS);
-	}
-
-	const starts = claims
-		.map((claim) => claim.source_span_start)
-		.filter((value): value is number => Number.isFinite(value) && value >= 0);
-	const ends = claims
-		.map((claim) => claim.source_span_end)
-		.filter((value): value is number => Number.isFinite(value) && value > 0);
-	if (starts.length === 0 || ends.length === 0) {
-		return sourceText.slice(0, VALIDATION_BATCH_SOURCE_MAX_CHARS);
-	}
-
-	const start = Math.max(0, Math.min(...starts) - VALIDATION_BATCH_SOURCE_CONTEXT_CHARS);
-	const end = Math.min(sourceText.length, Math.max(...ends) + VALIDATION_BATCH_SOURCE_CONTEXT_CHARS);
-	const snippet = sourceText.slice(start, end);
-	if (snippet.length <= VALIDATION_BATCH_SOURCE_MAX_CHARS) return snippet;
-	return snippet.slice(0, VALIDATION_BATCH_SOURCE_MAX_CHARS);
-}
-
 function buildValidationBatch(
 	batchClaims: PhaseOneClaim[],
 	relations: PhaseOneRelation[],
@@ -1295,7 +1279,10 @@ function buildValidationBatch(
 			};
 		})
 		.filter((argument): argument is Argument => Boolean(argument));
-	const batchSourceText = buildValidationSourceSnippet(batchClaims, sourceText);
+	const batchSourceText = buildValidationSourceSnippet(batchClaims, sourceText, {
+		maxChars: VALIDATION_BATCH_SOURCE_MAX_CHARS,
+		contextChars: VALIDATION_BATCH_SOURCE_CONTEXT_CHARS
+	});
 
 	const claimsJson = JSON.stringify(batchClaims, null, 2);
 	const relationsJson = JSON.stringify(batchRelations, null, 2);
@@ -1595,12 +1582,26 @@ function attachPassageMetadataToClaims(
 ): PhaseOneClaim[] {
 	const passageById = new Map(passages.map((passage) => [passage.id, passage]));
 	return claims.map((claim, index) => {
-		const matchedPassage =
-			(typeof claim.passage_id === 'string' ? passageById.get(claim.passage_id) : undefined) ??
-			(passages.length === 1 ? passages[0] : undefined) ??
-			findFallbackPassage(claim, passages);
-		// Do not trust model-supplied positions; make ordering deterministic per batch.
 		const position = positionOffset + index + 1;
+		const byId =
+			typeof claim.passage_id === 'string' ? passageById.get(claim.passage_id) : undefined;
+		let matchedPassage: PassageRecord | undefined = byId;
+		if (!matchedPassage && passages.length === 1) {
+			matchedPassage = passages[0];
+		}
+		if (!matchedPassage) {
+			matchedPassage = findFallbackPassage(claim, passages);
+			if (passages.length > 1) {
+				const pid =
+					typeof claim.passage_id === 'string' && claim.passage_id.trim()
+						? `"${claim.passage_id}"`
+						: '(missing)';
+				console.warn(
+					`  [WARN] Extraction claim ${position}: passage_id ${pid} did not resolve; grounded to passage ${matchedPassage.id} (${matchedPassage.section_title ?? 'section unknown'})`
+				);
+			}
+		}
+		// Do not trust model-supplied positions; make ordering deterministic per batch.
 		const typingMetadata = deriveClaimTypingMetadata(
 			{
 				text: claim.text,
@@ -1907,6 +1908,7 @@ async function callStageModel(params: {
 				activeIngestTiming.model_calls[stage] = (activeIngestTiming.model_calls[stage] ?? 0) + 1;
 				activeIngestTiming.model_call_wall_ms[stage] =
 					(activeIngestTiming.model_call_wall_ms[stage] ?? 0) + wall;
+				activeIngestTiming.stage_models[stage] = `${routingProvider}/${activePlan.model}`;
 			}
 			const inputTokens = result.usage?.inputTokens ?? 0;
 			const outputTokens = result.usage?.outputTokens ?? 0;

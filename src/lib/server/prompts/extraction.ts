@@ -34,6 +34,8 @@ CLAIM TYPE DEFINITIONS:
 RULES:
 - Extract CLAIMS, not summaries. 'Mill argues that...' is a summary. 'The only proof that something is desirable is that people actually desire it' is a claim.
 - Use the supplied passage ids exactly as given.
+- **Passage-only grounding (critical):** Every claim must be supportable from the text inside the `<passage>` block whose id you set in `passage_id`. Do not import facts from outside the supplied source text (no prior encyclopedia knowledge, no other sections, no bibliography). If something is only implied by background knowledge and not by the passage, either omit it or mark `claim_origin` as interpretive with lower confidence.
+- For long or encyclopedia-style sources, stay within the passage you tag: do not “complete” the article from memory.
 - Distinguish premises from conclusions. If claim A is offered as evidence for claim B, A is a premise and B is a thesis.
 - Use source_grounded unless the claim is clearly interpretive or synthetic. user_generated should be extremely rare in ingestion.
 - Include definitions when they are philosophically substantive.
