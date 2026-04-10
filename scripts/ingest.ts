@@ -39,7 +39,10 @@ import {
 	canonicalModelChainForStage,
 	type IngestionLlmStageKey
 } from '../src/lib/ingestionCanonicalPipeline.js';
-import { summarizeIngestPinsForLog } from '../src/lib/server/ingestRuns.js';
+import {
+	normalizePinnedModelId,
+	summarizeIngestPinsForLog
+} from '../src/lib/server/ingestRuns.js';
 import {
 	loadIngestPartialFromNeon,
 	saveIngestPartialToNeon
@@ -48,7 +51,6 @@ import {
 	capIngestBatchTargetForPlan,
 	isContextLengthExceededError
 } from '../src/lib/server/ingestion/modelBatchCaps.js';
-import { normalizeIngestPinModelId } from '../src/lib/server/ingestPinNormalize.js';
 import type { IngestCatalogRoutingJson } from '../src/lib/server/ingestCatalogRouting.js';
 import {
 	bumpIngestModelFailureInDb,
@@ -2815,7 +2817,7 @@ function applyIngestPinsJsonArg(argv: string[]): void {
 			) {
 				const prov = v.provider.trim();
 				process.env[`INGEST_PIN_PROVIDER_${suffix}`] = prov;
-				process.env[`INGEST_PIN_MODEL_${suffix}`] = normalizeIngestPinModelId(prov, v.model.trim());
+				process.env[`INGEST_PIN_MODEL_${suffix}`] = normalizePinnedModelId(prov, v.model.trim());
 				applied++;
 			}
 		}

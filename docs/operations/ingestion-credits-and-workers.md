@@ -15,8 +15,9 @@ Admin API:
 - `GET /api/admin/ingest/jobs` — recent jobs
 - `GET /api/admin/ingest/jobs/[id]` — detail (ticks job server-side)
 - `GET /api/admin/ingest/jobs/[id]/events?since_seq=` — timeline
+- `POST /api/admin/ingest/jobs/[id]/retry` — body `{ "mode": "restart" | "resume", "itemId"?: string }`. **restart** re-queues failed items as new child runs; **resume** calls `resumeFromFailure` on existing `childRunId` (pipeline checkpoint). Omit `itemId` to affect all failed rows.
 
-UI: `/admin/ingest/jobs` and `/admin/ingest/jobs/[id]`.
+UI: `/admin/ingest/jobs` and `/admin/ingest/jobs/[id]` (retry actions when `summary.error > 0`).
 
 ## SEP URL manifest
 

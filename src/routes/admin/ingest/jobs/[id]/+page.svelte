@@ -47,6 +47,8 @@
 
 	let detailTimer: ReturnType<typeof setInterval> | null = null;
 	let eventsTimer: ReturnType<typeof setInterval> | null = null;
+	let retryBusy = $state(false);
+	let retryMessage = $state('');
 
 	function currentJobId(): string {
 		return page.params.id?.trim() ?? '';
@@ -119,6 +121,40 @@
 		params.set('runId', runId);
 		params.set('monitor', '1');
 		window.location.href = `/admin/ingest?${params.toString()}`;
+	}
+
+	const failedCount = $derived(
+		job ? (typeof job.summary?.error === 'number' ? job.summary.error : 0) : 0
+	);
+
+	async function postJobRetry(mode: 'restart' | 'resume', itemId?: string): Promise<void> {
+		const jobId = currentJobId();
+		if (!jobId) return;
+		retryBusy = true;
+		retryMessage = '';
+		try {
+			const res = await fetch(`/api/admin/ingest/jobs/${encodeURIComponent(jobId)}/retry`, {
+				method: 'POST',
+				headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
+				body: JSON.stringify({ mode, ...(itemId ? { itemId } : {}) })
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				throw new Error(typeof body?.error === 'string' ? body.error : 'Retry request failed');
+			}
+			if (Array.isArray(body?.resumeResults)) {
+				const bad = (body.resumeResults as { ok?: boolean; error?: string }[]).filter((r) => !r.ok);
+				if (bad.length > 0) {
+					retryMessage = `Some resumes failed: ${bad.map((b) => b.error ?? '?').join('; ')}`;
+				}
+			}
+			await fetchDetail();
+			await fetchEvents();
+		} catch (e) {
+			retryMessage = e instanceof Error ? e.message : 'Retry failed';
+		} finally {
+			retryBusy = false;
+		}
 	}
 
 	$effect(() => {
@@ -202,6 +238,39 @@
 				Summary: total {job.summary?.total ?? '—'}, pending {job.summary?.pending ?? '—'}, running
 				{job.summary?.running ?? '—'}, done {job.summary?.done ?? '—'}, error {job.summary?.error ?? '—'}
 			</p>
+
+			{#if failedCount > 0}
+				<div class="mt-6 border-t border-[var(--color-border)] pt-5" role="region" aria-label="Retry failed URLs">
+					<h2 class="font-serif text-lg text-sophia-dark-text">Failed items</h2>
+					<p class="mt-2 text-sm text-sophia-dark-muted">
+						<span class="font-medium text-sophia-dark-text">Restart</span> clears the run and queues a new
+						child ingest (use after fixing code, env, or launch errors).
+						<span class="font-medium text-sophia-dark-text">Resume checkpoint</span> continues the same
+						ingest run from the last Surreal pipeline stage (Expand also has Resume for a single run).
+					</p>
+					{#if retryMessage}
+						<p class="mt-3 text-sm text-amber-100" role="status">{retryMessage}</p>
+					{/if}
+					<div class="mt-4 flex flex-wrap gap-3">
+						<button
+							type="button"
+							class="rounded-lg border border-[color-mix(in_srgb,var(--color-sage)_40%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-sage)_12%,var(--color-surface))] px-5 py-3 font-mono text-sm font-medium uppercase tracking-[0.08em] text-sophia-dark-text transition hover:border-[var(--color-sage)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+							disabled={retryBusy}
+							onclick={() => void postJobRetry('restart')}
+						>
+							{retryBusy ? 'Working…' : 'Restart all failed'}
+						</button>
+						<button
+							type="button"
+							class="rounded-lg border border-[var(--color-border)] bg-transparent px-5 py-3 font-mono text-sm uppercase tracking-[0.08em] text-sophia-dark-muted transition hover:border-[var(--color-sage)] hover:text-sophia-dark-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+							disabled={retryBusy}
+							onclick={() => void postJobRetry('resume')}
+						>
+							Resume checkpoints (all failed with run id)
+						</button>
+					</div>
+				</div>
+			{/if}
 		</header>
 
 		<section class="mt-6 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5" aria-labelledby="items-heading">
@@ -213,6 +282,7 @@
 							<th class="py-3 pr-3">URL</th>
 							<th class="py-3 pr-3">Status</th>
 							<th class="py-3 pr-3">Run</th>
+							<th class="py-3 pr-3">Retry</th>
 							<th class="py-3">Error</th>
 						</tr>
 					</thead>
@@ -232,6 +302,32 @@
 										>
 											{it.childRunId}
 										</button>
+									{:else}
+										—
+									{/if}
+								</td>
+								<td class="py-3 pr-3 align-top font-mono text-[11px]">
+									{#if it.status === 'error'}
+										<div class="flex flex-col gap-2">
+											<button
+												type="button"
+												class="rounded border border-[var(--color-border)] px-3 py-2 text-left uppercase tracking-[0.06em] text-sophia-dark-muted hover:border-[var(--color-sage)] hover:text-sophia-dark-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:opacity-50"
+												disabled={retryBusy}
+												onclick={() => void postJobRetry('restart', it.id)}
+											>
+												Restart
+											</button>
+											{#if it.childRunId}
+												<button
+													type="button"
+													class="rounded border border-[var(--color-border)] px-3 py-2 text-left uppercase tracking-[0.06em] text-sophia-dark-muted hover:border-[var(--color-sage)] hover:text-sophia-dark-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:opacity-50"
+													disabled={retryBusy}
+													onclick={() => void postJobRetry('resume', it.id)}
+												>
+													Resume
+												</button>
+											{/if}
+										</div>
 									{:else}
 										—
 									{/if}

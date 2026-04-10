@@ -191,7 +191,8 @@ function normalizeEmbeddingProvider(slug: string): 'vertex' | 'voyage' | null {
   return null;
 }
 
-function normalizePinnedModelId(provider: string, modelId: string): string {
+/** Exported for `scripts/ingest.ts` (`--ingest-pins-json`); same rules as admin `modelChainLabelsToEnv`. */
+export function normalizePinnedModelId(provider: string, modelId: string): string {
   const p = provider.toLowerCase().trim();
   const m = modelId.trim();
   // Vertex/Google 1.5 IDs are retired in several environments; pin modern equivalents.

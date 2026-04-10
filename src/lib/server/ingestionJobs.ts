@@ -294,6 +294,125 @@ export async function tickAllRunningIngestionJobs(): Promise<void> {
 	}
 }
 
+export type IngestionJobRetryMode = 'restart' | 'resume';
+
+/**
+ * `restart`: failed items → pending, new child runs on next tick (fixes bad deploy, launch errors, full redo).
+ * `resume`: failed items with childRunId → ingestRunManager.resumeFromFailure (continues ingest.ts from Surreal checkpoint).
+ */
+export async function retryIngestionJob(
+	jobId: string,
+	mode: IngestionJobRetryMode,
+	opts?: { itemId?: string }
+): Promise<
+	| {
+			ok: true;
+			touched: number;
+			resumeResults?: { runId: string; ok: boolean; error?: string }[];
+	  }
+	| { ok: false; error: string }
+> {
+	if (!isNeonIngestPersistenceEnabled()) return { ok: false, error: 'Neon ingest persistence is not enabled.' };
+	const db = getDrizzleDb();
+	const job = await db.query.ingestionJobs.findFirst({
+		where: eq(ingestionJobs.id, jobId)
+	});
+	if (!job) return { ok: false, error: 'Job not found.' };
+
+	let items = await db
+		.select()
+		.from(ingestionJobItems)
+		.where(eq(ingestionJobItems.jobId, jobId));
+
+	if (opts?.itemId?.trim()) {
+		const id = opts.itemId.trim();
+		items = items.filter((i) => i.id === id);
+		if (items.length === 0) return { ok: false, error: 'Item not found on this job.' };
+	}
+
+	const failed = items.filter((i) => i.status === 'error');
+	if (failed.length === 0) {
+		return { ok: false, error: opts?.itemId ? 'That item is not in error state.' : 'No failed items to retry.' };
+	}
+
+	await db
+		.update(ingestionJobs)
+		.set({
+			status: 'running',
+			completedAt: null,
+			updatedAt: new Date()
+		})
+		.where(eq(ingestionJobs.id, jobId));
+
+	if (mode === 'restart') {
+		for (const it of failed) {
+			await db
+				.update(ingestionJobItems)
+				.set({
+					status: 'pending',
+					childRunId: null,
+					lastError: null,
+					updatedAt: new Date()
+				})
+				.where(eq(ingestionJobItems.id, it.id));
+		}
+		await appendIngestionJobEvent(jobId, 'job_retry_restart', {
+			mode: 'restart',
+			itemCount: failed.length,
+			itemIds: failed.map((i) => i.id)
+		});
+		await tickIngestionJob(jobId);
+		return { ok: true, touched: failed.length };
+	}
+
+	// resume
+	const withRun = failed.filter((i) => Boolean(i.childRunId?.trim()));
+	const withoutRun = failed.filter((i) => !i.childRunId?.trim());
+	if (withRun.length === 0) {
+		return {
+			ok: false,
+			error:
+				'No failed items have a child ingest run (e.g. launch failed before a run id). Use “Restart failed” instead.'
+		};
+	}
+
+	const resumeResults: { runId: string; ok: boolean; error?: string }[] = [];
+	for (const it of withRun) {
+		const runId = it.childRunId!.trim();
+		const result = await ingestRunManager.resumeFromFailure(runId);
+		if (result.ok) {
+			await db
+				.update(ingestionJobItems)
+				.set({
+					status: 'running',
+					lastError: null,
+					updatedAt: new Date()
+				})
+				.where(eq(ingestionJobItems.id, it.id));
+			resumeResults.push({ runId, ok: true });
+		} else {
+			resumeResults.push({ runId, ok: false, error: result.error });
+		}
+	}
+
+	await appendIngestionJobEvent(jobId, 'job_retry_resume', {
+		mode: 'resume',
+		itemCount: withRun.length,
+		skippedNoRunId: withoutRun.map((i) => i.id),
+		results: resumeResults
+	});
+
+	await tickIngestionJob(jobId);
+
+	const okCount = resumeResults.filter((r) => r.ok).length;
+	if (okCount === 0) {
+		const msg = resumeResults.map((r) => r.error ?? 'unknown').join('; ');
+		return { ok: false, error: msg || 'Resume failed for all items.' };
+	}
+
+	return { ok: true, touched: okCount, resumeResults };
+}
+
 export type IngestionJobRow = InferSelectModel<typeof ingestionJobs>;
 export type IngestionJobItemRow = InferSelectModel<typeof ingestionJobItems>;
 export type IngestionJobEventRow = InferSelectModel<typeof ingestionJobEvents>;
