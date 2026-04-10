@@ -44,6 +44,7 @@ It exists to prove the platform in a real product: graph-grounded reasoning, ver
 | Documentation Governance | 2026-03-13 | [Documentation Governance](documentation-governance.md) |
 | Domain Expansion | 2026-03-13 | [Domain Expansion](domain-expansion.md) |
 | Unified GCP exit and Neon migration review | 2026-03-26 | [Unified GCP exit and Neon migration review](gcp-exit-unified-migration-review.md) |
+| Graph, RAG, and ingestion — unified architecture overview | 2026-04-10 | [Graph, RAG, and ingestion — unified architecture overview](graph-rag-and-ingestion-architecture-overview.md) |
 | Product Role | 2026-03-13 | [Product Role](product-role.md) |
 | Roadmap | 2026-03-26 | [Roadmap](roadmap.md) |
 <!-- GENERATED:active-sophia-docs:end -->
