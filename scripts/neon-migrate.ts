@@ -36,17 +36,23 @@ async function main() {
     const applied = new Set(
       (await pool.query<{ name: string }>('SELECT name FROM schema_migrations')).rows.map((r) => r.name)
     );
+    let skipped = 0;
+    let newlyApplied = 0;
     for (const f of files) {
       if (applied.has(f)) {
-        console.log(`[skip] ${f}`);
+        skipped += 1;
+        console.log(`[skip] ${f} (already in schema_migrations)`);
         continue;
       }
       const sql = fs.readFileSync(path.join(drizzleDir, f), 'utf8');
+      newlyApplied += 1;
       console.log(`[apply] ${f}`);
       await pool.query(sql);
       await pool.query('INSERT INTO schema_migrations (name) VALUES ($1)', [f]);
     }
-    console.log('Done.');
+    console.log(
+      `Done. ${newlyApplied} migration file(s) applied now; ${skipped} already applied (skipped). Database schema is up to date.`
+    );
   } finally {
     await pool.end();
   }
