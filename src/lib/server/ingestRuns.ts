@@ -30,6 +30,13 @@ import {
 } from '$lib/server/db/ingestStaging';
 import { encodeIngestCatalogRoutingJsonB64 } from '$lib/server/ingestCatalogRouting';
 import { resolveEmbeddingFingerprint, resolvePipelineVersion } from '$lib/server/ingestionPipelineMetadata';
+import {
+  INGEST_PIN_STAGE_SUFFIXES,
+  normalizePinnedModelId,
+  summarizeIngestPinsForLog
+} from './ingestPinNormalization.js';
+
+export { normalizePinnedModelId, summarizeIngestPinsForLog };
 
 export interface IngestRunPayload {
   source_url: string;
@@ -191,18 +198,6 @@ function normalizeEmbeddingProvider(slug: string): 'vertex' | 'voyage' | null {
   return null;
 }
 
-/** Exported for `scripts/ingest.ts` (`--ingest-pins-json`); same rules as admin `modelChainLabelsToEnv`. */
-export function normalizePinnedModelId(provider: string, modelId: string): string {
-  const p = provider.toLowerCase().trim();
-  const m = modelId.trim();
-  // Vertex/Google 1.5 IDs are retired in several environments; pin modern equivalents.
-  if ((p === 'vertex' || p === 'google') && m === 'gemini-1.5-pro') return 'gemini-2.5-pro';
-  if ((p === 'vertex' || p === 'google') && m === 'gemini-1.5-flash') return 'gemini-2.5-flash';
-  // Anthropic Messages API expects dated Haiku 3.5 ids; bare alias returns 404 from some gateways.
-  if (p === 'anthropic' && m === 'claude-3-5-haiku') return 'claude-3-5-haiku-20241022';
-  return m;
-}
-
 /**
  * Parses one Expand pipeline value: either `provider · modelId` (display) or
  * `provider__modelId` (stable catalog id from admin `stableModelId()`).
@@ -277,32 +272,19 @@ function embeddingPreferenceToEnv(embeddingModel: string | undefined): Record<st
   return out;
 }
 
-const PIN_STAGE_SUFFIXES = ['EXTRACTION', 'RELATIONS', 'GROUPING', 'VALIDATION', 'JSON_REPAIR'] as const;
-
 /**
  * Base64url JSON for `scripts/ingest.ts --ingest-pins-json=…` so operator pins survive
  * dotenv / `--env-file` ordering (see `loadServerEnv` + admin spawn).
  */
 export function encodeIngestPinsJsonCliArg(pinEnv: Record<string, string>): string | null {
   const out: Record<string, { provider: string; model: string }> = {};
-  for (const s of PIN_STAGE_SUFFIXES) {
+  for (const s of INGEST_PIN_STAGE_SUFFIXES) {
     const p = pinEnv[`INGEST_PIN_PROVIDER_${s}`]?.trim();
     const m = pinEnv[`INGEST_PIN_MODEL_${s}`]?.trim();
     if (p && m) out[s] = { provider: p, model: m };
   }
   if (Object.keys(out).length === 0) return null;
   return Buffer.from(JSON.stringify(out), 'utf8').toString('base64url');
-}
-
-/** One-line summary for admin run logs / ingest stdout (no secrets). */
-export function summarizeIngestPinsForLog(pinEnvFlat: Record<string, string>): string {
-  const parts: string[] = [];
-  for (const s of PIN_STAGE_SUFFIXES) {
-    const p = pinEnvFlat[`INGEST_PIN_PROVIDER_${s}`]?.trim();
-    const m = pinEnvFlat[`INGEST_PIN_MODEL_${s}`]?.trim();
-    if (p && m) parts.push(`${s}:${p}/${m}`);
-  }
-  return parts.length ? parts.join(' | ') : '(no parsed pins)';
 }
 
 export interface StageStatus {
