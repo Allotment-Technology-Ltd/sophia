@@ -4,9 +4,10 @@
  */
 
 import { eq, sql } from 'drizzle-orm';
-import { ingestPhaseGate } from '$lib/server/db/schema';
-import { getDrizzleDb } from '$lib/server/db/neon';
-import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
+/* Relative imports: ingest.ts runs under plain tsx (no $lib alias). */
+import { ingestPhaseGate } from '../db/schema.js';
+import { getDrizzleDb } from '../db/neon.js';
+import { isNeonIngestPersistenceEnabled } from '../neon/datastore.js';
 
 export type IngestPhaseGateKey = 'embed' | 'store';
 

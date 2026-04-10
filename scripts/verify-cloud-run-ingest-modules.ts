@@ -22,5 +22,6 @@ await import('../src/lib/server/prompts/relations.js');
 await import('../src/lib/server/prompts/grouping.js');
 await import('../src/lib/server/prompts/validation.js');
 await import('../src/lib/server/ingestPinNormalization.js');
+await import('../src/lib/server/ingestion/ingestPhaseSlot.js');
 
 console.log('[verify-cloud-run-ingest-modules] OK');
