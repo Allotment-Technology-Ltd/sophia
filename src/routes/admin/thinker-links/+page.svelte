@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getIdToken } from '$lib/authClient';
+  import { extractWikidataThinkerId } from '$lib/thinkerWikidataId';
 
   type QueueStatus = 'queued' | 'resolved' | 'rejected' | 'all';
 
@@ -43,6 +44,8 @@
   let limit = $state(50);
   let items = $state<UnresolvedQueueItem[]>([]);
   let busyById = $state<Record<string, boolean>>({});
+  /** Inline validation / last error for this row (global messages are easy to miss below the fold). */
+  let itemMessageById = $state<Record<string, string>>({});
   let qidInputById = $state<Record<string, string>>({});
   let labelInputById = $state<Record<string, string>>({});
   let notesInputById = $state<Record<string, string>>({});
@@ -55,6 +58,16 @@
 
   function setBusy(id: string, busy: boolean): void {
     busyById = { ...busyById, [id]: busy };
+  }
+
+  function setItemMessage(id: string, message: string): void {
+    itemMessageById = { ...itemMessageById, [id]: message };
+  }
+
+  function clearItemMessage(id: string): void {
+    const next = { ...itemMessageById };
+    delete next[id];
+    itemMessageById = next;
   }
 
   async function authHeaders(): Promise<Record<string, string>> {
@@ -119,6 +132,7 @@
       const body = await parseJsonResponse(res);
       const nextItems = Array.isArray(body.items) ? (body.items as UnresolvedQueueItem[]) : [];
       items = nextItems;
+      itemMessageById = {};
       hydrateDrafts(nextItems);
       await loadSourcePreviews(nextItems);
     } catch (error) {
@@ -176,6 +190,7 @@
   }
 
   function setSuggestion(item: UnresolvedQueueItem, qid: string, label: string): void {
+    clearItemMessage(item.id);
     qidInputById = { ...qidInputById, [item.id]: qid };
     labelInputById = { ...labelInputById, [item.id]: label };
   }
@@ -183,11 +198,18 @@
   async function resolveItem(item: UnresolvedQueueItem): Promise<void> {
     actionError = '';
     actionMessage = '';
-    const wikidata_id = (qidInputById[item.id] ?? '').trim();
+    clearItemMessage(item.id);
+    const rawQ = (qidInputById[item.id] ?? '').trim();
+    const wikidata_id = extractWikidataThinkerId(rawQ);
     const label = (labelInputById[item.id] ?? '').trim();
     const notes = (notesInputById[item.id] ?? '').trim();
     if (!wikidata_id) {
-      actionError = `Provide a Wikidata id (Q...) for "${item.raw_name}" before resolving.`;
+      setItemMessage(
+        item.id,
+        rawQ
+          ? `Could not read a Wikidata id from "${rawQ.slice(0, 80)}${rawQ.length > 80 ? '…' : ''}". Use a Q-id (e.g. Q9312) or paste a Wikidata entity URL.`
+          : `Enter a Wikidata id (e.g. Q9312) or paste a Wikidata URL for "${item.raw_name}".`
+      );
       return;
     }
     setBusy(item.id, true);
@@ -210,7 +232,9 @@
       actionMessage = `Resolved "${item.raw_name}" to ${wikidata_id}. Linked ${linkedSources} source(s).`;
       await loadQueue();
     } catch (error) {
-      actionError = error instanceof Error ? error.message : 'Resolve failed.';
+      const msg = error instanceof Error ? error.message : 'Resolve failed.';
+      setItemMessage(item.id, msg);
+      actionError = msg;
     } finally {
       setBusy(item.id, false);
     }
@@ -219,6 +243,7 @@
   async function rejectItem(item: UnresolvedQueueItem): Promise<void> {
     actionError = '';
     actionMessage = '';
+    clearItemMessage(item.id);
     const notes = (notesInputById[item.id] ?? '').trim();
     setBusy(item.id, true);
     try {
@@ -237,7 +262,9 @@
       actionMessage = `Rejected "${item.raw_name}".`;
       await loadQueue();
     } catch (error) {
-      actionError = error instanceof Error ? error.message : 'Reject failed.';
+      const msg = error instanceof Error ? error.message : 'Reject failed.';
+      setItemMessage(item.id, msg);
+      actionError = msg;
     } finally {
       setBusy(item.id, false);
     }
@@ -385,14 +412,9 @@
               Wikidata id
               <input
                 class="min-h-[44px] rounded border border-sophia-dark-border bg-sophia-dark-bg px-4 py-2 text-sm text-sophia-dark-text"
-                placeholder="Q12345"
-                value={qidInputById[item.id] ?? ''}
-                oninput={(event) => {
-                  qidInputById = {
-                    ...qidInputById,
-                    [item.id]: (event.currentTarget as HTMLInputElement).value
-                  };
-                }}
+                placeholder="Q9312 or paste entity URL"
+                bind:value={qidInputById[item.id]}
+                oninput={() => clearItemMessage(item.id)}
                 disabled={busyById[item.id] === true || item.status !== 'queued'}
               />
             </label>
@@ -402,13 +424,7 @@
               <input
                 class="min-h-[44px] rounded border border-sophia-dark-border bg-sophia-dark-bg px-4 py-2 text-sm text-sophia-dark-text"
                 placeholder="Immanuel Kant"
-                value={labelInputById[item.id] ?? ''}
-                oninput={(event) => {
-                  labelInputById = {
-                    ...labelInputById,
-                    [item.id]: (event.currentTarget as HTMLInputElement).value
-                  };
-                }}
+                bind:value={labelInputById[item.id]}
                 disabled={busyById[item.id] === true || item.status !== 'queued'}
               />
             </label>
@@ -419,16 +435,26 @@
             <textarea
               class="min-h-[88px] rounded border border-sophia-dark-border bg-sophia-dark-bg px-4 py-2 text-sm text-sophia-dark-text"
               placeholder="Optional audit note for why this was resolved or rejected."
-              value={notesInputById[item.id] ?? ''}
-              oninput={(event) => {
-                notesInputById = {
-                  ...notesInputById,
-                  [item.id]: (event.currentTarget as HTMLTextAreaElement).value
-                };
-              }}
+              bind:value={notesInputById[item.id]}
               disabled={busyById[item.id] === true || item.status !== 'queued'}
             ></textarea>
           </label>
+
+          {#if itemMessageById[item.id]}
+            <p
+              class="mt-3 rounded border border-sophia-dark-copper/50 bg-sophia-dark-copper/10 p-3 font-mono text-xs text-sophia-dark-copper"
+              role="alert"
+            >
+              {itemMessageById[item.id]}
+            </p>
+          {/if}
+
+          {#if item.status !== 'queued'}
+            <p class="mt-3 font-mono text-xs text-sophia-dark-muted" role="note">
+              Resolve and reject are only enabled for <span class="text-sophia-dark-text">queued</span> rows.
+              Change the status filter above to Queued, or pick another row.
+            </p>
+          {/if}
 
           <div class="mt-4 flex flex-wrap gap-2">
             <button
@@ -436,6 +462,7 @@
               class="min-h-[44px] rounded border border-sophia-dark-sage/55 bg-sophia-dark-sage/14 px-4 py-2 font-mono text-xs uppercase tracking-[0.08em] text-sophia-dark-sage hover:bg-sophia-dark-sage/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sophia-dark-blue disabled:opacity-50"
               onclick={() => void resolveItem(item)}
               disabled={busyById[item.id] === true || item.status !== 'queued'}
+              title={item.status !== 'queued' ? 'Switch status filter to Queued' : undefined}
             >
               {busyById[item.id] ? 'Saving…' : 'Resolve + link'}
             </button>
@@ -444,6 +471,7 @@
               class="min-h-[44px] rounded border border-sophia-dark-copper/55 bg-sophia-dark-copper/10 px-4 py-2 font-mono text-xs uppercase tracking-[0.08em] text-sophia-dark-copper hover:bg-sophia-dark-copper/16 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sophia-dark-blue disabled:opacity-50"
               onclick={() => void rejectItem(item)}
               disabled={busyById[item.id] === true || item.status !== 'queued'}
+              title={item.status !== 'queued' ? 'Switch status filter to Queued' : undefined}
             >
               {busyById[item.id] ? 'Saving…' : 'Reject'}
             </button>
