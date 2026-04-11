@@ -25,6 +25,7 @@ import {
 import { resolveEmbeddingFingerprint, resolvePipelineVersion } from './ingestionPipelineMetadata';
 import { MAX_DURABLE_INGEST_JOB_CONCURRENCY } from '$lib/ingestionJobConcurrency';
 import { sweepStalledIngestRuns } from './ingestion/ingestWatchdog';
+import { sanitizeIngestionJobWorkerDefaults } from './ingestionJobWorkerDefaults';
 
 const ADV_LOCK_JOB_EVENTS = 5_849_273;
 
@@ -353,6 +354,8 @@ export type CreateIngestionJobArgs = {
 	actorUid: string;
 	actorEmail: string | null;
 	validate?: boolean;
+	/** Merged into each child run `payload.batch_overrides` when items launch (bounded subset). */
+	workerDefaults?: unknown;
 	/**
 	 * When true, append URLs as new items on the most recently updated `running` job instead of creating
 	 * a second job (avoids doubling ADMIN_INGEST_MAX_CONCURRENT pressure from parallel workers).
@@ -454,6 +457,7 @@ export async function createIngestionJob(
 	);
 	const pipelineVersion = resolvePipelineVersion();
 	const embeddingFingerprint = resolveEmbeddingFingerprint();
+	const workerDefaults = sanitizeIngestionJobWorkerDefaults(args.workerDefaults) ?? {};
 
 	await db.insert(ingestionJobs).values({
 		id,
@@ -463,6 +467,7 @@ export async function createIngestionJob(
 		actorEmail: args.actorEmail,
 		notes: args.notes ?? null,
 		validateLlm: args.validate === true,
+		workerDefaults: workerDefaults as Record<string, unknown>,
 		summary: {
 			total: urls.length,
 			pending: urls.length,
@@ -491,7 +496,8 @@ export async function createIngestionJob(
 		urlCount: urls.length,
 		concurrency,
 		pipelineVersion,
-		embeddingFingerprint
+		embeddingFingerprint,
+		workerDefaultKeys: Object.keys(workerDefaults)
 	});
 
 	void tickIngestionJob(id);
@@ -700,6 +706,11 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 			if (j > 0) await sleepMs(Math.floor(Math.random() * (j + 1)));
 		}
 		const it = pendingItems[i]!;
+		const jobDefaultsRaw =
+			job.workerDefaults && typeof job.workerDefaults === 'object' && !Array.isArray(job.workerDefaults)
+				? job.workerDefaults
+				: {};
+		const jobBatchOverrides = sanitizeIngestionJobWorkerDefaults(jobDefaultsRaw);
 		const payload: IngestRunPayload = {
 			source_url: it.url,
 			source_type: it.sourceType,
@@ -708,7 +719,10 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 			model_chain: { extract: 'auto', relate: 'auto', group: 'auto', validate: 'auto' },
 			queue_record_id: it.queueRecordId ?? undefined,
 			pipeline_version: job.pipelineVersion ?? undefined,
-			embedding_fingerprint: job.embeddingFingerprint ?? undefined
+			embedding_fingerprint: job.embeddingFingerprint ?? undefined,
+			...(jobBatchOverrides && Object.keys(jobBatchOverrides).length > 0
+				? { batch_overrides: jobBatchOverrides }
+				: {})
 		};
 		try {
 			const childRunId = await ingestRunManager.createRun(payload, job.actorEmail ?? 'ingestion-job@sophia.local');

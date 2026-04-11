@@ -85,6 +85,14 @@ export interface IngestRunPayload {
     relationsBatchOverlapClaims?: number;
     /** Parallel single-passage extraction batches (`INGEST_EXTRACTION_CONCURRENCY`). */
     extractionConcurrency?: number;
+    /** Surreal passage CREATE concurrency in Stage 6 (`INGEST_PASSAGE_INSERT_CONCURRENCY`, max 12). */
+    passageInsertConcurrency?: number;
+    /** Surreal claim CREATE concurrency in Stage 6 (`INGEST_CLAIM_INSERT_CONCURRENCY`, max 24). */
+    claimInsertConcurrency?: number;
+    /** JSON string of ms per timing phase for watchdog (`INGEST_WATCHDOG_PHASE_IDLE_JSON`). */
+    watchdogPhaseIdleJson?: string;
+    /** Per-run baseline multiplier for watchdog (`INGEST_WATCHDOG_PHASE_BASELINE_MULT`). */
+    watchdogPhaseBaselineMult?: number;
     /** When false, disables strict grouping integrity exit (`INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE`). */
     failOnGroupingPositionCollapse?: boolean;
     /** Narrow provider preference for the worker (`INGEST_PROVIDER`). */
@@ -152,6 +160,10 @@ function batchOverridesToEnv(
     embedBatchDelayMs,
     relationsBatchOverlapClaims,
     extractionConcurrency,
+    passageInsertConcurrency,
+    claimInsertConcurrency,
+    watchdogPhaseIdleJson,
+    watchdogPhaseBaselineMult,
     failOnGroupingPositionCollapse,
     ingestProvider,
     ingestLogPins,
@@ -188,6 +200,8 @@ function batchOverridesToEnv(
       : null;
   const overlap = asPositiveInt(relationsBatchOverlapClaims);
   const extractConc = asPositiveInt(extractionConcurrency);
+  const passageConc = asPositiveInt(passageInsertConcurrency);
+  const claimConc = asPositiveInt(claimInsertConcurrency);
 
   if (extraction != null) out.INGEST_EXTRACTION_MAX_TOKENS_PER_SECTION = String(extraction);
   if (grouping != null) out.GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS = String(grouping);
@@ -197,6 +211,29 @@ function batchOverridesToEnv(
   if (embedDelay != null) out.VERTEX_EMBED_BATCH_DELAY_MS = String(embedDelay);
   if (overlap != null) out.RELATIONS_BATCH_OVERLAP_CLAIMS = String(overlap);
   if (extractConc != null) out.INGEST_EXTRACTION_CONCURRENCY = String(extractConc);
+  if (passageConc != null) {
+    out.INGEST_PASSAGE_INSERT_CONCURRENCY = String(Math.max(1, Math.min(12, passageConc)));
+  }
+  if (claimConc != null) {
+    out.INGEST_CLAIM_INSERT_CONCURRENCY = String(Math.max(1, Math.min(24, claimConc)));
+  }
+  if (typeof watchdogPhaseIdleJson === 'string') {
+    const t = watchdogPhaseIdleJson.trim();
+    if (t) {
+      try {
+        const o = JSON.parse(t) as Record<string, unknown>;
+        if (o && typeof o === 'object' && !Array.isArray(o)) {
+          out.INGEST_WATCHDOG_PHASE_IDLE_JSON = t;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  if (typeof watchdogPhaseBaselineMult === 'number' && Number.isFinite(watchdogPhaseBaselineMult)) {
+    const m = watchdogPhaseBaselineMult;
+    if (m > 0 && m <= 10) out.INGEST_WATCHDOG_PHASE_BASELINE_MULT = String(m);
+  }
   if (typeof failOnGroupingPositionCollapse === 'boolean') {
     out.INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE = failOnGroupingPositionCollapse ? 'true' : 'false';
   }

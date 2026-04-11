@@ -294,6 +294,8 @@ export const ingestionJobs = pgTable(
     actorEmail: text('actor_email'),
     notes: text('notes'),
     validateLlm: boolean('validate_llm').notNull().default(false),
+    /** Subset of `IngestRunPayload.batch_overrides` merged into each child run when the job ticks. */
+    workerDefaults: jsonb('worker_defaults').notNull().$type<Record<string, unknown>>().default({}),
     summary: jsonb('summary').notNull().$type<Record<string, unknown>>().default({}),
     pipelineVersion: text('pipeline_version'),
     embeddingFingerprint: text('embedding_fingerprint'),
