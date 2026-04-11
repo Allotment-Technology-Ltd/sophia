@@ -34,6 +34,12 @@ describe('parseIngestTimingFromLogLines', () => {
 		]);
 		expect(parsed?.stage_models).toEqual(timing.stage_models);
 	});
+
+	it('parses total_wall_ms when present', () => {
+		const timing = { run_started_at_ms: 1, total_wall_ms: 900_000, stage_ms: {} };
+		const parsed = parseIngestTimingFromLogLines([`[INGEST_TIMING] ${JSON.stringify(timing)}`]);
+		expect(parsed?.total_wall_ms).toBe(900_000);
+	});
 });
 
 describe('classifyIngestLogLine self-heal', () => {
