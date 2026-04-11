@@ -57,6 +57,17 @@ describe('modelChainLabelsToEnv', () => {
     expect(env.INGEST_PIN_MODEL_RELATIONS).toBe('gemini-2.5-flash');
   });
 
+  it('normalizes gemini-2.0-flash-lite pins to gemini-2.5-flash-lite', () => {
+    const env = modelChainLabelsToEnv({
+      extract: 'vertex · gemini-2.0-flash-lite-001',
+      relate: 'google · gemini-2.0-flash-lite',
+      group: 'auto',
+      validate: 'auto'
+    });
+    expect(env.INGEST_PIN_MODEL_EXTRACTION).toBe('gemini-2.5-flash-lite');
+    expect(env.INGEST_PIN_MODEL_RELATIONS).toBe('gemini-2.5-flash-lite');
+  });
+
   it('normalizes anthropic claude-3-5-haiku alias to dated API id', () => {
     const env = modelChainLabelsToEnv({
       extract: 'anthropic · claude-3-5-haiku',

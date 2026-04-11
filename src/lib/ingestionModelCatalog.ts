@@ -118,24 +118,6 @@ const INGESTION_MODEL_CATALOG_ROWS: CatalogRow[] = [
 	// ─── Google (AI Studio style) ─────────────────────────────────────────
 	[
 		'google',
-		'gemini-2.0-flash',
-		'low',
-		'capable',
-		'fast',
-		'1M',
-		'Very fast Gemini for long chunks and screening.'
-	],
-	[
-		'google',
-		'gemini-2.0-flash-lite',
-		'low',
-		'capable',
-		'fast',
-		'1M',
-		'Lowest-latency Gemini flash-lite.'
-	],
-	[
-		'google',
 		'gemini-2.5-flash',
 		'low',
 		'capable',
@@ -163,24 +145,6 @@ const INGESTION_MODEL_CATALOG_ROWS: CatalogRow[] = [
 	],
 	[
 		'google',
-		'gemini-1.5-pro',
-		'medium',
-		'strong',
-		'balanced',
-		'1M',
-		'Stable 1.5 Pro for legacy routes and comparisons.'
-	],
-	[
-		'google',
-		'gemini-1.5-flash',
-		'low',
-		'capable',
-		'fast',
-		'1M',
-		'Legacy flash for high-volume or older Restormel steps.'
-	],
-	[
-		'google',
 		'text-embedding-005',
 		'low',
 		'capable',
@@ -198,13 +162,9 @@ const INGESTION_MODEL_CATALOG_ROWS: CatalogRow[] = [
 		'Multilingual embeddings for mixed-language corpora.'
 	],
 	// ─── Vertex (GCP) — same Gemini ids many Restormel projects use ──────
-	['vertex', 'gemini-2.0-flash', 'low', 'capable', 'fast', '1M', 'Vertex-hosted Gemini 2.0 Flash.'],
-	['vertex', 'gemini-2.0-flash-lite', 'low', 'capable', 'fast', '1M', 'Vertex flash-lite.'],
 	['vertex', 'gemini-2.5-flash', 'low', 'capable', 'fast', '1M', 'Vertex 2.5 Flash — common default.'],
 	['vertex', 'gemini-2.5-flash-lite', 'low', 'capable', 'fast', '1M', 'Vertex 2.5 Flash Lite.'],
 	['vertex', 'gemini-2.5-pro', 'medium', 'strong', 'balanced', '1M', 'Vertex 2.5 Pro for quality-first.'],
-	['vertex', 'gemini-1.5-pro', 'medium', 'strong', 'balanced', '1M', 'Vertex 1.5 Pro.'],
-	['vertex', 'gemini-1.5-flash', 'low', 'capable', 'fast', '1M', 'Vertex 1.5 Flash.'],
 	[
 		'vertex',
 		'text-embedding-005',

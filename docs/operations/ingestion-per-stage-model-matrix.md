@@ -32,7 +32,7 @@ For durable jobs over large lists (e.g. Stanford Encyclopedia), prefer documente
 
 Re-check [Vertex model versions](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions) when editing this table. Retired IDs must not appear as primaries without a migration entry.
 
-Pin normalization maps legacy pins to GA IDs (see [`src/lib/server/ingestPinNormalization.ts`](../../src/lib/server/ingestPinNormalization.ts)): e.g. `gemini-1.5-*` → `gemini-2.5-*`, `gemini-2.0-flash` / `gemini-2.0-flash-001` → `gemini-2.5-flash`.
+Pin normalization maps legacy pins to GA IDs (see [`src/lib/server/ingestPinNormalization.ts`](../../src/lib/server/ingestPinNormalization.ts)): e.g. `gemini-1.5-*` → `gemini-2.5-*`, `gemini-2.0-flash` / `gemini-2.0-flash-001` → `gemini-2.5-flash`, and `gemini-2.0-flash-lite` / `gemini-2.0-flash-lite-001` → `gemini-2.5-flash-lite` (Vertex retirement June 1, 2026 for stable 2.0 IDs per [model versions](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions)).
 
 ## Golden corpus
 
