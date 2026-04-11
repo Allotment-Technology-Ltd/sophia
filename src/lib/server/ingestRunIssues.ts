@@ -32,6 +32,7 @@ export type IngestIssueKind =
   | 'recovery_agent'
   | 'circuit_open'
   | 'stage_health_bump'
+  | 'watchdog'
   | 'other_signal';
 
 export type IngestIssueSeverity = 'info' | 'low' | 'medium' | 'high';
@@ -87,6 +88,10 @@ function inferStageFromLine(line: string): string | null {
 export function classifyIngestLogLine(line: string, seq: number): IngestIssueRecord | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
+
+  if (trimmed.startsWith('[INGEST_TELEMETRY]') || trimmed.startsWith('[WATCHDOG]')) {
+    return null;
+  }
 
   const selfHeal = parseIngestSelfHealLine(trimmed);
   if (selfHeal) {

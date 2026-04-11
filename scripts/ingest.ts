@@ -30,6 +30,10 @@ import {
 } from '../src/lib/server/embeddings.js';
 import { withEmbedPhaseSlot } from '../src/lib/server/ingestion/ingestPhaseSlot.js';
 import {
+	emitIngestTelemetry,
+	runWithIngestTelemetryHeartbeat
+} from '../src/lib/server/ingestion/ingestionTelemetry.js';
+import {
 	assertSepPresetDiscipline,
 	buildSepPresetFingerprint,
 	parsePresetDisciplineMode
@@ -2002,31 +2006,41 @@ async function callStageModel(params: {
 			const estTpmTokens =
 				estimateTokens(systemPrompt) + estimateTokens(userMessage) + maxTokens;
 			await ingestTpmGuard.waitForBudget(routingProvider, estTpmTokens);
-			const result = await withTimeout(
-				generateText(
-					foldSystem
-						? {
-								model: activePlan.route.model,
-								messages: [
-									{
-										role: 'user',
-										content: `${systemPrompt}\n\n${userMessage}`
+			emitIngestTelemetry({
+				event: 'model_call_start',
+				stage,
+				provider: routingProvider,
+				model: activePlan.model
+			});
+			const result = await runWithIngestTelemetryHeartbeat({
+				stage,
+				work: () =>
+					withTimeout(
+						generateText(
+							foldSystem
+								? {
+										model: activePlan.route.model,
+										messages: [
+											{
+												role: 'user',
+												content: `${systemPrompt}\n\n${userMessage}`
+											}
+										],
+										temperature: 0.1,
+										maxOutputTokens: maxTokens
 									}
-								],
-								temperature: 0.1,
-								maxOutputTokens: maxTokens
-							}
-						: {
-								model: activePlan.route.model,
-								system: systemPrompt,
-								messages: [{ role: 'user', content: userMessage }],
-								temperature: 0.1,
-								maxOutputTokens: maxTokens
-							}
-				),
-				budget.timeoutMs,
-				`${stage} ${activePlan.provider}:${activePlan.model}`
-			);
+								: {
+										model: activePlan.route.model,
+										system: systemPrompt,
+										messages: [{ role: 'user', content: userMessage }],
+										temperature: 0.1,
+										maxOutputTokens: maxTokens
+									}
+						),
+						budget.timeoutMs,
+						`${stage} ${activePlan.provider}:${activePlan.model}`
+					)
+			});
 			if (activeIngestTiming) {
 				const wall = Date.now() - callStarted;
 				activeIngestTiming.model_calls[stage] = (activeIngestTiming.model_calls[stage] ?? 0) + 1;
@@ -2034,6 +2048,16 @@ async function callStageModel(params: {
 					(activeIngestTiming.model_call_wall_ms[stage] ?? 0) + wall;
 				activeIngestTiming.stage_models[stage] = `${routingProvider}/${activePlan.model}`;
 			}
+			const wallMs = Date.now() - callStarted;
+			emitIngestTelemetry({
+				event: 'model_call_end',
+				stage,
+				provider: routingProvider,
+				model: activePlan.model,
+				duration_ms: wallMs,
+				input_tokens: result.usage?.inputTokens ?? 0,
+				output_tokens: result.usage?.outputTokens ?? 0
+			});
 			const inputTokens = result.usage?.inputTokens ?? 0;
 			const outputTokens = result.usage?.outputTokens ?? 0;
 			ingestTpmGuard.recordUsage(routingProvider, inputTokens + outputTokens);

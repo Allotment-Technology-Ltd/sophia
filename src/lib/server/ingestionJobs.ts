@@ -23,6 +23,7 @@ import {
 } from './ingestRuns';
 import { resolveEmbeddingFingerprint, resolvePipelineVersion } from './ingestionPipelineMetadata';
 import { MAX_DURABLE_INGEST_JOB_CONCURRENCY } from '$lib/ingestionJobConcurrency';
+import { sweepStalledIngestRuns } from './ingestion/ingestWatchdog';
 
 const ADV_LOCK_JOB_EVENTS = 5_849_273;
 
@@ -485,6 +486,7 @@ async function listJobIdsNeedingTick(): Promise<string[]> {
 /** Advance all jobs that need ticking. Returns how many job ids were processed. */
 export async function tickAllRunningIngestionJobs(): Promise<number> {
 	if (!isNeonIngestPersistenceEnabled()) return 0;
+	await sweepStalledIngestRuns();
 	const ids = await listJobIdsNeedingTick();
 	for (const id of ids) {
 		await tickIngestionJob(id);

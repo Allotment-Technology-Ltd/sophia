@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { IngestIssueRecord } from '$lib/server/ingestRunIssues';
 import type { IngestRunPayload, IngestRunState, StageStatus } from '$lib/server/ingestRuns';
 import { getDrizzleDb } from './neon';
@@ -329,4 +329,103 @@ export async function neonGetReportEnvelope(runId: string): Promise<Record<strin
   });
   const env = row?.reportEnvelope;
   return env && typeof env === 'object' && !Array.isArray(env) ? (env as Record<string, unknown>) : null;
+}
+
+const ADV_LOCK_WATCHDOG = 5_849_270;
+const ADV_LOCK_INGEST_LOGS = 5_849_271;
+
+/**
+ * In-flight ingest rows with no recent output (Neon clock). Used by the idle watchdog.
+ * `idleMs` must be > 0; callers typically cap batch size.
+ */
+export async function neonListIdleStalledIngestRunIds(idleMs: number, limit: number): Promise<string[]> {
+  if (!isNeonIngestPersistenceEnabled() || idleMs <= 0) return [];
+  const db = getDrizzleDb();
+  const cap = Math.max(1, Math.min(100, limit));
+  const rows = await db
+    .select({ id: ingestRuns.id })
+    .from(ingestRuns)
+    .where(
+      and(
+        eq(ingestRuns.cancelledByUser, false),
+        isNull(ingestRuns.completedAt),
+        inArray(ingestRuns.status, ['running', 'queued', 'awaiting_sync']),
+        sql`(
+          (${ingestRuns.lastOutputAt} IS NOT NULL AND (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint - ${ingestRuns.lastOutputAt} > ${idleMs})
+          OR (${ingestRuns.lastOutputAt} IS NULL AND (EXTRACT(EPOCH FROM NOW()) - EXTRACT(EPOCH FROM ${ingestRuns.createdAt})) * 1000 > ${idleMs})
+        )`
+      )
+    )
+    .orderBy(asc(ingestRuns.updatedAt))
+    .limit(cap);
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Mark a run terminal (`error`) if it is still in-flight and past the idle threshold.
+ * Idempotent: returns false if the row no longer matches (already terminal or activity resumed).
+ * Appends one log line and one `watchdog` issue in the same transaction as the status update.
+ */
+export async function neonTerminalizeIngestRunWatchdogIdle(
+  runId: string,
+  idleMs: number
+): Promise<boolean> {
+  if (!isNeonIngestPersistenceEnabled() || idleMs <= 0) return false;
+  const logLine = `[WATCHDOG] idle_timeout run_id=${runId} idle_ms=${idleMs}`;
+  const errMsg = `watchdog_idle_timeout: no worker output for ${idleMs}ms (INGEST_WATCHDOG_IDLE_MS)`;
+  const db = getDrizzleDb();
+
+  return await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${ADV_LOCK_WATCHDOG}, hashtext(${runId}))`);
+    const updated = await tx
+      .update(ingestRuns)
+      .set({
+        status: 'error',
+        error: errMsg,
+        completedAt: new Date(),
+        updatedAt: new Date(),
+        lastFailureStage: 'watchdog',
+        currentAction: 'Watchdog: idle timeout'
+      })
+      .where(
+        and(
+          eq(ingestRuns.id, runId),
+          eq(ingestRuns.cancelledByUser, false),
+          isNull(ingestRuns.completedAt),
+          inArray(ingestRuns.status, ['running', 'queued', 'awaiting_sync']),
+          sql`(
+            (${ingestRuns.lastOutputAt} IS NOT NULL AND (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint - ${ingestRuns.lastOutputAt} > ${idleMs})
+            OR (${ingestRuns.lastOutputAt} IS NULL AND (EXTRACT(EPOCH FROM NOW()) - EXTRACT(EPOCH FROM ${ingestRuns.createdAt})) * 1000 > ${idleMs})
+          )`
+        )
+      )
+      .returning({ id: ingestRuns.id });
+
+    if (updated.length === 0) return false;
+
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${ADV_LOCK_INGEST_LOGS}, hashtext(${runId}))`);
+    const [logRow] = await tx
+      .select({ m: sql<number>`COALESCE(MAX(${ingestRunLogs.seq}), 0)`.mapWith(Number) })
+      .from(ingestRunLogs)
+      .where(eq(ingestRunLogs.runId, runId));
+    const logSeq = (logRow?.m ?? 0) + 1;
+    await tx.insert(ingestRunLogs).values({ runId, seq: logSeq, line: logLine });
+
+    const [issueRow] = await tx
+      .select({ m: sql<number>`COALESCE(MAX(${ingestRunIssues.seq}), 0)`.mapWith(Number) })
+      .from(ingestRunIssues)
+      .where(eq(ingestRunIssues.runId, runId));
+    const issueSeq = (issueRow?.m ?? 0) + 1;
+    await tx.insert(ingestRunIssues).values({
+      runId,
+      seq: issueSeq,
+      kind: 'watchdog',
+      severity: 'high',
+      stageHint: 'watchdog',
+      message: errMsg,
+      rawLine: logLine
+    });
+
+    return true;
+  });
 }

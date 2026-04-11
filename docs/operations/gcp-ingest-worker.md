@@ -16,6 +16,10 @@ Sophia runs **`tsx scripts/ingest.ts`** (and fetch-source) as **child processes*
 
 **Observability:** In Cloud Console → Cloud Run → **Metrics** → **Memory utilization** / **CPU** on the **revision** that ran the ingest. Correlate with **admin** ingest start times.
 
+**Logs (GCP + Neon, no extra vendors):** `scripts/ingest.ts` prints one JSON object per line prefixed with `[INGEST_TELEMETRY]` (for example `model_call_start`, `model_call_end`, `heartbeat`). Cloud Logging ingests stdout automatically. Optional `INGEST_TELEMETRY_HEARTBEAT_MS` (≥10s) bumps Neon `ingest_runs.last_output_at` during long model calls when `INGEST_ORCHESTRATION_RUN_ID` is set so idle watchdogs do not fire on healthy slow calls.
+
+**Idle watchdog (Neon):** Default idle threshold is **5 minutes** (`300000` ms). Override with `INGEST_WATCHDOG_IDLE_MS` (≥60s), or set **`INGEST_WATCHDOG_IDLE_MS=0`** to disable. `tickAllRunningIngestionJobs` / the Cloud Run ingestion poller terminalize stuck `ingest_runs`, append `ingest_run_logs` / `ingest_run_issues`, and optionally requeue job items (`INGEST_WATCHDOG_REQUEUE=1`). See [ingest-watchdog-and-observability-plan.md](./ingest-watchdog-and-observability-plan.md).
+
 ## Regional affinity
 
 | Dependency | Target |
