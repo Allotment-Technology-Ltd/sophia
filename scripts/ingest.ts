@@ -280,7 +280,7 @@ const INGEST_REMEDIATION_FAITHFULNESS_MIN = Math.max(
 	Math.min(100, Number(process.env.INGEST_REMEDIATION_FAITHFULNESS_MIN ?? '80') || 80)
 );
 const INGEST_REMEDIATION_MAX_CLAIMS = (() => {
-	const raw = Number(process.env.INGEST_REMEDIATION_MAX_CLAIMS ?? '24');
+	const raw = Number(process.env.INGEST_REMEDIATION_MAX_CLAIMS ?? '16');
 	if (!Number.isFinite(raw) || raw <= 0) return 24;
 	return Math.max(1, Math.trunc(raw));
 })();
@@ -313,7 +313,7 @@ const RELATIONS_BATCH_OVERLAP_CLAIMS =
 /** When >1, run independent extraction batches in parallel (ordered merge). Splits mid-batch disable parallelism for remaining work. */
 const INGEST_EXTRACTION_CONCURRENCY = Math.max(
 	1,
-	parsePositiveInt(process.env.INGEST_EXTRACTION_CONCURRENCY) ?? 2
+	parsePositiveInt(process.env.INGEST_EXTRACTION_CONCURRENCY) ?? 3
 );
 const INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE =
 	(process.env.INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE || 'true').toLowerCase() !== 'false';
@@ -4690,6 +4690,7 @@ async function main() {
 				console.log('\n┌──────────────────────────────────────────────────────────┐');
 				console.log('│ STAGE 5b: REMEDIATION (passage-bounded repair)          │');
 				console.log('└──────────────────────────────────────────────────────────┘');
+				console.log('STAGE 5b: REMEDIATION');
 				const remediationTracker = startStageUsage('remediation');
 				const preRemediationValidation = validationResult;
 
@@ -4719,6 +4720,11 @@ async function main() {
 
 				for (let i = startIdx; i < positions.length; i++) {
 					const pos = positions[i]!;
+					if (i === startIdx || (i + 1) % 3 === 0 || i === positions.length - 1) {
+						console.log(
+							`  [REMEDIATION] Claim ${i + 1}/${positions.length} (position_in_source=${pos})…`
+						);
+					}
 					const claim = allClaims.find((c) => c.position_in_source === pos);
 					if (!claim) continue;
 					const excerpt = sliceSourceAroundClaim(

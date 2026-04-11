@@ -394,6 +394,8 @@ export interface IngestRunState {
   lastFailureStageKey?: string | null;
   resumable?: boolean;
   lastOutputAt?: number;
+  /** Last worker heartbeat (telemetry); Neon column `worker_heartbeat_at`. */
+  workerHeartbeatAt?: number;
   processStartedAt?: number;
   processExitedAt?: number;
   /** When true, child exit handlers must not retry and should finalize as cancelled. */
@@ -556,7 +558,10 @@ const PIPELINE_STAGES = ['extract', 'relate', 'group', 'embed'] as const;
 /** Stages after fetch, in worker order; validate omitted when disabled in payload. */
 function orderedStagesAfterFetch(validate: boolean): string[] {
   const out: string[] = [...PIPELINE_STAGES];
-  if (validate) out.push('validate');
+  if (validate) {
+    out.push('validate');
+    out.push('remediation');
+  }
   out.push('store');
   return out;
 }
@@ -570,6 +575,7 @@ function stageAliasToKey(value: string | null | undefined): string | null {
   if (low.startsWith('group')) return 'group';
   if (low.startsWith('embed')) return 'embed';
   if (low.startsWith('validat')) return 'validate';
+  if (low.startsWith('remediat')) return 'remediation';
   if (low.startsWith('stor')) return 'store';
   return null;
 }
@@ -787,6 +793,7 @@ class IngestRunManager extends EventEmitter {
         group: { status: 'idle' },
         embed: { status: 'idle' },
         validate: { status: payload.validate ? 'idle' : 'skipped' },
+        remediation: { status: payload.validate ? 'idle' : 'skipped' },
         store: { status: 'idle' }
       },
       logLines: [],
@@ -1377,8 +1384,10 @@ class IngestRunManager extends EventEmitter {
           }
           if (payload.validate) {
             this.updateStageStatus(runId, 'validate', 'idle');
+            this.updateStageStatus(runId, 'remediation', 'idle');
           } else {
             this.updateStageStatus(runId, 'validate', 'skipped');
+            this.updateStageStatus(runId, 'remediation', 'skipped');
           }
           this.updateStageStatus(runId, 'store', 'idle');
         }
@@ -1390,8 +1399,10 @@ class IngestRunManager extends EventEmitter {
         }
         if (payload.validate) {
           this.updateStageStatus(runId, 'validate', 'idle');
+          this.updateStageStatus(runId, 'remediation', 'idle');
         } else {
           this.updateStageStatus(runId, 'validate', 'skipped');
+          this.updateStageStatus(runId, 'remediation', 'skipped');
         }
         this.updateStageStatus(runId, 'store', 'idle');
       }
@@ -1510,7 +1521,7 @@ class IngestRunManager extends EventEmitter {
         } else {
           const terminalStages = [
             ...PIPELINE_STAGES,
-            ...(payload.validate ? (['validate'] as const) : []),
+            ...(payload.validate ? (['validate', 'remediation'] as const) : []),
             'store'
           ] as const;
           for (const stage of terminalStages) {
@@ -1518,6 +1529,7 @@ class IngestRunManager extends EventEmitter {
           }
           if (!payload.validate) {
             this.updateStageStatus(runId, 'validate', 'skipped');
+            this.updateStageStatus(runId, 'remediation', 'skipped');
           }
           this.addLog(runId, 'Ingestion pipeline finished successfully.');
           this.completeRun(runId);
@@ -1577,7 +1589,7 @@ class IngestRunManager extends EventEmitter {
         } else {
           const terminalStages = [
             ...PIPELINE_STAGES,
-            ...(payload.validate ? (['validate'] as const) : []),
+            ...(payload.validate ? (['validate', 'remediation'] as const) : []),
             'store'
           ] as const;
           for (const stage of terminalStages) {
@@ -1693,6 +1705,9 @@ class IngestRunManager extends EventEmitter {
     }
     if (payload.validate) {
       this.updateStageStatus(runId, 'validate', 'error');
+      this.updateStageStatus(runId, 'remediation', 'error');
+    } else {
+      this.updateStageStatus(runId, 'remediation', 'skipped');
     }
     this.updateStageStatus(runId, 'store', 'error');
   }
@@ -1703,6 +1718,7 @@ class IngestRunManager extends EventEmitter {
       'fetch',
       ...PIPELINE_STAGES,
       payload.validate ? 'validate' : null,
+      payload.validate ? 'remediation' : null,
       ...(stopBeforeStore ? [] : ['store'])
     ].filter(Boolean) as string[];
     let stageIndex = 0;
@@ -1744,6 +1760,7 @@ class IngestRunManager extends EventEmitter {
           this.updateStageStatus(runId, 'store', 'idle');
           if (!payload.validate) {
             this.updateStageStatus(runId, 'validate', 'skipped');
+            this.updateStageStatus(runId, 'remediation', 'skipped');
           }
           state.status = 'awaiting_sync';
           this.addLog(runId, 'Run phases complete. Press “Sync to SurrealDB” to finish.');

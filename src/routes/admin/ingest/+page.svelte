@@ -199,6 +199,12 @@
     { key: 'embed', label: 'Embed', description: 'Embedding vectors for claims.', status: 'idle' },
     { key: 'validate', label: 'Validate', description: 'Optional cross-model validation.', status: 'idle' },
     {
+      key: 'remediation',
+      label: 'Remediate',
+      description: 'Passage-bounded repair of low-faithfulness claims after validation.',
+      status: 'idle'
+    },
+    {
       key: 'store',
       label: 'Store',
       description: 'Write graph and records to SurrealDB (use Sync when prepare finishes).',
@@ -273,6 +279,16 @@
         'When enabled, this stage can flag weak support, missing relations, or tension that should exist given the text—helping you trust the graph before you publish or query.',
         'You can disable validation for speed or cost; when on, it is a deliberate trade of latency for robustness.',
         'This is a differentiator from “one-shot” ingestion: Sophia treats quality as a pipeline concern, not a single prompt.'
+      ]
+    },
+    remediation: {
+      headline: 'Targeted repair before storage',
+      summary:
+        'When validation is enabled, passage-bounded remediation rewrites a small set of low-faithfulness claims using local context, then refreshes embeddings for those claims.',
+      readMore: [
+        'Remediation is intentionally narrow: it does not re-run the whole pipeline; it repairs specific positions the validator flagged, bounded by source spans.',
+        'This stage can dominate wall time when many claims need repair; the live log shows per-claim progress so long silences are easier to interpret.',
+        'Operators can tune `INGEST_REMEDIATION_MAX_CLAIMS` and related env vars when cost or latency needs to be capped.'
       ]
     },
     store: {
@@ -1085,7 +1101,12 @@
     return STAGE_TEMPLATE.map((stage) => ({
       ...stage,
       result: undefined,
-      status: stage.key === 'validate' ? (runValidate ? 'idle' : 'skipped') : 'idle'
+      status:
+        stage.key === 'validate' || stage.key === 'remediation'
+          ? runValidate
+            ? 'idle'
+            : 'skipped'
+          : 'idle'
     }));
   }
 
@@ -1690,6 +1711,8 @@
     grouping: 'ingestion_grouping',
     validate: 'ingestion_validation',
     validation: 'ingestion_validation',
+    remediation: 'ingestion_remediation',
+    remediat: 'ingestion_remediation',
     embed: 'ingestion_embedding',
     embedding: 'ingestion_embedding',
     json_repair: 'ingestion_json_repair',
@@ -1704,6 +1727,7 @@
     group: 'ingestion_grouping',
     embed: 'ingestion_embedding',
     validate: 'ingestion_validation',
+    remediation: 'ingestion_remediation',
     store: 'ingestion_json_repair'
   };
 
@@ -1722,6 +1746,13 @@
     if (/\[stage\].*group/.test(text) || /stage\s+\d+:\s*group/.test(text)) return 'group';
     if (/\[stage\].*embed/.test(text) || /stage\s+\d+:\s*embed/.test(text)) return 'embed';
     if (/\[stage\].*validat/.test(text) || /stage\s+\d+:\s*validat/.test(text)) return 'validate';
+    if (
+      /\[stage\].*remediat/.test(text) ||
+      /stage\s+5b:\s*remediat/.test(text) ||
+      /^stage\s+5b:\s*remediation/i.test(text.trim())
+    ) {
+      return 'remediation';
+    }
     if (/\[stage\].*store/.test(text) || /stage\s+\d+:\s*store/.test(text)) return 'store';
     return null;
   }
@@ -1763,6 +1794,7 @@
     if (norm.startsWith('relat')) return 'ingestion_relations';
     if (norm.startsWith('group')) return 'ingestion_grouping';
     if (norm.startsWith('validat')) return 'ingestion_validation';
+    if (norm.startsWith('remediat')) return 'ingestion_remediation';
     if (norm.startsWith('embed')) return 'ingestion_embedding';
     if (norm.startsWith('json') || norm.startsWith('repair')) return 'ingestion_json_repair';
     return null;
