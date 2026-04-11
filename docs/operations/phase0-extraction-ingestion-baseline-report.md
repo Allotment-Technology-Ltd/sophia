@@ -361,6 +361,8 @@ All rows below are **`sep_entry`** unless noted. Add **5–10** `web_article` UR
 
 Source: **“All stages + planning”** SQL block in §1.2 (`f` CTE), executed via Neon on 2026-04-11.
 
+**By `source_type` (same `f` cohort):** only **`sep_entry`** appears — **n = 10**, **mean_frac_extract ≈ 0.244**, extracting **p50 ≈ 162,850 ms**, **p90 ≈ 523,169 ms** (§1.2 `GROUP BY source_type` query).
+
 ### 6.2 Paragraph — % of E2E in extraction (mean + p90)
 
 Over the last **90 days**, among **N = 10** completed ingest runs with usable `total_wall_ms` in `report_envelope.timingTelemetry`, **`extracting` accounted for ~24.4%** of `total_wall_ms` **on average** and **~46.5%** at **p90** (fractions **0.2435** and **0.4654** from the extraction-fraction aggregate in §1.2). **Interpret cautiously:** **59** runs had `stage_ms` telemetry in the same window but lacked `total_wall_ms`, so the headline **N** is small and may skew toward worker paths that persist full timing summaries.
