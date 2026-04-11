@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
 	import { browser } from '$app/environment';
 	import { page } from '$app/state';
 	import { getIdToken } from '$lib/authClient';
@@ -45,10 +44,13 @@
 	let loadError = $state('');
 	let neonDisabled = $state(false);
 
-	let detailTimer: ReturnType<typeof setInterval> | null = null;
-	let eventsTimer: ReturnType<typeof setInterval> | null = null;
+	let pollTimer: ReturnType<typeof setTimeout> | null = null;
+	let pollToken = 0;
+	let pollInFlight = $state(false);
 	let retryBusy = $state(false);
 	let retryMessage = $state('');
+	let itemActionBusyId = $state<string | null>(null);
+	let itemActionMessage = $state('');
 	/** From API — max starts per URL (INGEST_JOB_ITEM_MAX_ATTEMPTS). */
 	let itemMaxAttempts = $state(2);
 
@@ -140,11 +142,43 @@
 		).length
 	);
 
+	async function postItemModify(
+		itemId: string,
+		action: 'requeue_to_pending' | 'cancel'
+	): Promise<void> {
+		const jobId = currentJobId();
+		if (!jobId) return;
+		itemActionBusyId = itemId;
+		itemActionMessage = '';
+		try {
+			const res = await fetch(
+				`/api/admin/ingest/jobs/${encodeURIComponent(jobId)}/items/${encodeURIComponent(itemId)}`,
+				{
+					method: 'POST',
+					headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
+					body: JSON.stringify({ action })
+				}
+			);
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				throw new Error(typeof body?.error === 'string' ? body.error : 'Action failed');
+			}
+			itemActionMessage = '';
+			await fetchDetail();
+			await fetchEvents();
+		} catch (e) {
+			itemActionMessage = e instanceof Error ? e.message : 'Action failed';
+		} finally {
+			itemActionBusyId = null;
+		}
+	}
+
 	async function postJobRetry(mode: 'restart' | 'resume', itemId?: string): Promise<void> {
 		const jobId = currentJobId();
 		if (!jobId) return;
 		retryBusy = true;
 		retryMessage = '';
+		itemActionMessage = '';
 		try {
 			const res = await fetch(`/api/admin/ingest/jobs/${encodeURIComponent(jobId)}/retry`, {
 				method: 'POST',
@@ -170,29 +204,70 @@
 		}
 	}
 
+	/**
+	 * Single serial poller: avoids overlapping GETs (Svelte effect + dual intervals caused
+	 * ERR_INSUFFICIENT_RESOURCES in Chrome when many requests piled up).
+	 */
 	$effect(() => {
 		if (!browser) return;
 		const id = page.params.id?.trim() ?? '';
 		if (!id) return;
+
+		pollToken += 1;
+		const token = pollToken;
 		lastEventSeq = 0;
 		events = [];
-		void fetchDetail();
-		void fetchEvents();
-	});
 
-	onMount(() => {
-		detailTimer = setInterval(() => {
-			if (currentJobId()) void fetchDetail();
-		}, 4000);
+		function clearPoll(): void {
+			if (pollTimer) {
+				clearTimeout(pollTimer);
+				pollTimer = null;
+			}
+		}
 
-		eventsTimer = setInterval(() => {
-			if (currentJobId()) void fetchEvents();
-		}, 4000);
-	});
+		function arm(delayMs: number): void {
+			clearPoll();
+			pollTimer = setTimeout(() => {
+				pollTimer = null;
+				void pollTick();
+			}, delayMs);
+		}
 
-	onDestroy(() => {
-		if (detailTimer) clearInterval(detailTimer);
-		if (eventsTimer) clearInterval(eventsTimer);
+		async function pollTick(): Promise<void> {
+			if (token !== pollToken) return;
+			const jobId = currentJobId();
+			if (!jobId) return;
+			if (pollInFlight) {
+				arm(2000);
+				return;
+			}
+			pollInFlight = true;
+			let ok = false;
+			try {
+				await fetchDetail();
+				ok = !neonDisabled && !loadError;
+				if (ok && !neonDisabled) await fetchEvents();
+			} finally {
+				pollInFlight = false;
+			}
+			if (token !== pollToken) return;
+			const j = job;
+			const terminal =
+				j &&
+				j.status === 'done' &&
+				(typeof j.summary?.pending === 'number' ? j.summary.pending : 0) === 0 &&
+				(typeof j.summary?.running === 'number' ? j.summary.running : 0) === 0;
+			const baseMs = terminal ? 30_000 : 5000;
+			const delayMs = ok ? baseMs : Math.min(60_000, baseMs * 3);
+			arm(delayMs);
+		}
+
+		void pollTick();
+
+		return () => {
+			clearPoll();
+			pollToken += 1;
+		};
 	});
 </script>
 
@@ -274,9 +349,17 @@
 						child ingest (use after fixing code, env, or launch errors).
 						<span class="font-medium text-sophia-dark-text">Resume checkpoint</span> continues the same
 						ingest run from the last Surreal pipeline stage (Expand also has Resume for a single run).
+						<span class="font-medium text-sophia-dark-text">Queue again</span> moves a failed URL back to
+						<span class="font-mono text-sophia-dark-text">pending</span> without spending another attempt
+						(use when the failure was environmental or you raised the attempt cap).
+						<span class="font-medium text-sophia-dark-text">Cancel URL</span> abandons that row as
+						<span class="font-mono text-sophia-dark-text">cancelled</span>.
 					</p>
 					{#if retryMessage}
 						<p class="mt-3 text-sm text-amber-100" role="status">{retryMessage}</p>
+					{/if}
+					{#if itemActionMessage}
+						<p class="mt-3 text-sm text-red-200/90" role="alert">{itemActionMessage}</p>
 					{/if}
 					<div class="mt-4 flex flex-wrap gap-3">
 						<button
@@ -343,7 +426,23 @@
 											<button
 												type="button"
 												class="rounded border border-[var(--color-border)] px-3 py-2 text-left uppercase tracking-[0.06em] text-sophia-dark-muted hover:border-[var(--color-sage)] hover:text-sophia-dark-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:opacity-50"
-												disabled={retryBusy}
+												disabled={retryBusy || itemActionBusyId === it.id}
+												onclick={() => void postItemModify(it.id, 'requeue_to_pending')}
+											>
+												{itemActionBusyId === it.id ? '…' : 'Queue again'}
+											</button>
+											<button
+												type="button"
+												class="rounded border border-[var(--color-border)] px-3 py-2 text-left uppercase tracking-[0.06em] text-sophia-dark-muted hover:border-red-400/50 hover:text-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:opacity-50"
+												disabled={retryBusy || itemActionBusyId === it.id}
+												onclick={() => void postItemModify(it.id, 'cancel')}
+											>
+												Cancel URL
+											</button>
+											<button
+												type="button"
+												class="rounded border border-[var(--color-border)] px-3 py-2 text-left uppercase tracking-[0.06em] text-sophia-dark-muted hover:border-[var(--color-sage)] hover:text-sophia-dark-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:opacity-50"
+												disabled={retryBusy || itemActionBusyId === it.id}
 												onclick={() => void postJobRetry('restart', it.id)}
 											>
 												Restart
@@ -352,13 +451,22 @@
 												<button
 													type="button"
 													class="rounded border border-[var(--color-border)] px-3 py-2 text-left uppercase tracking-[0.06em] text-sophia-dark-muted hover:border-[var(--color-sage)] hover:text-sophia-dark-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:opacity-50"
-													disabled={retryBusy}
+													disabled={retryBusy || itemActionBusyId === it.id}
 													onclick={() => void postJobRetry('resume', it.id)}
 												>
 													Resume
 												</button>
 											{/if}
 										</div>
+									{:else if it.status === 'running'}
+										<button
+											type="button"
+											class="rounded border border-[var(--color-border)] px-3 py-2 text-left uppercase tracking-[0.06em] text-sophia-dark-muted hover:border-red-400/50 hover:text-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:opacity-50"
+											disabled={retryBusy || itemActionBusyId === it.id}
+											onclick={() => void postItemModify(it.id, 'cancel')}
+										>
+											{itemActionBusyId === it.id ? '…' : 'Stop run'}
+										</button>
 									{:else}
 										—
 									{/if}

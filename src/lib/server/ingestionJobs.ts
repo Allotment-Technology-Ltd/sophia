@@ -217,7 +217,11 @@ function isStuckIngestRun(run: IngestRunState): boolean {
 	return false;
 }
 
-export async function tickIngestionJob(jobId: string): Promise<void> {
+/**
+ * Refresh job item rows from child ingest run state and recompute job summary / terminal status.
+ * Does **not** launch new child runs — safe for high-frequency admin GET polling.
+ */
+export async function reconcileIngestionJobView(jobId: string): Promise<void> {
 	if (!isNeonIngestPersistenceEnabled()) return;
 	const db = getDrizzleDb();
 	let job = await db.query.ingestionJobs.findFirst({
@@ -250,6 +254,10 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 		.select()
 		.from(ingestionJobItems)
 		.where(eq(ingestionJobItems.jobId, jobId));
+
+	const wasAllTerminalBefore =
+		items.length > 0 &&
+		items.every((r) => r.status !== 'pending' && r.status !== 'running');
 
 	// Refresh running items from child runs (terminal, or stuck → error)
 	for (const it of items) {
@@ -298,6 +306,49 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 	}
 
 	await applyAutoRequeueForJobErrors(jobId);
+
+	const refreshed = await db
+		.select()
+		.from(ingestionJobItems)
+		.where(eq(ingestionJobItems.jobId, jobId));
+
+	const summary = {
+		total: refreshed.length,
+		pending: refreshed.filter((r) => r.status === 'pending').length,
+		running: refreshed.filter((r) => r.status === 'running').length,
+		done: refreshed.filter((r) => r.status === 'done').length,
+		error: refreshed.filter((r) => r.status === 'error').length,
+		cancelled: refreshed.filter((r) => r.status === 'cancelled').length,
+		skipped: refreshed.filter((r) => r.status === 'skipped').length
+	};
+
+	const allTerminal =
+		summary.pending === 0 && summary.running === 0 && summary.total > 0;
+	const jobStatus = allTerminal ? 'done' : 'running';
+
+	await db
+		.update(ingestionJobs)
+		.set({
+			summary,
+			status: jobStatus,
+			updatedAt: new Date(),
+			completedAt: allTerminal ? new Date() : null
+		})
+		.where(eq(ingestionJobs.id, jobId));
+
+	if (allTerminal && !wasAllTerminalBefore) {
+		await appendIngestionJobEvent(jobId, 'job_completed', { summary });
+	}
+}
+
+export async function tickIngestionJob(jobId: string): Promise<void> {
+	if (!isNeonIngestPersistenceEnabled()) return;
+	await reconcileIngestionJobView(jobId);
+	const db = getDrizzleDb();
+	const job = await db.query.ingestionJobs.findFirst({
+		where: eq(ingestionJobs.id, jobId)
+	});
+	if (!job || job.status !== 'running') return;
 
 	const refreshed = await db
 		.select()
@@ -404,41 +455,7 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 		}
 	}
 
-	await applyAutoRequeueForJobErrors(jobId);
-
-	const finalItems = await db
-		.select()
-		.from(ingestionJobItems)
-		.where(eq(ingestionJobItems.jobId, jobId));
-	const finalSummary = {
-		total: finalItems.length,
-		pending: finalItems.filter((r) => r.status === 'pending').length,
-		running: finalItems.filter((r) => r.status === 'running').length,
-		done: finalItems.filter((r) => r.status === 'done').length,
-		error: finalItems.filter((r) => r.status === 'error').length,
-		cancelled: finalItems.filter((r) => r.status === 'cancelled').length,
-		skipped: finalItems.filter((r) => r.status === 'skipped').length
-	};
-
-	const allTerminal =
-		finalSummary.pending === 0 &&
-		finalSummary.running === 0 &&
-		finalSummary.total > 0;
-	const jobStatus = allTerminal ? 'done' : 'running';
-
-	await db
-		.update(ingestionJobs)
-		.set({
-			summary: finalSummary,
-			status: jobStatus,
-			updatedAt: new Date(),
-			completedAt: allTerminal ? new Date() : null
-		})
-		.where(eq(ingestionJobs.id, jobId));
-
-	if (allTerminal) {
-		await appendIngestionJobEvent(jobId, 'job_completed', { summary: finalSummary });
-	}
+	await reconcileIngestionJobView(jobId);
 }
 
 /** One pass equivalent to `scripts/ingestion-job-poller.ts --once` (all running jobs). */
@@ -593,6 +610,89 @@ export async function retryIngestionJob(
 	}
 
 	return { ok: true, touched: okCount, resumeResults };
+}
+
+export type IngestionJobItemModifyAction = 'requeue_to_pending' | 'cancel';
+
+/**
+ * Operator actions on a single job item from the admin job detail screen.
+ * - `requeue_to_pending`: failed item → pending without incrementing attempts (unblocks cap / manual retry).
+ * - `cancel`: terminal abandon — error items become `cancelled`; running items kill the child run then reconcile.
+ */
+export async function modifyIngestionJobItem(
+	jobId: string,
+	itemId: string,
+	action: IngestionJobItemModifyAction
+): Promise<{ ok: true } | { ok: false; error: string }> {
+	if (!isNeonIngestPersistenceEnabled()) return { ok: false, error: 'Neon ingest persistence is not enabled.' };
+	const id = itemId.trim();
+	if (!id) return { ok: false, error: 'Missing item id.' };
+
+	const db = getDrizzleDb();
+	const [it] = await db
+		.select()
+		.from(ingestionJobItems)
+		.where(and(eq(ingestionJobItems.jobId, jobId), eq(ingestionJobItems.id, id)))
+		.limit(1);
+	if (!it) return { ok: false, error: 'Item not found on this job.' };
+
+	if (action === 'requeue_to_pending') {
+		if (it.status !== 'error') {
+			return { ok: false, error: 'Only items in error state can be moved back to pending.' };
+		}
+		await db
+			.update(ingestionJobItems)
+			.set({
+				status: 'pending',
+				childRunId: null,
+				lastError: null,
+				blockedUntil: null,
+				launchThrottleCount: 0,
+				updatedAt: new Date()
+			})
+			.where(eq(ingestionJobItems.id, id));
+		await db
+			.update(ingestionJobs)
+			.set({ status: 'running', completedAt: null, updatedAt: new Date() })
+			.where(eq(ingestionJobs.id, jobId));
+		await appendIngestionJobEvent(jobId, 'item_requeued_manual', {
+			itemId: id,
+			url: it.url,
+			reason: 'operator_pending'
+		});
+		void tickIngestionJob(jobId);
+		return { ok: true };
+	}
+
+	// cancel
+	if (it.status === 'error') {
+		await db
+			.update(ingestionJobItems)
+			.set({
+				status: 'cancelled',
+				lastError: null,
+				updatedAt: new Date()
+			})
+			.where(eq(ingestionJobItems.id, id));
+		await appendIngestionJobEvent(jobId, 'item_cancelled', {
+			itemId: id,
+			url: it.url,
+			fromStatus: 'error'
+		});
+		await reconcileIngestionJobView(jobId);
+		return { ok: true };
+	}
+
+	if (it.status === 'running' && it.childRunId?.trim()) {
+		const cancel = ingestRunManager.cancelRun(it.childRunId.trim());
+		if (!cancel.ok) {
+			return { ok: false, error: cancel.error };
+		}
+		await reconcileIngestionJobView(jobId);
+		return { ok: true };
+	}
+
+	return { ok: false, error: 'Only error or in-flight (running) items can be cancelled from this action.' };
 }
 
 export type IngestionJobRow = InferSelectModel<typeof ingestionJobs>;
