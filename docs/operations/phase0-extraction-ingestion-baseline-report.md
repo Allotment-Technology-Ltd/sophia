@@ -6,7 +6,7 @@
 
 **Coverage caveat:** In this window, **59** completed runs had `timingTelemetry.stage_ms`, but only **10** had a usable numeric **`total_wall_ms`** in the same envelope (non-null / non-zero). **Percent-of-E2E and §6.1 stage table statistics use the N = 10 cohort** (runs where `total_wall_ms` is present). Broader runs still contribute to **issue counts** (65 runs with any `report_envelope`) and to **model-call concentration** when keyed only on `model_calls.extraction` (see §2).
 
-**GCP Logging:** Optional `[INGEST_TELEMETRY]` / `[INGEST_TIMING]` sampling was **not run** here (`gcloud logging read` failed: token refresh / non-interactive auth). Operators with credentials can still use the filters in §“Log queries”.
+**GCP Logging:** Optional `[INGEST_TELEMETRY]` / `[INGEST_TIMING]` sampling was **not run** in the original agent session (token refresh / non-interactive auth). **Operators:** authenticate in a normal terminal (browser handshake), export logs, then run the repo script below to widen **N** beyond Neon `report_envelope` completeness.
 
 ---
 
@@ -398,15 +398,54 @@ See §3 — numeric thresholds should be **derived from one baseline golden batc
 
 ## Log queries (GCP Logging — examples)
 
-**Last `[INGEST_TIMING]` lines:**
+### Authenticate (`gcloud` browser login)
 
-```
-resource.type="cloud_run_revision"
-logName=~"stdout"
-textPayload=~"\[INGEST_TIMING\] \\{"
+Run in **your own terminal** (must allow opening a browser or pasting a verification URL):
+
+```bash
+gcloud auth login
 ```
 
-**Per-call extraction durations:**
+If the CLI still cannot refresh tokens (CI / headless), use **Application Default Credentials** for tools that expect ADC:
+
+```bash
+gcloud auth application-default login
+```
+
+Point at production (see [gcp-infrastructure.md](./gcp-infrastructure.md)):
+
+```bash
+gcloud config set project sophia-488807
+```
+
+### Export `[INGEST_TIMING]` (widen N vs Neon envelope)
+
+Ingest prints **`[INGEST_TIMING] {json}`** from `scripts/ingest.ts` on stdout; Cloud Run captures it. Query **both** the dedicated worker and the main app service (admin ingest children can run on either — see [gcp-ingest-worker.md](./gcp-ingest-worker.md)):
+
+```bash
+FILTER='resource.type="cloud_run_revision" AND (resource.labels.service_name="sophia-ingest-worker" OR resource.labels.service_name="sophia") AND textPayload:"INGEST_TIMING"'
+```
+
+Export last **90 days** to a JSON file (adjust `--freshness` / `--limit` as needed; very large exports may need **Log Analytics / BigQuery** instead):
+
+```bash
+gcloud logging read "$FILTER" \
+  --project=sophia-488807 \
+  --freshness=90d \
+  --format=json \
+  --limit=5000 \
+  > /tmp/ingest-timing-gcp.json
+```
+
+Aggregate (mean / p50 / p90 fractions, corr, calls — same spirit as §1.2 / §2):
+
+```bash
+pnpm ops:phase0-timing-from-gcp-export -- /tmp/ingest-timing-gcp.json
+```
+
+**What to do next:** (1) If **`with total_wall_ms > 0`** from the script is **much larger** than Neon’s **10**, refresh §6.1–§6.5 using log-derived numbers (and note “source: GCP export”). (2) If counts are still low, increase `--limit`, widen freshness, or set up a **saved query / sink** so you are not capped by CLI pagination. (3) **Dedupe:** the script dedupes on log `insertId` only; if the same run appears twice with different ids, add a run-key field to `[INGEST_TIMING]` later or dedupe in BigQuery on `run_started_at_ms` + `total_wall_ms`.
+
+**Per-call extraction durations (`[INGEST_TELEMETRY]`):**
 
 ```
 textPayload=~"\[INGEST_TELEMETRY\\]"
@@ -416,3 +455,11 @@ jsonPayload.message=~"\[INGEST_TELEMETRY\\]"
 (Adjust to your export schema: some sinks put the line in `textPayload`, others parse JSON.)
 
 Filter parsed JSON where `jsonPayload.event="model_call_end"` AND `jsonPayload.stage="extraction"` (if parsed to structured fields).
+
+**Legacy example (regex on `{`):**
+
+```
+resource.type="cloud_run_revision"
+logName=~"stdout"
+textPayload=~"\[INGEST_TIMING\] \\{"
+```
