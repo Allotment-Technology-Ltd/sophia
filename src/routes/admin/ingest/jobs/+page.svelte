@@ -778,7 +778,7 @@
 					<textarea
 						class="mt-2 min-h-[72px] w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-xs"
 						bind:value={jobWatchdogPhaseIdleJson}
-						placeholder='{"extracting":480000,"storing":600000}'
+						placeholder={JSON.stringify({ extracting: 480000, storing: 600000 })}
 						rows="3"
 					></textarea>
 				</label>
