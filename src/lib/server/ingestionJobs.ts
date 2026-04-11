@@ -3,13 +3,14 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { and, asc, desc, eq, gt, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type { InferSelectModel } from 'drizzle-orm';
 import { getDrizzleDb } from './db/neon';
 import { ingestionJobEvents, ingestionJobItems, ingestionJobs } from './db/schema';
 import { neonLoadIngestRun } from './db/ingestRunRepository';
 import { isNeonIngestPersistenceEnabled } from './neon/datastore';
 import {
+	classifyIngestJobErrorMessage,
 	computeLaunchThrottleBackoffMs,
 	isLaunchThrottleError,
 	shouldAutoRequeueIngestJobItem
@@ -75,6 +76,234 @@ async function applyAutoRequeueForJobErrors(jobId: string): Promise<void> {
 			reason: 'retry_after_failure'
 		});
 	}
+}
+
+function exhaustionFailureClassFromKind(kind: ReturnType<typeof classifyIngestJobErrorMessage>): string {
+	if (kind === 'permanent') return 'permanent';
+	if (kind === 'retryable') return 'retryable_exhausted';
+	return 'unknown_exhausted';
+}
+
+/** Mark `error` items that hit max attempts as DLQ (idempotent). */
+async function syncDlqForExhaustedJobItems(jobId: string): Promise<void> {
+	const db = getDrizzleDb();
+	const maxA = getIngestionJobItemMaxAttempts();
+	const items = await db
+		.select()
+		.from(ingestionJobItems)
+		.where(
+			and(
+				eq(ingestionJobItems.jobId, jobId),
+				eq(ingestionJobItems.status, 'error'),
+				gte(ingestionJobItems.attempts, maxA),
+				isNull(ingestionJobItems.dlqEnqueuedAt)
+			)
+		);
+	for (const it of items) {
+		const kind = classifyIngestJobErrorMessage(it.lastError);
+		const failureClass = exhaustionFailureClassFromKind(kind);
+		await db
+			.update(ingestionJobItems)
+			.set({
+				dlqEnqueuedAt: new Date(),
+				lastFailureKind: kind,
+				failureClass,
+				updatedAt: new Date()
+			})
+			.where(eq(ingestionJobItems.id, it.id));
+		await appendIngestionJobEvent(jobId, 'item_dlq', {
+			itemId: it.id,
+			url: it.url,
+			lastError: it.lastError,
+			kind,
+			failureClass,
+			maxAttempts: maxA
+		});
+	}
+}
+
+/** Catch-up for admin DLQ list: any exhausted error rows not yet stamped. */
+export async function syncDlqForAllExhaustedItems(): Promise<number> {
+	if (!isNeonIngestPersistenceEnabled()) return 0;
+	const db = getDrizzleDb();
+	const maxA = getIngestionJobItemMaxAttempts();
+	const items = await db
+		.select()
+		.from(ingestionJobItems)
+		.where(
+			and(
+				eq(ingestionJobItems.status, 'error'),
+				gte(ingestionJobItems.attempts, maxA),
+				isNull(ingestionJobItems.dlqEnqueuedAt)
+			)
+		);
+	for (const it of items) {
+		const kind = classifyIngestJobErrorMessage(it.lastError);
+		const failureClass = exhaustionFailureClassFromKind(kind);
+		await db
+			.update(ingestionJobItems)
+			.set({
+				dlqEnqueuedAt: new Date(),
+				lastFailureKind: kind,
+				failureClass,
+				updatedAt: new Date()
+			})
+			.where(eq(ingestionJobItems.id, it.id));
+		await appendIngestionJobEvent(it.jobId, 'item_dlq', {
+			itemId: it.id,
+			url: it.url,
+			lastError: it.lastError,
+			kind,
+			failureClass,
+			maxAttempts: maxA
+		});
+	}
+	return items.length;
+}
+
+export type IngestionJobDlqRow = {
+	itemId: string;
+	jobId: string;
+	url: string;
+	lastError: string | null;
+	failureClass: string | null;
+	lastFailureKind: string | null;
+	dlqEnqueuedAt: string | null;
+	attempts: number;
+	dlqReplayCount: number;
+	jobNotes: string | null;
+	jobStatus: string;
+};
+
+export async function listIngestionJobDlqItems(limit: number): Promise<IngestionJobDlqRow[]> {
+	if (!isNeonIngestPersistenceEnabled()) return [];
+	const db = getDrizzleDb();
+	const cap = Math.max(1, Math.min(200, limit));
+	const rows = await db
+		.select({
+			item: ingestionJobItems,
+			jobStatus: ingestionJobs.status,
+			jobNotes: ingestionJobs.notes
+		})
+		.from(ingestionJobItems)
+		.innerJoin(ingestionJobs, eq(ingestionJobItems.jobId, ingestionJobs.id))
+		.where(
+			and(
+				eq(ingestionJobItems.status, 'error'),
+				isNotNull(ingestionJobItems.dlqEnqueuedAt)
+			)
+		)
+		.orderBy(desc(ingestionJobItems.dlqEnqueuedAt))
+		.limit(cap);
+	return rows.map((r) => ({
+		itemId: r.item.id,
+		jobId: r.item.jobId,
+		url: r.item.url,
+		lastError: r.item.lastError ?? null,
+		failureClass: r.item.failureClass ?? null,
+		lastFailureKind: r.item.lastFailureKind ?? null,
+		dlqEnqueuedAt: r.item.dlqEnqueuedAt?.toISOString() ?? null,
+		attempts: r.item.attempts,
+		dlqReplayCount: r.item.dlqReplayCount ?? 0,
+		jobNotes: r.jobNotes ?? null,
+		jobStatus: r.jobStatus
+	}));
+}
+
+export async function replayDlqJobItems(itemIds: string[]): Promise<
+	{ ok: true; replayed: number; jobIds: string[] } | { ok: false; error: string }
+> {
+	if (!isNeonIngestPersistenceEnabled()) return { ok: false, error: 'Neon ingest persistence is not enabled.' };
+	const ids = [...new Set(itemIds.map((x) => x.trim()).filter(Boolean))];
+	if (ids.length === 0) return { ok: false, error: 'No item ids provided.' };
+	const db = getDrizzleDb();
+	let replayed = 0;
+	const jobIds = new Set<string>();
+	for (const id of ids) {
+		const [it] = await db.select().from(ingestionJobItems).where(eq(ingestionJobItems.id, id)).limit(1);
+		if (!it || it.status !== 'error') continue;
+		await db
+			.update(ingestionJobItems)
+			.set({
+				status: 'pending',
+				childRunId: null,
+				lastError: null,
+				blockedUntil: null,
+				launchThrottleCount: 0,
+				dlqEnqueuedAt: null,
+				lastFailureKind: null,
+				failureClass: null,
+				dlqReplayCount: (it.dlqReplayCount ?? 0) + 1,
+				updatedAt: new Date()
+			})
+			.where(eq(ingestionJobItems.id, id));
+		await db
+			.update(ingestionJobs)
+			.set({ status: 'running', completedAt: null, updatedAt: new Date() })
+			.where(eq(ingestionJobs.id, it.jobId));
+		await appendIngestionJobEvent(it.jobId, 'item_replay_from_dlq', {
+			itemId: id,
+			url: it.url,
+			replayKind: 'manual'
+		});
+		jobIds.add(it.jobId);
+		replayed++;
+	}
+	return { ok: true, replayed, jobIds: [...jobIds] };
+}
+
+function getDlqAutoReplayDelayMs(): number {
+	const r = parseInt(process.env.INGEST_DLQ_AUTO_REPLAY_DELAY_MS ?? '0', 10);
+	return Number.isFinite(r) && r >= 60_000 ? Math.min(r, 86_400_000) : 0;
+}
+
+/** Move `retryable_exhausted` DLQ rows back to `pending` after cooldown (optional autonomy). */
+export async function applyDlqAutoReplayIfEnabled(): Promise<number> {
+	const delayMs = getDlqAutoReplayDelayMs();
+	if (!isNeonIngestPersistenceEnabled() || delayMs <= 0) return 0;
+	const db = getDrizzleDb();
+	const cutoff = new Date(Date.now() - delayMs);
+	const rows = await db
+		.select()
+		.from(ingestionJobItems)
+		.where(
+			and(
+				eq(ingestionJobItems.status, 'error'),
+				eq(ingestionJobItems.failureClass, 'retryable_exhausted'),
+				isNotNull(ingestionJobItems.dlqEnqueuedAt),
+				lte(ingestionJobItems.dlqEnqueuedAt, cutoff)
+			)
+		)
+		.limit(50);
+	let n = 0;
+	for (const it of rows) {
+		await db
+			.update(ingestionJobItems)
+			.set({
+				status: 'pending',
+				childRunId: null,
+				lastError: null,
+				blockedUntil: null,
+				launchThrottleCount: 0,
+				dlqEnqueuedAt: null,
+				lastFailureKind: null,
+				failureClass: null,
+				dlqReplayCount: (it.dlqReplayCount ?? 0) + 1,
+				updatedAt: new Date()
+			})
+			.where(eq(ingestionJobItems.id, it.id));
+		await db
+			.update(ingestionJobs)
+			.set({ status: 'running', completedAt: null, updatedAt: new Date() })
+			.where(eq(ingestionJobs.id, it.jobId));
+		await appendIngestionJobEvent(it.jobId, 'item_replay_from_dlq_auto', {
+			itemId: it.id,
+			url: it.url,
+			delayMs
+		});
+		n++;
+	}
+	return n;
 }
 
 export type IngestionJobItemStatus =
@@ -307,6 +536,7 @@ export async function reconcileIngestionJobView(jobId: string): Promise<void> {
 	}
 
 	await applyAutoRequeueForJobErrors(jobId);
+	await syncDlqForExhaustedJobItems(jobId);
 
 	const refreshed = await db
 		.select()
@@ -487,6 +717,7 @@ async function listJobIdsNeedingTick(): Promise<string[]> {
 export async function tickAllRunningIngestionJobs(): Promise<number> {
 	if (!isNeonIngestPersistenceEnabled()) return 0;
 	await sweepStalledIngestRuns();
+	await applyDlqAutoReplayIfEnabled();
 	const ids = await listJobIdsNeedingTick();
 	for (const id of ids) {
 		await tickIngestionJob(id);
@@ -553,6 +784,10 @@ export async function retryIngestionJob(
 					childRunId: null,
 					lastError: null,
 					blockedUntil: null,
+					launchThrottleCount: 0,
+					dlqEnqueuedAt: null,
+					lastFailureKind: null,
+					failureClass: null,
 					updatedAt: new Date()
 				})
 				.where(eq(ingestionJobItems.id, it.id));
@@ -650,6 +885,9 @@ export async function modifyIngestionJobItem(
 				lastError: null,
 				blockedUntil: null,
 				launchThrottleCount: 0,
+				dlqEnqueuedAt: null,
+				lastFailureKind: null,
+				failureClass: null,
 				updatedAt: new Date()
 			})
 			.where(eq(ingestionJobItems.id, id));
