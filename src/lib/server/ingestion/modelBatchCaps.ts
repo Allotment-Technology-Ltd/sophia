@@ -32,6 +32,7 @@ function maxBatchTargetForModel(stage: IngestReasoningStage, modelLower: string)
     if (m.includes('claude')) return 100_000;
     if (m.includes('gemini') && (m.includes('flash') || m.includes('2.5'))) return 90_000;
     if (m.includes('gemini')) return 72_000;
+    if (m.includes('mistral') || m.includes('ministral')) return 90_000;
     return DEFAULT_UNKNOWN_VALIDATION;
   }
 
@@ -44,6 +45,7 @@ function maxBatchTargetForModel(stage: IngestReasoningStage, modelLower: string)
     if (m.includes('claude')) return 100_000;
     if (m.includes('gemini') && m.includes('flash')) return 90_000;
     if (m.includes('gemini')) return 72_000;
+    if (m.includes('mistral') || m.includes('ministral')) return 100_000;
     return DEFAULT_UNKNOWN_GROUPING;
   }
 
@@ -57,6 +59,8 @@ function maxBatchTargetForModel(stage: IngestReasoningStage, modelLower: string)
   if (m.includes('claude')) return 24_000;
   if (m.includes('gemini') && m.includes('flash')) return 22_000;
   if (m.includes('gemini')) return 18_000;
+  if (m.includes('mistral-large') || m.includes('mistral/mistral-large')) return 32_000;
+  if (m.includes('mistral') || m.includes('ministral')) return 26_000;
   return DEFAULT_UNKNOWN_RELATIONS;
 }
 

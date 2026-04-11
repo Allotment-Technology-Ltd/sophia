@@ -27,7 +27,7 @@ describe('parseIngestTimingFromLogLines', () => {
 
 	it('preserves stage_models for validation comparability', () => {
 		const timing = {
-			stage_models: { validation: 'vertex/gemini-3-flash-preview', extraction: 'openai/gpt-4o-mini' }
+			stage_models: { validation: 'vertex/gemini-3-flash-preview', extraction: 'mistral/mistral-large-latest' }
 		};
 		const parsed = parseIngestTimingFromLogLines([
 			`[INGEST_TIMING] ${JSON.stringify(timing)}`

@@ -50,7 +50,10 @@
 	let jobClaimInsertConcurrency = $state('');
 	let jobRemediationMaxClaims = $state('');
 	let jobRelationsOverlap = $state('');
-	let jobIngestProvider = $state<'auto' | 'anthropic' | 'vertex'>('auto');
+	/** Default mistral for SEP / fine-tune relabel durable jobs; persisted per browser. */
+	let jobIngestProvider = $state<'auto' | 'anthropic' | 'vertex' | 'mistral'>('mistral');
+	/** Re-run from extraction when Surreal `ingestion_log` is already complete (INGEST_FORCE_REINGEST). */
+	let jobForceReingest = $state(true);
 	let jobFailOnGroupingCollapse = $state(true);
 	let jobIngestLogPins = $state(false);
 	let jobRemediationEnabled = $state(true);
@@ -124,6 +127,7 @@
 		const overlap = parseOptionalInt(jobRelationsOverlap, 1, 99);
 		if (overlap != null) o.relationsBatchOverlapClaims = overlap;
 		o.ingestProvider = jobIngestProvider;
+		if (jobForceReingest) o.forceReingest = true;
 		o.failOnGroupingPositionCollapse = jobFailOnGroupingCollapse;
 		o.ingestLogPins = jobIngestLogPins;
 		if (validateLlm) {
@@ -170,7 +174,8 @@
 					jobRemediationEnabled,
 					jobRemediationRevalidate,
 					jobWatchdogPhaseIdleJson,
-					jobWatchdogBaselineMult
+					jobWatchdogBaselineMult,
+					jobForceReingest
 				})
 			);
 		} catch {
@@ -463,9 +468,15 @@
 				if (
 					p.jobIngestProvider === 'auto' ||
 					p.jobIngestProvider === 'anthropic' ||
-					p.jobIngestProvider === 'vertex'
+					p.jobIngestProvider === 'vertex' ||
+					p.jobIngestProvider === 'mistral'
 				) {
 					jobIngestProvider = p.jobIngestProvider;
+				}
+				if (typeof p.jobForceReingest === 'boolean') {
+					jobForceReingest = p.jobForceReingest;
+				} else if (!('jobForceReingest' in p)) {
+					jobForceReingest = true;
 				}
 				if (typeof p.jobFailOnGroupingCollapse === 'boolean')
 					jobFailOnGroupingCollapse = p.jobFailOnGroupingCollapse;
@@ -509,7 +520,8 @@
 			jobRemediationEnabled +
 			jobRemediationRevalidate +
 			jobWatchdogPhaseIdleJson +
-			jobWatchdogBaselineMult
+			jobWatchdogBaselineMult +
+			jobForceReingest
 		);
 		persistJobWorkerFields();
 	});
@@ -673,6 +685,13 @@
 					Defaults are remembered in this browser. For full model routing and batch token caps, use
 					<a href="/admin/ingest" class="text-[var(--color-sage)] underline-offset-2 hover:underline">single-run ingest</a>.
 				</p>
+				<label class="mt-3 flex cursor-pointer items-center gap-3 rounded border border-[var(--color-border)]/60 bg-black/15 p-3">
+					<input type="checkbox" bind:checked={jobForceReingest} class="h-5 w-5 rounded border-[var(--color-border)]" />
+					<span class="text-sm text-sophia-dark-text">
+						Re-ingest — bypass “already complete” in Surreal <span class="font-mono text-xs">ingestion_log</span>
+						(<span class="font-mono text-xs">INGEST_FORCE_REINGEST</span> / <span class="font-mono text-xs">--force-stage extracting</span>). Turn off only for net-new URLs.
+					</span>
+				</label>
 				<div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 					<label class="block">
 						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Extraction parallelism</span>
@@ -746,6 +765,7 @@
 							class="mt-2 w-full max-w-xs rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
 							bind:value={jobIngestProvider}
 						>
+							<option value="mistral">mistral (default — SEP relabel)</option>
 							<option value="auto">auto</option>
 							<option value="vertex">vertex</option>
 							<option value="anthropic">anthropic</option>

@@ -35,4 +35,14 @@ describe('sanitizeIngestionJobWorkerDefaults', () => {
     });
     expect(o?.watchdogPhaseIdleJson).toBe('{"extracting":120000}');
   });
+
+  it('accepts mistral ingestProvider', () => {
+    const o = sanitizeIngestionJobWorkerDefaults({ ingestProvider: 'mistral' });
+    expect(o?.ingestProvider).toBe('mistral');
+  });
+
+  it('passes forceReingest for durable-job re-ingest', () => {
+    const o = sanitizeIngestionJobWorkerDefaults({ forceReingest: true });
+    expect(o?.forceReingest).toBe(true);
+  });
 });

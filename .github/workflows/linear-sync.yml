@@ -12,14 +12,6 @@ on:
     branches:
       - main
     paths:
-      - "docs/restormel/04-delivery/19-milestone-plan-with-exit-criteria.md"
-      - "docs/restormel/04-delivery/20-engineering-backlog-by-epic.md"
-      - "docs/restormel/05-design/21-design-backlog-by-surface.md"
-      - "docs/restormel/meta/**"
-      - "docs/Restormel/04-delivery/19-milestone-plan-with-exit-criteria.md"
-      - "docs/Restormel/04-delivery/20-engineering-backlog-by-epic.md"
-      - "docs/Restormel/05-design/21-design-backlog-by-surface.md"
-      - "docs/Restormel/meta/**"
       - "scripts/restormel/sync_linear.py"
       - ".github/workflows/linear-sync.yml"
 

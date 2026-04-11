@@ -710,7 +710,11 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 			job.workerDefaults && typeof job.workerDefaults === 'object' && !Array.isArray(job.workerDefaults)
 				? job.workerDefaults
 				: {};
-		const jobBatchOverrides = sanitizeIngestionJobWorkerDefaults(jobDefaultsRaw);
+		const jobBatchOverrides = sanitizeIngestionJobWorkerDefaults(jobDefaultsRaw) ?? {};
+		const batchOverrides = { ...jobBatchOverrides };
+		if (batchOverrides.ingestProvider === undefined) {
+			batchOverrides.ingestProvider = 'mistral';
+		}
 		const payload: IngestRunPayload = {
 			source_url: it.url,
 			source_type: it.sourceType,
@@ -720,9 +724,8 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 			queue_record_id: it.queueRecordId ?? undefined,
 			pipeline_version: job.pipelineVersion ?? undefined,
 			embedding_fingerprint: job.embeddingFingerprint ?? undefined,
-			...(jobBatchOverrides && Object.keys(jobBatchOverrides).length > 0
-				? { batch_overrides: jobBatchOverrides }
-				: {})
+			ingestion_job_id: jobId,
+			batch_overrides: batchOverrides
 		};
 		try {
 			const childRunId = await ingestRunManager.createRun(payload, job.actorEmail ?? 'ingestion-job@sophia.local');

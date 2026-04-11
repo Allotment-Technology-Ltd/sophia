@@ -64,7 +64,12 @@ export function sanitizeIngestionJobWorkerDefaults(raw: unknown): BO | undefined
   const rf = asInt(o.remediationFaithfulnessMin);
   if (rf != null && rf >= 1 && rf <= 100) out.remediationFaithfulnessMin = rf;
 
-  if (o.ingestProvider === 'auto' || o.ingestProvider === 'anthropic' || o.ingestProvider === 'vertex') {
+  if (
+    o.ingestProvider === 'auto' ||
+    o.ingestProvider === 'anthropic' ||
+    o.ingestProvider === 'vertex' ||
+    o.ingestProvider === 'mistral'
+  ) {
     out.ingestProvider = o.ingestProvider;
   }
   if (typeof o.failOnGroupingPositionCollapse === 'boolean') {
@@ -79,6 +84,9 @@ export function sanitizeIngestionJobWorkerDefaults(raw: unknown): BO | undefined
   }
   if (typeof o.ingestRemediationForceRelationsRerun === 'boolean') {
     out.ingestRemediationForceRelationsRerun = o.ingestRemediationForceRelationsRerun;
+  }
+  if (typeof o.forceReingest === 'boolean') {
+    out.forceReingest = o.forceReingest;
   }
 
   const tBounds = (n: number | null) => n != null && n >= 10_000 && n <= 3_600_000;

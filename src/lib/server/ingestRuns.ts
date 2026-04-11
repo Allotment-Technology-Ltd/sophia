@@ -38,6 +38,7 @@ import {
   normalizePinnedModelId,
   summarizeIngestPinsForLog
 } from './ingestPinNormalization.js';
+import { resolveSurrealRpcUrl } from './surrealEnv.js';
 import { DEFAULT_ADMIN_INGEST_MAX_CONCURRENT } from '$lib/ingestionJobConcurrency';
 import {
 	isIngestGlobalConcurrencyGateEnabled,
@@ -96,7 +97,7 @@ export interface IngestRunPayload {
     /** When false, disables strict grouping integrity exit (`INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE`). */
     failOnGroupingPositionCollapse?: boolean;
     /** Narrow provider preference for the worker (`INGEST_PROVIDER`). */
-    ingestProvider?: 'auto' | 'anthropic' | 'vertex';
+    ingestProvider?: 'auto' | 'anthropic' | 'vertex' | 'mistral';
     /** When true, worker logs `[INGEST_PINS]` diagnostics (`INGEST_LOG_PINS=1`). */
     ingestLogPins?: boolean;
     /** Per-run model call timeout for most ingest stages (`scripts/ingest.ts` → `INGEST_MODEL_TIMEOUT_MS`). */
@@ -127,6 +128,11 @@ export interface IngestRunPayload {
     ingestRemediationRevalidate?: boolean;
     /** `INGEST_REMEDIATION_FORCE_RELATIONS_RERUN=1`. */
     ingestRemediationForceRelationsRerun?: boolean;
+    /**
+     * When true, sets `INGEST_FORCE_REINGEST=1` on the ingest child so `ingestion_log.status=complete`
+     * does not short-circuit (same as `--force-stage extracting`).
+     */
+    forceReingest?: boolean;
   };
   model_chain: {
     extract: string;
@@ -143,6 +149,11 @@ export interface IngestRunPayload {
   /** Durable metadata (auto-filled in createRun when omitted). */
   pipeline_version?: string;
   embedding_fingerprint?: string;
+  /**
+   * When set, this run was launched from a Neon durable ingestion job (`ingestion_jobs`).
+   * Worker skips `INGEST_CATALOG_ROUTING_JSON_B64` so routing is Restormel + canonical + finetune filter only.
+   */
+  ingestion_job_id?: string;
 }
 
 function batchOverridesToEnv(
@@ -180,7 +191,8 @@ function batchOverridesToEnv(
     remediationMaxClaims,
     ingestRemediationEnabled,
     ingestRemediationRevalidate,
-    ingestRemediationForceRelationsRerun
+    ingestRemediationForceRelationsRerun,
+    forceReingest
   } = overrides;
 
   const asPositiveInt = (v: unknown): number | null => {
@@ -237,7 +249,12 @@ function batchOverridesToEnv(
   if (typeof failOnGroupingPositionCollapse === 'boolean') {
     out.INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE = failOnGroupingPositionCollapse ? 'true' : 'false';
   }
-  if (ingestProvider === 'auto' || ingestProvider === 'anthropic' || ingestProvider === 'vertex') {
+  if (
+    ingestProvider === 'auto' ||
+    ingestProvider === 'anthropic' ||
+    ingestProvider === 'vertex' ||
+    ingestProvider === 'mistral'
+  ) {
     out.INGEST_PROVIDER = ingestProvider;
   }
   if (typeof ingestLogPins === 'boolean') {
@@ -283,6 +300,9 @@ function batchOverridesToEnv(
   }
   if (typeof ingestRemediationForceRelationsRerun === 'boolean') {
     out.INGEST_REMEDIATION_FORCE_RELATIONS_RERUN = ingestRemediationForceRelationsRerun ? '1' : '0';
+  }
+  if (forceReingest === true) {
+    out.INGEST_FORCE_REINGEST = '1';
   }
 
   return out;
@@ -537,6 +557,8 @@ export interface IngestExecutionInfo {
   firestoreProject: string | null;
   /** When set, durable ingest orchestration + staging use Neon Postgres (DATABASE_URL). */
   neonIngestPersistence?: boolean;
+  /** Neon `ingest_run_logs` write policy for child process lines (see `INGEST_NEON_LOG_PERSISTENCE`). */
+  neonIngestLogPersistence?: NeonIngestLogPersistence;
 }
 
 function redactSurrealTarget(rawUrl: string): string {
@@ -551,8 +573,8 @@ function redactSurrealTarget(rawUrl: string): string {
 
 export function getIngestExecutionInfo(): IngestExecutionInfo {
   const mode = ingestRunUsesRealChildProcess() ? 'real' : 'simulated';
-  const surrealRaw = (process.env.SURREAL_URL ?? 'http://localhost:8000/rpc').trim();
-  const surrealTarget = redactSurrealTarget(surrealRaw || 'http://localhost:8000/rpc');
+  const surrealRaw = resolveSurrealRpcUrl();
+  const surrealTarget = redactSurrealTarget(surrealRaw);
   const firestoreProject =
     (process.env.FIREBASE_PROJECT_ID ??
       process.env.GOOGLE_CLOUD_PROJECT ??
@@ -562,7 +584,8 @@ export function getIngestExecutionInfo(): IngestExecutionInfo {
     mode,
     surrealTarget,
     firestoreProject,
-    neonIngestPersistence: isNeonIngestPersistenceEnabled()
+    neonIngestPersistence: isNeonIngestPersistenceEnabled(),
+    neonIngestLogPersistence: ingestNeonLogPersistenceMode()
   };
 }
 
@@ -570,7 +593,7 @@ function appendProcessOutput(runId: string, chunk: Buffer, manager: IngestRunMan
   const text = chunk.toString('utf-8');
   for (const line of text.split(/\n/)) {
     const trimmed = line.replace(/\r$/, '');
-    if (trimmed.length > 0) manager.addLog(runId, trimmed);
+    if (trimmed.length > 0) manager.addLog(runId, trimmed, { fromChildProcess: true });
   }
 }
 
@@ -588,6 +611,31 @@ function extractIngestWorkerFailureHint(logLines: string[], maxLen = 900): strin
   let out = hits.length > 0 ? hits.reverse().join(' | ') : logLines.slice(-4).join(' | ').trim();
   if (out.length > maxLen) out = `${out.slice(0, maxLen - 3)}...`;
   return out;
+}
+
+/** How aggressively child stdout/stderr lines are written to Neon `ingest_run_logs` (each line was a transaction + bump). */
+export type NeonIngestLogPersistence = 'full' | 'minimal' | 'off';
+
+export function ingestNeonLogPersistenceMode(): NeonIngestLogPersistence {
+  const v = (process.env.INGEST_NEON_LOG_PERSISTENCE ?? '').trim().toLowerCase();
+  if (v === 'off' || v === '0' || v === 'false' || v === 'none') return 'off';
+  if (v === 'minimal' || v === 'summary' || v === 'reduced') return 'minimal';
+  return 'full';
+}
+
+function neonActivityBumpDebounceMs(): number {
+  const r = parseInt(process.env.INGEST_NEON_ACTIVITY_DEBOUNCE_MS ?? '1500', 10);
+  return Number.isFinite(r) && r >= 200 ? Math.min(120_000, r) : 1500;
+}
+
+/** Child-process lines still written to Neon when `INGEST_NEON_LOG_PERSISTENCE=minimal` (Phase-0 scripts + failures). Orchestrator `addLog` lines always persist in `minimal`. */
+function shouldPersistIngestLogLineToNeon(line: string): boolean {
+  const s = line.trim();
+  if (!s) return false;
+  if (/\[INGEST_(TIMING|TELEMETRY)\]/i.test(s)) return true;
+  if (/\[INGEST_FINETUNE_POLICY\]/i.test(s)) return true;
+  if (/\[CANCEL\]/i.test(s)) return true;
+  return INGEST_WORKER_FAILURE_LINE.test(s);
 }
 
 const PIPELINE_STAGES = ['extract', 'relate', 'group', 'embed'] as const;
@@ -621,6 +669,8 @@ class IngestRunManager extends EventEmitter {
   private runs: Map<string, IngestRunState> = new Map();
   private maxLogLines = 500;
   private snapshotPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Debounced `neonBumpRunActivity` — avoids one UPDATE per log line during noisy ingest output. */
+  private activityBumpTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private queuePollTimer: ReturnType<typeof setInterval> | null = null;
   private queuePollBusy = false;
   private queueLinkPromotionBusy = false;
@@ -766,6 +816,33 @@ class IngestRunManager extends EventEmitter {
     this.snapshotPersistTimers.delete(runId);
     const s = this.runs.get(runId);
     if (s && isNeonIngestPersistenceEnabled()) void neonPersistIngestRunSnapshot(s);
+  }
+
+  private scheduleNeonActivityBump(runId: string): void {
+    if (!isNeonIngestPersistenceEnabled()) return;
+    const prev = this.activityBumpTimers.get(runId);
+    if (prev) clearTimeout(prev);
+    const ms = neonActivityBumpDebounceMs();
+    const t = setTimeout(() => {
+      this.activityBumpTimers.delete(runId);
+      const s = this.runs.get(runId);
+      if (!s) return;
+      void neonBumpRunActivity(runId, s.lastOutputAt ?? s.createdAt);
+    }, ms);
+    this.activityBumpTimers.set(runId, t);
+  }
+
+  /** Flush debounced activity bump (e.g. before terminal snapshot). */
+  private flushNeonActivityBump(runId: string): void {
+    const prev = this.activityBumpTimers.get(runId);
+    if (prev) {
+      clearTimeout(prev);
+      this.activityBumpTimers.delete(runId);
+    }
+    const s = this.runs.get(runId);
+    if (s && isNeonIngestPersistenceEnabled()) {
+      void neonBumpRunActivity(runId, s.lastOutputAt ?? s.createdAt);
+    }
   }
 
   /**
@@ -950,7 +1027,7 @@ class IngestRunManager extends EventEmitter {
     void persistIngestRunReport(state);
   }
 
-  addLog(runId: string, line: string): void {
+  addLog(runId: string, line: string, opts?: { fromChildProcess?: boolean }): void {
     const state = this.runs.get(runId);
     if (state) {
       state.logLines.push(line);
@@ -961,8 +1038,15 @@ class IngestRunManager extends EventEmitter {
         state.logLines.shift();
       }
       if (isNeonIngestPersistenceEnabled()) {
-        void neonAppendLogLine(runId, line);
-        void neonBumpRunActivity(runId, state.lastOutputAt);
+        const logMode = ingestNeonLogPersistenceMode();
+        const persistToNeon =
+          logMode === 'full' ||
+          (logMode === 'minimal' &&
+            (!opts?.fromChildProcess || shouldPersistIngestLogLineToNeon(line)));
+        if (persistToNeon) {
+          void neonAppendLogLine(runId, line);
+        }
+        this.scheduleNeonActivityBump(runId);
         this.scheduleNeonSnapshotPersist(runId);
       }
       // Periodic Firestore merge so overnight failures still leave a durable row (not only in-memory UI).
@@ -999,6 +1083,7 @@ class IngestRunManager extends EventEmitter {
       state.status = 'done';
       state.completedAt = Date.now();
       state.resumable = false;
+      this.flushNeonActivityBump(runId);
       this.flushNeonSnapshotPersist(runId);
       this.schedulePersistReport(runId);
       if (state.payload.queue_record_id) {
@@ -1029,6 +1114,7 @@ class IngestRunManager extends EventEmitter {
           }
         });
       }
+      this.flushNeonActivityBump(runId);
       this.flushNeonSnapshotPersist(runId);
       this.schedulePersistReport(runId);
       if (state.payload.queue_record_id) {
@@ -1071,6 +1157,7 @@ class IngestRunManager extends EventEmitter {
     }
 
     this.addLog(runId, '[CANCEL] Ingestion cancelled by operator.');
+    this.flushNeonActivityBump(runId);
     this.flushNeonSnapshotPersist(runId);
     this.schedulePersistReport(runId);
     if (state.payload.queue_record_id) {
@@ -1374,7 +1461,8 @@ class IngestRunManager extends EventEmitter {
       : {};
 
     let catalogRoutingEnv: Record<string, string> = {};
-    if (!operatorModelPins) {
+    const skipCatalogForDurableJob = Boolean(payload.ingestion_job_id?.trim());
+    if (!operatorModelPins && !skipCatalogForDurableJob) {
       try {
         const b64 = await encodeIngestCatalogRoutingJsonB64();
         if (b64) {
@@ -1390,6 +1478,11 @@ class IngestRunManager extends EventEmitter {
           e instanceof Error ? e.message : String(e)
         );
       }
+    } else if (skipCatalogForDurableJob && !operatorModelPins) {
+      this.addLog(
+        runId,
+        '[ingest] durable ingestion job: skipping INGEST_CATALOG_ROUTING_JSON_B64 (Restormel + canonical + finetune policy only)'
+      );
     }
 
     if (Object.keys(operatorByokEnv).length > 0) {

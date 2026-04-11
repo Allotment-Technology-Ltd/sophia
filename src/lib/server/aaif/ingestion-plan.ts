@@ -21,7 +21,7 @@ export type IngestionStage =
   | 'embedding'
   | 'json_repair';
 
-export type IngestProviderPreference = 'auto' | 'vertex' | 'anthropic';
+export type IngestProviderPreference = 'auto' | 'vertex' | 'anthropic' | 'mistral';
 
 export interface IngestionPlanningContext {
   sourceTitle: string;

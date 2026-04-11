@@ -46,8 +46,8 @@ describe('planIngestionStage', () => {
     });
 
     expect(mockResolveExtractionModelRoute).toHaveBeenCalledWith({
-      requestedProvider: 'openai',
-      requestedModelId: 'gpt-4o-mini',
+      requestedProvider: 'mistral',
+      requestedModelId: 'mistral-large-latest',
       routeId: 'interactive',
       failureMode: 'degraded_default',
       restormelContext: {
@@ -143,7 +143,7 @@ describe('planIngestionStage', () => {
       sourceLengthChars: 50_000
     });
 
-    expect(estimates).toHaveLength(7);
+    expect(estimates).toHaveLength(8);
     expect(estimates[0]?.stage).toBe('fetch');
     expect(estimates[0]?.inputTokens).toBeGreaterThan(12_000);
     expect(estimates[1]?.stage).toBe('extraction');
