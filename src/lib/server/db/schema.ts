@@ -323,11 +323,19 @@ export const ingestionJobItems = pgTable(
     /** Count of “too many concurrent workers” style launch throttles (separate from ingest attempts). */
     launchThrottleCount: integer('launch_throttle_count').notNull().default(0),
     queueRecordId: text('queue_record_id'),
+    /** Set when item is terminal `error` after max attempts (DLQ visibility). */
+    dlqEnqueuedAt: timestamp('dlq_enqueued_at', { withTimezone: true }),
+    /** Result of `classifyIngestJobErrorMessage` at DLQ time: retryable | permanent | unknown */
+    lastFailureKind: text('last_failure_kind'),
+    /** Terminal bucket: retryable_exhausted | permanent | unknown_exhausted */
+    failureClass: text('failure_class'),
+    dlqReplayCount: integer('dlq_replay_count').notNull().default(0),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
   },
   (t) => ({
     jobIdx: index('idx_ingestion_job_items_job').on(t.jobId),
-    jobStatusIdx: index('idx_ingestion_job_items_job_status').on(t.jobId, t.status)
+    jobStatusIdx: index('idx_ingestion_job_items_job_status').on(t.jobId, t.status),
+    dlqIdx: index('idx_ingestion_job_items_dlq').on(t.dlqEnqueuedAt)
   })
 );
 

@@ -25,7 +25,18 @@ const RETRYABLE_PATTERNS = [
 	/transient/i,
 	/too\s+many\s+concurrent\s+ingest/i,
 	/concurrent\s+ingest\s+workers/i,
-	/ingest_stuck_timeout/i
+	/ingest_stuck_timeout/i,
+	/\btpm\b/i,
+	/tokens?\s+per\s*min/i,
+	/token.?limit/i,
+	/quota\s+exceeded/i,
+	/please\s+try\s+again\s+later/i,
+	/the\s+model\s+is\s+overloaded/i,
+	/overloaded_error/i,
+	/safet(y)?\s+ratelimit/i,
+	/generation\s+blocked/i,
+	/vertexai\.googleapis\.com.*unavailable/i,
+	/aiplatform\.googleapis\.com.*unavailable/i
 ];
 
 const PERMANENT_PATTERNS = [

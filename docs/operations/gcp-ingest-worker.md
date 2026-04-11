@@ -20,6 +20,8 @@ Sophia runs **`tsx scripts/ingest.ts`** (and fetch-source) as **child processes*
 
 **Idle watchdog (Neon):** Default idle threshold is **5 minutes** (`300000` ms). Override with `INGEST_WATCHDOG_IDLE_MS` (≥60s), or set **`INGEST_WATCHDOG_IDLE_MS=0`** to disable. `tickAllRunningIngestionJobs` / the Cloud Run ingestion poller terminalize stuck `ingest_runs`, append `ingest_run_logs` / `ingest_run_issues`, and optionally requeue job items (`INGEST_WATCHDOG_REQUEUE=1`). See [ingest-watchdog-and-observability-plan.md](./ingest-watchdog-and-observability-plan.md).
 
+**Job DLQ auto-replay:** If **`INGEST_DLQ_AUTO_REPLAY_DELAY_MS`** is set (≥60s), each poller tick may move **`retryable_exhausted`** dead-letter items back to **`pending`**. See [ingestion-credits-and-workers.md](./ingestion-credits-and-workers.md).
+
 ## Regional affinity
 
 | Dependency | Target |

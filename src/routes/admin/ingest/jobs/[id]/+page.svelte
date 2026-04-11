@@ -28,6 +28,10 @@
 		lastError?: string | null;
 		attempts?: number;
 		updatedAt?: string;
+		dlqEnqueuedAt?: string | null;
+		failureClass?: string | null;
+		lastFailureKind?: string | null;
+		dlqReplayCount?: number;
 	};
 
 	type EventRow = {
@@ -141,6 +145,8 @@
 				typeof i.lastError === 'string' && /too many concurrent ingest/i.test(i.lastError)
 		).length
 	);
+
+	const dlqItemCount = $derived(items.filter((i) => Boolean(i.dlqEnqueuedAt)).length);
 
 	async function postItemModify(
 		itemId: string,
@@ -278,6 +284,10 @@
 <main class="job-detail-page sophia-stack-comfortable">
 	<p class="font-mono text-xs">
 		<a href="/admin/ingest/jobs" class="text-sophia-dark-sage underline-offset-2 hover:underline">← All jobs</a>
+		<span class="text-sophia-dark-muted"> · </span>
+		<a href="/admin/ingest/jobs#dead-letter" class="text-sophia-dark-sage underline-offset-2 hover:underline"
+			>Dead letter queue</a
+		>
 	</p>
 
 	{#if neonDisabled}
@@ -338,6 +348,15 @@
 				>
 					{launchCapErrorCount} URL(s) failed with a concurrent worker cap. They are re-tried automatically when
 					slots free (up to {itemMaxAttempts} attempts). Raise ADMIN_INGEST_MAX_CONCURRENT if the host allows.
+				</p>
+			{/if}
+			{#if dlqItemCount > 0}
+				<p class="mt-3 text-sm text-sophia-dark-muted" role="status">
+					{dlqItemCount} URL(s) in <span class="font-mono text-xs text-sophia-dark-text">DLQ</span> (max attempts
+					reached). Replay from
+					<a href="/admin/ingest/jobs#dead-letter" class="text-sophia-dark-sage underline-offset-2 hover:underline"
+						>all jobs · Dead letter</a
+					>.
 				</p>
 			{/if}
 
@@ -403,7 +422,17 @@
 								<td class="max-w-[280px] py-3 pr-3 font-mono text-xs break-all">
 									{it.url}
 								</td>
-								<td class="py-3 pr-3">{it.status}</td>
+								<td class="py-3 pr-3">
+									{it.status}
+									{#if it.dlqEnqueuedAt}
+										<span
+											class="ml-1 inline-block rounded bg-amber-500/20 px-1.5 font-mono text-[10px] uppercase tracking-wide text-amber-100"
+											title="Dead letter (max attempts)"
+										>
+											DLQ
+										</span>
+									{/if}
+								</td>
 								<td class="py-3 pr-3 font-mono text-xs text-sophia-dark-muted">
 									{typeof it.attempts === 'number' ? it.attempts : 0}/{itemMaxAttempts}
 								</td>

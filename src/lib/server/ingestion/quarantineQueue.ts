@@ -36,8 +36,8 @@ export async function loadQuarantineClaimQueue(opts: {
 	const limit = Math.min(100, Math.max(1, opts.limit ?? 40));
 	const urlPart = opts.sourceUrlContains?.trim().toLowerCase();
 
-	/* SurrealQL: do not reference source.* in WHERE without FETCH; filter URL in JS if needed.
-	 * Tight OR avoids selecting “all claims” (old query used verification_state IS NONE OR != validated). */
+	/* SurrealQL: WHERE → ORDER BY → LIMIT → FETCH (FETCH must be last; do not reference source.* in WHERE).
+	 * Filter URL in JS if needed. Tight OR avoids selecting “all claims”. */
 	const sql = `
 SELECT
 	id,
@@ -57,9 +57,9 @@ WHERE
 			AND verification_state != 'skipped'
 		)
 	)
-FETCH source
 ORDER BY validation_score ASC
-LIMIT $lim;
+LIMIT $lim
+FETCH source;
 `;
 
 	const vars: Record<string, unknown> = {
