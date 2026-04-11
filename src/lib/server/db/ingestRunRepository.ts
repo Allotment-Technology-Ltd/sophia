@@ -370,6 +370,30 @@ const idleStallWhereSql = (idleMs: number) =>
           )
         )`;
 
+/**
+ * Same predicate as `idleStallWhereSql` but qualified as `ir.*` for queries that alias
+ * `FROM ingest_runs ir`. PostgreSQL does not expose the base table name when an alias is used;
+ * referencing `"ingest_runs"."last_output_at"` in that scope fails at runtime.
+ */
+const idleStallWhereSqlIr = (idleMs: number) =>
+  sql`(
+          (
+            (ir.last_output_at IS NOT NULL OR ir.worker_heartbeat_at IS NOT NULL)
+            AND (
+              (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint
+              - GREATEST(
+                  COALESCE(ir.last_output_at, 0::bigint),
+                  COALESCE(ir.worker_heartbeat_at, 0::bigint)
+                )
+            ) > ${idleMs}
+          )
+          OR (
+            ir.last_output_at IS NULL
+            AND ir.worker_heartbeat_at IS NULL
+            AND (EXTRACT(EPOCH FROM NOW()) - EXTRACT(EPOCH FROM ir.created_at)) * 1000 > ${idleMs}
+          )
+        )`;
+
 export type IdleStalledIngestCandidateRow = {
   id: string;
   currentStageKey: string | null;
@@ -415,7 +439,7 @@ export async function neonListIdleStalledIngestCandidateRows(
       AND ir.completed_at IS NULL
       AND ir.status IN ('running', 'queued', 'awaiting_sync')
       AND (
-        ${idleStallWhereSql(listThresholdMs)}
+        ${idleStallWhereSqlIr(listThresholdMs)}
         OR (
           (
             NULLIF(trim(ir.payload #>> '{batch_overrides,watchdogPhaseIdleJson}'), '') IS NOT NULL
@@ -423,7 +447,7 @@ export async function neonListIdleStalledIngestCandidateRows(
           )
           OR (
             NULLIF(trim(ir.payload #>> '{batch_overrides,watchdogPhaseBaselineMult}'), '') IS NOT NULL
-            AND ${idleStallWhereSql(tunedMs)}
+            AND ${idleStallWhereSqlIr(tunedMs)}
           )
         )
       )
