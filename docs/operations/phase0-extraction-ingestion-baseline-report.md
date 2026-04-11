@@ -2,7 +2,11 @@
 
 **Scope:** Baseline wall time, extraction sub-breakdown signals, quality gates, golden eval set proposal, hypotheses, and go/no-go. No model training or serving design.
 
-**Environment note:** This agent session had **no `DATABASE_URL`** to Neon; **production aggregates were not executed**. Section 1 therefore documents **exact SQL and log queries** and leaves numeric cells as **pending** until an operator runs them (or uses the GCP Logging fallback). If you want this tailored to **only** Cloud Logging exports (no Neon SQL), say so in a follow-up: *“Assume only GCP Logging export, no Neon SQL.”*
+**Production snapshot (Neon):** Aggregates below were pulled with **Neon MCP `run_sql`** against project **`sophia`** on **2026-04-11**, window **`completed_at` last 90 days**, predicates `status = 'done'`, `cancelled_by_user = false`, `completed_at IS NOT NULL`, and `report_envelope` containing **`timingTelemetry.stage_ms`**.
+
+**Coverage caveat:** In this window, **59** completed runs had `timingTelemetry.stage_ms`, but only **10** had a usable numeric **`total_wall_ms`** in the same envelope (non-null / non-zero). **Percent-of-E2E and §6.1 stage table statistics use the N = 10 cohort** (runs where `total_wall_ms` is present). Broader runs still contribute to **issue counts** (65 runs with any `report_envelope`) and to **model-call concentration** when keyed only on `model_calls.extraction` (see §2).
+
+**GCP Logging:** Optional `[INGEST_TELEMETRY]` / `[INGEST_TIMING]` sampling was **not run** here (`gcloud logging read` failed: token refresh / non-interactive auth). Operators with credentials can still use the filters in §“Log queries”.
 
 ---
 
@@ -104,46 +108,50 @@ WITH m AS (
   FROM ingest_runs ir
   WHERE ir.status = 'done'
     AND ir.cancelled_by_user = false
+    AND ir.completed_at IS NOT NULL
     AND ir.completed_at >= NOW() - INTERVAL '90 days'
     AND ir.report_envelope ? 'timingTelemetry'
     AND ir.report_envelope->'timingTelemetry' ? 'stage_ms'
-)
+),
+f AS (SELECT * FROM m WHERE total_wall_ms IS NOT NULL)
 SELECT
-  COUNT(*) FILTER (WHERE total_wall_ms IS NOT NULL) AS n,
-  percentile_cont(0.5) WITHIN GROUP (ORDER BY extracting_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS extracting_p50,
-  percentile_cont(0.9) WITHIN GROUP (ORDER BY extracting_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS extracting_p90,
-  MAX(extracting_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS extracting_max,
-  AVG(extracting_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS extracting_mean,
-  percentile_cont(0.5) WITHIN GROUP (ORDER BY relating_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS relating_p50,
-  percentile_cont(0.9) WITHIN GROUP (ORDER BY relating_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS relating_p90,
-  MAX(relating_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS relating_max,
-  AVG(relating_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS relating_mean,
-  percentile_cont(0.5) WITHIN GROUP (ORDER BY grouping_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS grouping_p50,
-  percentile_cont(0.9) WITHIN GROUP (ORDER BY grouping_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS grouping_p90,
-  MAX(grouping_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS grouping_max,
-  AVG(grouping_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS grouping_mean,
-  percentile_cont(0.5) WITHIN GROUP (ORDER BY embedding_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS embedding_p50,
-  percentile_cont(0.9) WITHIN GROUP (ORDER BY embedding_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS embedding_p90,
-  MAX(embedding_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS embedding_max,
-  AVG(embedding_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS embedding_mean,
-  percentile_cont(0.5) WITHIN GROUP (ORDER BY validating_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS validating_p50,
-  percentile_cont(0.9) WITHIN GROUP (ORDER BY validating_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS validating_p90,
-  MAX(validating_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS validating_max,
-  AVG(validating_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS validating_mean,
-  percentile_cont(0.5) WITHIN GROUP (ORDER BY remediating_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS remediating_p50,
-  percentile_cont(0.9) WITHIN GROUP (ORDER BY remediating_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS remediating_p90,
-  MAX(remediating_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS remediating_max,
-  AVG(remediating_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS remediating_mean,
-  percentile_cont(0.5) WITHIN GROUP (ORDER BY storing_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS storing_p50,
-  percentile_cont(0.9) WITHIN GROUP (ORDER BY storing_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS storing_p90,
-  MAX(storing_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS storing_max,
-  AVG(storing_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS storing_mean,
-  percentile_cont(0.5) WITHIN GROUP (ORDER BY planning_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS planning_p50,
-  percentile_cont(0.9) WITHIN GROUP (ORDER BY planning_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS planning_p90,
-  MAX(planning_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS planning_max,
-  AVG(planning_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS planning_mean
-FROM m;
+  COUNT(*)::int AS n,
+  percentile_cont(0.5) WITHIN GROUP (ORDER BY extracting_ms) AS extracting_p50,
+  percentile_cont(0.9) WITHIN GROUP (ORDER BY extracting_ms) AS extracting_p90,
+  MAX(extracting_ms) AS extracting_max,
+  AVG(extracting_ms) AS extracting_mean,
+  percentile_cont(0.5) WITHIN GROUP (ORDER BY relating_ms) AS relating_p50,
+  percentile_cont(0.9) WITHIN GROUP (ORDER BY relating_ms) AS relating_p90,
+  MAX(relating_ms) AS relating_max,
+  AVG(relating_ms) AS relating_mean,
+  percentile_cont(0.5) WITHIN GROUP (ORDER BY grouping_ms) AS grouping_p50,
+  percentile_cont(0.9) WITHIN GROUP (ORDER BY grouping_ms) AS grouping_p90,
+  MAX(grouping_ms) AS grouping_max,
+  AVG(grouping_ms) AS grouping_mean,
+  percentile_cont(0.5) WITHIN GROUP (ORDER BY embedding_ms) AS embedding_p50,
+  percentile_cont(0.9) WITHIN GROUP (ORDER BY embedding_ms) AS embedding_p90,
+  MAX(embedding_ms) AS embedding_max,
+  AVG(embedding_ms) AS embedding_mean,
+  percentile_cont(0.5) WITHIN GROUP (ORDER BY validating_ms) AS validating_p50,
+  percentile_cont(0.9) WITHIN GROUP (ORDER BY validating_ms) AS validating_p90,
+  MAX(validating_ms) AS validating_max,
+  AVG(validating_ms) AS validating_mean,
+  percentile_cont(0.5) WITHIN GROUP (ORDER BY remediating_ms) AS remediating_p50,
+  percentile_cont(0.9) WITHIN GROUP (ORDER BY remediating_ms) AS remediating_p90,
+  MAX(remediating_ms) AS remediating_max,
+  AVG(remediating_ms) AS remediating_mean,
+  percentile_cont(0.5) WITHIN GROUP (ORDER BY storing_ms) AS storing_p50,
+  percentile_cont(0.9) WITHIN GROUP (ORDER BY storing_ms) AS storing_p90,
+  MAX(storing_ms) AS storing_max,
+  AVG(storing_ms) AS storing_mean,
+  percentile_cont(0.5) WITHIN GROUP (ORDER BY planning_ms) AS planning_p50,
+  percentile_cont(0.9) WITHIN GROUP (ORDER BY planning_ms) AS planning_p90,
+  MAX(planning_ms) AS planning_max,
+  AVG(planning_ms) AS planning_mean
+FROM f;
 ```
+
+**PostgreSQL note:** ordered-set aggregates (`percentile_cont` … `WITHIN GROUP`) **cannot** use a `FILTER` clause; restrict rows in a CTE (e.g. `f` above) instead.
 
 #### SQL — by `source_type` (same window)
 
@@ -157,16 +165,19 @@ WITH m AS (
   FROM ingest_runs ir
   WHERE ir.status = 'done'
     AND ir.cancelled_by_user = false
+    AND ir.completed_at IS NOT NULL
     AND ir.completed_at >= NOW() - INTERVAL '90 days'
     AND ir.report_envelope ? 'timingTelemetry'
-)
+    AND ir.report_envelope->'timingTelemetry' ? 'stage_ms'
+),
+f AS (SELECT * FROM m WHERE total_wall_ms IS NOT NULL)
 SELECT
   source_type,
-  COUNT(*) FILTER (WHERE total_wall_ms IS NOT NULL) AS n,
-  percentile_cont(0.5) WITHIN GROUP (ORDER BY extracting_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS extracting_p50_ms,
-  percentile_cont(0.9) WITHIN GROUP (ORDER BY extracting_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS extracting_p90_ms,
-  AVG(extracting_ms / total_wall_ms) FILTER (WHERE total_wall_ms IS NOT NULL) AS mean_frac_extract
-FROM m
+  COUNT(*)::int AS n,
+  percentile_cont(0.5) WITHIN GROUP (ORDER BY extracting_ms) AS extracting_p50_ms,
+  percentile_cont(0.9) WITHIN GROUP (ORDER BY extracting_ms) AS extracting_p90_ms,
+  AVG(extracting_ms / total_wall_ms) AS mean_frac_extract
+FROM f
 GROUP BY 1
 ORDER BY n DESC;
 ```
@@ -181,12 +192,14 @@ Export or query logs where `textPayload` / `jsonPayload.message` contains `[INGE
 
 ### 1.4 Answer: % of total wall time in `extracting` (mean + p90)
 
-**Pending execution of the SQL above** (or log export). Interpret **`frac_extract_mean`** and **`frac_extract_p90`** from the first aggregate query as:
+From the first aggregate query (§1.2, **N = 10** rows with `total_wall_ms`, 2026-04-11 pull):
 
-- **Mean % extraction of E2E** = `100 * frac_extract_mean`
-- **p90 % extraction of E2E** = `100 * frac_extract_p90`
+- **`frac_extract_mean` ≈ 0.2435** → **Mean % extraction of E2E ≈ 24.4%**
+- **`frac_extract_p90` ≈ 0.4654** → **p90 % extraction of E2E ≈ 46.5%**
 
-**Caveat:** `total_wall_ms` is process wall clock from `run_started_at_ms` to summary; it includes planning and any gaps **not** attributed to a `stage_ms` bucket. If sums of stages + planning are systematically below `total_wall_ms`, report both “stage-attributed” and “total wall” fractions.
+On the same cohort, **mean** `stage_ms` / `total_wall_ms` shares were approximately **validating 38.7%**, **remediating 20.2%**, **storing 14.0%** (see §6.5).
+
+**Caveat:** `total_wall_ms` is process wall clock from `run_started_at_ms` to summary; it includes planning and any gaps **not** attributed to a `stage_ms` bucket. In this snapshot many completed runs lacked `total_wall_ms` in `report_envelope` (see environment note); backfill or log-based `total_wall_ms` would widen **N** before treating percentiles as stable.
 
 ---
 
@@ -215,6 +228,12 @@ WHERE ir.status = 'done'
   AND ir.completed_at >= NOW() - INTERVAL '90 days'
   AND ir.report_envelope->'timingTelemetry'->'model_calls' ? 'extraction';
 ```
+
+**Production read (2026-04-11, Neon):** On the **N = 10** runs that have both `total_wall_ms` and `model_call_wall_ms.extraction`, **Pearson corr(`extracting_ms`, `model_call_wall_ms.extraction`) ≈ 0.85** — extraction wall time moves with extraction-stage model wall time, consistent with **model latency / call count** driving much of `stage_ms.extracting` in this slice.
+
+Across **49** completed runs in 90d that expose `model_calls.extraction` (broader than the N = 10 E2E cohort), the same correlation is **≈ 0.73**, with **median ~4** extraction calls per run (**p90 ~5**), and **median implied ms/call** (`model_call_wall_ms.extraction / calls`) **≈ 60k** (**p90 ≈ 95k**). That pattern is **moderate call count** with **heavy per-call wall**, not hundreds of tiny calls.
+
+**`timingTelemetry` repair/retry fields (N = 10 E2E cohort):** `batch_splits` and `recovery_agent_invocations` are **0 at p50 and p90**; `json_repair_invocations` **p90 ≈ 1** (median 0); `model_retries` **p90 = 0** on this slice. **`ingest_run_issues`** on **65** done runs with any `report_envelope` in the window: **`json_repair` 127**, **`retry` 26**, **`ingest_retry` 11**, **`recovery_agent` 0** rows (kinds filtered to repair/retry family). So **JSON repair pressure shows up in issues more than in the timing counters** for runs that omit `total_wall_ms`, and concentration metrics should be revisited after envelope completeness improves.
 
 ### 2.2 Correlation: tokens, batch splits, retries, recovery agent, concurrency
 
@@ -315,11 +334,11 @@ All rows below are **`sep_entry`** unless noted. Add **5–10** `web_article` UR
 
 ## 5) Extraction-specific hypotheses (ranked)
 
-1. **Model latency dominates** — If `model_call_wall_ms.extraction ≈ stage_ms.extracting` and `model_calls.extraction` is moderate, **faster model / shorter time-to-first-token** at similar quality is the highest ROI (subject to TPM).
-2. **Batching / truncation / repair loop dominates** — If `batch_splits` and `json_repair_invocations` correlate with long `extracting` and many **medium** calls, **better extraction JSON conformance** (bespoke or fine-tuned) may cut wall time more than raw tokens/sec by **avoiding splits and repair passes**.
-3. **Retries and recovery agent dominate tail** — If p90 `retry_backoff_ms_total` and `recovery_agent_invocations` are high relative to median, **reducing transient extraction failures** (routing, context, output format) competes with raw speed for **p90 E2E**.
+1. **Downstream validation + remediation dominate mean E2E** — On the **N = 10** `total_wall_ms` cohort, **mean** wall fractions are roughly **validating ~39%**, **remediating ~20%**, **storing ~14%**, **extracting ~24%**. A bespoke extractor alone does not address the largest **mean** buckets unless it indirectly collapses validation/remediation work.
+2. **Model latency still shapes extraction** — **Corr(extracting, `model_call_wall_ms.extraction`) ≈ 0.85** on the N = 10 cohort (§2.1), with **~4–5** calls/run and **~60–95s per call** at median/p90 in the broader 49-run slice — **fewer, longer calls** dominate extraction wall more than “dozens of micro-calls”.
+3. **JSON repair / truncation** — Issue volume **`json_repair` 127** on 65 runs with reports vs **low** `json_repair_invocations` / `batch_splits` in the small timing slice suggests **telemetry/envelope completeness** and **issue logging** capture repair pressure that is not fully reflected in `timingTelemetry` aggregates until `total_wall_ms` is consistently present. **Rank 2 vs 3** for extraction-only spikes: prefer **instrumentation + golden re-runs** before betting on a format-only model change.
 
-*(Rank 2 vs 3 after baseline SQL / log histograms.)*
+*(Re-ranked after Neon baseline, 2026-04-11.)*
 
 ---
 
@@ -327,24 +346,24 @@ All rows below are **`sep_entry`** unless noted. Add **5–10** `web_article` UR
 
 ### 6.1 Table — stage × p50 / p90 / max / mean wall ms (sample N)
 
-**N =** *(column `n` from the “All stages + planning” query in §1.2 — pending)*
+**N = 10** (done runs, last 90 days, `timingTelemetry.stage_ms` present **and** `total_wall_ms` non-null in envelope). Values rounded to nearest ms except planning (sub-second).
 
 | stage (`stage_ms` or planning sum) | p50 ms | p90 ms | max ms | mean ms |
 |------------------------------------|--------|--------|--------|---------|
-| extracting | — | — | — | — |
-| relating | — | — | — | — |
-| grouping | — | — | — | — |
-| embedding | — | — | — | — |
-| validating | — | — | — | — |
-| remediating | — | — | — | — |
-| storing | — | — | — | — |
-| planning | — | — | — | — |
+| extracting | 162,850 | 523,169 | 532,902 | 191,847 |
+| relating | 9,040 | 12,832 | 14,397 | 7,531 |
+| grouping | 2,616 | 13,911 | 28,170 | 5,810 |
+| embedding | 1,458 | 1,920 | 2,091 | 1,134 |
+| validating | 195,772 | 458,726 | 489,141 | 243,465 |
+| remediating | 84,233 | 247,506 | 359,921 | 124,459 |
+| storing | 85,257 | 119,016 | 131,762 | 86,720 |
+| planning | 5 | 6 | 6 | 5 |
 
-Populate from the **“All stages + planning”** SQL block in §1.2 (`*_p50`, `*_p90`, `*_max`, `*_mean` columns).
+Source: **“All stages + planning”** SQL block in §1.2 (`f` CTE), executed via Neon on 2026-04-11.
 
 ### 6.2 Paragraph — % of E2E in extraction (mean + p90)
 
-**Pending:** Use `frac_extract_mean` and `frac_extract_p90` from §1.2. One-sentence template: “Over the last 90 days, `extracting` accounted for **X%** of `total_wall_ms` on average and **Y%** at p90 across N completed runs.”
+Over the last **90 days**, among **N = 10** completed ingest runs with usable `total_wall_ms` in `report_envelope.timingTelemetry`, **`extracting` accounted for ~24.4%** of `total_wall_ms` **on average** and **~46.5%** at **p90** (fractions **0.2435** and **0.4654** from the extraction-fraction aggregate in §1.2). **Interpret cautiously:** **59** runs had `stage_ms` telemetry in the same window but lacked `total_wall_ms`, so the headline **N** is small and may skew toward worker paths that persist full timing summaries.
 
 ### 6.3 Quality gates (summary)
 
@@ -357,7 +376,7 @@ See §3 — numeric thresholds should be **derived from one baseline golden batc
 
 ### 6.5 Go / no-go (one paragraph)
 
-**Go** to a bespoke **extraction** model spike if baseline shows **`extracting` is a large share of `total_wall_ms` at both mean and p90** (e.g. consistently **>35–40%** mean with material p90 tail) **and** telemetry implicates **extraction-stage model calls** (`model_call_wall_ms.extraction`, `model_calls.extraction`) rather than exclusively downstream stages — **or** if **`batch_splits` / `json_repair_invocations` / retries** explain a large fraction of extraction wall, where a format-stable extractor plausibly removes whole passes. **No-go** (defer bespoke extraction) if **`extracting` is a small fraction of E2E** (e.g. **<20%** mean) while **embedding**, **validating**, or **storing** dominates, or if extraction time is already **parallelism-saturated** at current TPM with low retry rates — in those cases, ROI shifts to **embedding/validation infra** or **quota/concurrency**, not extraction weights.
+**No-go (defer bespoke extraction as the primary Phase-1 bet)** on current numbers: **mean** `extracting` is **~24%** of `total_wall_ms` — below the **~35–40%** “large mean share” gate — while **`validating` (~39% mean)** plus **`remediating` (~20%)** and **`storing` (~14%)** dominate typical E2E wall in the **N = 10** cohort. **Extraction is still material at the tail** (**~46.5%** of E2E at **p90**), and **corr(extracting, `model_call_wall_ms.extraction`) ≈ 0.85** on that cohort supports tuning **extraction model speed / call shape** for tail latency — but **ROI first** belongs to **validation + remediation + store path** (and to **fixing `total_wall_ms` / timing envelope coverage** so **N** is not 10/59). **Revisit “Go” on bespoke extraction** if, after envelope backfill, **mean** extracting share rises materially **or** golden runs show **`json_repair` / truncation** concentrated on extraction with **`model_call_wall_ms.extraction` ≈ `stage_ms.extracting`** and **high** `json_repair_invocations` in timing (not only in `ingest_run_issues`).
 
 ---
 
