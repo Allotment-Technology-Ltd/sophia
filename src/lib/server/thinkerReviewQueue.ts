@@ -1,3 +1,4 @@
+import { extractWikidataThinkerId } from '$lib/thinkerWikidataId';
 import { query } from '$lib/server/db';
 import { canonicalizeThinkerName } from '$lib/server/thinkerIdentity';
 
@@ -96,7 +97,7 @@ export async function resolveUnresolvedThinkerReference(params: {
 	notes?: string | null;
 }): Promise<{ linkedSources: number }> {
 	const queueRecordId = normalizeRecordKey(params.queueRecordId);
-	const thinkerRecordId = normalizeRecordKey(params.wikidataId);
+	const thinkerRecordId = extractWikidataThinkerId(params.wikidataId ?? '');
 	if (!queueRecordId || !thinkerRecordId) {
 		throw new Error('Invalid queue record id or Wikidata id');
 	}
