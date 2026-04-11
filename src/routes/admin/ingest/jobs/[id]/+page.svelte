@@ -147,6 +147,9 @@
 	);
 
 	const dlqItemCount = $derived(items.filter((i) => Boolean(i.dlqEnqueuedAt)).length);
+	const dlqErrorCount = $derived(
+		items.filter((i) => i.status === 'error' && Boolean(i.dlqEnqueuedAt)).length
+	);
 
 	async function postItemModify(
 		itemId: string,
@@ -179,7 +182,11 @@
 		}
 	}
 
-	async function postJobRetry(mode: 'restart' | 'resume', itemId?: string): Promise<void> {
+	async function postJobRetry(
+		mode: 'restart' | 'resume',
+		itemId?: string,
+		opts?: { onlyDlq?: boolean }
+	): Promise<void> {
 		const jobId = currentJobId();
 		if (!jobId) return;
 		retryBusy = true;
@@ -189,7 +196,11 @@
 			const res = await fetch(`/api/admin/ingest/jobs/${encodeURIComponent(jobId)}/retry`, {
 				method: 'POST',
 				headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
-				body: JSON.stringify({ mode, ...(itemId ? { itemId } : {}) })
+				body: JSON.stringify({
+					mode,
+					...(itemId ? { itemId } : {}),
+					...(opts?.onlyDlq ? { only_dlq: true } : {})
+				})
 			});
 			const body = await res.json().catch(() => ({}));
 			if (!res.ok) {
@@ -364,15 +375,19 @@
 				<div class="mt-6 border-t border-[var(--color-border)] pt-5" role="region" aria-label="Retry failed URLs">
 					<h2 class="font-serif text-lg text-sophia-dark-text">Failed items</h2>
 					<p class="mt-2 text-sm text-sophia-dark-muted">
-						<span class="font-medium text-sophia-dark-text">Restart</span> clears the run and queues a new
-						child ingest (use after fixing code, env, or launch errors).
-						<span class="font-medium text-sophia-dark-text">Resume checkpoint</span> continues the same
-						ingest run from the last Surreal pipeline stage (Expand also has Resume for a single run).
-						<span class="font-medium text-sophia-dark-text">Queue again</span> moves a failed URL back to
-						<span class="font-mono text-sophia-dark-text">pending</span> without spending another attempt
-						(use when the failure was environmental or you raised the attempt cap).
-						<span class="font-medium text-sophia-dark-text">Cancel URL</span> abandons that row as
-						<span class="font-mono text-sophia-dark-text">cancelled</span>.
+						<span class="font-medium text-sophia-dark-text">Restart all failed</span> re-queues
+						<span class="font-medium text-sophia-dark-text">every</span> URL in
+						<span class="font-mono text-sophia-dark-text">error</span> (including one-off failures before DLQ).
+						<span class="font-medium text-sophia-dark-text">Restart DLQ only</span> targets rows that hit max
+						attempts (dead-letter stamp). Use
+						<a href="/admin/ingest/jobs#dead-letter" class="text-sophia-dark-sage underline-offset-2 hover:underline"
+							>global DLQ replay</a
+						>
+						to re-queue selected URLs across jobs.
+						<span class="font-medium text-sophia-dark-text">Resume checkpoints</span> continues runs that still
+						have a child run id.
+						<span class="font-medium text-sophia-dark-text">Queue again</span> moves one URL to
+						<span class="font-mono text-sophia-dark-text">pending</span> without spending another attempt.
 					</p>
 					{#if retryMessage}
 						<p class="mt-3 text-sm text-amber-100" role="status">{retryMessage}</p>
@@ -388,6 +403,22 @@
 							onclick={() => void postJobRetry('restart')}
 						>
 							{retryBusy ? 'Working…' : 'Restart all failed'}
+						</button>
+						<button
+							type="button"
+							class="rounded-lg border border-[color-mix(in_srgb,var(--color-sage)_35%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-sage)_8%,var(--color-surface))] px-5 py-3 font-mono text-sm font-medium uppercase tracking-[0.08em] text-sophia-dark-text transition hover:border-[var(--color-sage)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+							disabled={retryBusy || dlqErrorCount === 0}
+							onclick={() => void postJobRetry('restart', undefined, { onlyDlq: true })}
+						>
+							{retryBusy ? 'Working…' : 'Restart DLQ only'}
+						</button>
+						<button
+							type="button"
+							class="rounded-lg border border-[var(--color-border)] bg-transparent px-5 py-3 font-mono text-sm uppercase tracking-[0.08em] text-sophia-dark-muted transition hover:border-[var(--color-sage)] hover:text-sophia-dark-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+							disabled={retryBusy || dlqErrorCount === 0}
+							onclick={() => void postJobRetry('resume', undefined, { onlyDlq: true })}
+						>
+							Resume DLQ (with run id)
 						</button>
 						<button
 							type="button"

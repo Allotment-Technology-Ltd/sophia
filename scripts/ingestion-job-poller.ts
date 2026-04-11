@@ -7,6 +7,7 @@
 
 import { loadServerEnv } from '../src/lib/server/env.ts';
 import { tickAllRunningIngestionJobs } from '../src/lib/server/ingestionJobs.ts';
+import { tickAllRunningReembedJobs } from '../src/lib/server/ingestion/reembedCorpusJob.ts';
 import { isNeonIngestPersistenceEnabled } from '../src/lib/server/neon/datastore.ts';
 
 loadServerEnv();
@@ -35,7 +36,11 @@ async function main(): Promise<void> {
 		try {
 			const n = await tickAllRunningIngestionJobs();
 			if (n > 0) {
-				console.log(`[poller] Ticked ${n} job(s)`);
+				console.log(`[poller] Ticked ${n} ingestion job(s)`);
+			}
+			const r = await tickAllRunningReembedJobs();
+			if (r > 0) {
+				console.log(`[poller] Ticked ${r} re-embed job(s)`);
 			}
 		} catch (e) {
 			console.error('[poller]', e instanceof Error ? e.message : e);

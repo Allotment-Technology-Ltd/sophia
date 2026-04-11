@@ -44,6 +44,7 @@
     "db:migrate": "tsx --env-file=.env scripts/neon-migrate.ts",
     "db:migrate:ci": "tsx scripts/neon-migrate.ts",
     "db:audit-surreal-vector": "tsx --env-file=.env scripts/audit-surreal-vector-index.ts",
+    "db:corpus-embedding-inventory": "tsx --env-file=.env scripts/corpus-embedding-inventory.ts",
     "db:stoa-schema": "tsx --env-file=.env scripts/setup-stoa-schema.ts",
     "neon:auth-env": "tsx --env-file=.env scripts/neon-auth-print-env.ts",
     "verify:neon-ingest-run": "tsx scripts/verify-neon-ingest-run.ts",

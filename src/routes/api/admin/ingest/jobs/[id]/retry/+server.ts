@@ -13,9 +13,9 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 		const jobId = params.id?.trim();
 		if (!jobId) return json({ error: 'Missing job id' }, { status: 400 });
 
-		let body: { mode?: string; itemId?: string } = {};
+		let body: { mode?: string; itemId?: string; only_dlq?: boolean } = {};
 		try {
-			body = (await request.json()) as { mode?: string; itemId?: string };
+			body = (await request.json()) as { mode?: string; itemId?: string; only_dlq?: boolean };
 		} catch {
 			body = {};
 		}
@@ -26,7 +26,8 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 		const mode = rawMode as IngestionJobRetryMode;
 
 		const result = await retryIngestionJob(jobId, mode, {
-			itemId: typeof body.itemId === 'string' ? body.itemId : undefined
+			itemId: typeof body.itemId === 'string' ? body.itemId : undefined,
+			onlyDlq: body.only_dlq === true
 		});
 
 		if (!result.ok) {

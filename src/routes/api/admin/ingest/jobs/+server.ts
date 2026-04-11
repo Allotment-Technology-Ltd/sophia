@@ -45,6 +45,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			concurrency?: unknown;
 			notes?: unknown;
 			validate?: unknown;
+			merge_into_latest_running_job?: unknown;
 		};
 		const rawUrls = payload.urls;
 		if (!Array.isArray(rawUrls) || rawUrls.length === 0) {
@@ -61,18 +62,20 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		const concurrency = Math.max(1, Math.min(MAX_DURABLE_INGEST_JOB_CONCURRENCY, rawConcurrency));
 		const notes = typeof payload.notes === 'string' ? payload.notes : null;
 		const validate = payload.validate === true;
+		const mergeIntoLatestRunningJob = payload.merge_into_latest_running_job === true;
 		const created = await createIngestionJob({
 			urls,
 			concurrency,
 			notes,
 			actorUid: actor.uid,
 			actorEmail: actor.email ?? null,
-			validate
+			validate,
+			mergeIntoLatestRunningJob
 		});
 		if (!created) {
 			return json({ error: 'Failed to create job' }, { status: 500 });
 		}
-		return json({ jobId: created.id }, { status: 202 });
+		return json({ jobId: created.id, merged: created.merged === true }, { status: 202 });
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Failed to create job';
 		return json({ error: message }, { status: 500 });
