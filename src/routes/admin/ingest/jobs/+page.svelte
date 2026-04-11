@@ -40,6 +40,24 @@
 	/** Append URLs to the most recently touched running job instead of starting a second job (eases global worker cap). */
 	let mergeIntoRunningJob = $state(false);
 
+	const JOB_WORKER_SETTINGS_KEY = 'sophia.admin.ingestJobWorkerDefaults.v1';
+
+	/** Optional per-item worker tuning (stored on job row, merged into each child `batch_overrides`). */
+	let workerTuningOpen = $state(false);
+	let jobExtractionConcurrency = $state('');
+	let jobExtractionMaxTokens = $state('');
+	let jobPassageInsertConcurrency = $state('');
+	let jobClaimInsertConcurrency = $state('');
+	let jobRemediationMaxClaims = $state('');
+	let jobRelationsOverlap = $state('');
+	let jobIngestProvider = $state<'auto' | 'anthropic' | 'vertex'>('auto');
+	let jobFailOnGroupingCollapse = $state(true);
+	let jobIngestLogPins = $state(false);
+	let jobRemediationEnabled = $state(true);
+	let jobRemediationRevalidate = $state(false);
+	let jobWatchdogPhaseIdleJson = $state('');
+	let jobWatchdogBaselineMult = $state('');
+
 	/** SEP catalog helper: topic presets + un-ingested filter (Neon). */
 	let sepPresetId = $state('');
 	let sepCustomKeywords = $state('');
@@ -51,6 +69,7 @@
 	let sepLastStats = $state('');
 
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
+	let jobWorkerFieldsHydrated = $state(false);
 
 	type DlqRow = {
 		itemId: string;
@@ -78,6 +97,85 @@
 		const h: Record<string, string> = { Authorization: `Bearer ${token}` };
 		if (json) h['Content-Type'] = 'application/json';
 		return h;
+	}
+
+	function parseOptionalInt(input: string, min: number, max: number): number | undefined {
+		const t = input.trim();
+		if (!t) return undefined;
+		const n = Number(t);
+		if (!Number.isFinite(n)) return undefined;
+		const i = Math.trunc(n);
+		if (i < min || i > max) return undefined;
+		return i;
+	}
+
+	function buildWorkerDefaultsPayload(): { ok: true; payload?: Record<string, unknown> } | { ok: false; error: string } {
+		const o: Record<string, unknown> = {};
+		const extC = parseOptionalInt(jobExtractionConcurrency, 1, 16);
+		if (extC != null) o.extractionConcurrency = extC;
+		const extTok = parseOptionalInt(jobExtractionMaxTokens, 1000, 20_000);
+		if (extTok != null) o.extractionMaxTokensPerSection = extTok;
+		const passC = parseOptionalInt(jobPassageInsertConcurrency, 1, 12);
+		if (passC != null) o.passageInsertConcurrency = passC;
+		const claimC = parseOptionalInt(jobClaimInsertConcurrency, 1, 24);
+		if (claimC != null) o.claimInsertConcurrency = claimC;
+		const remMax = parseOptionalInt(jobRemediationMaxClaims, 1, 200);
+		if (remMax != null) o.remediationMaxClaims = remMax;
+		const overlap = parseOptionalInt(jobRelationsOverlap, 1, 99);
+		if (overlap != null) o.relationsBatchOverlapClaims = overlap;
+		o.ingestProvider = jobIngestProvider;
+		o.failOnGroupingPositionCollapse = jobFailOnGroupingCollapse;
+		o.ingestLogPins = jobIngestLogPins;
+		if (validateLlm) {
+			o.ingestRemediationEnabled = jobRemediationEnabled;
+			o.ingestRemediationRevalidate = jobRemediationRevalidate;
+		}
+		const idleRaw = jobWatchdogPhaseIdleJson.trim();
+		if (idleRaw) {
+			try {
+				const parsed = JSON.parse(idleRaw);
+				if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+					o.watchdogPhaseIdleJson = JSON.stringify(parsed);
+				}
+			} catch {
+				return { ok: false, error: 'Watchdog phase idle JSON is not valid JSON.' };
+			}
+		}
+		const multRaw = jobWatchdogBaselineMult.trim();
+		if (multRaw) {
+			const m = Number(multRaw);
+			if (!Number.isFinite(m) || m < 0.5 || m > 10) {
+				return { ok: false, error: 'Watchdog baseline multiplier must be between 0.5 and 10.' };
+			}
+			o.watchdogPhaseBaselineMult = m;
+		}
+		return Object.keys(o).length > 0 ? { ok: true, payload: o } : { ok: true };
+	}
+
+	function persistJobWorkerFields(): void {
+		if (typeof window === 'undefined') return;
+		try {
+			localStorage.setItem(
+				JOB_WORKER_SETTINGS_KEY,
+				JSON.stringify({
+					jobExtractionConcurrency,
+					jobExtractionMaxTokens,
+					jobPassageInsertConcurrency,
+					jobClaimInsertConcurrency,
+					jobRemediationMaxClaims,
+					jobRelationsOverlap,
+					jobIngestProvider,
+					jobFailOnGroupingCollapse,
+					jobIngestLogPins,
+					jobRemediationEnabled,
+					jobRemediationRevalidate,
+					jobWatchdogPhaseIdleJson,
+					jobWatchdogBaselineMult
+				})
+			);
+		} catch {
+			/* ignore */
+		}
 	}
 
 	function parseUrls(raw: string): string[] {
@@ -195,6 +293,11 @@
 			submitMessage = 'Add at least one valid URL (one per line).';
 			return;
 		}
+		const workerBuild = buildWorkerDefaultsPayload();
+		if (!workerBuild.ok) {
+			submitMessage = workerBuild.error;
+			return;
+		}
 		submitting = true;
 		try {
 			const res = await fetch('/api/admin/ingest/jobs', {
@@ -208,7 +311,10 @@
 					),
 					notes: notes.trim() || null,
 					validate: validateLlm,
-					merge_into_latest_running_job: mergeIntoRunningJob
+					merge_into_latest_running_job: mergeIntoRunningJob,
+					...(workerBuild.payload && Object.keys(workerBuild.payload).length > 0
+						? { worker_defaults: workerBuild.payload }
+						: {})
 				})
 			});
 			const body = await res.json().catch(() => ({}));
@@ -225,6 +331,7 @@
 			const merged = body?.merged === true;
 			urlsInput = '';
 			notes = '';
+			persistJobWorkerFields();
 			await loadJobs();
 			const q = merged ? '?appended=1' : '';
 			window.location.href = `/admin/ingest/jobs/${encodeURIComponent(jobId)}${q}`;
@@ -342,6 +449,38 @@
 	}
 
 	onMount(() => {
+		try {
+			const raw = localStorage.getItem(JOB_WORKER_SETTINGS_KEY);
+			if (raw) {
+				const p = JSON.parse(raw) as Record<string, unknown>;
+				if (typeof p.jobExtractionConcurrency === 'string') jobExtractionConcurrency = p.jobExtractionConcurrency;
+				if (typeof p.jobExtractionMaxTokens === 'string') jobExtractionMaxTokens = p.jobExtractionMaxTokens;
+				if (typeof p.jobPassageInsertConcurrency === 'string')
+					jobPassageInsertConcurrency = p.jobPassageInsertConcurrency;
+				if (typeof p.jobClaimInsertConcurrency === 'string') jobClaimInsertConcurrency = p.jobClaimInsertConcurrency;
+				if (typeof p.jobRemediationMaxClaims === 'string') jobRemediationMaxClaims = p.jobRemediationMaxClaims;
+				if (typeof p.jobRelationsOverlap === 'string') jobRelationsOverlap = p.jobRelationsOverlap;
+				if (
+					p.jobIngestProvider === 'auto' ||
+					p.jobIngestProvider === 'anthropic' ||
+					p.jobIngestProvider === 'vertex'
+				) {
+					jobIngestProvider = p.jobIngestProvider;
+				}
+				if (typeof p.jobFailOnGroupingCollapse === 'boolean')
+					jobFailOnGroupingCollapse = p.jobFailOnGroupingCollapse;
+				if (typeof p.jobIngestLogPins === 'boolean') jobIngestLogPins = p.jobIngestLogPins;
+				if (typeof p.jobRemediationEnabled === 'boolean') jobRemediationEnabled = p.jobRemediationEnabled;
+				if (typeof p.jobRemediationRevalidate === 'boolean')
+					jobRemediationRevalidate = p.jobRemediationRevalidate;
+				if (typeof p.jobWatchdogPhaseIdleJson === 'string')
+					jobWatchdogPhaseIdleJson = p.jobWatchdogPhaseIdleJson;
+				if (typeof p.jobWatchdogBaselineMult === 'string') jobWatchdogBaselineMult = p.jobWatchdogBaselineMult;
+			}
+		} catch {
+			/* ignore */
+		}
+		jobWorkerFieldsHydrated = true;
 		void loadJobs();
 		void loadSepPresets();
 		void loadDlq();
@@ -353,6 +492,26 @@
 
 	onDestroy(() => {
 		if (pollTimer) clearInterval(pollTimer);
+	});
+
+	$effect(() => {
+		if (!jobWorkerFieldsHydrated || typeof window === 'undefined') return;
+		void (
+			jobExtractionConcurrency +
+			jobExtractionMaxTokens +
+			jobPassageInsertConcurrency +
+			jobClaimInsertConcurrency +
+			jobRemediationMaxClaims +
+			jobRelationsOverlap +
+			jobIngestProvider +
+			jobFailOnGroupingCollapse +
+			jobIngestLogPins +
+			jobRemediationEnabled +
+			jobRemediationRevalidate +
+			jobWatchdogPhaseIdleJson +
+			jobWatchdogBaselineMult
+		);
+		persistJobWorkerFields();
 	});
 </script>
 
@@ -504,6 +663,139 @@
 					/>
 				</label>
 			</div>
+
+			<details class="mt-4 rounded-lg border border-[var(--color-border)] bg-black/10 p-4" bind:open={workerTuningOpen}>
+				<summary class="cursor-pointer font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-muted">
+					Worker defaults (per URL run)
+				</summary>
+				<p class="mt-2 text-sm text-sophia-dark-muted">
+					Applied to every child ingest for this job (stored on the job row). Blank fields use worker / server env.
+					Defaults are remembered in this browser. For full model routing and batch token caps, use
+					<a href="/admin/ingest" class="text-[var(--color-sage)] underline-offset-2 hover:underline">single-run ingest</a>.
+				</p>
+				<div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+					<label class="block">
+						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Extraction parallelism</span>
+						<input
+							type="number"
+							min="1"
+							max="16"
+							class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
+							bind:value={jobExtractionConcurrency}
+							placeholder="INGEST_EXTRACTION_CONCURRENCY"
+						/>
+					</label>
+					<label class="block">
+						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Max tokens / section</span>
+						<input
+							type="number"
+							min="1000"
+							max="20000"
+							class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
+							bind:value={jobExtractionMaxTokens}
+							placeholder="INGEST_EXTRACTION_MAX_TOKENS_PER_SECTION"
+						/>
+					</label>
+					<label class="block">
+						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Surreal passage inserts</span>
+						<input
+							type="number"
+							min="1"
+							max="12"
+							class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
+							bind:value={jobPassageInsertConcurrency}
+							placeholder="INGEST_PASSAGE_INSERT_CONCURRENCY"
+						/>
+					</label>
+					<label class="block">
+						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Surreal claim inserts</span>
+						<input
+							type="number"
+							min="1"
+							max="24"
+							class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
+							bind:value={jobClaimInsertConcurrency}
+							placeholder="INGEST_CLAIM_INSERT_CONCURRENCY"
+						/>
+					</label>
+					<label class="block">
+						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Remediation max claims</span>
+						<input
+							type="number"
+							min="1"
+							max="200"
+							class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
+							bind:value={jobRemediationMaxClaims}
+							placeholder="INGEST_REMEDIATION_MAX_CLAIMS"
+						/>
+					</label>
+					<label class="block">
+						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Relations overlap</span>
+						<input
+							type="number"
+							min="1"
+							max="99"
+							class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
+							bind:value={jobRelationsOverlap}
+							placeholder="RELATIONS_BATCH_OVERLAP_CLAIMS"
+						/>
+					</label>
+					<label class="block sm:col-span-2">
+						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Ingest provider</span>
+						<select
+							class="mt-2 w-full max-w-xs rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
+							bind:value={jobIngestProvider}
+						>
+							<option value="auto">auto</option>
+							<option value="vertex">vertex</option>
+							<option value="anthropic">anthropic</option>
+						</select>
+					</label>
+				</div>
+				<label class="mt-3 flex cursor-pointer items-center gap-3">
+					<input type="checkbox" bind:checked={jobFailOnGroupingCollapse} class="h-5 w-5 rounded border-[var(--color-border)]" />
+					<span class="text-sm text-sophia-dark-text">Fail on grouping position collapse (strict)</span>
+				</label>
+				<label class="mt-2 flex cursor-pointer items-center gap-3">
+					<input type="checkbox" bind:checked={jobIngestLogPins} class="h-5 w-5 rounded border-[var(--color-border)]" />
+					<span class="text-sm text-sophia-dark-text">Log routing pin diagnostics (INGEST_LOG_PINS)</span>
+				</label>
+				{#if validateLlm}
+					<div class="mt-3 space-y-2 rounded border border-[var(--color-border)]/60 bg-black/15 p-3">
+						<p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Remediation (when validation on)</p>
+						<label class="flex cursor-pointer items-center gap-3">
+							<input type="checkbox" bind:checked={jobRemediationEnabled} class="h-5 w-5 rounded border-[var(--color-border)]" />
+							<span class="text-sm text-sophia-dark-text">Enable remediation pass</span>
+						</label>
+						<label class="flex cursor-pointer items-center gap-3">
+							<input type="checkbox" bind:checked={jobRemediationRevalidate} class="h-5 w-5 rounded border-[var(--color-border)]" />
+							<span class="text-sm text-sophia-dark-text">Re-validate after remediation</span>
+						</label>
+					</div>
+				{/if}
+				<label class="mt-4 block">
+					<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Watchdog phase idle (JSON, ms)</span>
+					<textarea
+						class="mt-2 min-h-[72px] w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-xs"
+						bind:value={jobWatchdogPhaseIdleJson}
+						placeholder='{"extracting":480000,"storing":600000}'
+						rows="3"
+					></textarea>
+				</label>
+				<label class="mt-2 block max-w-xs">
+					<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Watchdog baseline mult.</span>
+					<input
+						type="number"
+						min="0.5"
+						max="10"
+						step="0.1"
+						class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
+						bind:value={jobWatchdogBaselineMult}
+						placeholder="e.g. 2.5"
+					/>
+				</label>
+			</details>
+
 			<label class="flex cursor-pointer items-center gap-3">
 				<input type="checkbox" bind:checked={validateLlm} class="h-5 w-5 rounded border-[var(--color-border)]" />
 				<span class="text-sm text-sophia-dark-text">Run LLM validation stage</span>

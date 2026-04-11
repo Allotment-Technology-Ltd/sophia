@@ -1,0 +1,38 @@
+import { describe, expect, it } from 'vitest';
+import { sanitizeIngestionJobWorkerDefaults } from './ingestionJobWorkerDefaults';
+
+describe('sanitizeIngestionJobWorkerDefaults', () => {
+  it('returns undefined for empty', () => {
+    expect(sanitizeIngestionJobWorkerDefaults(undefined)).toBeUndefined();
+    expect(sanitizeIngestionJobWorkerDefaults({})).toBeUndefined();
+  });
+
+  it('keeps bounded numeric fields', () => {
+    const o = sanitizeIngestionJobWorkerDefaults({
+      extractionConcurrency: 4,
+      passageInsertConcurrency: 10,
+      claimInsertConcurrency: 16,
+      remediationMaxClaims: 20
+    });
+    expect(o?.extractionConcurrency).toBe(4);
+    expect(o?.passageInsertConcurrency).toBe(10);
+    expect(o?.claimInsertConcurrency).toBe(16);
+    expect(o?.remediationMaxClaims).toBe(20);
+  });
+
+  it('drops out-of-range values', () => {
+    expect(
+      sanitizeIngestionJobWorkerDefaults({ extractionConcurrency: 99 })?.extractionConcurrency
+    ).toBeUndefined();
+    expect(
+      sanitizeIngestionJobWorkerDefaults({ passageInsertConcurrency: 20 })?.passageInsertConcurrency
+    ).toBeUndefined();
+  });
+
+  it('normalizes watchdog JSON string', () => {
+    const o = sanitizeIngestionJobWorkerDefaults({
+      watchdogPhaseIdleJson: '{"extracting": 120000}'
+    });
+    expect(o?.watchdogPhaseIdleJson).toBe('{"extracting":120000}');
+  });
+});

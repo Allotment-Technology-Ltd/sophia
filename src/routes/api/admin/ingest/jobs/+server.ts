@@ -46,6 +46,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			notes?: unknown;
 			validate?: unknown;
 			merge_into_latest_running_job?: unknown;
+			worker_defaults?: unknown;
 		};
 		const rawUrls = payload.urls;
 		if (!Array.isArray(rawUrls) || rawUrls.length === 0) {
@@ -70,7 +71,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			actorUid: actor.uid,
 			actorEmail: actor.email ?? null,
 			validate,
-			mergeIntoLatestRunningJob
+			mergeIntoLatestRunningJob,
+			workerDefaults: payload.worker_defaults
 		});
 		if (!created) {
 			return json({ error: 'Failed to create job' }, { status: 500 });
