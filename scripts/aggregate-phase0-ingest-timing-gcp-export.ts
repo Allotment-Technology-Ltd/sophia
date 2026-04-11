@@ -6,6 +6,7 @@
  *
  *   gcloud logging read '...filter...' --project=sophia-488807 --format=json > /tmp/ingest-timing.json
  *   pnpm exec tsx scripts/aggregate-phase0-ingest-timing-gcp-export.ts /tmp/ingest-timing.json
+ *   pnpm ops:phase0-timing-from-gcp-export -- /tmp/ingest-timing.json   # `--` is skipped; path must follow
  *
  * Or pipe: gcloud logging read '...' --format=json | pnpm exec tsx scripts/aggregate-phase0-ingest-timing-gcp-export.ts
  *
@@ -13,17 +14,44 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 type UnknownRecord = Record<string, unknown>;
 
+/** Collect string leaves up to `maxDepth` (Cloud Run / sinks nest stdout oddly). */
+function collectStrings(obj: unknown, maxDepth: number, out: string[]): void {
+	if (maxDepth < 0 || obj === undefined || obj === null) return;
+	if (typeof obj === 'string') {
+		out.push(obj);
+		return;
+	}
+	if (typeof obj !== 'object') return;
+	if (Array.isArray(obj)) {
+		for (const x of obj) collectStrings(x, maxDepth - 1, out);
+		return;
+	}
+	for (const v of Object.values(obj as UnknownRecord)) collectStrings(v, maxDepth - 1, out);
+}
+
+/** Prefer direct stdout fields; fall back to any nested string containing the marker. */
 function logLineText(entry: UnknownRecord): string {
 	const tp = entry.textPayload;
-	if (typeof tp === 'string') return tp;
+	if (typeof tp === 'string' && tp.includes('[INGEST_TIMING]')) return tp;
 	const msg = entry.jsonPayload;
-	if (msg && typeof msg === 'object' && 'message' in msg && typeof (msg as { message?: unknown }).message === 'string') {
-		return (msg as { message: string }).message;
+	if (msg && typeof msg === 'object') {
+		const m = msg as UnknownRecord;
+		for (const key of ['message', 'text', 'log', 'msg', 'data']) {
+			const v = m[key];
+			if (typeof v === 'string' && v.includes('[INGEST_TIMING]')) return v;
+		}
 	}
-	return '';
+	const buf: string[] = [];
+	collectStrings(entry, 6, buf);
+	for (const s of buf) {
+		if (s.includes('[INGEST_TIMING]')) return s;
+	}
+	return typeof tp === 'string' ? tp : '';
 }
 
 function parseIngestTimingPayload(line: string): UnknownRecord | null {
@@ -90,8 +118,19 @@ function pearson(a: number[], b: number[]): number | null {
 	return den === 0 ? null : nume / den;
 }
 
+/**
+ * First user path arg: `tsx` puts this script at argv[2], then optional `--`, then the export path.
+ * Also ignores standalone `--` (pnpm `run` passes it through).
+ */
+function inputFilePathFromArgv(): string | undefined {
+	const selfBase = basename(fileURLToPath(import.meta.url));
+	const rest = process.argv.slice(2).filter((a) => a !== '--');
+	if (rest[0] && basename(rest[0]) === selfBase) rest.shift();
+	return rest[0];
+}
+
 function main(): void {
-	const path = process.argv[2];
+	const path = inputFilePathFromArgv();
 	const raw = path ? readFileSync(path, 'utf8') : readFileSync(0, 'utf8');
 	let entries: unknown[];
 	try {
@@ -139,8 +178,31 @@ function main(): void {
 	console.log(`with total_wall_ms > 0:  ${withTotal.length}`);
 	console.log('');
 
+	if (entries.length === 0) {
+		const preview = raw.trim().slice(0, 240);
+		console.log('Export parsed as an empty JSON array [].');
+		console.log(`File length: ${raw.length} bytes. Preview: ${preview || '(empty file)'}`);
+		console.log('');
+		console.log('gcloud returned no rows for that filter/window. See docs/operations/phase0-extraction-ingestion-baseline-report.md (GCP — “Still seeing []”). Quick tries:');
+		console.log('  • SEARCH("INGEST_TIMING") project-wide');
+		console.log('  • cloud_run_job / gcloud run jobs logs read (wave ingest jobs)');
+		console.log('  • Sanity: any cloud_run_revision log in 7d?');
+		console.log('  • Neon runs may never have hit GCP stdout (local/CI/other host).');
+		return;
+	}
+
+	if (payloads.length === 0) {
+		const sample = entries[0];
+		const keys = sample && typeof sample === 'object' ? Object.keys(sample as object).join(', ') : '';
+		console.log('No `[INGEST_TIMING]` payload found in any log entry (checked textPayload + nested strings).');
+		console.log(`First entry top-level keys: ${keys || '(n/a)'}`);
+		console.log('Re-export with a filter that matches your worker stdout, or inspect one row: jq \'.[0]\' your.json');
+		return;
+	}
+
 	if (withTotal.length === 0) {
-		console.log('No rows with total_wall_ms; widen filter or check payload shape.');
+		console.log('Parsed timing lines but none had total_wall_ms > 0 (older workers or partial summaries).');
+		console.log(`Lines without total: ${payloads.length} — check payload keys: ${Object.keys(payloads[0] ?? {}).slice(0, 12).join(', ')}`);
 		return;
 	}
 

@@ -20,6 +20,8 @@ import { createHash } from 'node:crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Surreal } from 'surrealdb';
+import { signinSurrealWithFallback } from './lib/surrealSignin.js';
+import { resolveSurrealRpcUrl } from '../src/lib/server/surrealEnv.ts';
 import { generateText } from 'ai';
 import { estimateCost as estimateRestormelCost, defaultProviders } from '@restormel/keys';
 import {
@@ -58,6 +60,12 @@ import {
 	canonicalModelChainForStage,
 	type IngestionLlmStageKey
 } from '../src/lib/ingestionCanonicalPipeline.js';
+import {
+	filterModelTiersForFinetunePolicy,
+	ingestFinetuneLabelerStrictEnabled,
+	isFinetuneSensitiveLlmStage,
+	parseFinetuneLabelerAllowedProviders
+} from '../src/lib/ingestionFinetuneLabelerPolicy.js';
 import {
 	normalizePinnedModelId,
 	summarizeIngestPinsForLog
@@ -180,7 +188,7 @@ const ingestTpmGuard = createIngestProviderTpmGuard();
 
 const INGEST_PROVIDER_DEFAULT = (process.env.INGEST_PROVIDER || 'auto').toLowerCase();
 
-const SURREAL_URL = process.env.SURREAL_URL || 'http://localhost:8000/rpc';
+const SURREAL_URL = resolveSurrealRpcUrl();
 const SURREAL_USER = process.env.SURREAL_USER || 'root';
 const SURREAL_PASS = process.env.SURREAL_PASS || 'root';
 const SURREAL_NAMESPACE = process.env.SURREAL_NAMESPACE || 'sophia';
@@ -539,6 +547,7 @@ function tierFitsEstimatedContext(
 	else if (m.includes('gemini')) maxIn = 950_000;
 	else if (m.includes('gpt-4')) maxIn = 120_000;
 	else if (m.includes('claude')) maxIn = 190_000;
+	else if (m.includes('mistral') || m.includes('ministral')) maxIn = 120_000;
 	return estIn <= maxIn;
 }
 
@@ -600,7 +609,24 @@ function buildEffectiveModelChainForStage(
 		pushTier({ provider: t.provider, modelId: t.modelId });
 	}
 
-	return out;
+	const filtered = filterModelTiersForFinetunePolicy(stage, out, process.env);
+	if (
+		ingestFinetuneLabelerStrictEnabled(process.env) &&
+		filtered.length < out.length &&
+		isFinetuneSensitiveLlmStage(stage)
+	) {
+		const allow = parseFinetuneLabelerAllowedProviders(process.env).join(',');
+		console.warn(
+			`  [INGEST_FINETUNE_POLICY] ${stage}: dropped ${out.length - filtered.length} model tier(s) not in allowed providers (${allow}); Restormel/catalog/OpenAI fallbacks cannot bypass this.`
+		);
+	}
+	if (filtered.length === 0) {
+		const allow = parseFinetuneLabelerAllowedProviders(process.env).join(',');
+		throw new Error(
+			`[INGEST_FINETUNE_POLICY] ${stage}: no models left after provider filter (allowed=${allow}). Set Mistral-capable Restormel routes, INGEST_PIN_* for this stage, or temporarily INGEST_FINETUNE_LABELER_STRICT=0 for local experiments only.`
+		);
+	}
+	return filtered;
 }
 
 function createEmptyTiming(): IngestTimingPayload {
@@ -768,71 +794,6 @@ async function reconnectDbWithRetry(db: Surreal, reason: string): Promise<void> 
 	);
 }
 
-async function signinSurrealWithFallback(db: Surreal): Promise<void> {
-	const access = (process.env.SURREAL_ACCESS || process.env.SURREAL_RECORD_ACCESS || '').trim();
-	const attempts: Array<{ label: string; payload: Record<string, unknown> }> = [
-		{
-			label: 'root/basic',
-			payload: { username: SURREAL_USER, password: SURREAL_PASS }
-		},
-		{
-			label: 'namespace/basic',
-			payload: {
-				namespace: SURREAL_NAMESPACE,
-				database: SURREAL_DATABASE,
-				username: SURREAL_USER,
-				password: SURREAL_PASS
-			}
-		},
-		{
-			label: 'namespace/shorthand',
-			payload: {
-				NS: SURREAL_NAMESPACE,
-				DB: SURREAL_DATABASE,
-				user: SURREAL_USER,
-				pass: SURREAL_PASS
-			}
-		}
-	];
-
-	if (access) {
-		attempts.push({
-			label: `access/${access}`,
-			payload: {
-				namespace: SURREAL_NAMESPACE,
-				database: SURREAL_DATABASE,
-				access,
-				username: SURREAL_USER,
-				password: SURREAL_PASS
-			}
-		});
-		attempts.push({
-			label: `access-shorthand/${access}`,
-			payload: {
-				NS: SURREAL_NAMESPACE,
-				DB: SURREAL_DATABASE,
-				AC: access,
-				user: SURREAL_USER,
-				pass: SURREAL_PASS
-			}
-		});
-	}
-
-	let lastError: unknown;
-	for (const attempt of attempts) {
-		try {
-			await db.signin(attempt.payload as any);
-			if (attempt.label !== 'root/basic') {
-				console.log(`  [DB] Signed in via ${attempt.label} auth mode.`);
-			}
-			return;
-		} catch (error) {
-			lastError = error;
-		}
-	}
-	throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'Unknown signin error'));
-}
-
 async function dbQueryWithRetry<T>(
 	db: Surreal,
 	query: string,
@@ -932,7 +893,10 @@ function parseIngestProvider(value: string | undefined): IngestProvider {
 	if (!value) return 'auto';
 	const normalized = value.toLowerCase().trim();
 	if (normalized === 'auto') return 'auto';
-	return normalized === 'anthropic' ? 'anthropic' : 'vertex';
+	if (normalized === 'anthropic') return 'anthropic';
+	if (normalized === 'vertex' || normalized === 'google') return 'vertex';
+	if (normalized === 'mistral') return 'mistral';
+	return 'auto';
 }
 
 function parsePositiveInt(value: string | undefined): number | undefined {
@@ -3255,6 +3219,14 @@ function logIngestPinsWorkerSnapshot(phase: string, argv: string[]): void {
 	}
 }
 
+function logIngestFinetunePolicySnapshot(): void {
+	const strict = ingestFinetuneLabelerStrictEnabled(process.env);
+	const allowed = parseFinetuneLabelerAllowedProviders(process.env);
+	console.log(
+		`[INGEST_FINETUNE_POLICY] strict=${strict ? '1' : '0'} allowed_providers=${allowed.join('|')} (sensitive stages: extraction, relations, grouping, remediation, json_repair; validation unchanged)`
+	);
+}
+
 async function loadSourceTextAndMeta(
 	filePathArg: string
 ): Promise<{ txtPath: string; sourceText: string; sourceMeta: SourceMeta; slug: string }> {
@@ -3304,6 +3276,7 @@ async function main() {
 	applyIngestEmbeddingEnvOverrides();
 	applyIngestPinsJsonArg(args);
 	logIngestPinsWorkerSnapshot('after_cli_json', args);
+	logIngestFinetunePolicySnapshot();
 	const filePath = args.find((a) => !a.startsWith('--'));
 	const shouldValidate = resolveShouldValidate(args.includes('--validate'));
 	const ingestProviderFlagIdx = args.findIndex((a) => a === '--ingest-provider');
@@ -3329,11 +3302,19 @@ async function main() {
 	// Force-stage: re-run from a specific stage, ignoring saved progress.
 	// e.g. --force-stage embedding re-runs Stage 4 onwards.
 	const forceStageIdx = args.findIndex((a) => a === '--force-stage');
-	const forceStage = forceStageIdx !== -1 ? args[forceStageIdx + 1] : null;
+	let forceStage = forceStageIdx !== -1 ? args[forceStageIdx + 1] : null;
 	if (forceStage && !STAGES_ORDER.includes(forceStage)) {
 		console.error(`[ERROR] Unknown --force-stage value: ${forceStage}`);
 		console.error(`Valid stages: ${STAGES_ORDER.join(', ')}`);
 		process.exit(1);
+	}
+	const ingestForceReingest =
+		process.env.INGEST_FORCE_REINGEST === '1' || process.env.INGEST_FORCE_REINGEST === 'true';
+	if (!forceStage && ingestForceReingest) {
+		forceStage = 'extracting';
+		console.log(
+			'[FORCE] INGEST_FORCE_REINGEST=1 → same as --force-stage extracting (bypass ingestion_log complete skip; re-run from extraction)'
+		);
 	}
 
 	if (!filePath) {
@@ -3360,6 +3341,9 @@ async function main() {
 		console.error('  INGEST_RECOVERY_AGENT=1      Optional: after inner retries, consult routed model for bounded backoff + one extra attempt (transient errors)');
 		console.error('  INGEST_RECOVERY_AGENT_MAX_SLEEP_MS, INGEST_RECOVERY_AGENT_TIMEOUT_MS');
 		console.error('  INGEST_CIRCUIT_FAILURE_THRESHOLD   Soft circuit: after N failures on same stage+model in one run, skip tier (0=disabled)');
+		console.error(
+			'  INGEST_FORCE_REINGEST=1          Durable-job / operator re-ingest: treat as --force-stage extracting (skip early exit when ingestion_log is complete)'
+		);
 		console.error('\nResume is automatic — re-run the same source to pick up where it left off.');
 		process.exit(1);
 	}

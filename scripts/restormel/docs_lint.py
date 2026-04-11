@@ -78,7 +78,8 @@ def main() -> int:
     for relative_path, expected_doc_type in KEY_DELIVERY_DOCS.items():
         path = DOCS_ROOT / relative_path
         if not path.exists():
-            failures.append(f"Missing required delivery doc: {path}")
+            # Full Restormel delivery pack is optional in public checkouts.
+            warnings.append(f"Skipping missing delivery doc (not in this tree): {path}")
             continue
 
         text = path.read_text(encoding="utf-8")

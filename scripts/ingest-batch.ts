@@ -3,7 +3,7 @@
  *
  * Ingest multiple sources from the curated source list.
  *
- * Usage: npx tsx --env-file=.env scripts/ingest-batch.ts [--wave 1|2|3] [--validate] [--dry-run] [--status] [--retry] [--fast] [--fail-fast] [--domain <domain>] [--ingest-provider <auto|vertex|anthropic>] [--source-list <path>] [--yes]
+ * Usage: npx tsx --env-file=.env scripts/ingest-batch.ts [--wave 1|2|3] [--validate] [--dry-run] [--status] [--retry] [--fast] [--fail-fast] [--domain <domain>] [--ingest-provider <auto|vertex|anthropic|mistral>] [--source-list <path>] [--yes]
  *
  * Flags:
  *   --wave N                Only ingest sources from wave N (1, 2, or 3)
@@ -14,7 +14,7 @@
  *   --fast                  Fast extraction mode (no validation, detailed error logging)
  *   --fail-fast             Stop launching new sources after first failure
  *   --domain <domain>       Override claim domain tag for all sources (e.g. philosophy_of_mind)
- *   --ingest-provider <p>   Provider hint for Restormel planning: auto | vertex | anthropic (default: auto)
+ *   --ingest-provider <p>   Provider hint for Restormel planning: auto | vertex | anthropic | mistral (default: auto)
  *   --source-list <path>    Path to source list JSON (default: ./data/source-list-3a.json)
  *   --yes                   Skip cost confirmation prompt (for CI / automated runs)
  *
@@ -108,13 +108,16 @@ interface IngestionLogRecord {
 	cost_usd?: number;
 }
 
-type IngestProvider = 'auto' | 'vertex' | 'anthropic';
+type IngestProvider = 'auto' | 'vertex' | 'anthropic' | 'mistral';
 
 function parseIngestProvider(value: string | undefined): IngestProvider {
 	if (!value) return 'auto';
 	const normalized = value.toLowerCase().trim();
 	if (normalized === 'auto') return 'auto';
-	return normalized === 'anthropic' ? 'anthropic' : 'vertex';
+	if (normalized === 'anthropic') return 'anthropic';
+	if (normalized === 'vertex' || normalized === 'google') return 'vertex';
+	if (normalized === 'mistral') return 'mistral';
+	return 'auto';
 }
 
 // ─── Semaphore for concurrency control ────────────────────────────────────

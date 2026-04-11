@@ -47,10 +47,10 @@ In practice, this repo currently contains both the SOPHIA product surfaces and a
 
 ## What is source of truth vs supporting context
 
-- Current product/technical truth: this file and the other docs in `docs/sophia/`
-- Active platform truth: `docs/restormel/`
-- Operational runbooks and schema/prompt/API references: supporting reference docs under `docs/`
-- Historical and superseded plans: `docs/archive/`
+- Current product/technical truth: this file and the other curated files under `docs/sophia/` (see [Documentation index](../README.md)).
+- Active platform truth: high-level stub in `docs/restormel/README.md` (full planning pack is not shipped in this tree).
+- Operational runbooks: public slice in `docs/operations/ingestion-credits-and-workers.md` where applicable.
+- Historical and superseded plans: kept outside this public documentation slice.
 
 ## Current interpretation of the repo
 

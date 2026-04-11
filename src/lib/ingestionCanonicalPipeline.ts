@@ -2,8 +2,9 @@
  * Single production ingestion profile: default models per stage and ordered fallbacks
  * when the primary model fails after retries (see scripts/ingest.ts `callStageModel`).
  *
- * Env pins (`INGEST_PIN_*`) still override these defaults. Restormel may still steer routes
- * when the operator uses ingest-provider `auto` without pins.
+ * Env pins (`INGEST_PIN_*`) still override these defaults for the **first** resolve tier.
+ * `scripts/ingest.ts` may still filter cross-tier fallbacks via `INGEST_FINETUNE_LABELER_*` on
+ * sensitive stages. Restormel steers the primary route when ingest-provider is `auto` without pins.
  *
  * Vertex Gemini IDs must stay aligned with current Vertex model pages (including preview ids):
  * https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-flash
@@ -38,19 +39,18 @@ export type IngestionLlmStageKey =
 export type CanonicalModelRef = { provider: ModelProvider; modelId: string };
 
 /**
- * Primary models tuned for: structured JSON at extract/relate/group, cross-vendor validation
- * (Vertex reviews OpenAI pipeline output by default), fast JSON repair on Vertex (Gemini Flash).
+ * Primary models tuned for: structured JSON at extract/relate/group on **Mistral** (fine-tune
+ * lineage / API ToS path), cross-vendor **validation** (Vertex reviews Mistral pipeline output),
+ * JSON repair + remediation on Mistral so OpenAI/Anthropic never rewrite persisted training slices.
  */
 export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, CanonicalModelRef> = {
-	extraction: { provider: 'openai', modelId: 'gpt-4o-mini' },
-	/** gpt-4o: large context + better TPM headroom than gpt-4-turbo for big claim JSON graphs */
-	relations: { provider: 'openai', modelId: 'gpt-4o' },
-	grouping: { provider: 'openai', modelId: 'gpt-4o' },
-	/** Distinct from extraction (mini): second opinion from another provider improves faithfulness checks. */
+	extraction: { provider: 'mistral', modelId: 'mistral-large-latest' },
+	relations: { provider: 'mistral', modelId: 'mistral-large-latest' },
+	grouping: { provider: 'mistral', modelId: 'mistral-large-latest' },
+	/** Distinct from labeler stages: second opinion from another provider improves faithfulness checks. */
 	validation: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
-	/** Passage-bounded rewrite; prefer strong model (aligned with ingestion_remediation floor). */
-	remediation: { provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
-	json_repair: { provider: 'vertex', modelId: 'gemini-3-flash-preview' }
+	remediation: { provider: 'mistral', modelId: 'mistral-large-latest' },
+	json_repair: { provider: 'mistral', modelId: 'mistral-medium-latest' }
 };
 
 /**
@@ -58,31 +58,18 @@ export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, Ca
  * Next entries should be stronger or alternate-provider for resilience.
  */
 export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, CanonicalModelRef[]> = {
-	extraction: [
-		{ provider: 'openai', modelId: 'gpt-4o' },
-		{ provider: 'vertex', modelId: 'gemini-3-flash-preview' }
-	],
-	relations: [
-		{ provider: 'openai', modelId: 'gpt-4-turbo' },
-		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' }
-	],
-	grouping: [
-		{ provider: 'openai', modelId: 'gpt-4-turbo' },
-		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' }
-	],
+	extraction: [{ provider: 'mistral', modelId: 'mistral-medium-latest' }],
+	relations: [{ provider: 'mistral', modelId: 'mistral-medium-latest' }],
+	grouping: [{ provider: 'mistral', modelId: 'mistral-medium-latest' }],
 	validation: [
 		{ provider: 'openai', modelId: 'gpt-4o' },
 		{ provider: 'openai', modelId: 'gpt-4o-mini' },
 		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' }
 	],
-	remediation: [
-		{ provider: 'openai', modelId: 'gpt-4o' },
-		{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
-		{ provider: 'openai', modelId: 'gpt-4-turbo' }
-	],
+	remediation: [{ provider: 'mistral', modelId: 'mistral-medium-latest' }],
 	json_repair: [
-		{ provider: 'openai', modelId: 'gpt-4o-mini' },
-		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' }
+		{ provider: 'mistral', modelId: 'mistral-large-latest' },
+		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	]
 };
 

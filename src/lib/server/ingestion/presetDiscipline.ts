@@ -28,7 +28,9 @@ export function buildSepPresetFingerprint(env: NodeJS.ProcessEnv): Record<string
 		pin_provider_extraction: env.INGEST_PIN_PROVIDER_EXTRACTION ?? null,
 		pin_model_extraction: env.INGEST_PIN_MODEL_EXTRACTION ?? null,
 		pin_provider_validation: env.INGEST_PIN_PROVIDER_VALIDATION ?? null,
-		pin_model_validation: env.INGEST_PIN_MODEL_VALIDATION ?? null
+		pin_model_validation: env.INGEST_PIN_MODEL_VALIDATION ?? null,
+		finetune_labeler_strict: (env.INGEST_FINETUNE_LABELER_STRICT ?? '1').trim() || null,
+		finetune_labeler_allowed_providers: env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS ?? null
 	};
 }
 

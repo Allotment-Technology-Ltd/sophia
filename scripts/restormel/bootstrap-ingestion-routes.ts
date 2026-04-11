@@ -10,10 +10,20 @@
  *   RESTORMEL_ENVIRONMENT_ID (default: production)
  *   RESTORMEL_KEYS_BASE / RESTORMEL_BASE_URL (optional)
  *
- * Optional model overrides (defaults are sensible for Vertex + Anthropic):
+ * Default published steps (unless overridden below):
+ *   - **ingestion_extraction / relations / grouping / json_repair / remediation / shared:** Mistral-only
+ *     (`mistral-large-latest` → `mistral-medium-latest` → `mistral-small-latest`) for fine-tune lineage.
+ *   - **ingestion_validation:** Vertex + Anthropic + Vertex (second-opinion path; matches canonical validation).
+ *
+ * Optional overrides (apply to the active profile — labeler vs validation — see source):
  *   RESTORMEL_BOOTSTRAP_PRIMARY_PROVIDER / RESTORMEL_BOOTSTRAP_PRIMARY_MODEL
  *   RESTORMEL_BOOTSTRAP_FALLBACK_PROVIDER / RESTORMEL_BOOTSTRAP_FALLBACK_MODEL
  *   RESTORMEL_BOOTSTRAP_FALLBACK2_PROVIDER / RESTORMEL_BOOTSTRAP_FALLBACK2_MODEL
+ *
+ * Validation-only overrides (when adjusting the validation route chain):
+ *   RESTORMEL_BOOTSTRAP_VALIDATION_PRIMARY_PROVIDER / RESTORMEL_BOOTSTRAP_VALIDATION_PRIMARY_MODEL
+ *   RESTORMEL_BOOTSTRAP_VALIDATION_FALLBACK_PROVIDER / RESTORMEL_BOOTSTRAP_VALIDATION_FALLBACK_MODEL
+ *   RESTORMEL_BOOTSTRAP_VALIDATION_FALLBACK2_PROVIDER / RESTORMEL_BOOTSTRAP_VALIDATION_FALLBACK2_MODEL
  *
  * Usage:
  *   pnpm restormel:ingestion-bootstrap plan
@@ -46,6 +56,7 @@ const DEDICATED_STAGES: StageDef[] = [
   { substage: 'relations', routeStage: 'ingestion_relations', label: 'Relations' },
   { substage: 'grouping', routeStage: 'ingestion_grouping', label: 'Grouping' },
   { substage: 'validation', routeStage: 'ingestion_validation', label: 'Validation' },
+  { substage: 'remediation', routeStage: 'ingestion_remediation', label: 'Remediation' },
   { substage: 'json_repair', routeStage: 'ingestion_json_repair', label: 'JSON repair' }
 ];
 

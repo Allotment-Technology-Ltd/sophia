@@ -15,6 +15,29 @@ const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 dotenv.config({ path: resolve(root, '.env') });
 dotenv.config({ path: resolve(root, '.env.local') });
 
+/** If `SURREAL_URL` is unset, build it from `SURREAL_INSTANCE` + `SURREAL_HOSTNAME` (keep in sync with `src/lib/server/surrealEnv.ts`). */
+function materializeSurrealUrlFromParts() {
+	if ((process.env.SURREAL_URL || '').trim()) return;
+	const strip = (h) =>
+		h
+			.trim()
+			.replace(/^wss?:\/\//i, '')
+			.replace(/^https?:\/\//i, '')
+			.replace(/\/rpc\/?$/i, '')
+			.split('/')[0];
+	const hostRaw = (process.env.SURREAL_HOSTNAME || '').trim();
+	const instRaw = (process.env.SURREAL_INSTANCE || '').trim();
+	if (hostRaw && instRaw) {
+		const host = strip(hostRaw);
+		const inst = strip(instRaw);
+		if (host && inst) process.env.SURREAL_URL = `wss://${inst}.${host}/rpc`;
+	} else if (hostRaw) {
+		const host = strip(hostRaw);
+		if (host) process.env.SURREAL_URL = `wss://${host}/rpc`;
+	}
+}
+materializeSurrealUrlFromParts();
+
 function resolveCredentialPath(raw) {
   if (!raw || typeof raw !== 'string') return null;
   const trimmed = raw.trim();
