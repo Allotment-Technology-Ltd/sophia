@@ -8,10 +8,10 @@
       emphasis: true
     },
     {
-      href: '/admin/quarantine',
-      title: 'Quarantine review',
+      href: '/admin/issue-resolution',
+      title: 'Issue resolution',
       description:
-        'Queue of claims with low validation scores or review flags; select rows and run the same passage-bounded remediation model used after ingest validation.',
+        'Embedding corpus maintenance (inventory, re-embed job, poller-driven progress) and quarantined claim triage with passage-bounded remediation. Legacy /admin/quarantine redirects here.',
       emphasis: false
     },
     {

@@ -221,7 +221,8 @@ export async function replayDlqJobItems(itemIds: string[]): Promise<
 	const jobIds = new Set<string>();
 	for (const id of ids) {
 		const [it] = await db.select().from(ingestionJobItems).where(eq(ingestionJobItems.id, id)).limit(1);
-		if (!it || it.status !== 'error') continue;
+		// DLQ replay: only rows that were stamped into the dead-letter queue (max attempts exhausted).
+		if (!it || it.status !== 'error' || it.dlqEnqueuedAt == null) continue;
 		await db
 			.update(ingestionJobItems)
 			.set({
@@ -352,11 +353,100 @@ export type CreateIngestionJobArgs = {
 	actorUid: string;
 	actorEmail: string | null;
 	validate?: boolean;
+	/**
+	 * When true, append URLs as new items on the most recently updated `running` job instead of creating
+	 * a second job (avoids doubling ADMIN_INGEST_MAX_CONCURRENT pressure from parallel workers).
+	 */
+	mergeIntoLatestRunningJob?: boolean;
 };
 
-export async function createIngestionJob(args: CreateIngestionJobArgs): Promise<{ id: string } | null> {
+async function findLatestRunningIngestionJobId(): Promise<string | null> {
+	const db = getDrizzleDb();
+	const [row] = await db
+		.select({ id: ingestionJobs.id })
+		.from(ingestionJobs)
+		.where(eq(ingestionJobs.status, 'running'))
+		.orderBy(desc(ingestionJobs.updatedAt))
+		.limit(1);
+	return row?.id ?? null;
+}
+
+/**
+ * Append URLs as pending items on an existing job (dedupe by exact URL string already on the job).
+ */
+export async function appendUrlsToIngestionJob(
+	jobId: string,
+	urls: string[]
+): Promise<{ added: number; skippedDuplicate: number }> {
+	const db = getDrizzleDb();
+	const job = await db.query.ingestionJobs.findFirst({
+		where: eq(ingestionJobs.id, jobId)
+	});
+	if (!job) throw new Error('Job not found.');
+	if (job.status !== 'running') {
+		throw new Error(`Job is not running (status=${job.status}); cannot append URLs.`);
+	}
+
+	const existingRows = await db
+		.select({ url: ingestionJobItems.url })
+		.from(ingestionJobItems)
+		.where(eq(ingestionJobItems.jobId, jobId));
+	const seen = new Set(existingRows.map((r) => r.url.trim()));
+
+	let added = 0;
+	let skippedDuplicate = 0;
+	for (const raw of urls) {
+		const u = raw.trim();
+		if (!u) continue;
+		if (seen.has(u)) {
+			skippedDuplicate += 1;
+			continue;
+		}
+		seen.add(u);
+		await db.insert(ingestionJobItems).values({
+			id: buildItemId(),
+			jobId,
+			url: u,
+			sourceType: inferSourceTypeFromUrl(u),
+			status: 'pending',
+			attempts: 0
+		});
+		added += 1;
+	}
+
+	if (added > 0) {
+		await appendIngestionJobEvent(jobId, 'urls_appended', {
+			added,
+			skippedDuplicate,
+			merge: true
+		});
+		await reconcileIngestionJobView(jobId);
+		void tickIngestionJob(jobId);
+	}
+
+	return { added, skippedDuplicate };
+}
+
+export async function createIngestionJob(
+	args: CreateIngestionJobArgs
+): Promise<{ id: string; merged?: boolean } | null> {
 	if (!isNeonIngestPersistenceEnabled()) return null;
 	const db = getDrizzleDb();
+	const urls = [...new Set(args.urls.map((u) => u.trim()).filter(Boolean))];
+	if (urls.length === 0) throw new Error('At least one URL is required');
+
+	if ((process.env.INGEST_JOB_PREFLIGHT ?? '').trim() === '1') {
+		await runIngestionJobPreflightOrThrow();
+	}
+
+	if (args.mergeIntoLatestRunningJob === true) {
+		const target = await findLatestRunningIngestionJobId();
+		if (target) {
+			await appendUrlsToIngestionJob(target, urls);
+			return { id: target, merged: true };
+		}
+	}
+
 	const id = buildJobId();
 	const concurrency = Math.max(
 		1,
@@ -364,12 +454,6 @@ export async function createIngestionJob(args: CreateIngestionJobArgs): Promise<
 	);
 	const pipelineVersion = resolvePipelineVersion();
 	const embeddingFingerprint = resolveEmbeddingFingerprint();
-	const urls = [...new Set(args.urls.map((u) => u.trim()).filter(Boolean))];
-	if (urls.length === 0) throw new Error('At least one URL is required');
-
-	if ((process.env.INGEST_JOB_PREFLIGHT ?? '').trim() === '1') {
-		await runIngestionJobPreflightOrThrow();
-	}
 
 	await db.insert(ingestionJobs).values({
 		id,
@@ -411,7 +495,7 @@ export async function createIngestionJob(args: CreateIngestionJobArgs): Promise<
 	});
 
 	void tickIngestionJob(id);
-	return { id };
+	return { id, merged: false };
 }
 
 function terminalRunStatus(s: string): boolean {
@@ -734,7 +818,7 @@ export type IngestionJobRetryMode = 'restart' | 'resume';
 export async function retryIngestionJob(
 	jobId: string,
 	mode: IngestionJobRetryMode,
-	opts?: { itemId?: string }
+	opts?: { itemId?: string; onlyDlq?: boolean }
 ): Promise<
 	| {
 			ok: true;
@@ -762,8 +846,18 @@ export async function retryIngestionJob(
 	}
 
 	const failed = items.filter((i) => i.status === 'error');
-	if (failed.length === 0) {
-		return { ok: false, error: opts?.itemId ? 'That item is not in error state.' : 'No failed items to retry.' };
+	const target = opts?.onlyDlq === true ? failed.filter((i) => i.dlqEnqueuedAt != null) : failed;
+	if (target.length === 0) {
+		if (failed.length === 0) {
+			return { ok: false, error: opts?.itemId ? 'That item is not in error state.' : 'No failed items to retry.' };
+		}
+		return {
+			ok: false,
+			error:
+				opts?.onlyDlq === true
+					? 'No DLQ items to retry (dead-letter rows have dlq_enqueued_at set after max attempts).'
+					: 'No failed items to retry.'
+		};
 	}
 
 	await db
@@ -776,7 +870,7 @@ export async function retryIngestionJob(
 		.where(eq(ingestionJobs.id, jobId));
 
 	if (mode === 'restart') {
-		for (const it of failed) {
+		for (const it of target) {
 			await db
 				.update(ingestionJobItems)
 				.set({
@@ -794,16 +888,17 @@ export async function retryIngestionJob(
 		}
 		await appendIngestionJobEvent(jobId, 'job_retry_restart', {
 			mode: 'restart',
-			itemCount: failed.length,
-			itemIds: failed.map((i) => i.id)
+			itemCount: target.length,
+			itemIds: target.map((i) => i.id),
+			onlyDlq: opts?.onlyDlq === true
 		});
 		await tickIngestionJob(jobId);
-		return { ok: true, touched: failed.length };
+		return { ok: true, touched: target.length };
 	}
 
 	// resume
-	const withRun = failed.filter((i) => Boolean(i.childRunId?.trim()));
-	const withoutRun = failed.filter((i) => !i.childRunId?.trim());
+	const withRun = target.filter((i) => Boolean(i.childRunId?.trim()));
+	const withoutRun = target.filter((i) => !i.childRunId?.trim());
 	if (withRun.length === 0) {
 		return {
 			ok: false,
@@ -835,7 +930,8 @@ export async function retryIngestionJob(
 		mode: 'resume',
 		itemCount: withRun.length,
 		skippedNoRunId: withoutRun.map((i) => i.id),
-		results: resumeResults
+		results: resumeResults,
+		onlyDlq: opts?.onlyDlq === true
 	});
 
 	await tickIngestionJob(jobId);

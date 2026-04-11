@@ -357,3 +357,46 @@ export const ingestionJobEvents = pgTable(
   })
 );
 
+/** Durable re-embed corpus job (Surreal claim.embedding → target_dim, e.g. 1024). */
+export const reembedJobs = pgTable(
+  'reembed_jobs',
+  {
+    id: text('id').primaryKey(),
+    status: text('status').notNull().default('pending'),
+    targetDim: integer('target_dim').notNull().default(1024),
+    stage: text('stage').notNull().default('pending'),
+    processedCount: integer('processed_count').notNull().default(0),
+    totalCount: integer('total_count'),
+    cursorOffset: integer('cursor_offset').notNull().default(0),
+    batchSize: integer('batch_size').notNull().default(50),
+    lastError: text('last_error'),
+    actorEmail: text('actor_email'),
+    summary: jsonb('summary').notNull().$type<Record<string, unknown>>().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp('completed_at', { withTimezone: true })
+  },
+  (t) => ({
+    statusIdx: index('idx_reembed_jobs_status').on(t.status),
+    updatedIdx: index('idx_reembed_jobs_updated').on(t.updatedAt)
+  })
+);
+
+export const reembedJobEvents = pgTable(
+  'reembed_job_events',
+  {
+    id: serial('id').primaryKey(),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => reembedJobs.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    eventType: text('event_type').notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown> | null>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (t) => ({
+    jobSeqUq: uniqueIndex('reembed_job_events_job_seq_unique').on(t.jobId, t.seq),
+    jobSeqIdx: index('idx_reembed_job_events_job_seq').on(t.jobId, t.seq)
+  })
+);
+

@@ -37,6 +37,8 @@
 	let concurrency = $state(2);
 	let notes = $state('');
 	let validateLlm = $state(false);
+	/** Append URLs to the most recently touched running job instead of starting a second job (eases global worker cap). */
+	let mergeIntoRunningJob = $state(false);
 
 	/** SEP catalog helper: topic presets + un-ingested filter (Neon). */
 	let sepPresetId = $state('');
@@ -205,7 +207,8 @@
 						Math.min(MAX_DURABLE_INGEST_JOB_CONCURRENCY, Math.trunc(concurrency) || 2)
 					),
 					notes: notes.trim() || null,
-					validate: validateLlm
+					validate: validateLlm,
+					merge_into_latest_running_job: mergeIntoRunningJob
 				})
 			});
 			const body = await res.json().catch(() => ({}));
@@ -219,10 +222,12 @@
 			}
 			const jobId = typeof body?.jobId === 'string' ? body.jobId : '';
 			if (!jobId) throw new Error('Missing job id in response.');
+			const merged = body?.merged === true;
 			urlsInput = '';
 			notes = '';
 			await loadJobs();
-			window.location.href = `/admin/ingest/jobs/${encodeURIComponent(jobId)}`;
+			const q = merged ? '?appended=1' : '';
+			window.location.href = `/admin/ingest/jobs/${encodeURIComponent(jobId)}${q}`;
 		} catch (e) {
 			submitMessage = e instanceof Error ? e.message : 'Failed to start job.';
 		} finally {
@@ -502,6 +507,17 @@
 			<label class="flex cursor-pointer items-center gap-3">
 				<input type="checkbox" bind:checked={validateLlm} class="h-5 w-5 rounded border-[var(--color-border)]" />
 				<span class="text-sm text-sophia-dark-text">Run LLM validation stage</span>
+			</label>
+			<label class="flex cursor-pointer items-center gap-3">
+				<input
+					type="checkbox"
+					bind:checked={mergeIntoRunningJob}
+					class="h-5 w-5 rounded border-[var(--color-border)]"
+				/>
+				<span class="text-sm text-sophia-dark-text">
+					If a job is already running, append these URLs to it (pending queue). Avoids a second job competing for
+					<span class="font-mono text-xs">ADMIN_INGEST_MAX_CONCURRENT</span> worker slots.
+				</span>
 			</label>
 			{#if submitMessage}
 				<p class="text-sm text-amber-100" role="status">{submitMessage}</p>

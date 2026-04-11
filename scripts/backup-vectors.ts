@@ -65,6 +65,16 @@ async function main() {
 		process.exit(1);
 	}
 
+	const dimHistogram = new Map<number, number>();
+	for (const v of vectors) {
+		const d = v.embedding?.length ?? 0;
+		dimHistogram.set(d, (dimHistogram.get(d) ?? 0) + 1);
+	}
+	const histObj = Object.fromEntries(
+		[...dimHistogram.entries()].sort((a, b) => a[0] - b[0]).map(([k, c]) => [String(k), c])
+	);
+	console.log('[BACKUP] Observed embedding dimensions (count per length):', histObj);
+
 	// Validate embedding dimensions
 	const firstDim = vectors[0].embedding?.length;
 	console.log(`[BACKUP] First embedding dimension: ${firstDim}`);
