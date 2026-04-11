@@ -827,7 +827,7 @@ class IngestRunManager extends EventEmitter {
       this.activityBumpTimers.delete(runId);
       const s = this.runs.get(runId);
       if (!s) return;
-      void neonBumpRunActivity(runId, s.lastOutputAt);
+      void neonBumpRunActivity(runId, s.lastOutputAt ?? s.createdAt);
     }, ms);
     this.activityBumpTimers.set(runId, t);
   }
@@ -841,7 +841,7 @@ class IngestRunManager extends EventEmitter {
     }
     const s = this.runs.get(runId);
     if (s && isNeonIngestPersistenceEnabled()) {
-      void neonBumpRunActivity(runId, s.lastOutputAt);
+      void neonBumpRunActivity(runId, s.lastOutputAt ?? s.createdAt);
     }
   }
 
