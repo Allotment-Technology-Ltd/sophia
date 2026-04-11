@@ -8,6 +8,8 @@
 
 **GCP Logging:** Optional `[INGEST_TELEMETRY]` / `[INGEST_TIMING]` sampling was **not run** in the original agent session (token refresh / non-interactive auth). **Operators:** authenticate in a normal terminal (browser handshake), export logs, then run the repo script below to widen **N** beyond Neon `report_envelope` completeness.
 
+**Repro / refresh:** The **SQL in §1.2** is the source of truth to re-verify **N** and per-stage numbers after schema or cohort changes. If you want this tailored to **only** Cloud Logging exports (no Neon SQL), say so in a follow-up: *“Assume only GCP Logging export, no Neon SQL.”*
+
 ---
 
 ## 1) Baseline wall time by stage (extraction first)
@@ -195,7 +197,11 @@ Export or query logs where `textPayload` / `jsonPayload.message` contains `[INGE
 From the first aggregate query (§1.2, **N = 10** rows with `total_wall_ms`, 2026-04-11 pull):
 
 - **`frac_extract_mean` ≈ 0.2435** → **Mean % extraction of E2E ≈ 24.4%**
-- **`frac_extract_p90` ≈ 0.4654** → **p90 % extraction of E2E ≈ 46.5%**
+- **`frac_extract_p90` ≈ 0.4654** → **p90 % extraction of E2E (per-run share) ≈ 46.5%**
+
+Re-run formulas: **Mean %** = `100 * frac_extract_mean`, **p90 %** = `100 * frac_extract_p90`.
+
+**Implication:** Extraction is **~¼ of E2E on average** in this cohort but **nearly half at the p90 of per-run shares** — material at the tail, yet **not** “half the pipeline” every run. A **perfect** zero-cost extraction (else unchanged) caps **mean** E2E savings near **~24%**; realistic fine-tunes recover **a fraction** of that, so **extraction-only** tuning **cannot** deliver a **~50% full-run** speedup **by itself** unless other stages shrink too — see **§7** for the multi-stage / portfolio framing.
 
 On the same cohort, **mean** `stage_ms` / `total_wall_ms` shares were approximately **validating 38.7%**, **remediating 20.2%**, **storing 14.0%** (see §6.5).
 
@@ -252,6 +258,8 @@ Across **49** completed runs in 90d that expose `model_calls.extraction` (broade
 ## 3) Quality definition (“no regression” gates)
 
 All gates assume **pinned validation** (and optionally extraction) models for comparability — see `docs/operations/ingestion-golden-sep-corpus.md` and `timingTelemetry.stage_models.validation`.
+
+**Product rule (post–Phase 0):** Keep **validation on a separate, fixed “judge” model** (not the same fine-tuned worker used for extract / relate / group / remediate / JSON repair). That preserves **faithfulness measurement** as a stable control arm: upstream stages should get faster and cleaner so validation **passes** with less rework, not because the judge co-adapted with tuned weights.
 
 | Gate | Metric | Where it is recorded | Suggested threshold (tune from baseline) |
 |------|--------|----------------------|----------------------------------------|
@@ -340,9 +348,17 @@ All rows below are **`sep_entry`** unless noted. Add **5–10** `web_article` UR
 
 *(Re-ranked after Neon baseline, 2026-04-11.)*
 
+**Spike framing:** Even if (1)–(3) are extraction-centric, **Neon mean extraction share ~25%** (§1.4) implies the **multi-stage reuse** story in **§7** is the right container for a **~50% E2E** ambition — not extraction-only ROI in isolation.
+
 ---
 
 ## 6) Deliverables checklist
+
+- [x] Table: **stage** × **p50 / p90 / max / mean** wall ms + sample **N** — §6.1 *(Neon **N = 10** with `total_wall_ms`; re-run SQL after envelope backfill)*.
+- [x] Paragraph: **% of E2E** in extraction (mean + p90) — §6.2 *(Neon: **~24.4%** mean, **~46.5%** p90 on that cohort)*.
+- [x] **Quality gates** with thresholds + **separate validation model** rule — §3.
+- [x] **Golden set** + storage path — §4 / `docs/operations/golden-extraction-eval.json`.
+- [x] **Go / no-go** + **portfolio / multi-phase** framing — §6.5 and **§7**.
 
 ### 6.1 Table — stage × p50 / p90 / max / mean wall ms (sample N)
 
@@ -365,7 +381,7 @@ Source: **“All stages + planning”** SQL block in §1.2 (`f` CTE), executed v
 
 ### 6.2 Paragraph — % of E2E in extraction (mean + p90)
 
-Over the last **90 days**, among **N = 10** completed ingest runs with usable `total_wall_ms` in `report_envelope.timingTelemetry`, **`extracting` accounted for ~24.4%** of `total_wall_ms` **on average** and **~46.5%** at **p90** (fractions **0.2435** and **0.4654** from the extraction-fraction aggregate in §1.2). **Interpret cautiously:** **59** runs had `stage_ms` telemetry in the same window but lacked `total_wall_ms`, so the headline **N** is small and may skew toward worker paths that persist full timing summaries.
+Over the last **90 days**, among **N = 10** completed ingest runs with usable `total_wall_ms` in `report_envelope.timingTelemetry`, **`extracting` accounted for ~24.4%** of `total_wall_ms` **on average** and **~46.5%** at **p90** (fractions **0.2435** and **0.4654** from the extraction-fraction aggregate in §1.2). **Interpret cautiously:** **59** runs had `stage_ms` telemetry in the same window but lacked `total_wall_ms`, so the headline **N** is small and may skew toward worker paths that persist full timing summaries. **Re-run §1.2 SQL** after envelope backfill to refresh **N** and percentages.
 
 ### 6.3 Quality gates (summary)
 
@@ -378,7 +394,24 @@ See §3 — numeric thresholds should be **derived from one baseline golden batc
 
 ### 6.5 Go / no-go (one paragraph)
 
-**No-go (defer bespoke extraction as the primary Phase-1 bet)** on current numbers: **mean** `extracting` is **~24%** of `total_wall_ms` — below the **~35–40%** “large mean share” gate — while **`validating` (~39% mean)** plus **`remediating` (~20%)** and **`storing` (~14%)** dominate typical E2E wall in the **N = 10** cohort. **Extraction is still material at the tail** (**~46.5%** of E2E at **p90**), and **corr(extracting, `model_call_wall_ms.extraction`) ≈ 0.85** on that cohort supports tuning **extraction model speed / call shape** for tail latency — but **ROI first** belongs to **validation + remediation + store path** (and to **fixing `total_wall_ms` / timing envelope coverage** so **N** is not 10/59). **Revisit “Go” on bespoke extraction** if, after envelope backfill, **mean** extracting share rises materially **or** golden runs show **`json_repair` / truncation** concentrated on extraction with **`model_call_wall_ms.extraction` ≈ `stage_ms.extracting`** and **high** `json_repair_invocations` in timing (not only in `ingest_run_issues`).
+**No-go** on treating **bespoke extraction alone** as the lever that delivers **~50% full-run** improvement: on the **N = 10** cohort, **mean** `extracting` is **~24%** of `total_wall_ms` — below the **~35–40%** “large mean share” gate — while **`validating` (~39% mean)** plus **`remediating` (~20%)** and **`storing` (~14%)** dominate typical E2E wall. **Extraction is still material at the tail** (**~46.5%** of E2E at **p90**), and **corr(extracting, `model_call_wall_ms.extraction`) ≈ 0.85** supports tuning **extraction model speed / call shape** for tail latency.
+
+**Do go** on a **platform** bet (see **§7**): prove a **worker** (fine-tuned or bespoke) on **extraction first**, then **reuse** the same model or adapter family on **relating, grouping, remediation, and JSON repair** — **always** keep **validation on a separate fixed “judge” model** (§3). Do **not** expect **~50% E2E** from extraction in isolation; treat **~50%** as a **portfolio** target (model + routing + fewer retries + unchanged validation judge + embed/store path), with **moderated first-wave** expectations (e.g. **10–20%** full-run if several stages improve), then reassess.
+
+**ROI first** on current numbers still belongs to **validation + remediation + store** (and to **fixing `total_wall_ms` / timing envelope coverage** so **N** is not **10/59**). **Revisit extraction-first “Go”** if, after envelope backfill, **mean** extracting share rises materially **or** golden runs show **`json_repair` / truncation** concentrated on extraction with **`model_call_wall_ms.extraction` ≈ `stage_ms.extracting`** and **high** `json_repair_invocations` in timing (not only in `ingest_run_issues`).
+
+---
+
+## 7) Strategy: 50% E2E vs extraction-only fine-tune (handover narrative)
+
+This section captures the **product / research synthesis** (including the follow-up chat you had after Neon baselines). Numbers cited for **mean vs p90 extraction share** refer to the **N = 10** cohort in §1.4 / §6.2 unless you widen **N** via log export or envelope backfill.
+
+| Topic | Implication |
+|--------|-------------|
+| **“50% from extraction-only fine-tune”** | **Wrong lever** for a **50% end-to-end** goal when **mean** extraction is **~¼** of `total_wall_ms` in the documented cohort: even a **free** extraction stage caps **mean** E2E savings near that share; realistic fine-tunes recover **a fraction** of that. |
+| **Reuse across relate / group / remediate / fix** | **Plausible path** to a larger **run-level** win: a domain-specialised worker that is **faster**, **more format-stable**, or **cheaper per token** can **compound** across structured-output stages and **json_repair**-heavy paths — same fine-tune or **same family + adapter** as a platform bet. |
+| **Validation always separate** | Keep a **strong, fixed alternative model** for validation (pins + no co-training with the worker). Quality gates stay interpretable; faster runs should come from **cleaner upstream outputs**, not a weaker judge. |
+| **Success criteria** | **Layered:** per-stage latency, tokens, repair rate, retries (`[INGEST_TIMING]`, `[INGEST_TELEMETRY]`); **run-level** `total_wall_ms`. First fine-tune wave: target **moderated** full-run improvement (order **10–20%** if multiple stages move), then iterate; **~50%** remains an **ambition** across the **whole** portfolio (model + concurrency + retries + embed/store), not extraction in isolation. |
 
 ---
 
