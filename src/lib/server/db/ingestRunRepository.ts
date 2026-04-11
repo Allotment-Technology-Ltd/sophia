@@ -370,6 +370,30 @@ const idleStallWhereSql = (idleMs: number) =>
           )
         )`;
 
+/**
+ * Same predicate as `idleStallWhereSql` but with alias `ir` for `FROM ingest_runs ir`.
+ * Drizzle's `${ingestRuns.lastOutputAt}` renders as `"ingest_runs"."last_output_at"`, which is
+ * invalid when the query only exposes alias `ir` (PostgreSQL hides the table name).
+ */
+const idleStallWhereSqlIr = (idleMs: number) =>
+  sql`(
+          (
+            (ir.last_output_at IS NOT NULL OR ir.worker_heartbeat_at IS NOT NULL)
+            AND (
+              (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint
+              - GREATEST(
+                  COALESCE(ir.last_output_at, 0::bigint),
+                  COALESCE(ir.worker_heartbeat_at, 0::bigint)
+                )
+            ) > ${idleMs}
+          )
+          OR (
+            ir.last_output_at IS NULL
+            AND ir.worker_heartbeat_at IS NULL
+            AND (EXTRACT(EPOCH FROM NOW()) - EXTRACT(EPOCH FROM ir.created_at)) * 1000 > ${idleMs}
+          )
+        )`;
+
 export type IdleStalledIngestCandidateRow = {
   id: string;
   currentStageKey: string | null;
@@ -407,7 +431,7 @@ export async function neonListIdleStalledIngestCandidateRows(
     WHERE ir.cancelled_by_user = false
       AND ir.completed_at IS NULL
       AND ir.status IN ('running', 'queued', 'awaiting_sync')
-      AND ${idleStallWhereSql(idleMs)}
+      AND ${idleStallWhereSqlIr(idleMs)}
     ORDER BY ir.updated_at ASC
     LIMIT ${cap}
   `);
