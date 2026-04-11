@@ -4,7 +4,7 @@ import { assertAdminAccess } from '$lib/server/adminAccess';
 import {
 	getIngestionJobDetail,
 	getIngestionJobItemMaxAttempts,
-	reconcileIngestionJobView
+	tickIngestionJob
 } from '$lib/server/ingestionJobs';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 
@@ -16,7 +16,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 		}
 		const id = params.id?.trim();
 		if (!id) return json({ error: 'Missing job id' }, { status: 400 });
-		await reconcileIngestionJobView(id);
+		await tickIngestionJob(id);
 		const detail = await getIngestionJobDetail(id);
 		if (!detail) return json({ error: 'Job not found' }, { status: 404 });
 		return json({
