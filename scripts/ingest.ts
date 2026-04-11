@@ -96,7 +96,7 @@ import {
 	parseRetryAfterMsFromProviderMessage
 } from '../src/lib/server/ingestion/recoveryAgent.js';
 import { formatIngestSelfHealLine } from '../src/lib/server/ingestion/selfHealLog.js';
-import { startSpinner } from './progress.js';
+import { formatDuration, startSpinner } from './progress.js';
 
 // ─── Prompt imports (relative paths for standalone script) ─────────────────
 import {
@@ -417,6 +417,8 @@ function estimateTokens(text: string): number {
 
 /** Per-run timing for [INGEST_TIMING] JSON line (parsed into Firestore reports). */
 interface IngestTimingPayload {
+	/** Wall-clock start of this worker process for this source (for total_wall_ms). */
+	run_started_at_ms: number;
 	planning_initial_ms: number;
 	planning_post_extraction_ms: number;
 	planning_post_relations_ms: number;
@@ -438,6 +440,8 @@ interface IngestTimingPayload {
 	recovery_agent_backoff_ms_total: number;
 	embed_wall_ms: number;
 	store_wall_ms: number;
+	/** Set when logging the final summary line (wall clock for entire run). */
+	total_wall_ms?: number;
 }
 
 let activeIngestTiming: IngestTimingPayload | null = null;
@@ -601,6 +605,7 @@ function buildEffectiveModelChainForStage(
 
 function createEmptyTiming(): IngestTimingPayload {
 	return {
+		run_started_at_ms: Date.now(),
 		planning_initial_ms: 0,
 		planning_post_extraction_ms: 0,
 		planning_post_relations_ms: 0,
@@ -624,9 +629,54 @@ function bumpStageMs(key: string, ms: number): void {
 	activeIngestTiming.stage_ms[key] = (activeIngestTiming.stage_ms[key] ?? 0) + ms;
 }
 
+function ingestElapsedWallMs(): number {
+	if (!activeIngestTiming) return 0;
+	return Date.now() - activeIngestTiming.run_started_at_ms;
+}
+
+/** One-line progress for operators and log UIs; cumulative elapsed is wall clock since run start. */
+function reportIngestPhaseTiming(phase: string, segmentWallMs: number): void {
+	if (!activeIngestTiming) return;
+	const elapsed = ingestElapsedWallMs();
+	console.log(
+		`  [TIMING] ${phase}: ${formatDuration(segmentWallMs)} (elapsed since run start ${formatDuration(elapsed)})`
+	);
+	emitIngestTelemetry({
+		event: 'phase_timing',
+		phase,
+		phase_wall_ms: Math.round(segmentWallMs),
+		elapsed_wall_ms: Math.round(elapsed)
+	});
+}
+
+function logIngestTimingHumanBlock(t: IngestTimingPayload, totalWallMs: number): void {
+	const sm = t.stage_ms;
+	const row = (label: string, ms: number) =>
+		ms > 0 || label.startsWith('Planning') ? `    ${label.padEnd(26)} ${formatDuration(ms)}` : '';
+	const lines = [
+		'  ─── Ingestion timing (wall clock) ───',
+		row('Planning (initial)', t.planning_initial_ms),
+		row('Planning (post-extract)', t.planning_post_extraction_ms),
+		row('Planning (post-relations)', t.planning_post_relations_ms),
+		row('Stage 1 · extracting', sm.extracting ?? 0),
+		row('Stage 2 · relating', sm.relating ?? 0),
+		row('Stage 3 · grouping', sm.grouping ?? 0),
+		row('Stage 4 · embedding', sm.embedding ?? t.embed_wall_ms ?? 0),
+		row('Stage 5 · validating', sm.validating ?? 0),
+		row('Stage 5b · remediating', sm.remediating ?? 0),
+		row('Stage 6 · storing', sm.storing ?? t.store_wall_ms ?? 0),
+		`    ${'Total (this run)'.padEnd(26)} ${formatDuration(totalWallMs)}`
+	].filter((l) => l.length > 0 && !l.match(/^[\s]*$/));
+	console.log(lines.join('\n'));
+}
+
 function logIngestTimingSummary(): void {
 	if (!activeIngestTiming) return;
-	console.log(`[INGEST_TIMING] ${JSON.stringify(activeIngestTiming)}`);
+	const totalWallMs = Date.now() - activeIngestTiming.run_started_at_ms;
+	const payload: IngestTimingPayload = { ...activeIngestTiming, total_wall_ms: totalWallMs };
+	logIngestTimingHumanBlock(payload, totalWallMs);
+	console.log(`[INGEST_TIMING] ${JSON.stringify(payload)}`);
+	emitIngestTelemetry({ event: 'ingest_timing_complete', ...payload });
 	activeIngestTiming = null;
 }
 
@@ -3900,6 +3950,10 @@ async function main() {
 			]);
 			if (activeIngestTiming) {
 				activeIngestTiming.planning_post_extraction_ms = Date.now() - planPostExStart;
+				reportIngestPhaseTiming(
+					'Planning (post-extraction)',
+					activeIngestTiming.planning_post_extraction_ms
+				);
 			}
 
 		// ═══════════════════════════════════════════════════════════════
@@ -4392,6 +4446,7 @@ async function main() {
 			if (activeIngestTiming) {
 				activeIngestTiming.embed_wall_ms += embedMs;
 				bumpStageMs('embedding', embedMs);
+				reportIngestPhaseTiming('Stage 4 · embedding', embedMs);
 			}
 
 			const newCharCount = claimTexts
@@ -4594,6 +4649,9 @@ async function main() {
 				cost_usd: parseFloat(estimateCostUsd())
 			});
 			bumpStageMs('validating', Date.now() - stageValStart);
+			if (activeIngestTiming) {
+				reportIngestPhaseTiming('Stage 5 · validation', activeIngestTiming.stage_ms['validating'] ?? 0);
+			}
 		} else {
 			console.log('  [SKIP] Stage 5: Validation (already completed)\n');
 			validationResult = partial.validation ?? null;
