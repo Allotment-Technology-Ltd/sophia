@@ -5,7 +5,7 @@
 
 import { generateText } from 'ai';
 import { z } from 'zod';
-import { collectErrorMessageChain } from '$lib/ingestionErrorChain';
+import { collectErrorMessageChain } from '../../ingestionErrorChain.js';
 import { resolveReasoningModelRoute } from '../vertex.js';
 
 const RecoveryDecisionSchema = z.object({
