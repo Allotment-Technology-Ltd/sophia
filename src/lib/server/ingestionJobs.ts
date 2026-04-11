@@ -3,7 +3,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { and, asc, desc, eq, gt, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type { InferSelectModel } from 'drizzle-orm';
 import { getDrizzleDb } from './db/neon';
 import { ingestionJobEvents, ingestionJobItems, ingestionJobs } from './db/schema';
