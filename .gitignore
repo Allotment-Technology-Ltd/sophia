@@ -28,24 +28,8 @@ data/ingested/batch-summary-*.json
 memory/
 .cursor/
 
-# Documentation — public clone keeps a small curated set (see exceptions below).
-docs/*
-!docs/README.md
-!docs/sophia/
-docs/sophia/*
-!docs/sophia/README.md
-!docs/sophia/architecture.md
-!docs/sophia/roadmap.md
-!docs/sophia/current-state.md
-!docs/stoa_game/
-docs/stoa_game/*
-!docs/stoa_game/README.md
-!docs/restormel/
-docs/restormel/*
-!docs/restormel/README.md
-!docs/operations/
-docs/operations/*
-!docs/operations/ingestion-credits-and-workers.md
+# Local design documents — do not commit work-in-progress design files
+docs/design/MASTER-IMPLEMENTATION-GUIDE.md
 
 # Operator batch manifests / inventories (local only)
 data/relabel-inventory.csv
@@ -103,7 +87,11 @@ data/thinker-graph/philosophers.json
 # Local migration artifacts
 data/migration/
 
-# Private migration scripts (not for public repo)
+# Private migration docs/scripts (not for public repo)
+docs/GCP-ORG-MIGRATION.md
+docs/MIGRATION-IMPLEMENTATION-SUMMARY.md
+docs/MIGRATION-QUICKSTART.md
+docs/ORG-POLICY-TROUBLESHOOTING.md
 scripts/check-org-policies.sh
 scripts/migration-db-backup.sh
 scripts/modify-org-policies.sh

@@ -37,8 +37,6 @@ UI: `/admin/ingest/jobs` (includes **Dead letter** table) and `/admin/ingest/job
 
 **Store idempotency:** `scripts/ingest.ts` can persist **`ingest_source_text_sha256`** on Surreal `source` (default on) and **`INGEST_STORE_ENFORCE_TEXT_HASH=1`** aborts if an existing row’s hash disagrees with the current `data/sources` body (same canonical URL).
 
-**Neon egress (admin child runs):** verbose `scripts/ingest.ts` stdout used to append **every** line to **`ingest_run_logs`** and bump activity, which can dominate small-plan transfer. Set **`INGEST_NEON_LOG_PERSISTENCE=minimal`** to keep orchestrator lines plus high-signal child lines (timing/telemetry/finetune/cancel/failure-shaped patterns), or **`off`** to skip log rows entirely (run **`snapshot_json`** still updates; scripts that read **`ingest_run_logs`** lose detail). **`INGEST_NEON_ACTIVITY_DEBOUNCE_MS`** (default **1500**) coalesces **`lastOutputAt`** updates; terminal paths flush immediately.
-
 ## SEP URL manifest
 
 Generate a JSON list of `plato.stanford.edu` entry URLs (one HTTP GET to the public contents page; see script header for etiquette):
@@ -55,13 +53,13 @@ pnpm sep:catalog -- --out data/sep-entry-urls.json
 
 1. **`pnpm db:migrate`** (or CI `db:migrate:ci`) has applied latest `drizzle/*.sql` — including optional **`ingest_concurrency_gate`** / **`ingest_phase_gate`** if you use global or phase limits, and **`0011_ingestion_job_item_dlq.sql`** for DLQ columns.
 2. **Poller** runs without an open browser: Cloud Scheduler → Cloud Run Job `sophia-ingestion-job-poller` (or `pnpm ingestion:job-poller` in CI). Logs should show `[poller] Ticked N job(s)` when work exists. In GCP Console, confirm the schedule target matches this job and the execution role can invoke it. For large batches (50+ URLs), consider a **1 minute** schedule if Neon and worker capacity allow (default docs often use 2 minutes).
-3. **Quotas and alerts:** Vertex TPM, embedding APIs, and Neon — tune using your cloud console and provider dashboards (extended quota notes live in the private ops doc pack, not shipped here).
+3. **Quotas and alerts:** Vertex TPM, embedding APIs, and Neon — see [ingestion-gcp-quotas.md](./ingestion-gcp-quotas.md).
 4. **Optional multi-instance:** set **`INGEST_GLOBAL_CONCURRENCY_GATE=1`** so concurrent child processes are counted in Neon across app replicas (same cap as `ADMIN_INGEST_MAX_CONCURRENT`).
 5. **Long unattended batches:** consider **`INGEST_JOB_REQUEUE_UNKNOWN=1`** after validating false-positive rate; tune **`INGEST_WATCHDOG_IDLE_MS`** / **`INGEST_JOB_ITEM_STALE_MS`**; use DLQ UI or **`INGEST_DLQ_AUTO_REPLAY_DELAY_MS`** for retryable exhausted items.
 
-**Production (GCP, no browser):** CI deploys Cloud Run Job **`sophia-ingestion-job-poller`** on every app deploy (same image as `sophia`; one `tick` per execution). Enable automatic ticks with **`pnpm gcp:setup-ingestion-poller-scheduler`** (Cloud Scheduler every 2 minutes). Full GCP topology is maintained in the private operations pack.
+**Production (GCP, no browser):** CI deploys Cloud Run Job **`sophia-ingestion-job-poller`** on every app deploy (same image as `sophia`; one `tick` per execution). Enable automatic ticks with **`pnpm gcp:setup-ingestion-poller-scheduler`** (Cloud Scheduler every 2 minutes). See [`gcp-infrastructure.md`](./gcp-infrastructure.md).
 
-**Throughput (batching):** embeddings already batch via `embedTexts` / `INGEST_EMBED_BATCH_SIZE`; LLM stages use token-target batch envs in `scripts/ingest.ts`. Vendor **async** batch APIs are a separate lane (see `scripts/ingest.ts` and optional internal async-lane notes).
+**Throughput (batching):** embeddings already batch via `embedTexts` / `INGEST_EMBED_BATCH_SIZE`; LLM stages use token-target batch envs in `scripts/ingest.ts`. Vendor **async** batch APIs are a separate lane — see [ingest-async-batch-lane.md](./ingest-async-batch-lane.md).
 
 **Local / ad hoc:**
 
