@@ -1,12 +1,11 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from '$env/dynamic/private';
 
-/** Prefer current stable Flash; see https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions */
-export const VALIDATION_MODEL = 'gemini-2.5-flash';
+/** Prefer current Gemini 3 Flash preview on Vertex / AI Studio. */
+export const VALIDATION_MODEL = 'gemini-3-flash-preview';
 const VALIDATION_MODELS = parseModelList(process.env.GEMINI_MODELS, [
 	VALIDATION_MODEL,
-	'gemini-2.5-flash-lite',
-	'gemini-2.0-flash-001'
+	'gemini-3.1-flash-lite-preview'
 ]);
 
 const geminiApiKey = env.GOOGLE_AI_API_KEY;
@@ -152,7 +151,7 @@ export async function validateWithGemini(prompt: string): Promise<string> {
 
 /**
  * Get total tokens used in this session
- * Useful for tracking costs: Gemini 2.0 Flash = $0.075 per 1M input tokens, $0.30 per 1M output tokens
+ * Useful for tracking costs; tune rates when Google publishes 2.5 Flash pricing for your billing path.
  */
 export function getTotalTokensUsed(): number {
 	return totalTokensUsed;
@@ -160,7 +159,7 @@ export function getTotalTokensUsed(): number {
 
 /**
  * Get estimated cost of validation used so far
- * Based on Gemini 2.0 Flash pricing (assuming ~2:1 output:input ratio for validation)
+ * Rough placeholder using legacy 2.0 Flash rates (assuming ~2:1 output:input ratio for validation)
  */
 export function getEstimatedValidationCost(): string {
 	// Average assumption: validation output is ~2x input size
@@ -191,7 +190,7 @@ export function resetTokenCounter(): void {
 export function logStats(): void {
 	console.log('\n[GEMINI] === VALIDATION SESSION STATISTICS ===');
 	console.log(`Total tokens used: ${totalTokensUsed.toLocaleString()}`);
-	console.log(`Estimated cost (Gemini 2.0 Flash): $${getEstimatedValidationCost()}`);
+	console.log(`Estimated cost (placeholder rates): $${getEstimatedValidationCost()}`);
 	console.log(`Model: ${VALIDATION_MODEL}`);
 	console.log('');
 }

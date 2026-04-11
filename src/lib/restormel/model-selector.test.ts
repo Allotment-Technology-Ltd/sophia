@@ -15,28 +15,28 @@ describe('restormel model selector helpers', () => {
 
   it('builds provider definitions from the visible model options', () => {
     const providers = createSophiaModelSelectorProviders([
-      { provider: 'vertex', id: 'gemini-2.5-flash' },
-      { provider: 'vertex', id: 'gemini-1.5-pro' },
+      { provider: 'vertex', id: 'gemini-3-flash-preview' },
+      { provider: 'vertex', id: 'gemini-3.1-pro-preview' },
       { provider: 'anthropic', id: 'claude-3-5-sonnet' }
     ]);
 
     expect(providers.map((provider) => provider.id)).toEqual(['anthropic', 'google']);
     expect(providers.find((provider) => provider.id === 'google')?.models).toEqual([
-      'gemini-2.5-flash',
-      'gemini-1.5-pro'
+      'gemini-3-flash-preview',
+      'gemini-3.1-pro-preview'
     ]);
   });
 
   it('models platform availability for the packaged selector without exposing secrets', async () => {
     const providers = createSophiaModelSelectorProviders([
-      { provider: 'vertex', id: 'gemini-2.5-flash' }
+      { provider: 'vertex', id: 'gemini-3-flash-preview' }
     ]);
 
     const keys = createSophiaModelSelectorKeys([], providers, 'platform');
 
-    await expect(keys.resolve('google', 'gemini-2.5-flash')).resolves.toMatchObject({
+    await expect(keys.resolve('google', 'gemini-3-flash-preview')).resolves.toMatchObject({
       provider: 'google',
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       source: 'platform'
     });
   });

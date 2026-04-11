@@ -58,7 +58,7 @@ vi.mock('$lib/server/reasoningEval', () => ({
     },
     route: {
       provider: 'vertex',
-      modelId: 'gemini-2.5-flash',
+      modelId: 'gemini-3-flash-preview',
       routeId: 'verify',
       reason: 'Restormel route'
     }

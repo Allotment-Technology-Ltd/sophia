@@ -31,12 +31,11 @@ async function main() {
 			const testModels = [
 				'gemini-pro',
 				'gemini-1.0-pro',
-				'gemini-1.5-pro',
-				'gemini-1.5-flash',
-				'gemini-1.5-flash-latest',
-				'gemini-2.0-flash-exp',
+				'gemini-3-flash-preview',
+				'gemini-3.1-flash-lite-preview',
+				'gemini-3.1-pro-preview',
 				'models/gemini-pro',
-				'models/gemini-1.5-flash'
+				'models/gemini-3-flash-preview'
 			];
 			
 			for (const modelName of testModels) {

@@ -6,7 +6,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as fs from 'fs';
 
 const GOOGLE_AI_API_KEY = process.env.GOOGLE_AI_API_KEY || '';
-const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_MODEL = 'gemini-3-flash-preview';
 
 async function main() {
 	console.log('╔══════════════════════════════════════════════════════╗');

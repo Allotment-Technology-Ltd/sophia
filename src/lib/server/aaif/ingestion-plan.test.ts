@@ -29,7 +29,7 @@ describe('planIngestionStage', () => {
     mockResolveExtractionModelRoute.mockResolvedValue({
       model: Symbol('model'),
       provider: 'vertex',
-      modelId: 'gemini-2.5-flash',
+      modelId: 'gemini-3-flash-preview',
       credentialSource: 'platform',
       supportsGrounding: false,
       routingSource: 'restormel',
@@ -65,7 +65,7 @@ describe('planIngestionStage', () => {
       }
     });
     expect(plan.provider).toBe('vertex');
-    expect(plan.model).toBe('gemini-2.5-flash');
+    expect(plan.model).toBe('gemini-3-flash-preview');
     expect(plan.routingSource).toBe('restormel');
     expect(plan.request.task).toBe('completion');
     expect(plan.request.constraints?.latency).toBe('low');

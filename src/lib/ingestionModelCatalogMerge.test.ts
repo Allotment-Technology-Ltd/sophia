@@ -25,7 +25,7 @@ describe('extractModelRowsFromRestormelPayload', () => {
 
 	it('reads data.models', () => {
 		const rows = extractModelRowsFromRestormelPayload({
-			data: { models: [{ providerType: 'google', modelId: 'gemini-2.5-flash' }] }
+			data: { models: [{ providerType: 'google', modelId: 'gemini-3-flash-preview' }] }
 		});
 		expect(rows).toHaveLength(1);
 	});

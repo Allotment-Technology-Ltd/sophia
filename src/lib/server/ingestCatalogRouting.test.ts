@@ -28,19 +28,19 @@ describe('buildIngestCatalogModelChainForStage', () => {
       surfaceAssignments: {
         'openai::gpt-4o-mini': 'ingestion_only',
         'openai::gpt-4o': 'ingestion_only',
-        'vertex::gemini-2.5-pro': 'ingestion_only'
+        'vertex::gemini-3.1-pro-preview': 'ingestion_only'
       }
     };
     const rows: CatalogSurfaceRow[] = [
       row('openai', 'gpt-4o'),
       row('openai', 'gpt-4o-mini'),
-      row('vertex', 'gemini-2.5-pro')
+      row('vertex', 'gemini-3.1-pro-preview')
     ];
     const chain = buildIngestCatalogModelChainForStage('extraction', rows, surfaces);
     const ids = chain.map((c) => c.modelId);
     expect(ids[0]).toBe('gpt-4o-mini');
     expect(ids).toContain('gpt-4o');
-    expect(ids).toContain('gemini-2.5-pro');
+    expect(ids).toContain('gemini-3.1-pro-preview');
   });
 
   it('excludes models marked off in surfaces', () => {

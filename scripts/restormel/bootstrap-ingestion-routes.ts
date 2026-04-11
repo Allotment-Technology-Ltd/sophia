@@ -72,13 +72,13 @@ function findSharedRoute(routes: RestormelRouteRecord[]): RestormelRouteRecord |
 function buildDefaultSteps(): RestormelStepRecord[] {
   const primaryProvider = process.env.RESTORMEL_BOOTSTRAP_PRIMARY_PROVIDER?.trim() || 'vertex';
   const primaryModel =
-    process.env.RESTORMEL_BOOTSTRAP_PRIMARY_MODEL?.trim() || 'gemini-2.5-flash';
+    process.env.RESTORMEL_BOOTSTRAP_PRIMARY_MODEL?.trim() || 'gemini-3-flash-preview';
   const fb1Provider = process.env.RESTORMEL_BOOTSTRAP_FALLBACK_PROVIDER?.trim() || 'anthropic';
   const fb1Model =
     process.env.RESTORMEL_BOOTSTRAP_FALLBACK_MODEL?.trim() || 'claude-haiku-4-5-20251001';
   const fb2Provider = process.env.RESTORMEL_BOOTSTRAP_FALLBACK2_PROVIDER?.trim() || 'vertex';
   const fb2Model =
-    process.env.RESTORMEL_BOOTSTRAP_FALLBACK2_MODEL?.trim() || 'gemini-2.5-pro';
+    process.env.RESTORMEL_BOOTSTRAP_FALLBACK2_MODEL?.trim() || 'gemini-3.1-pro-preview';
 
   const switchCriteria = {
     onFailureKinds: [

@@ -238,7 +238,7 @@ export class HealthChecker {
 			}
 
 			const client = new GoogleGenerativeAI(this.config.google_ai_api_key);
-			const model = client.getGenerativeModel({ model: 'gemini-2.5-flash-latest' });
+			const model = client.getGenerativeModel({ model: 'gemini-3-flash-preview' });
 
 			const response = await model.generateContent({
 				contents: [

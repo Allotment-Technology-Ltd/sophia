@@ -29,7 +29,7 @@ describe('@restormel/aaif compatibility package', () => {
     const response = {
       output: 'Summary',
       provider: 'vertex',
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       cost: 0.0012,
       routing: {
         reason: 'Restormel route selected the lowest-latency permitted model.'

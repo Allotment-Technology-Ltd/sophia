@@ -149,13 +149,15 @@ const OPENAI_DEGRADED_DEEP_MODEL =
   'gpt-4o';
 
 const VERTEX_DEGRADED_STANDARD_MODEL =
+  DEFAULT_MODEL_CATALOG.vertex.find((id) => id.includes('gemini-3') && id.includes('flash')) ??
   DEFAULT_MODEL_CATALOG.vertex.find((id) => id.includes('flash') && id.includes('2.5')) ??
   DEFAULT_MODEL_CATALOG.vertex[1] ??
-  'gemini-2.5-flash';
+  'gemini-3-flash-preview';
 const VERTEX_DEGRADED_DEEP_MODEL =
+  DEFAULT_MODEL_CATALOG.vertex.find((id) => id.includes('gemini-3') && id.includes('pro')) ??
   DEFAULT_MODEL_CATALOG.vertex.find((id) => id.includes('2.5-pro')) ??
   DEFAULT_MODEL_CATALOG.vertex[0] ??
-  'gemini-2.5-pro';
+  'gemini-3.1-pro-preview';
 
 function uniqueModelIds(values: Array<string | undefined>): string[] {
   const out: string[] = [];

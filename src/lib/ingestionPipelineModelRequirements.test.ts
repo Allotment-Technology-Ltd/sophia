@@ -144,7 +144,7 @@ describe('resolveCatalogQualityCost', () => {
 
 describe('inferQualityTierFromModelIdentity', () => {
 	it('classifies flash as capable', () => {
-		expect(inferQualityTierFromModelIdentity('vertex', 'gemini-2.5-flash')).toBe('capable');
+		expect(inferQualityTierFromModelIdentity('vertex', 'gemini-3-flash-preview')).toBe('capable');
 	});
 });
 

@@ -118,21 +118,30 @@ const INGESTION_MODEL_CATALOG_ROWS: CatalogRow[] = [
 	// ─── Google (AI Studio style) ─────────────────────────────────────────
 	[
 		'google',
-		'gemini-2.0-flash',
+		'gemini-3-flash-preview',
 		'low',
 		'capable',
 		'fast',
 		'1M',
-		'Very fast Gemini for long chunks and screening.'
+		'Gemini 3 Flash (Vertex preview) — default cross-vendor / fast repair path.'
 	],
 	[
 		'google',
-		'gemini-2.0-flash-lite',
+		'gemini-3.1-flash-lite-preview',
 		'low',
 		'capable',
 		'fast',
 		'1M',
-		'Lowest-latency Gemini flash-lite.'
+		'Gemini 3.1 Flash-Lite preview; cost-sensitive high volume.'
+	],
+	[
+		'google',
+		'gemini-3.1-pro-preview',
+		'medium',
+		'strong',
+		'balanced',
+		'1M',
+		'Gemini 3.1 Pro preview — remediation / quality-first Vertex tier.'
 	],
 	[
 		'google',
@@ -141,7 +150,7 @@ const INGESTION_MODEL_CATALOG_ROWS: CatalogRow[] = [
 		'capable',
 		'fast',
 		'1M',
-		'Long books and Gutenberg-scale text; verify edge cases.'
+		'Legacy GA Flash (retirement floor per Vertex lifecycle docs); prefer 3.x for new work.'
 	],
 	[
 		'google',
@@ -150,7 +159,7 @@ const INGESTION_MODEL_CATALOG_ROWS: CatalogRow[] = [
 		'capable',
 		'fast',
 		'1M',
-		'Cheaper 2.5 Flash for massive inputs.'
+		'Legacy GA Flash-Lite; prefer gemini-3.1-flash-lite-preview.'
 	],
 	[
 		'google',
@@ -159,25 +168,7 @@ const INGESTION_MODEL_CATALOG_ROWS: CatalogRow[] = [
 		'strong',
 		'balanced',
 		'1M',
-		'Strong long-context quality for books and messy sites.'
-	],
-	[
-		'google',
-		'gemini-1.5-pro',
-		'medium',
-		'strong',
-		'balanced',
-		'1M',
-		'Stable 1.5 Pro for legacy routes and comparisons.'
-	],
-	[
-		'google',
-		'gemini-1.5-flash',
-		'low',
-		'capable',
-		'fast',
-		'1M',
-		'Legacy flash for high-volume or older Restormel steps.'
+		'Legacy GA Pro; prefer gemini-3.1-pro-preview.'
 	],
 	[
 		'google',
@@ -197,14 +188,21 @@ const INGESTION_MODEL_CATALOG_ROWS: CatalogRow[] = [
 		'2k',
 		'Multilingual embeddings for mixed-language corpora.'
 	],
-	// ─── Vertex (GCP) — same Gemini ids many Restormel projects use ──────
-	['vertex', 'gemini-2.0-flash', 'low', 'capable', 'fast', '1M', 'Vertex-hosted Gemini 2.0 Flash.'],
-	['vertex', 'gemini-2.0-flash-lite', 'low', 'capable', 'fast', '1M', 'Vertex flash-lite.'],
-	['vertex', 'gemini-2.5-flash', 'low', 'capable', 'fast', '1M', 'Vertex 2.5 Flash — common default.'],
-	['vertex', 'gemini-2.5-flash-lite', 'low', 'capable', 'fast', '1M', 'Vertex 2.5 Flash Lite.'],
-	['vertex', 'gemini-2.5-pro', 'medium', 'strong', 'balanced', '1M', 'Vertex 2.5 Pro for quality-first.'],
-	['vertex', 'gemini-1.5-pro', 'medium', 'strong', 'balanced', '1M', 'Vertex 1.5 Pro.'],
-	['vertex', 'gemini-1.5-flash', 'low', 'capable', 'fast', '1M', 'Vertex 1.5 Flash.'],
+	// ─── Vertex (GCP) — Gemini ids (preview + legacy GA) ─────────────────
+	['vertex', 'gemini-3-flash-preview', 'low', 'capable', 'fast', '1M', 'Vertex Gemini 3 Flash preview — ingest default Flash.'],
+	[
+		'vertex',
+		'gemini-3.1-flash-lite-preview',
+		'low',
+		'capable',
+		'fast',
+		'1M',
+		'Vertex Gemini 3.1 Flash-Lite preview.'
+	],
+	['vertex', 'gemini-3.1-pro-preview', 'medium', 'strong', 'balanced', '1M', 'Vertex Gemini 3.1 Pro preview.'],
+	['vertex', 'gemini-2.5-flash', 'low', 'capable', 'fast', '1M', 'Vertex 2.5 Flash (legacy GA).'],
+	['vertex', 'gemini-2.5-flash-lite', 'low', 'capable', 'fast', '1M', 'Vertex 2.5 Flash Lite (legacy GA).'],
+	['vertex', 'gemini-2.5-pro', 'medium', 'strong', 'balanced', '1M', 'Vertex 2.5 Pro (legacy GA).'],
 	[
 		'vertex',
 		'text-embedding-005',
@@ -624,8 +622,8 @@ export const INGESTION_SOURCE_MODEL_HINTS: Record<IngestionSourceTypeId, SourceT
 		note: 'IEP mirrors SEP-style structure; watch for noisier markup than SEP.'
 	},
 	gutenberg_text: {
-		budget: 'google · gemini-2.5-flash',
-		balanced: 'google · gemini-2.5-pro',
+		budget: 'google · gemini-3-flash-preview',
+		balanced: 'google · gemini-3.1-pro-preview',
 		quality: 'anthropic · claude-sonnet-4-5-20250929',
 		note: 'Very long inputs favour Gemini’s window; use smaller chunks if you stay on smaller-context models.'
 	},

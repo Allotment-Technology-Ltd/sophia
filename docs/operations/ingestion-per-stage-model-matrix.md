@@ -8,12 +8,12 @@ Canonical code defaults live in [`src/lib/ingestionCanonicalPipeline.ts`](../../
 
 | Stage (Restormel `route.stage`) | Primary (Sophia default) | Fallbacks (order) | Measured notes |
 |--------------------------------|--------------------------|---------------------|----------------|
-| `ingestion_extraction` | OpenAI `gpt-4o-mini` | `gpt-4o`, Vertex `gemini-2.5-flash` | Structured JSON; mini first for cost. |
-| `ingestion_relations` | OpenAI `gpt-4o` | `gpt-4-turbo`, Vertex `gemini-2.5-pro` | Large claim graphs; TPM headroom. |
-| `ingestion_grouping` | OpenAI `gpt-4o` | `gpt-4-turbo`, Vertex `gemini-2.5-pro` | Argument grouping batches. |
-| `ingestion_validation` | Vertex `gemini-2.5-flash` | `gpt-4o`, `gpt-4o-mini`, `gemini-2.5-pro` | Cross-vendor check vs extraction path. |
-| `ingestion_remediation` | Vertex `gemini-2.5-pro` | `gpt-4o`, Vertex `gemini-2.5-flash`, `gpt-4-turbo` | Post-validation passage-bounded claim repair; strong-tier floor in catalog gates. |
-| `ingestion_json_repair` | Vertex `gemini-2.5-flash` | `gpt-4o-mini`, `gemini-2.5-pro` | Fast repair on malformed JSON. |
+| `ingestion_extraction` | OpenAI `gpt-4o-mini` | `gpt-4o`, Vertex `gemini-3-flash-preview` | Structured JSON; mini first for cost. |
+| `ingestion_relations` | OpenAI `gpt-4o` | `gpt-4-turbo`, Vertex `gemini-3.1-pro-preview` | Large claim graphs; TPM headroom. |
+| `ingestion_grouping` | OpenAI `gpt-4o` | `gpt-4-turbo`, Vertex `gemini-3.1-pro-preview` | Argument grouping batches. |
+| `ingestion_validation` | Vertex `gemini-3-flash-preview` | `gpt-4o`, `gpt-4o-mini`, `gemini-3.1-pro-preview` | Cross-vendor check vs extraction path. |
+| `ingestion_remediation` | Vertex `gemini-3.1-pro-preview` | `gpt-4o`, Vertex `gemini-3-flash-preview`, `gpt-4-turbo` | Post-validation passage-bounded claim repair; strong-tier floor in catalog gates. |
+| `ingestion_json_repair` | Vertex `gemini-3-flash-preview` | `gpt-4o-mini`, `gemini-3.1-pro-preview` | Fast repair on malformed JSON. |
 | Embeddings (`EMBEDDING_PROVIDER`) | **One** of: Vertex `text-embedding-005` (768-d) or Voyage voyage-4 family (1024-d) | N/A | Not Restormel execution routing today; lock doc: [ingestion-embedding-lock.md](./ingestion-embedding-lock.md). |
 
 Catalog-aware fallback chains for workers when pins are off: [`src/lib/server/ingestCatalogRouting.ts`](../../src/lib/server/ingestCatalogRouting.ts) (Model availability → cost-ordered).
@@ -24,15 +24,15 @@ For durable jobs over large lists (e.g. Stanford Encyclopedia), prefer documente
 
 ### Right-sizing models (cheap vs pro)
 
-- **Keep cheap by default:** extraction (`gpt-4o-mini` or matrix primary), JSON repair (`gemini-2.5-flash`), and embeddings (Vertex `text-embedding-005` or Voyage lite) unless benchmarks show regressions.
-- **Spend where evidence shows lift:** relations and grouping (`gpt-4o` tier), validation (cross-model `gemini-2.5-flash` or pinned equivalent), remediation (`gemini-2.5-pro` when repair is on).
+- **Keep cheap by default:** extraction (`gpt-4o-mini` or matrix primary), JSON repair (`gemini-3-flash-preview`), and embeddings (Vertex `text-embedding-005` or Voyage lite) unless benchmarks show regressions.
+- **Spend where evidence shows lift:** relations and grouping (`gpt-4o` tier), validation (cross-model `gemini-3-flash-preview` or pinned equivalent), remediation (`gemini-3.1-pro-preview` when repair is on).
 - **Restormel pins:** use route steps + admin pins so bulk jobs do not inherit “pro everywhere”; re-benchmark after pin changes ([ingestion-benchmarks.md](./ingestion-benchmarks.md)).
 
 ## Vertex lifecycle
 
 Re-check [Vertex model versions](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions) when editing this table. Retired IDs must not appear as primaries without a migration entry.
 
-Pin normalization maps legacy pins to GA IDs (see [`src/lib/server/ingestPinNormalization.ts`](../../src/lib/server/ingestPinNormalization.ts)): e.g. `gemini-1.5-*` → `gemini-2.5-*`, `gemini-2.0-flash` / `gemini-2.0-flash-001` → `gemini-2.5-flash`.
+Pin normalization maps legacy pins to current Vertex Gemini **3.x preview** ids (see [`src/lib/server/ingestPinNormalization.ts`](../../src/lib/server/ingestPinNormalization.ts)): e.g. `gemini-1.5-flash` / `gemini-2.0-flash*` / `gemini-2.5-flash` → `gemini-3-flash-preview`; `*-flash-lite` variants → `gemini-3.1-flash-lite-preview`; `gemini-1.5-pro` / `gemini-2.5-pro` → `gemini-3.1-pro-preview`. See [Gemini 3 Flash](https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-flash), [3.1 Pro](https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-1-pro), [3.1 Flash-Lite](https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-1-flash-lite), and the [lifecycle table](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions) (2.0 stable ids retire 2026-06-01; 2.5 GA ids list a “not before 2026-10-16” retirement floor).
 
 ## Golden corpus
 
