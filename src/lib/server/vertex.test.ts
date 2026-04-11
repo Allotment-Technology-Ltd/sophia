@@ -124,17 +124,17 @@ describe('resolveReasoningModelRoute', () => {
     process.env.GOOGLE_AI_API_KEY = 'AIza-test';
     mockResolveProviderDecision.mockResolvedValue({
       provider: 'vertex',
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       source: 'restormel',
       routeId: 'interactive',
-      explanation: 'route=interactive step=0 provider=vertex model=gemini-2.5-flash'
+      explanation: 'route=interactive step=0 provider=vertex model=gemini-3-flash-preview'
     });
 
     const { resolveReasoningModelRoute } = await import('./vertex');
     const route = await resolveReasoningModelRoute({ routeId: 'interactive' });
 
     expect(route.provider).toBe('vertex');
-    expect(route.model).toBe('google:gemini-2.5-flash');
+    expect(route.model).toBe('google:gemini-3-flash-preview');
     expect(mockCreateGoogleGenerativeAI).toHaveBeenCalled();
   });
 
@@ -143,10 +143,10 @@ describe('resolveReasoningModelRoute', () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
     mockResolveProviderDecision.mockResolvedValue({
       provider: 'vertex',
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       source: 'restormel',
       routeId: 'interactive',
-      explanation: 'route=interactive step=0 provider=vertex model=gemini-2.5-flash'
+      explanation: 'route=interactive step=0 provider=vertex model=gemini-3-flash-preview'
     });
 
     const { resolveReasoningModelRoute } = await import('./vertex');

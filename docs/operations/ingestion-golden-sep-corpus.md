@@ -29,12 +29,12 @@ Faithfulness scores are only comparable when **validation** (and, for stability,
 | Variable | Purpose |
 |----------|---------|
 | `INGEST_PIN_PROVIDER_VALIDATION` | e.g. `vertex` |
-| `INGEST_PIN_MODEL_VALIDATION` | e.g. `gemini-2.5-flash` (see pin normalization below) |
+| `INGEST_PIN_MODEL_VALIDATION` | e.g. `gemini-3-flash-preview` (see pin normalization below) |
 | `INGEST_PIN_PROVIDER_EXTRACTION` | optional; e.g. `openai` |
 | `INGEST_PIN_MODEL_EXTRACTION` | optional; e.g. `gpt-4o-mini` |
 | `INGEST_NO_MODEL_FALLBACK` | Set to `1` if you need a **single** model per stage (no chain fallback on failure) |
 
-Legacy Vertex Gemini IDs in pins are normalized at parse time ([`src/lib/server/ingestPinNormalization.ts`](../../src/lib/server/ingestPinNormalization.ts)) (e.g. `gemini-1.5-flash` → `gemini-2.5-flash`).
+Legacy Vertex Gemini IDs in pins are normalized at parse time ([`src/lib/server/ingestPinNormalization.ts`](../../src/lib/server/ingestPinNormalization.ts)) (e.g. `gemini-1.5-flash` / `gemini-2.5-flash` → `gemini-3-flash-preview`).
 
 **Long entries:** validation feeds an excerpt built from claim spans (see `buildValidationSourceSnippet` and `VALIDATION_BATCH_SOURCE_MAX_CHARS` / `VALIDATION_BATCH_SOURCE_CONTEXT_CHARS`). The pipeline **splits validation batches** when the span-union window would exceed the char cap, so each batch’s excerpt includes the text for its claims (avoiding false “ungrounded” scores when claims span a long article). Center-weighted truncation still applies only when a **single** claim’s passage window exceeds the cap.
 

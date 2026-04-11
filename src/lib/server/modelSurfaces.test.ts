@@ -47,12 +47,12 @@ describe('supplementBindableKeysWithCatalogVertexEmbeddings', () => {
 describe('buildKeysBindableModelKeySet', () => {
 	it('merges global and project payloads and normalizes google→vertex', () => {
 		const global = {
-			data: [{ providerType: 'openai', modelId: 'gpt-4o' }, { providerType: 'google', modelId: 'gemini-2.5-flash' }]
+			data: [{ providerType: 'openai', modelId: 'gpt-4o' }, { providerType: 'google', modelId: 'gemini-3-flash-preview' }]
 		};
 		const project = { data: [] as unknown[] };
 		const set = buildKeysBindableModelKeySet(global, project);
 		expect(set.has(catalogSurfaceStableKey('openai', 'gpt-4o'))).toBe(true);
-		expect(set.has(catalogSurfaceStableKey('vertex', 'gemini-2.5-flash'))).toBe(true);
+		expect(set.has(catalogSurfaceStableKey('vertex', 'gemini-3-flash-preview'))).toBe(true);
 	});
 
 	it('reads nested model on bindings', () => {
@@ -344,14 +344,14 @@ describe('canonicalizeSurfaceAssignmentsForPut', () => {
 		data: {
 			models: [
 				{ providerType: 'openai', modelId: 'gpt-4o' },
-				{ providerType: 'google', modelId: 'gemini-2.5-flash' }
+				{ providerType: 'google', modelId: 'gemini-3-flash-preview' }
 			]
 		}
 	};
 
 	it('keeps google:: stable key and still reads vertex:: alias from the PUT body', () => {
-		const kGoogle = catalogSurfaceStableKey('google', 'gemini-2.5-flash');
-		const kVertex = catalogSurfaceStableKey('vertex', 'gemini-2.5-flash');
+		const kGoogle = catalogSurfaceStableKey('google', 'gemini-3-flash-preview');
+		const kVertex = catalogSurfaceStableKey('vertex', 'gemini-3-flash-preview');
 		const raw = {
 			[kGoogle]: 'off' as SurfaceRole,
 			[catalogSurfaceStableKey('openai', 'gpt-4o')]: 'ingestion_only' as SurfaceRole

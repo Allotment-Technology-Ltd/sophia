@@ -198,7 +198,7 @@ describe('/api/stoa/dialogue SSE contract', () => {
     mockResolveReasoningModelRoute.mockResolvedValue({
       model: { id: 'fake-model' },
       provider: 'vertex',
-      modelId: 'gemini-2.5-flash',
+      modelId: 'gemini-3-flash-preview',
       resolvedRouteId: 'route:test',
       resolvedExplanation: 'test route'
     });
@@ -217,7 +217,7 @@ describe('/api/stoa/dialogue SSE contract', () => {
     mockRunDeepEscalation.mockResolvedValue({
       analysis: 'Deep synthesis text.',
       usage: { inputTokens: 9, outputTokens: 6, totalTokens: 15 },
-      route: { provider: 'vertex', modelId: 'gemini-2.5-pro', routeId: 'deep:test', reason: 'deep' }
+      route: { provider: 'vertex', modelId: 'gemini-3.1-pro-preview', routeId: 'deep:test', reason: 'deep' }
     });
   });
 

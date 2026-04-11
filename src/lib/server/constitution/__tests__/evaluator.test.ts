@@ -17,7 +17,7 @@ vi.mock('$lib/server/vertex', () => ({
   resolveReasoningModelRoute: vi.fn(async () => ({
     model: 'mock-reasoning-model',
     provider: 'vertex',
-    modelId: 'gemini-2.5-flash',
+    modelId: 'gemini-3-flash-preview',
     resolvedExplanation: 'Restormel route'
   })),
   trackTokens: vi.fn()

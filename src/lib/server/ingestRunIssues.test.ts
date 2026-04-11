@@ -27,7 +27,7 @@ describe('parseIngestTimingFromLogLines', () => {
 
 	it('preserves stage_models for validation comparability', () => {
 		const timing = {
-			stage_models: { validation: 'vertex/gemini-2.5-flash', extraction: 'openai/gpt-4o-mini' }
+			stage_models: { validation: 'vertex/gemini-3-flash-preview', extraction: 'openai/gpt-4o-mini' }
 		};
 		const parsed = parseIngestTimingFromLogLines([
 			`[INGEST_TIMING] ${JSON.stringify(timing)}`
@@ -49,7 +49,7 @@ describe('classifyIngestLogLine self-heal', () => {
 			signal: 'recovery_agent',
 			stage: 'extraction',
 			provider: 'vertex',
-			model: 'gemini-2.5-flash',
+			model: 'gemini-3-flash-preview',
 			outcome: 'sleep_retry',
 			detail: 'after transient 429'
 		});

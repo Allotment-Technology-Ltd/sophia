@@ -106,14 +106,14 @@ describe('resolveProviderDecision', () => {
         contractVersion: '2026-03-26',
         routeId: 'r1',
         providerType: 'google',
-        modelId: 'gemini-2.5-flash',
+        modelId: 'gemini-3-flash-preview',
         explanation: 'ok',
         stepChain: [
           {
             stepId: 's0',
             orderIndex: 0,
             providerType: 'vertex',
-            modelId: 'gemini-2.5-flash',
+            modelId: 'gemini-3-flash-preview',
             enabled: true,
             selected: true
           }
@@ -123,11 +123,11 @@ describe('resolveProviderDecision', () => {
 
     const result = await resolveProviderDecision({
       routeId: 'r1',
-      safeDefault: { provider: 'vertex', model: 'gemini-2.5-flash' }
+      safeDefault: { provider: 'vertex', model: 'gemini-3-flash-preview' }
     });
 
     expect(result.provider).toBe('vertex');
-    expect(result.model).toBe('gemini-2.5-flash');
+    expect(result.model).toBe('gemini-3-flash-preview');
     expect(result.stepChain?.[0]?.providerType).toBe('vertex');
   });
 
@@ -155,13 +155,13 @@ describe('resolveProviderDecision', () => {
       routeId: 'interactive',
       safeDefault: {
         provider: 'vertex',
-        model: 'gemini-2.5-flash'
+        model: 'gemini-3-flash-preview'
       }
     });
 
     expect(result).toEqual({
       provider: 'vertex',
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       source: 'degraded_default',
       routeId: null,
       explanation: 'No permitted AI model route is currently available. Using Sophia\'s degraded default route.',
@@ -204,7 +204,7 @@ describe('resolveProviderDecision', () => {
           contractVersion: '2026-03-26',
           routeId: 'fallback-shared-route',
           providerType: 'google',
-          modelId: 'gemini-2.5-flash',
+          modelId: 'gemini-3-flash-preview',
           explanation: 'Matched shared ingestion route',
           stepChain: null
         }
@@ -215,7 +215,7 @@ describe('resolveProviderDecision', () => {
         workload: 'ingestion',
         stage: 'relations'
       },
-      safeDefault: { provider: 'vertex', model: 'gemini-2.5-flash' }
+      safeDefault: { provider: 'vertex', model: 'gemini-3-flash-preview' }
     });
 
     expect(resolveSpy).toHaveBeenCalledTimes(2);
@@ -229,7 +229,7 @@ describe('resolveProviderDecision', () => {
     expect(resolveSpy.mock.calls[1]?.[0]).not.toHaveProperty('stage');
     expect(result.source).toBe('restormel');
     expect(result.provider).toBe('vertex');
-    expect(result.model).toBe('gemini-2.5-flash');
+    expect(result.model).toBe('gemini-3-flash-preview');
     expect(result.routeId).toBe('fallback-shared-route');
   });
 });

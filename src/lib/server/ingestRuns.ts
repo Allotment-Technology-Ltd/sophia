@@ -32,6 +32,9 @@ import { encodeIngestCatalogRoutingJsonB64 } from '$lib/server/ingestCatalogRout
 import { resolveEmbeddingFingerprint, resolvePipelineVersion } from '$lib/server/ingestionPipelineMetadata';
 import {
   INGEST_PIN_STAGE_SUFFIXES,
+  INGEST_VERTEX_GEMINI_FLASH_LITE_MODEL_ID,
+  INGEST_VERTEX_GEMINI_FLASH_MODEL_ID,
+  INGEST_VERTEX_GEMINI_PRO_MODEL_ID,
   normalizePinnedModelId,
   summarizeIngestPinsForLog
 } from './ingestPinNormalization.js';
@@ -42,7 +45,13 @@ import {
 	tryAcquireGlobalIngestSlot
 } from './ingestGlobalConcurrencyGate.js';
 
-export { normalizePinnedModelId, summarizeIngestPinsForLog };
+export {
+  INGEST_VERTEX_GEMINI_FLASH_LITE_MODEL_ID,
+  INGEST_VERTEX_GEMINI_FLASH_MODEL_ID,
+  INGEST_VERTEX_GEMINI_PRO_MODEL_ID,
+  normalizePinnedModelId,
+  summarizeIngestPinsForLog
+};
 
 /**
  * Preview mode: no Surreal write in the same run (operator syncs later). Default is **full store**

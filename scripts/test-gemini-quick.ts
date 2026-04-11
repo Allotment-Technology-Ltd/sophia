@@ -7,10 +7,10 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 const GOOGLE_AI_API_KEY = process.env.GOOGLE_AI_API_KEY || '';
 
 async function main() {
-	console.log('Testing gemini-2.5-flash...\n');
+	console.log('Testing gemini-3-flash-preview...\n');
 	
 	const genAI = new GoogleGenerativeAI(GOOGLE_AI_API_KEY);
-	const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+	const model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
 	
 	try {
 		const result = await model.generateContent({
@@ -24,7 +24,7 @@ async function main() {
 		const response = result.response;
 		console.log('✅ Response:', response.text());
 		console.log('✅ Tokens:', response.usageMetadata?.totalTokenCount || 0);
-		console.log('\n✅ gemini-2.5-flash is working!');
+		console.log('\n✅ gemini-3-flash-preview is working!');
 	} catch (error) {
 		console.error('❌ Error:', error);
 	}

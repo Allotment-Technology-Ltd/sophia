@@ -4,7 +4,7 @@ Use this when running large durable jobs (e.g. SEP) or multiple concurrent `inge
 
 ## Vertex AI (Gemini, embeddings)
 
-- In **Google Cloud Console** → **Vertex AI** → **Quotas**, monitor requests per minute and token limits for the models you use (`gemini-2.5-*`, `text-embedding-005`, etc.).
+- In **Google Cloud Console** → **Vertex AI** → **Quotas**, monitor requests per minute and token limits for the models you use (`gemini-3-*`, `gemini-2.5-*` if still pinned, `text-embedding-005`, etc.).
 - Raise quotas **before** scaling `ADMIN_INGEST_MAX_CONCURRENT` or enabling **`INGEST_GLOBAL_CONCURRENCY_GATE`**.
 
 ## Cloud Run

@@ -32,7 +32,7 @@ describe('executeAAIFRequest', () => {
     mockResolveReasoningModelRoute.mockResolvedValue({
       model: 'fake-model-instance',
       provider: 'vertex',
-      modelId: 'gemini-2.5-flash',
+      modelId: 'gemini-3-flash-preview',
       routingSource: 'restormel',
       resolvedExplanation: 'Restormel selected the default interactive route.'
     });
@@ -63,7 +63,7 @@ describe('executeAAIFRequest', () => {
     expect(result).toMatchObject({
       output: 'Hello from Sophia',
       provider: 'vertex',
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       routing: {
         reason: 'Restormel selected the default interactive route.'
       }

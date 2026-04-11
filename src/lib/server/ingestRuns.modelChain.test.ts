@@ -9,7 +9,7 @@ describe('modelChainLabelsToEnv', () => {
   it('maps Expand labels to INGEST_PIN env keys and normalizes google to vertex', () => {
     const chain: IngestRunPayload['model_chain'] = {
       extract: 'anthropic · claude-sonnet-4-20250514',
-      relate: 'google · gemini-2.5-flash',
+      relate: 'google · gemini-3-flash-preview',
       group: 'anthropic · claude-sonnet-4-20250514',
       validate: 'openai · gpt-4o'
     };
@@ -17,7 +17,7 @@ describe('modelChainLabelsToEnv', () => {
     expect(env.INGEST_PIN_PROVIDER_EXTRACTION).toBe('anthropic');
     expect(env.INGEST_PIN_MODEL_EXTRACTION).toBe('claude-sonnet-4-20250514');
     expect(env.INGEST_PIN_PROVIDER_RELATIONS).toBe('vertex');
-    expect(env.INGEST_PIN_MODEL_RELATIONS).toBe('gemini-2.5-flash');
+    expect(env.INGEST_PIN_MODEL_RELATIONS).toBe('gemini-3-flash-preview');
     expect(env.INGEST_PIN_PROVIDER_VALIDATION).toBe('openai');
     expect(env.INGEST_PIN_MODEL_VALIDATION).toBe('gpt-4o');
   });
@@ -44,7 +44,7 @@ describe('modelChainLabelsToEnv', () => {
     expect(Object.keys(env).length).toBe(0);
   });
 
-  it('normalizes vertex gemini-2.0-flash pins to gemini-2.5-flash', () => {
+  it('normalizes vertex gemini-2.0-flash pins to gemini-3-flash-preview', () => {
     const env = modelChainLabelsToEnv({
       extract: 'vertex · gemini-2.0-flash-001',
       relate: 'google · gemini-2.0-flash',
@@ -52,20 +52,31 @@ describe('modelChainLabelsToEnv', () => {
       validate: 'auto'
     });
     expect(env.INGEST_PIN_PROVIDER_EXTRACTION).toBe('vertex');
-    expect(env.INGEST_PIN_MODEL_EXTRACTION).toBe('gemini-2.5-flash');
+    expect(env.INGEST_PIN_MODEL_EXTRACTION).toBe('gemini-3-flash-preview');
     expect(env.INGEST_PIN_PROVIDER_RELATIONS).toBe('vertex');
-    expect(env.INGEST_PIN_MODEL_RELATIONS).toBe('gemini-2.5-flash');
+    expect(env.INGEST_PIN_MODEL_RELATIONS).toBe('gemini-3-flash-preview');
   });
 
-  it('normalizes gemini-2.0-flash-lite pins to gemini-2.5-flash-lite', () => {
+  it('normalizes gemini-2.0-flash-lite pins to gemini-3.1-flash-lite-preview', () => {
     const env = modelChainLabelsToEnv({
       extract: 'vertex · gemini-2.0-flash-lite-001',
       relate: 'google · gemini-2.0-flash-lite',
       group: 'auto',
       validate: 'auto'
     });
-    expect(env.INGEST_PIN_MODEL_EXTRACTION).toBe('gemini-2.5-flash-lite');
-    expect(env.INGEST_PIN_MODEL_RELATIONS).toBe('gemini-2.5-flash-lite');
+    expect(env.INGEST_PIN_MODEL_EXTRACTION).toBe('gemini-3.1-flash-lite-preview');
+    expect(env.INGEST_PIN_MODEL_RELATIONS).toBe('gemini-3.1-flash-lite-preview');
+  });
+
+  it('normalizes gemini-2.5-flash pins to gemini-3-flash-preview', () => {
+    const env = modelChainLabelsToEnv({
+      extract: 'vertex · gemini-2.5-flash',
+      relate: 'google · gemini-2.5-flash',
+      group: 'auto',
+      validate: 'auto'
+    });
+    expect(env.INGEST_PIN_MODEL_EXTRACTION).toBe('gemini-3-flash-preview');
+    expect(env.INGEST_PIN_MODEL_RELATIONS).toBe('gemini-3-flash-preview');
   });
 
   it('normalizes anthropic claude-3-5-haiku alias to dated API id', () => {

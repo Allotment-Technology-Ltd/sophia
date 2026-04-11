@@ -1,11 +1,11 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { env } from '$env/dynamic/private';
 
-/** Prefer current stable Flash; see https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions */
-export const VALIDATION_MODEL = 'gemini-2.5-flash';
+/** Prefer current Gemini 3 Flash preview on Vertex / AI Studio. */
+export const VALIDATION_MODEL = 'gemini-3-flash-preview';
 const VALIDATION_MODELS = parseModelList(process.env.GEMINI_MODELS, [
 	VALIDATION_MODEL,
-	'gemini-2.5-flash-lite'
+	'gemini-3.1-flash-lite-preview'
 ]);
 
 const geminiApiKey = env.GOOGLE_AI_API_KEY;

@@ -5,9 +5,10 @@
  * Env pins (`INGEST_PIN_*`) still override these defaults. Restormel may still steer routes
  * when the operator uses ingest-provider `auto` without pins.
  *
- * Vertex Gemini IDs must stay aligned with current GA / lifecycle:
+ * Vertex Gemini IDs must stay aligned with current Vertex model pages (including preview ids):
+ * https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-flash
+ * https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-1-pro
  * https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions
- * https://cloud.google.com/vertex-ai/generative-ai/docs/migrate
  */
 import type { ModelProvider } from '@restormel/contracts/providers';
 
@@ -46,10 +47,10 @@ export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, Ca
 	relations: { provider: 'openai', modelId: 'gpt-4o' },
 	grouping: { provider: 'openai', modelId: 'gpt-4o' },
 	/** Distinct from extraction (mini): second opinion from another provider improves faithfulness checks. */
-	validation: { provider: 'vertex', modelId: 'gemini-2.5-flash' },
+	validation: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 	/** Passage-bounded rewrite; prefer strong model (aligned with ingestion_remediation floor). */
-	remediation: { provider: 'vertex', modelId: 'gemini-2.5-pro' },
-	json_repair: { provider: 'vertex', modelId: 'gemini-2.5-flash' }
+	remediation: { provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
+	json_repair: { provider: 'vertex', modelId: 'gemini-3-flash-preview' }
 };
 
 /**
@@ -59,29 +60,29 @@ export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, Ca
 export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, CanonicalModelRef[]> = {
 	extraction: [
 		{ provider: 'openai', modelId: 'gpt-4o' },
-		{ provider: 'vertex', modelId: 'gemini-2.5-flash' }
+		{ provider: 'vertex', modelId: 'gemini-3-flash-preview' }
 	],
 	relations: [
 		{ provider: 'openai', modelId: 'gpt-4-turbo' },
-		{ provider: 'vertex', modelId: 'gemini-2.5-pro' }
+		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' }
 	],
 	grouping: [
 		{ provider: 'openai', modelId: 'gpt-4-turbo' },
-		{ provider: 'vertex', modelId: 'gemini-2.5-pro' }
+		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' }
 	],
 	validation: [
 		{ provider: 'openai', modelId: 'gpt-4o' },
 		{ provider: 'openai', modelId: 'gpt-4o-mini' },
-		{ provider: 'vertex', modelId: 'gemini-2.5-pro' }
+		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' }
 	],
 	remediation: [
 		{ provider: 'openai', modelId: 'gpt-4o' },
-		{ provider: 'vertex', modelId: 'gemini-2.5-flash' },
+		{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 		{ provider: 'openai', modelId: 'gpt-4-turbo' }
 	],
 	json_repair: [
 		{ provider: 'openai', modelId: 'gpt-4o-mini' },
-		{ provider: 'vertex', modelId: 'gemini-2.5-pro' }
+		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' }
 	]
 };
 

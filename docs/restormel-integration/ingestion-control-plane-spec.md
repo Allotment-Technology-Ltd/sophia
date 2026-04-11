@@ -125,7 +125,7 @@ Required response:
     "routeId": "ingestion_grouping",
     "selectedStepId": "fallback_vertex",
     "providerType": "google",
-    "modelId": "gemini-2.5-pro",
+    "modelId": "gemini-3.1-pro-preview",
     "estimatedCostUsd": 0.0834,
     "switchReasonCode": "previous_step_rate_limited",
     "matchedCriteria": [
@@ -139,7 +139,7 @@ Required response:
         "modelId": "gpt-4o"
       }
     ],
-    "explanation": "route=ingestion_grouping step=1 provider=google model=gemini-2.5-pro"
+    "explanation": "route=ingestion_grouping step=1 provider=google model=gemini-3.1-pro-preview"
   }
 }
 ```
@@ -230,7 +230,7 @@ Required response:
       {
         "stepId": "fallback_vertex",
         "providerType": "google",
-        "modelId": "gemini-2.5-pro",
+        "modelId": "gemini-3.1-pro-preview",
         "estimatedCostUsd": 0.0834,
         "wouldRun": false,
         "wouldBeSkippedBecause": "primary_step_selected"
