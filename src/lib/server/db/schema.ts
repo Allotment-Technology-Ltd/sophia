@@ -56,6 +56,8 @@ export const ingestRuns = pgTable(
     currentStageKey: text('current_stage_key'),
     currentAction: text('current_action'),
     lastOutputAt: bigint('last_output_at', { mode: 'number' }),
+    /** Bumped by worker telemetry heartbeats during long model calls (separate from log-driven last_output_at). */
+    workerHeartbeatAt: bigint('worker_heartbeat_at', { mode: 'number' }),
     cancelledByUser: boolean('cancelled_by_user').notNull().default(false),
     syncStartedAt: timestamp('sync_started_at', { withTimezone: true }),
     syncCompletedAt: timestamp('sync_completed_at', { withTimezone: true }),

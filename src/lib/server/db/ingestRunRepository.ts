@@ -32,6 +32,7 @@ export async function neonCreateIngestRun(state: IngestRunState): Promise<void> 
     currentStageKey: state.currentStageKey ?? null,
     currentAction: state.currentAction ?? null,
     lastOutputAt: state.lastOutputAt ?? null,
+    workerHeartbeatAt: state.workerHeartbeatAt ?? null,
     cancelledByUser: state.cancelledByUser === true,
     syncStartedAt: state.syncStartedAt ? new Date(state.syncStartedAt) : null,
     syncCompletedAt: state.syncCompletedAt ? new Date(state.syncCompletedAt) : null,
@@ -62,6 +63,7 @@ export async function neonPersistIngestRunSnapshot(state: IngestRunState): Promi
       currentStageKey: state.currentStageKey ?? null,
       currentAction: state.currentAction ?? null,
       lastOutputAt: state.lastOutputAt ?? null,
+      workerHeartbeatAt: state.workerHeartbeatAt ?? null,
       cancelledByUser: state.cancelledByUser === true,
       syncStartedAt: state.syncStartedAt ? new Date(state.syncStartedAt) : null,
       syncCompletedAt: state.syncCompletedAt ? new Date(state.syncCompletedAt) : null,
@@ -77,6 +79,16 @@ export async function neonBumpRunActivity(runId: string, lastOutputAt: number): 
   await db
     .update(ingestRuns)
     .set({ lastOutputAt, updatedAt: new Date() })
+    .where(eq(ingestRuns.id, runId));
+}
+
+/** Bumps worker liveness without advancing log-driven `last_output_at` (used during long model calls). */
+export async function neonBumpWorkerHeartbeat(runId: string, workerHeartbeatAt: number): Promise<void> {
+  if (!isNeonIngestPersistenceEnabled()) return;
+  const db = getDrizzleDb();
+  await db
+    .update(ingestRuns)
+    .set({ workerHeartbeatAt, updatedAt: new Date() })
     .where(eq(ingestRuns.id, runId));
 }
 
@@ -241,6 +253,7 @@ export async function neonLoadIngestRun(runId: string): Promise<IngestRunState |
     lastFailureStageKey: row.lastFailureStage,
     resumable: row.resumable,
     lastOutputAt: row.lastOutputAt ?? undefined,
+    workerHeartbeatAt: row.workerHeartbeatAt ?? undefined,
     processStartedAt: undefined,
     processExitedAt: undefined,
     cancelledByUser: row.cancelledByUser,
@@ -338,26 +351,82 @@ const ADV_LOCK_INGEST_LOGS = 5_849_271;
  * In-flight ingest rows with no recent output (Neon clock). Used by the idle watchdog.
  * `idleMs` must be > 0; callers typically cap batch size.
  */
-export async function neonListIdleStalledIngestRunIds(idleMs: number, limit: number): Promise<string[]> {
+const idleStallWhereSql = (idleMs: number) =>
+  sql`(
+          (
+            (${ingestRuns.lastOutputAt} IS NOT NULL OR ${ingestRuns.workerHeartbeatAt} IS NOT NULL)
+            AND (
+              (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint
+              - GREATEST(
+                  COALESCE(${ingestRuns.lastOutputAt}, 0::bigint),
+                  COALESCE(${ingestRuns.workerHeartbeatAt}, 0::bigint)
+                )
+            ) > ${idleMs}
+          )
+          OR (
+            ${ingestRuns.lastOutputAt} IS NULL
+            AND ${ingestRuns.workerHeartbeatAt} IS NULL
+            AND (EXTRACT(EPOCH FROM NOW()) - EXTRACT(EPOCH FROM ${ingestRuns.createdAt})) * 1000 > ${idleMs}
+          )
+        )`;
+
+export type IdleStalledIngestCandidateRow = {
+  id: string;
+  currentStageKey: string | null;
+  createdAtMs: number;
+  lastOutputAt: number | null;
+  workerHeartbeatAt: number | null;
+  lastIngestTimingLine: string | null;
+};
+
+/**
+ * Candidate stalled runs (same idle predicate as the watchdog) with context for phase-aware grace.
+ */
+export async function neonListIdleStalledIngestCandidateRows(
+  idleMs: number,
+  limit: number
+): Promise<IdleStalledIngestCandidateRow[]> {
   if (!isNeonIngestPersistenceEnabled() || idleMs <= 0) return [];
   const db = getDrizzleDb();
   const cap = Math.max(1, Math.min(100, limit));
-  const rows = await db
-    .select({ id: ingestRuns.id })
-    .from(ingestRuns)
-    .where(
-      and(
-        eq(ingestRuns.cancelledByUser, false),
-        isNull(ingestRuns.completedAt),
-        inArray(ingestRuns.status, ['running', 'queued', 'awaiting_sync']),
-        sql`(
-          (${ingestRuns.lastOutputAt} IS NOT NULL AND (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint - ${ingestRuns.lastOutputAt} > ${idleMs})
-          OR (${ingestRuns.lastOutputAt} IS NULL AND (EXTRACT(EPOCH FROM NOW()) - EXTRACT(EPOCH FROM ${ingestRuns.createdAt})) * 1000 > ${idleMs})
-        )`
-      )
-    )
-    .orderBy(asc(ingestRuns.updatedAt))
-    .limit(cap);
+  const rows = await db.execute(sql`
+    SELECT
+      ir.id AS id,
+      ir.current_stage_key AS "currentStageKey",
+      (EXTRACT(EPOCH FROM ir.created_at) * 1000)::bigint AS "createdAtMs",
+      ir.last_output_at AS "lastOutputAt",
+      ir.worker_heartbeat_at AS "workerHeartbeatAt",
+      (
+        SELECT l.line
+        FROM ${ingestRunLogs} l
+        WHERE l.run_id = ir.id AND l.line LIKE '[INGEST_TIMING] %'
+        ORDER BY l.seq DESC
+        LIMIT 1
+      ) AS "lastIngestTimingLine"
+    FROM ${ingestRuns} ir
+    WHERE ir.cancelled_by_user = false
+      AND ir.completed_at IS NULL
+      AND ir.status IN ('running', 'queued', 'awaiting_sync')
+      AND ${idleStallWhereSql(idleMs)}
+    ORDER BY ir.updated_at ASC
+    LIMIT ${cap}
+  `);
+  const out: IdleStalledIngestCandidateRow[] = [];
+  for (const r of rows.rows as Record<string, unknown>[]) {
+    out.push({
+      id: String(r.id),
+      currentStageKey: r.currentStageKey != null ? String(r.currentStageKey) : null,
+      createdAtMs: Number(r.createdAtMs),
+      lastOutputAt: r.lastOutputAt != null ? Number(r.lastOutputAt) : null,
+      workerHeartbeatAt: r.workerHeartbeatAt != null ? Number(r.workerHeartbeatAt) : null,
+      lastIngestTimingLine: r.lastIngestTimingLine != null ? String(r.lastIngestTimingLine) : null
+    });
+  }
+  return out;
+}
+
+export async function neonListIdleStalledIngestRunIds(idleMs: number, limit: number): Promise<string[]> {
+  const rows = await neonListIdleStalledIngestCandidateRows(idleMs, limit);
   return rows.map((r) => r.id);
 }
 
@@ -368,11 +437,11 @@ export async function neonListIdleStalledIngestRunIds(idleMs: number, limit: num
  */
 export async function neonTerminalizeIngestRunWatchdogIdle(
   runId: string,
-  idleMs: number
+  thresholdMs: number
 ): Promise<boolean> {
-  if (!isNeonIngestPersistenceEnabled() || idleMs <= 0) return false;
-  const logLine = `[WATCHDOG] idle_timeout run_id=${runId} idle_ms=${idleMs}`;
-  const errMsg = `watchdog_idle_timeout: no worker output for ${idleMs}ms (INGEST_WATCHDOG_IDLE_MS)`;
+  if (!isNeonIngestPersistenceEnabled() || thresholdMs <= 0) return false;
+  const logLine = `[WATCHDOG] idle_timeout run_id=${runId} threshold_ms=${thresholdMs} (INGEST_WATCHDOG_IDLE_MS + phase rules)`;
+  const errMsg = `watchdog_idle_timeout: no worker output for ${thresholdMs}ms (watchdog threshold; see INGEST_WATCHDOG_IDLE_MS and phase baselines)`;
   const db = getDrizzleDb();
 
   return await db.transaction(async (tx) => {
@@ -394,8 +463,21 @@ export async function neonTerminalizeIngestRunWatchdogIdle(
           isNull(ingestRuns.completedAt),
           inArray(ingestRuns.status, ['running', 'queued', 'awaiting_sync']),
           sql`(
-            (${ingestRuns.lastOutputAt} IS NOT NULL AND (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint - ${ingestRuns.lastOutputAt} > ${idleMs})
-            OR (${ingestRuns.lastOutputAt} IS NULL AND (EXTRACT(EPOCH FROM NOW()) - EXTRACT(EPOCH FROM ${ingestRuns.createdAt})) * 1000 > ${idleMs})
+            (
+              (${ingestRuns.lastOutputAt} IS NOT NULL OR ${ingestRuns.workerHeartbeatAt} IS NOT NULL)
+              AND (
+                (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint
+                - GREATEST(
+                    COALESCE(${ingestRuns.lastOutputAt}, 0::bigint),
+                    COALESCE(${ingestRuns.workerHeartbeatAt}, 0::bigint)
+                  )
+              ) > ${thresholdMs}
+            )
+            OR (
+              ${ingestRuns.lastOutputAt} IS NULL
+              AND ${ingestRuns.workerHeartbeatAt} IS NULL
+              AND (EXTRACT(EPOCH FROM NOW()) - EXTRACT(EPOCH FROM ${ingestRuns.createdAt})) * 1000 > ${thresholdMs}
+            )
           )`
         )
       )

@@ -6,9 +6,14 @@
 import { and, eq } from 'drizzle-orm';
 import { getDrizzleDb } from '../db/neon';
 import {
-  neonListIdleStalledIngestRunIds,
+  neonListIdleStalledIngestCandidateRows,
   neonTerminalizeIngestRunWatchdogIdle
 } from '../db/ingestRunRepository';
+import {
+  ingestWatchdogListQueryIdleMs,
+  isPastWatchdogThreshold,
+  resolveWatchdogIdleThresholdMs
+} from './ingestWatchdogPhaseBaselines';
 import { ingestionJobItems } from '../db/schema';
 import { isNeonIngestPersistenceEnabled } from '../neon/datastore';
 
@@ -59,14 +64,19 @@ export async function sweepStalledIngestRuns(): Promise<IngestWatchdogSweepResul
 
   const batchRaw = (process.env.INGEST_WATCHDOG_BATCH ?? '25').trim();
   const batch = Math.max(1, Math.min(100, parseInt(batchRaw, 10) || 25));
-  const ids = await neonListIdleStalledIngestRunIds(idleMs, batch);
-  out.examined = ids.length;
+  const listIdleMs = ingestWatchdogListQueryIdleMs(idleMs);
+  const candidates = await neonListIdleStalledIngestCandidateRows(listIdleMs, batch);
+  out.examined = candidates.length;
   const requeue = ingestWatchdogRequeueJobItems();
   const errMsg = `watchdog_idle_timeout: no worker output for ${idleMs}ms (INGEST_WATCHDOG_IDLE_MS)`;
 
   const db = getDrizzleDb();
+  const nowMs = Date.now();
 
-  for (const runId of ids) {
+  for (const row of candidates) {
+    const runId = row.id;
+    if (!isPastWatchdogThreshold(nowMs, row, idleMs)) continue;
+    const thresholdMs = resolveWatchdogIdleThresholdMs(idleMs, row);
     const jobRows = await db
       .select({ jobId: ingestionJobItems.jobId })
       .from(ingestionJobItems)
@@ -75,7 +85,7 @@ export async function sweepStalledIngestRuns(): Promise<IngestWatchdogSweepResul
       );
     const jobLinks = [...new Map(jobRows.map((r) => [r.jobId, r])).values()];
 
-    const ok = await neonTerminalizeIngestRunWatchdogIdle(runId, idleMs);
+    const ok = await neonTerminalizeIngestRunWatchdogIdle(runId, thresholdMs);
     if (!ok) continue;
     out.terminalized += 1;
     out.runIds.push(runId);
@@ -109,11 +119,12 @@ export async function sweepStalledIngestRuns(): Promise<IngestWatchdogSweepResul
 
     if (jobLinks.length > 0) {
       const { appendIngestionJobEvent } = await import('../ingestionJobs.js');
-      for (const row of jobLinks) {
-        await appendIngestionJobEvent(row.jobId, 'watchdog_terminalized', {
+      for (const link of jobLinks) {
+        await appendIngestionJobEvent(link.jobId, 'watchdog_terminalized', {
           childRunId: runId,
           requeue,
-          idleMs
+          idleMs,
+          thresholdMs
         });
       }
     }
@@ -127,7 +138,8 @@ export async function sweepStalledIngestRuns(): Promise<IngestWatchdogSweepResul
         examined: out.examined,
         terminalized: out.terminalized,
         requeued_items: out.requeuedItems,
-        idle_ms: idleMs
+        idle_ms: idleMs,
+        list_idle_ms: listIdleMs
       })}`
     );
   }

@@ -31,7 +31,12 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
   const processId =
     typeof state.process?.pid === 'number' && state.process.pid > 0 ? state.process.pid : null;
   const lastOutputAt = state.lastOutputAt ?? null;
-  const idleForMs = lastOutputAt != null ? Math.max(0, now - lastOutputAt) : null;
+  const workerHeartbeatAt = state.workerHeartbeatAt ?? null;
+  const lastActivityAt =
+    lastOutputAt != null || workerHeartbeatAt != null
+      ? Math.max(lastOutputAt ?? 0, workerHeartbeatAt ?? 0)
+      : null;
+  const idleForMs = lastActivityAt != null ? Math.max(0, now - lastActivityAt) : null;
   const processStartedAt = state.processStartedAt ?? null;
   const processExitedAt = state.processExitedAt ?? null;
 
@@ -55,6 +60,8 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
     processStartedAt,
     processExitedAt,
     lastOutputAt,
+    workerHeartbeatAt,
+    lastActivityAt,
     idleForMs,
     createdAt: state.createdAt,
     completedAt: state.completedAt,

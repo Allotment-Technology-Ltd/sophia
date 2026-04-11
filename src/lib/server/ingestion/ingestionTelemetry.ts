@@ -26,26 +26,35 @@ export function parseIngestTelemetryPayloadLine(line: string): Record<string, un
   }
 }
 
-/** Min 10s, max 120s; `0` = heartbeats off. */
+/**
+ * Min 10s, max 120s. Unset → **45s when `INGEST_ORCHESTRATION_RUN_ID` is set** (Neon orchestration),
+ * else off. Set `INGEST_TELEMETRY_HEARTBEAT_MS=0` to disable even when orchestrated.
+ */
 export function ingestTelemetryHeartbeatMs(): number {
-  const r = parseInt(process.env.INGEST_TELEMETRY_HEARTBEAT_MS ?? '0', 10);
-  return Number.isFinite(r) && r >= 10_000 ? Math.min(r, 120_000) : 0;
+  const raw = process.env.INGEST_TELEMETRY_HEARTBEAT_MS?.trim();
+  if (raw === '0') return 0;
+  if (raw !== undefined && raw !== '') {
+    const r = parseInt(raw, 10);
+    return Number.isFinite(r) && r >= 10_000 ? Math.min(r, 120_000) : 0;
+  }
+  if (process.env.INGEST_ORCHESTRATION_RUN_ID?.trim()) return 45_000;
+  return 0;
 }
 
-async function bumpOrchestrationRunActivityBestEffort(): Promise<void> {
+async function bumpOrchestrationWorkerHeartbeatBestEffort(): Promise<void> {
   const runId = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim();
   if (!runId || !process.env.DATABASE_URL?.trim()) return;
   try {
-    const { neonBumpRunActivity } = await import('../db/ingestRunRepository.js');
-    await neonBumpRunActivity(runId, Date.now());
+    const { neonBumpWorkerHeartbeat } = await import('../db/ingestRunRepository.js');
+    await neonBumpWorkerHeartbeat(runId, Date.now());
   } catch {
     /* non-fatal */
   }
 }
 
 /**
- * While `work()` runs, emit heartbeat telemetry on an interval and bump Neon `last_output_at`
- * when orchestration is enabled so idle watchdogs do not fire during long model calls.
+ * While `work()` runs, emit heartbeat telemetry on an interval and bump Neon `worker_heartbeat_at`
+ * when orchestration is enabled so idle watchdogs see liveness without inflating log-driven idle.
  */
 export async function runWithIngestTelemetryHeartbeat<T>(opts: {
   stage: string;
@@ -58,7 +67,7 @@ export async function runWithIngestTelemetryHeartbeat<T>(opts: {
   const iv = setInterval(() => {
     beats += 1;
     emitIngestTelemetry({ event: 'heartbeat', stage: opts.stage, beat: beats });
-    void bumpOrchestrationRunActivityBestEffort();
+    void bumpOrchestrationWorkerHeartbeatBestEffort();
   }, intervalMs);
   try {
     return await opts.work();
