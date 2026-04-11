@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	effectiveRecoverySleepMs,
+	isRetryableIngestModelError,
 	isRetryableIngestModelErrorMessage
 } from './recoveryAgent';
 
@@ -13,6 +14,16 @@ describe('isRetryableIngestModelErrorMessage', () => {
 
 	it('returns false for obvious auth errors', () => {
 		expect(isRetryableIngestModelErrorMessage('401 invalid API key')).toBe(false);
+	});
+
+	it('isRetryableIngestModelError reads nested TPM (AI SDK wrapper)', () => {
+		const inner = new Error(
+			'Request too large for gpt-4o on tokens per min (TPM): Limit 30000, Requested 34130'
+		);
+		const outer = new Error('Failed after 3 attempts. Last error: upstream');
+		(outer as Error & { cause?: unknown }).cause = inner;
+		expect(isRetryableIngestModelErrorMessage(outer.message)).toBe(false);
+		expect(isRetryableIngestModelError(outer)).toBe(true);
 	});
 });
 

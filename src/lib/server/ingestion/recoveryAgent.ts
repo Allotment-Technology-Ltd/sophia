@@ -5,6 +5,7 @@
 
 import { generateText } from 'ai';
 import { z } from 'zod';
+import { collectErrorMessageChain } from '$lib/ingestionErrorChain';
 import { resolveReasoningModelRoute } from '../vertex.js';
 
 const RecoveryDecisionSchema = z.object({
@@ -45,6 +46,11 @@ export function isRetryableIngestModelErrorMessage(message: string): boolean {
 		/rate limit|quota|too many requests/i.test(msg) ||
 		/\btpm\b|tokens per min|token.?per.?min/i.test(msg)
 	);
+}
+
+/** Includes nested `Error.cause` (AI SDK wraps provider TPM text there). */
+export function isRetryableIngestModelError(error: unknown): boolean {
+	return isRetryableIngestModelErrorMessage(collectErrorMessageChain(error));
 }
 
 function stripJsonFence(text: string): string {

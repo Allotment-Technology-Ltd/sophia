@@ -83,11 +83,12 @@ import {
 	toSurrealRecordIdStr
 } from '../src/lib/server/surrealRecordSql.js';
 import { createIngestProviderTpmGuard } from './lib/ingestProviderTpm.js';
+import { collectErrorMessageChain, isTpmOrRateLimitInError } from '../src/lib/ingestionErrorChain.js';
 import {
 	consultIngestionRecoveryAgent,
 	effectiveRecoverySleepMs,
 	ingestRecoveryAgentEnabled,
-	isRetryableIngestModelErrorMessage,
+	isRetryableIngestModelError,
 	parseRetryAfterMsFromProviderMessage
 } from '../src/lib/server/ingestion/recoveryAgent.js';
 import { formatIngestSelfHealLine } from '../src/lib/server/ingestion/selfHealLog.js';
@@ -1282,13 +1283,6 @@ function estimateRelationsClaimsJsonTokens(claims: PhaseOneClaim[]): number {
 	return estimateTokens(JSON.stringify(claims, null, 2));
 }
 
-function isTpmOrRateLimitModelErrorMessage(msg: string): boolean {
-	return (
-		/\btpm\b|tokens per min|token.?per.?min/i.test(msg) ||
-		/rate limit|too many requests|429/i.test(msg)
-	);
-}
-
 function mergeRelationsDedup(
 	existing: PhaseOneRelation[],
 	incoming: PhaseOneRelation[]
@@ -2080,7 +2074,7 @@ async function callStageModel(params: {
 				return await invokeModelCallOnce();
 			} catch (error) {
 				lastError = error instanceof Error ? error : new Error(String(error));
-				const msg = lastError.message;
+				const msg = collectErrorMessageChain(lastError);
 				const retryable =
 					msg.includes('429') ||
 					msg.includes('529') ||
@@ -2100,11 +2094,7 @@ async function callStageModel(params: {
 			}
 		}
 
-		if (
-			ingestRecoveryAgentEnabled() &&
-			lastError &&
-			isRetryableIngestModelErrorMessage(lastError.message)
-		) {
+		if (ingestRecoveryAgentEnabled() && lastError && isRetryableIngestModelError(lastError)) {
 			console.log(
 				formatIngestSelfHealLine({
 					v: 1,
@@ -2116,13 +2106,13 @@ async function callStageModel(params: {
 					detail: 'after inner retries exhausted'
 				})
 			);
+			const errorChain = collectErrorMessageChain(lastError);
 			const decision = await consultIngestionRecoveryAgent({
 				stage,
 				provider: activePlan.provider,
 				model: activePlan.model,
-				errorMessage: lastError.message,
-				innerAttempt: attempt,
-				suggestedRetryAfterMs: parseRetryAfterMsFromProviderMessage(lastError.message)
+				errorMessage: errorChain,
+				suggestedRetryAfterMs: parseRetryAfterMsFromProviderMessage(errorChain)
 			});
 			if (activeIngestTiming) {
 				activeIngestTiming.recovery_agent_invocations += 1;
@@ -3987,8 +3977,7 @@ async function main() {
 							planningContext: relationsPlanningContext
 						});
 					} catch (relErr) {
-						const msg = relErr instanceof Error ? relErr.message : String(relErr);
-						if (batchClaims.length > 1 && isTpmOrRateLimitModelErrorMessage(msg)) {
+						if (batchClaims.length > 1 && isTpmOrRateLimitInError(relErr)) {
 							const mid = Math.ceil(batchClaims.length / 2);
 							workQueue.splice(
 								batchIndex,

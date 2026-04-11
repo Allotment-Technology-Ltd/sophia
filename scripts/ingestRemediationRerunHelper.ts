@@ -3,6 +3,7 @@
  * Used by scripts/ingest.ts after claim text repairs + deterministic relation drops.
  */
 
+import { isTpmOrRateLimitInError } from '../src/lib/ingestionErrorChain.js';
 import { capIngestBatchTargetForPlan } from '../src/lib/server/ingestion/modelBatchCaps.js';
 import {
 	buildRelationsBatches,
@@ -66,13 +67,6 @@ function parseJsonResponse(text: string): unknown {
 
 function estimateRelationsClaimsJsonTokens(claims: PhaseOneClaim[]): number {
 	return estimateTokens(JSON.stringify(claims, null, 2));
-}
-
-function isTpmOrRateLimitModelErrorMessage(msg: string): boolean {
-	return (
-		/\btpm\b|tokens per min|token.?per.?min/i.test(msg) ||
-		/rate limit|too many requests|429/i.test(msg)
-	);
 }
 
 function splitGroupingBatchInHalf(batch: GroupingBatch): [GroupingBatch, GroupingBatch] | null {
@@ -202,8 +196,7 @@ export async function rerunRelationsAndGroupingForRemediation(opts: {
 					planningContext: relationsPlanningContext
 				});
 			} catch (relErr) {
-				const msg = relErr instanceof Error ? relErr.message : String(relErr);
-				if (batchClaims.length > 1 && isTpmOrRateLimitModelErrorMessage(msg)) {
+				if (batchClaims.length > 1 && isTpmOrRateLimitInError(relErr)) {
 					const mid = Math.ceil(batchClaims.length / 2);
 					workQueue.splice(batchIndex, 1, batchClaims.slice(0, mid), batchClaims.slice(mid));
 					console.warn(
