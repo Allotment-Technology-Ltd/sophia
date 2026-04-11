@@ -26,9 +26,26 @@ describe('ingestWatchdogPhaseBaselines', () => {
       createdAtMs: 0,
       lastOutputAt: null,
       workerHeartbeatAt: null,
-      lastIngestTimingLine: null
+      lastIngestTimingLine: null,
+      watchdogPhaseIdleJson: null,
+      watchdogPhaseBaselineMult: null
     };
     expect(resolveWatchdogIdleThresholdMs(300_000, row)).toBe(120_000);
+  });
+
+  it('prefers per-run watchdogPhaseIdleJson over env for same phase', () => {
+    process.env.INGEST_WATCHDOG_PHASE_IDLE_JSON = JSON.stringify({ extracting: 120_000 });
+    const row: IdleStalledIngestCandidateRow = {
+      id: 'x',
+      currentStageKey: 'extract',
+      createdAtMs: 0,
+      lastOutputAt: null,
+      workerHeartbeatAt: null,
+      lastIngestTimingLine: null,
+      watchdogPhaseIdleJson: JSON.stringify({ extracting: 90_000 }),
+      watchdogPhaseBaselineMult: null
+    };
+    expect(resolveWatchdogIdleThresholdMs(300_000, row)).toBe(90_000);
   });
 
   it('widens list query idle when phase map has smaller thresholds', () => {
@@ -44,7 +61,9 @@ describe('ingestWatchdogPhaseBaselines', () => {
       createdAtMs: now - 600_000,
       lastOutputAt: now - 400_000,
       workerHeartbeatAt: now - 100_000,
-      lastIngestTimingLine: null
+      lastIngestTimingLine: null,
+      watchdogPhaseIdleJson: null,
+      watchdogPhaseBaselineMult: null
     };
     expect(isPastWatchdogThreshold(now, row, 300_000)).toBe(false);
   });

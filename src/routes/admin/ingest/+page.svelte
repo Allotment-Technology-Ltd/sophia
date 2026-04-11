@@ -288,7 +288,7 @@
       readMore: [
         'Remediation is intentionally narrow: it does not re-run the whole pipeline; it repairs specific positions the validator flagged, bounded by source spans.',
         'This stage can dominate wall time when many claims need repair; the live log shows per-claim progress so long silences are easier to interpret.',
-        'Operators can tune `INGEST_REMEDIATION_MAX_CLAIMS` and related env vars when cost or latency needs to be capped.'
+        'Use the throughput fields under Worker defaults (saved in this browser) to cap remediation and tune Surreal write concurrency per batch.'
       ]
     },
     store: {
@@ -435,6 +435,21 @@
   let ingestionAdvisorAutoApplyValidation = $state(true);
   let workerIngestProvider = $state<'auto' | 'anthropic' | 'vertex'>('auto');
   let workerRelationsOverlapClaims = $state('');
+  /** `batch_overrides.extractionConcurrency` → `INGEST_EXTRACTION_CONCURRENCY`. */
+  let workerExtractionConcurrency = $state('');
+  /** `batch_overrides.remediationMaxClaims` → `INGEST_REMEDIATION_MAX_CLAIMS`. */
+  let workerRemediationMaxClaims = $state('');
+  /** `batch_overrides.passageInsertConcurrency` → `INGEST_PASSAGE_INSERT_CONCURRENCY` (1–12). */
+  let workerPassageInsertConcurrency = $state('');
+  /** `batch_overrides.claimInsertConcurrency` → `INGEST_CLAIM_INSERT_CONCURRENCY` (1–24). */
+  let workerClaimInsertConcurrency = $state('');
+  /**
+   * `batch_overrides.watchdogPhaseIdleJson` — same keys as server env
+   * `INGEST_WATCHDOG_PHASE_IDLE_JSON` (extracting, relating, …, in ms).
+   */
+  let workerWatchdogPhaseIdleJson = $state('');
+  /** `batch_overrides.watchdogPhaseBaselineMult` (overrides env for this run). */
+  let workerWatchdogPhaseBaselineMult = $state('');
   let workerFailOnGroupingCollapse = $state(true);
   /** Maps to `INGEST_LOG_PINS` on the ingest worker. */
   let workerIngestLogPins = $state(false);
@@ -2476,12 +2491,20 @@
     failOnGroupingPositionCollapse: boolean;
     ingestLogPins: boolean;
     relationsBatchOverlapClaims?: number;
+    extractionConcurrency?: number;
+    remediationMaxClaims?: number;
+    passageInsertConcurrency?: number;
+    claimInsertConcurrency?: number;
   } {
     const o: {
       ingestProvider: 'auto' | 'anthropic' | 'vertex';
       failOnGroupingPositionCollapse: boolean;
       ingestLogPins: boolean;
       relationsBatchOverlapClaims?: number;
+      extractionConcurrency?: number;
+      remediationMaxClaims?: number;
+      passageInsertConcurrency?: number;
+      claimInsertConcurrency?: number;
     } = {
       ingestProvider: workerIngestProvider,
       failOnGroupingPositionCollapse: workerFailOnGroupingCollapse,
@@ -2495,7 +2518,74 @@
         if (i >= 1 && i <= 99) o.relationsBatchOverlapClaims = i;
       }
     }
+    const extC = workerExtractionConcurrency.trim();
+    if (extC !== '') {
+      const n = Number(extC);
+      if (Number.isFinite(n)) {
+        const i = Math.trunc(n);
+        if (i >= 1 && i <= 16) o.extractionConcurrency = i;
+      }
+    }
+    const remMax = workerRemediationMaxClaims.trim();
+    if (remMax !== '') {
+      const n = Number(remMax);
+      if (Number.isFinite(n)) {
+        const i = Math.trunc(n);
+        if (i >= 1 && i <= 200) o.remediationMaxClaims = i;
+      }
+    }
+    const passC = workerPassageInsertConcurrency.trim();
+    if (passC !== '') {
+      const n = Number(passC);
+      if (Number.isFinite(n)) {
+        const i = Math.trunc(n);
+        if (i >= 1 && i <= 12) o.passageInsertConcurrency = i;
+      }
+    }
+    const claimC = workerClaimInsertConcurrency.trim();
+    if (claimC !== '') {
+      const n = Number(claimC);
+      if (Number.isFinite(n)) {
+        const i = Math.trunc(n);
+        if (i >= 1 && i <= 24) o.claimInsertConcurrency = i;
+      }
+    }
     return o;
+  }
+
+  function mergeBatchOverridesForRun(): {
+    merged?: Record<string, string | number | boolean>;
+    error?: string;
+  } {
+    const batchBuild = buildBatchOverridesFromUi();
+    if (batchBuild.error) return { error: batchBuild.error };
+    const worker = buildWorkerTuningOverrides();
+    const merged: Record<string, string | number | boolean> = {
+      ...(batchBuild.overrides ?? {}),
+      ...worker
+    };
+    const idleRaw = workerWatchdogPhaseIdleJson.trim();
+    if (idleRaw !== '') {
+      try {
+        const p = JSON.parse(idleRaw);
+        if (!p || typeof p !== 'object' || Array.isArray(p)) {
+          return { error: 'Watchdog phase idle JSON must be a JSON object (e.g. {"extracting":480000}).' };
+        }
+        merged.watchdogPhaseIdleJson = JSON.stringify(p);
+      } catch {
+        return { error: 'Watchdog phase idle JSON is not valid JSON.' };
+      }
+    }
+    const baselineRaw = workerWatchdogPhaseBaselineMult.trim();
+    if (baselineRaw !== '') {
+      const m = Number(baselineRaw);
+      if (!Number.isFinite(m)) return { error: 'Watchdog baseline multiplier must be a number.' };
+      if (m < 0.5 || m > 10) {
+        return { error: 'Watchdog baseline multiplier must be between 0.5 and 10.' };
+      }
+      merged.watchdogPhaseBaselineMult = m;
+    }
+    return { merged };
   }
 
   $effect(() => {
@@ -2509,6 +2599,12 @@
           ingestionAdvisorAutoApplyValidation,
           workerIngestProvider,
           workerRelationsOverlapClaims,
+          workerExtractionConcurrency,
+          workerRemediationMaxClaims,
+          workerPassageInsertConcurrency,
+          workerClaimInsertConcurrency,
+          workerWatchdogPhaseIdleJson,
+          workerWatchdogPhaseBaselineMult,
           workerFailOnGroupingCollapse,
           workerIngestLogPins,
           batchIngestModelTimeoutMs,
@@ -2543,15 +2639,13 @@
       return;
     }
 
-    const batchBuild = buildBatchOverridesFromUi();
-    batchOverridesError = batchBuild.error ?? '';
-    if (batchBuild.error) {
-      runError = batchBuild.error;
+    const merge = mergeBatchOverridesForRun();
+    batchOverridesError = merge.error ?? '';
+    if (merge.error) {
+      runError = merge.error;
       return;
     }
-    const batchOverrides = batchBuild.overrides ?? {};
-    const workerTuning = buildWorkerTuningOverrides();
-    const mergedBatchOverrides = { ...batchOverrides, ...workerTuning };
+    const mergedBatchOverrides = merge.merged ?? {};
 
     starting = true;
     monitorRunNotice = '';
@@ -2683,15 +2777,13 @@
     syncing = true;
     runError = '';
     try {
-      const batchBuild = buildBatchOverridesFromUi();
-      batchOverridesError = batchBuild.error ?? '';
-      if (batchBuild.error) {
-        runError = batchBuild.error;
+      const merge = mergeBatchOverridesForRun();
+      batchOverridesError = merge.error ?? '';
+      if (merge.error) {
+        runError = merge.error;
         return;
       }
-      const batchOverrides = batchBuild.overrides ?? {};
-      const workerTuning = buildWorkerTuningOverrides();
-      const mergedBatchOverrides = { ...batchOverrides, ...workerTuning };
+      const mergedBatchOverrides = merge.merged ?? {};
 
       const response = await fetch(`/api/admin/ingest/run/${runId}/resume`, {
         method: 'POST',
@@ -3037,6 +3129,24 @@
         }
         if (typeof p.workerRelationsOverlapClaims === 'string') {
           workerRelationsOverlapClaims = p.workerRelationsOverlapClaims;
+        }
+        if (typeof p.workerExtractionConcurrency === 'string') {
+          workerExtractionConcurrency = p.workerExtractionConcurrency;
+        }
+        if (typeof p.workerRemediationMaxClaims === 'string') {
+          workerRemediationMaxClaims = p.workerRemediationMaxClaims;
+        }
+        if (typeof p.workerPassageInsertConcurrency === 'string') {
+          workerPassageInsertConcurrency = p.workerPassageInsertConcurrency;
+        }
+        if (typeof p.workerClaimInsertConcurrency === 'string') {
+          workerClaimInsertConcurrency = p.workerClaimInsertConcurrency;
+        }
+        if (typeof p.workerWatchdogPhaseIdleJson === 'string') {
+          workerWatchdogPhaseIdleJson = p.workerWatchdogPhaseIdleJson;
+        }
+        if (typeof p.workerWatchdogPhaseBaselineMult === 'string') {
+          workerWatchdogPhaseBaselineMult = p.workerWatchdogPhaseBaselineMult;
         }
         if (typeof p.workerFailOnGroupingCollapse === 'boolean') {
           workerFailOnGroupingCollapse = p.workerFailOnGroupingCollapse;
@@ -3575,6 +3685,125 @@
                         Optional. Maps to <span class="font-mono">RELATIONS_BATCH_OVERLAP_CLAIMS</span>.
                       </p>
                     </div>
+                    <div>
+                      <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="extract-concurrency">
+                        Extraction parallelism (batches)
+                      </label>
+                      <input
+                        id="extract-concurrency"
+                        type="number"
+                        min="1"
+                        max="16"
+                        step="1"
+                        placeholder="e.g. 3"
+                        value={workerExtractionConcurrency}
+                        oninput={(e) => (workerExtractionConcurrency = (e.currentTarget as HTMLInputElement).value)}
+                        disabled={runInProgress()}
+                        class="mt-1 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                      />
+                      <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                        <span class="font-mono">INGEST_EXTRACTION_CONCURRENCY</span> — parallel single-passage extraction batches.
+                      </p>
+                    </div>
+                    <div>
+                      <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="remediation-max">
+                        Remediation max claims
+                      </label>
+                      <input
+                        id="remediation-max"
+                        type="number"
+                        min="1"
+                        max="200"
+                        step="1"
+                        placeholder="e.g. 16"
+                        value={workerRemediationMaxClaims}
+                        oninput={(e) => (workerRemediationMaxClaims = (e.currentTarget as HTMLInputElement).value)}
+                        disabled={runInProgress()}
+                        class="mt-1 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                      />
+                      <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                        <span class="font-mono">INGEST_REMEDIATION_MAX_CLAIMS</span> when validation + remediation run.
+                      </p>
+                    </div>
+                    <div>
+                      <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="passage-insert-conc">
+                        Surreal passage insert concurrency
+                      </label>
+                      <input
+                        id="passage-insert-conc"
+                        type="number"
+                        min="1"
+                        max="12"
+                        step="1"
+                        placeholder="e.g. 8"
+                        value={workerPassageInsertConcurrency}
+                        oninput={(e) => (workerPassageInsertConcurrency = (e.currentTarget as HTMLInputElement).value)}
+                        disabled={runInProgress()}
+                        class="mt-1 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                      />
+                      <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                        <span class="font-mono">INGEST_PASSAGE_INSERT_CONCURRENCY</span> (Stage 6).
+                      </p>
+                    </div>
+                    <div>
+                      <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="claim-insert-conc">
+                        Surreal claim insert concurrency
+                      </label>
+                      <input
+                        id="claim-insert-conc"
+                        type="number"
+                        min="1"
+                        max="24"
+                        step="1"
+                        placeholder="e.g. 8"
+                        value={workerClaimInsertConcurrency}
+                        oninput={(e) => (workerClaimInsertConcurrency = (e.currentTarget as HTMLInputElement).value)}
+                        disabled={runInProgress()}
+                        class="mt-1 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                      />
+                      <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                        <span class="font-mono">INGEST_CLAIM_INSERT_CONCURRENCY</span> (Stage 6).
+                      </p>
+                    </div>
+                  </div>
+                  <div>
+                    <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="watchdog-phase-idle">
+                      Watchdog phase idle (JSON, ms per phase)
+                    </label>
+                    <textarea
+                      id="watchdog-phase-idle"
+                      rows="3"
+                      placeholder='{"extracting":480000,"storing":600000}'
+                      value={workerWatchdogPhaseIdleJson}
+                      oninput={(e) => (workerWatchdogPhaseIdleJson = (e.currentTarget as HTMLTextAreaElement).value)}
+                      disabled={runInProgress()}
+                      class="mt-1 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                    ></textarea>
+                    <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                      Stored in run payload as <span class="font-mono">batch_overrides.watchdogPhaseIdleJson</span>; keys:
+                      extracting, relating, grouping, embedding, validating, remediating, storing. Merged with server env for this run only.
+                    </p>
+                  </div>
+                  <div>
+                    <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="watchdog-baseline-mult">
+                      Watchdog baseline multiplier (optional)
+                    </label>
+                    <input
+                      id="watchdog-baseline-mult"
+                      type="number"
+                      min="0.5"
+                      max="10"
+                      step="0.1"
+                      placeholder="e.g. 2.5"
+                      value={workerWatchdogPhaseBaselineMult}
+                      oninput={(e) => (workerWatchdogPhaseBaselineMult = (e.currentTarget as HTMLInputElement).value)}
+                      disabled={runInProgress()}
+                      class="mt-1 w-full max-w-xs rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                    />
+                    <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                      Per-run override for <span class="font-mono">INGEST_WATCHDOG_PHASE_BASELINE_MULT</span> (uses last
+                      <span class="font-mono">[INGEST_TIMING]</span> line on the run).
+                    </p>
                   </div>
                   <label class="flex cursor-pointer items-start gap-2 font-mono text-xs text-sophia-dark-muted">
                     <input

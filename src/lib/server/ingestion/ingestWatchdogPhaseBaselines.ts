@@ -32,7 +32,7 @@ export function ingestCurrentStageToTimingKey(
   return null;
 }
 
-function parsePhaseIdleJson(raw: string | undefined): Partial<Record<IngestTimingStageMsKey, number>> | null {
+export function parsePhaseIdleJson(raw: string | undefined | null): Partial<Record<IngestTimingStageMsKey, number>> | null {
   if (raw == null || !raw.trim()) return null;
   try {
     const o = JSON.parse(raw) as Record<string, unknown>;
@@ -59,11 +59,19 @@ function parsePhaseIdleJson(raw: string | undefined): Partial<Record<IngestTimin
   }
 }
 
-/** Smallest configured phase threshold for widening the SQL candidate net. */
+function mergePhaseIdleMaps(
+  a: Partial<Record<IngestTimingStageMsKey, number>> | null,
+  b: Partial<Record<IngestTimingStageMsKey, number>> | null
+): Partial<Record<IngestTimingStageMsKey, number>> | null {
+  if (!a && !b) return null;
+  return { ...(a ?? {}), ...(b ?? {}) };
+}
+
+/** Smallest configured phase threshold from env `INGEST_WATCHDOG_PHASE_IDLE_JSON` (widens SQL listing). */
 export function ingestWatchdogListQueryIdleMs(baseIdleMs: number): number {
-  const parsed = parsePhaseIdleJson(process.env.INGEST_WATCHDOG_PHASE_IDLE_JSON?.trim());
-  if (!parsed) return baseIdleMs;
-  const vals = Object.values(parsed).filter((n) => typeof n === 'number' && n > 0) as number[];
+  const envParsed = parsePhaseIdleJson(process.env.INGEST_WATCHDOG_PHASE_IDLE_JSON?.trim());
+  if (!envParsed) return baseIdleMs;
+  const vals = Object.values(envParsed).filter((n) => typeof n === 'number' && n > 0) as number[];
   if (vals.length === 0) return baseIdleMs;
   return Math.min(baseIdleMs, ...vals);
 }
@@ -136,13 +144,18 @@ export function resolveWatchdogIdleThresholdMs(
   baseIdleMs: number,
   row: IdleStalledIngestCandidateRow
 ): number {
-  const phaseMap = parsePhaseIdleJson(process.env.INGEST_WATCHDOG_PHASE_IDLE_JSON?.trim());
+  const envMap = parsePhaseIdleJson(process.env.INGEST_WATCHDOG_PHASE_IDLE_JSON?.trim());
+  const runMap = parsePhaseIdleJson(row.watchdogPhaseIdleJson);
+  const phaseMap = mergePhaseIdleMaps(envMap, runMap);
   const timingKey = ingestCurrentStageToTimingKey(row.currentStageKey);
   if (timingKey && phaseMap && typeof phaseMap[timingKey] === 'number') {
     return Math.max(MIN_THRESHOLD_MS, Math.min(phaseMap[timingKey]!, 86_400_000));
   }
 
-  const multRaw = process.env.INGEST_WATCHDOG_PHASE_BASELINE_MULT?.trim();
+  const multRaw =
+    row.watchdogPhaseBaselineMult != null && Number.isFinite(row.watchdogPhaseBaselineMult)
+      ? String(row.watchdogPhaseBaselineMult)
+      : process.env.INGEST_WATCHDOG_PHASE_BASELINE_MULT?.trim();
   const mult = multRaw ? parseFloat(multRaw) : NaN;
   if (
     timingKey &&

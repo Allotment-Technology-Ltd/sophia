@@ -377,18 +377,23 @@ export type IdleStalledIngestCandidateRow = {
   lastOutputAt: number | null;
   workerHeartbeatAt: number | null;
   lastIngestTimingLine: string | null;
+  /** From `payload.batch_overrides.watchdogPhaseIdleJson` when set (stringified JSON). */
+  watchdogPhaseIdleJson: string | null;
+  /** From `payload.batch_overrides.watchdogPhaseBaselineMult` when set. */
+  watchdogPhaseBaselineMult: number | null;
 };
 
 /**
  * Candidate stalled runs (same idle predicate as the watchdog) with context for phase-aware grace.
  */
 export async function neonListIdleStalledIngestCandidateRows(
-  idleMs: number,
+  listThresholdMs: number,
   limit: number
 ): Promise<IdleStalledIngestCandidateRow[]> {
-  if (!isNeonIngestPersistenceEnabled() || idleMs <= 0) return [];
+  if (!isNeonIngestPersistenceEnabled() || listThresholdMs <= 0) return [];
   const db = getDrizzleDb();
   const cap = Math.max(1, Math.min(100, limit));
+  const tunedMs = 60_000;
   const rows = await db.execute(sql`
     SELECT
       ir.id AS id,
@@ -402,24 +407,43 @@ export async function neonListIdleStalledIngestCandidateRows(
         WHERE l.run_id = ir.id AND l.line LIKE '[INGEST_TIMING] %'
         ORDER BY l.seq DESC
         LIMIT 1
-      ) AS "lastIngestTimingLine"
+      ) AS "lastIngestTimingLine",
+      NULLIF(trim(ir.payload #>> '{batch_overrides,watchdogPhaseIdleJson}'), '') AS "watchdogPhaseIdleJson",
+      NULLIF(trim(ir.payload #>> '{batch_overrides,watchdogPhaseBaselineMult}'), '') AS "watchdogPhaseBaselineMultRaw"
     FROM ${ingestRuns} ir
     WHERE ir.cancelled_by_user = false
       AND ir.completed_at IS NULL
       AND ir.status IN ('running', 'queued', 'awaiting_sync')
-      AND ${idleStallWhereSql(idleMs)}
+      AND (
+        ${idleStallWhereSql(listThresholdMs)}
+        OR (
+          (
+            NULLIF(trim(ir.payload #>> '{batch_overrides,watchdogPhaseIdleJson}'), '') IS NOT NULL
+            AND length(trim(ir.payload #>> '{batch_overrides,watchdogPhaseIdleJson}')) > 2
+          )
+          OR (
+            NULLIF(trim(ir.payload #>> '{batch_overrides,watchdogPhaseBaselineMult}'), '') IS NOT NULL
+            AND ${idleStallWhereSql(tunedMs)}
+          )
+        )
+      )
     ORDER BY ir.updated_at ASC
     LIMIT ${cap}
   `);
   const out: IdleStalledIngestCandidateRow[] = [];
   for (const r of rows.rows as Record<string, unknown>[]) {
+    const rawMult = r.watchdogPhaseBaselineMultRaw != null ? String(r.watchdogPhaseBaselineMultRaw).trim() : '';
+    const wbm = rawMult ? parseFloat(rawMult) : NaN;
     out.push({
       id: String(r.id),
       currentStageKey: r.currentStageKey != null ? String(r.currentStageKey) : null,
       createdAtMs: Number(r.createdAtMs),
       lastOutputAt: r.lastOutputAt != null ? Number(r.lastOutputAt) : null,
       workerHeartbeatAt: r.workerHeartbeatAt != null ? Number(r.workerHeartbeatAt) : null,
-      lastIngestTimingLine: r.lastIngestTimingLine != null ? String(r.lastIngestTimingLine) : null
+      lastIngestTimingLine: r.lastIngestTimingLine != null ? String(r.lastIngestTimingLine) : null,
+      watchdogPhaseIdleJson:
+        r.watchdogPhaseIdleJson != null ? String(r.watchdogPhaseIdleJson).trim() || null : null,
+      watchdogPhaseBaselineMult: Number.isFinite(wbm) && wbm > 0 && wbm <= 10 ? wbm : null
     });
   }
   return out;

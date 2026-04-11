@@ -372,6 +372,12 @@ export interface IngestRunSnapshotForReport {
       ingestStageGroupingTimeoutMs?: number;
       ingestStageEmbeddingTimeoutMs?: number;
       ingestStageJsonRepairTimeoutMs?: number;
+      extractionConcurrency?: number;
+      passageInsertConcurrency?: number;
+      claimInsertConcurrency?: number;
+      remediationMaxClaims?: number;
+      watchdogPhaseIdleJson?: string;
+      watchdogPhaseBaselineMult?: number;
     };
   };
   issues: IngestIssueRecord[];
