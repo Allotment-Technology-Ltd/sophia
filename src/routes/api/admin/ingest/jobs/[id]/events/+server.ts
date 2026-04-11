@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
-import { listIngestionJobEvents, tickIngestionJob } from '$lib/server/ingestionJobs';
+import { listIngestionJobEvents, reconcileIngestionJobView } from '$lib/server/ingestionJobs';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 
 export const GET: RequestHandler = async ({ locals, params, url }) => {
@@ -12,7 +12,7 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
 		}
 		const id = params.id?.trim();
 		if (!id) return json({ error: 'Missing job id' }, { status: 400 });
-		await tickIngestionJob(id);
+		await reconcileIngestionJobView(id);
 		const sinceSeq = Math.max(0, Number.parseInt(url.searchParams.get('since_seq') ?? '0', 10) || 0);
 		const limit = Math.max(1, Math.min(500, Number.parseInt(url.searchParams.get('limit') ?? '200', 10) || 200));
 		const events = await listIngestionJobEvents(id, { sinceSeq, limit });
