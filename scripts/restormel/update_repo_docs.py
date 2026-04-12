@@ -26,6 +26,18 @@ class DocRecord:
     source_of_truth: str | None
 
 
+def _restormel_docs_root() -> Path | None:
+    """Restormel markdown pack lives in docs/local on maintainer checkouts; absent on public clones."""
+    for candidate in (
+        REPO_ROOT / "docs" / "local" / "restormel",
+        REPO_ROOT / "docs" / "restormel",
+        REPO_ROOT / "docs" / "Restormel",
+    ):
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
 RESTORMEL_GROUPS = OrderedDict(
     [
         ("00-overview", "Overview"),
@@ -43,7 +55,7 @@ RESTORMEL_GROUPS = OrderedDict(
 ROOT_STRUCTURE = OrderedDict(
     [
         ("src", "SvelteKit application, server logic, and UI surfaces."),
-        ("docs", "Public, reference, and archived documentation surfaces."),
+        ("docs", "Public documentation index plus SOPHIA narrative; full pack under docs/local/ for maintainers."),
         ("scripts", "Operational tooling, ingestion utilities, and docs automation."),
         ("tests", "Playwright end-to-end coverage."),
         ("data", "Source data and ingestion inputs."),
@@ -70,16 +82,6 @@ TARGETS = OrderedDict(
                     ("docs-map", "render_docs_map"),
                     ("key-doc-entry-points", "render_docs_entry_points"),
                     ("active-vs-archive", "render_active_vs_archive"),
-                ]
-            ),
-        ),
-        (
-            Path("docs/restormel/README.md"),
-            OrderedDict(
-                [
-                    ("active-restormel-docs", "render_active_restormel_docs"),
-                    ("restormel-delivery-docs", "render_restormel_delivery_docs"),
-                    ("restormel-reference-docs", "render_restormel_reference_docs"),
                 ]
             ),
         ),
@@ -167,9 +169,16 @@ def sorted_markdown_files(directory: Path) -> list[Path]:
 
 
 def restormel_group_docs() -> OrderedDict[str, list[DocRecord]]:
+    root = _restormel_docs_root()
     groups: OrderedDict[str, list[DocRecord]] = OrderedDict()
     for folder, label in RESTORMEL_GROUPS.items():
-        directory = REPO_ROOT / "docs" / "restormel" / folder
+        if root is None:
+            groups[label] = []
+            continue
+        directory = root / folder
+        if not directory.is_dir():
+            groups[label] = []
+            continue
         groups[label] = collect_docs(sorted_markdown_files(directory))
     return groups
 
@@ -186,8 +195,14 @@ def sophia_active_docs() -> list[DocRecord]:
 
 
 def restormel_reference_docs() -> list[DocRecord]:
+    root = _restormel_docs_root()
+    if root is None:
+        return []
+    ref_dir = root / "10-reference"
+    if not ref_dir.is_dir():
+        return []
     records: list[DocRecord] = []
-    for path in sorted((REPO_ROOT / "docs" / "restormel" / "10-reference").glob("*.md")):
+    for path in sorted(ref_dir.glob("*.md")):
         if path.name == "README.md":
             continue
         records.append(load_doc(path))
@@ -256,23 +271,18 @@ def root_entry_rows(from_file: Path) -> list[list[str]]:
     rows = [
         [
             "SOPHIA docs",
-            "Current showcase app docs, architecture, roadmap, and domain status.",
+            "Public showcase app docs: architecture, roadmap, domain status, changelog.",
             markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "sophia" / "README.md")),
         ],
         [
-            "Restormel docs",
-            "Platform strategy, architecture, delivery planning, and reference automation.",
-            markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "restormel" / "README.md")),
-        ],
-        [
             "Documentation hub",
-            "Cross-repo docs navigation, active/reference/archive split, and entry points.",
+            "Public documentation index and how to obtain the maintainer doc pack.",
             markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "README.md")),
         ],
         [
-            "Archive",
-            "Historical plans and superseded materials kept for traceability.",
-            markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "archive" / "README.md")),
+            "Maintainer doc pack",
+            "Restormel platform pack, operations, reference, archive (local only; not on public Git).",
+            markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "LOCAL_DOCS.md")),
         ],
     ]
     return rows
@@ -285,32 +295,18 @@ def render_root_key_links(from_file: Path) -> str:
 def render_root_repo_doc_map(from_file: Path) -> str:
     rows = [
         [
-            "Active",
+            "Public",
             "SOPHIA",
             str(len(sophia_active_docs())),
             "Showcase app identity, architecture, roadmap, domains, and changelog.",
             markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "sophia" / "README.md")),
         ],
         [
-            "Active",
-            "Restormel",
-            str(sum(len(records) for records in restormel_group_docs().values())),
-            "Platform strategy, modularisation, delivery controls, and product planning.",
-            markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "restormel" / "README.md")),
-        ],
-        [
-            "Reference",
-            "Reference docs",
-            str(len(list((REPO_ROOT / "docs" / "reference").rglob("*.md")))),
-            "Supporting API, architecture, operations, product, and learning references.",
-            markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "reference" / "README.md")),
-        ],
-        [
-            "Archived",
-            "Archive",
-            str(len(list((REPO_ROOT / "docs" / "archive").rglob("*.md")))),
-            "Historical strategy, architecture, delivery, product, and experiment material.",
-            markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "archive" / "README.md")),
+            "Maintainer",
+            "Full doc tree",
+            "—",
+            "Restormel platform pack, operations runbooks, reference library, and archive (not on public Git; see LOCAL_DOCS).",
+            markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "LOCAL_DOCS.md")),
         ],
     ]
     return render_table(["Status", "Surface", "Docs", "Scope", "Entry point"], rows)
@@ -323,12 +319,13 @@ def render_root_repo_structure(from_file: Path) -> str:
         if path.exists():
             link = relative_link(from_file, path)
             lines.append(f"- [`{directory}/`]({link}) {description}")
-    gcp_doc = REPO_ROOT / "docs" / "operations" / "gcp-infrastructure.md"
     deploy_yml = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
-    if gcp_doc.is_file() and deploy_yml.is_file():
+    if deploy_yml.is_file():
+        # Do not link to gcp-infrastructure.md — it lives only under docs/local/ on maintainer clones
+        # and would make this block differ between CI and local checkouts.
         lines.append(
-            f"- [`docs/operations/gcp-infrastructure.md`]({relative_link(from_file, gcp_doc)}) "
-            "— production GCP layout; app deploys via "
+            "- Maintainer GCP layout (when `docs/local/` is populated): "
+            "`docs/local/operations/gcp-infrastructure.md` — production layout; app deploys via "
             f"[`deploy.yml`]({relative_link(from_file, deploy_yml)}) (`gcloud run deploy`)."
         )
     return "\n".join(lines)
@@ -338,12 +335,14 @@ def render_root_current_priorities(_: Path) -> str:
     sophia_priorities = parse_ordered_list_under_heading(
         REPO_ROOT / "docs" / "sophia" / "current-state.md", "## Active priorities"
     )
-    restormel_priorities = parse_ordered_list_under_heading(
-        REPO_ROOT / "docs" / "restormel" / "04-delivery" / "19-milestone-plan-with-exit-criteria.md",
-        "## Priority Order",
-    )
     lines = ["### SOPHIA", *[f"{index}. {item}" for index, item in enumerate(sophia_priorities, start=1)], ""]
-    lines.extend(["### Restormel", *[f"{index}. {item}" for index, item in enumerate(restormel_priorities, start=1)]])
+    # Restormel priority order is authored in the maintainer-only tree so this block stays identical on public CI.
+    lines.extend(
+        [
+            "### Restormel",
+            "_(Priority order lives in the maintainer doc pack: `docs/local/restormel/04-delivery/19-milestone-plan-with-exit-criteria.md`. See `docs/LOCAL_DOCS.md`.)_",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -351,31 +350,17 @@ def render_docs_map(from_file: Path) -> str:
     rows = [
         [
             "SOPHIA",
-            "Active",
+            "Public",
             str(len(sophia_active_docs())),
-            "Showcase/reference app documentation.",
+            "Showcase/reference app documentation shipped with the public repo.",
             markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "sophia" / "README.md")),
         ],
         [
-            "Restormel",
-            "Active",
-            str(sum(len(records) for records in restormel_group_docs().values())),
-            "Platform planning, architecture, and delivery docs.",
-            markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "restormel" / "README.md")),
-        ],
-        [
-            "Reference",
-            "Reference",
-            str(len(list((REPO_ROOT / "docs" / "reference").rglob("*.md")))),
-            "Supporting implementation and operational references.",
-            markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "reference" / "README.md")),
-        ],
-        [
-            "Archive",
-            "Archived",
-            str(len(list((REPO_ROOT / "docs" / "archive").rglob("*.md")))),
-            "Historical material preserved for traceability.",
-            markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "archive" / "README.md")),
+            "Maintainer pack",
+            "Local only",
+            "—",
+            "Restormel, operations, reference, and archive material under docs/local/ (not published on public Git).",
+            markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "LOCAL_DOCS.md")),
         ],
     ]
     return render_table(["Surface", "Status", "Docs", "Use it for", "Entry point"], rows)
@@ -387,10 +372,8 @@ def render_docs_entry_points(from_file: Path) -> str:
         load_doc(REPO_ROOT / "docs" / "sophia" / "current-state.md"),
         load_doc(REPO_ROOT / "docs" / "sophia" / "architecture.md"),
         load_doc(REPO_ROOT / "docs" / "sophia" / "roadmap.md"),
-        load_doc(REPO_ROOT / "docs" / "restormel" / "README.md"),
-        load_doc(REPO_ROOT / "docs" / "restormel" / "04-delivery" / "19-milestone-plan-with-exit-criteria.md"),
-        load_doc(REPO_ROOT / "docs" / "reference" / "README.md"),
-        load_doc(REPO_ROOT / "docs" / "archive" / "README.md"),
+        load_doc(REPO_ROOT / "docs" / "sophia" / "changelog.md"),
+        load_doc(REPO_ROOT / "docs" / "LOCAL_DOCS.md"),
     ]
     rows = [[doc.title, markdown_link(from_file, doc)] for doc in docs]
     return render_table(["Document", "Link"], rows)
@@ -399,19 +382,19 @@ def render_docs_entry_points(from_file: Path) -> str:
 def render_active_vs_archive(from_file: Path) -> str:
     rows = [
         [
-            "Active source of truth",
-            f"{len(sophia_active_docs())} SOPHIA docs and {sum(len(records) for records in restormel_group_docs().values())} Restormel docs",
-            "Update when product, architecture, or delivery meaning changes.",
+            "Public SOPHIA slice",
+            f"{len(sophia_active_docs())} active-tagged docs under docs/sophia/",
+            "Shipped with the public repository; keep aligned with the product surface.",
         ],
         [
-            "Supporting reference",
-            f"{len(list((REPO_ROOT / 'docs' / 'reference').rglob('*.md')))} docs under docs/reference and {len(restormel_reference_docs())} Restormel reference docs",
-            "Use for runbooks, API details, and automation context.",
+            "Maintainer-only tree",
+            "Restormel platform pack, operations runbooks, reference library, and archive under docs/local/ when populated.",
+            markdown_link(from_file, load_doc(REPO_ROOT / "docs" / "LOCAL_DOCS.md")),
         ],
         [
-            "Archived",
-            f"{len(list((REPO_ROOT / 'docs' / 'archive').rglob('*.md')))} docs under docs/archive",
-            f"Do not treat as current guidance; start at {markdown_link(from_file, load_doc(REPO_ROOT / 'docs' / 'archive' / 'README.md'))}.",
+            "Historical / internal",
+            "Lives under docs/local/ on maintainer machines; not published on the public default checkout.",
+            "Do not treat archived paths as current guidance unless promoted into the public SOPHIA slice.",
         ],
     ]
     return render_table(["Class", "Current snapshot", "Operating rule"], rows)
@@ -463,7 +446,7 @@ def render_sophia_key_links(from_file: Path) -> str:
         load_doc(REPO_ROOT / "docs" / "sophia" / "roadmap.md"),
         load_doc(REPO_ROOT / "docs" / "sophia" / "domain-expansion.md"),
         load_doc(REPO_ROOT / "docs" / "sophia" / "changelog.md"),
-        load_doc(REPO_ROOT / "docs" / "restormel" / "README.md"),
+        load_doc(REPO_ROOT / "docs" / "LOCAL_DOCS.md"),
     ]
     rows = [[doc.title, markdown_link(from_file, doc)] for doc in docs]
     return render_table(["Document", "Link"], rows)

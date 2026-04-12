@@ -890,7 +890,7 @@ export async function restormelGetSwitchCriteriaEnums(): Promise<RestormelSwitch
  * Project model **index** (Gateway Key / dashboard): `GET …/projects/{projectId}/models`.
  * Canonical JSON: binding rows are the array at **`data`** (not `data.bindings`); see
  * restormel-keys `docs/restormel-integration/keys-catalog-sync.md` and OpenAPI 1.3.2+.
- * @see docs/restormel-integration/keys-catalog-sync.md
+ * @see docs/local/restormel-integration/keys-catalog-sync.md
  */
 export async function restormelListProjectModels(): Promise<unknown> {
   return requestRestormel<unknown>(`${projectPath()}/models`);

@@ -192,7 +192,7 @@ async function main(): Promise<void> {
 
 	console.log('── Interpretation (not legal advice) ──');
 	console.log(
-		'  If merged counts are dominated by `openai/` or `anthropic/`, mined JSON labels from those runs may be restricted for training another model under those vendors’ ToS — regenerate labels with a policy-clear generator (see docs/operations/sophia-technical-review.md Risk 1).'
+		'  If merged counts are dominated by `openai/` or `anthropic/`, mined JSON labels from those runs may be restricted for training another model under those vendors’ ToS — regenerate labels with a policy-clear generator (see docs/local/operations/sophia-technical-review.md Risk 1).'
 	);
 }
 

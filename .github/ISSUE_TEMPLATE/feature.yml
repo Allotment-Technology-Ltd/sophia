@@ -29,8 +29,8 @@ body:
       label: Linked Docs
       description: Absolute or repo-relative links to Restormel source-of-truth docs.
       placeholder: |
-        - docs/restormel/04-delivery/19-milestone-plan-with-exit-criteria.md
-        - docs/restormel/04-delivery/20-engineering-backlog-by-epic.md
+        - docs/local/restormel/04-delivery/19-milestone-plan-with-exit-criteria.md
+        - docs/local/restormel/04-delivery/20-engineering-backlog-by-epic.md
     validations:
       required: true
 
@@ -67,6 +67,6 @@ body:
       placeholder: |
         - src/... 
         - scripts/restormel/...
-        - docs/restormel/...
+        - docs/local/restormel/...
     validations:
       required: true

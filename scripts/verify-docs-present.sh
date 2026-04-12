@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fail if expected tracked docs are missing (e.g. after a shallow clone or a bad .gitignore).
+# Fail if expected documentation paths are missing (e.g. shallow clone or bad .gitignore).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -12,10 +12,19 @@ check() {
   fi
 }
 
-check "docs/restormel/meta/linear-config.yml"
-check "docs/restormel/meta/milestones.yml"
-check "docs/restormel/README.md"
+# Public slice shipped on main
 check "docs/README.md"
+check "docs/LOCAL_DOCS.md"
+check "docs/sophia/README.md"
+
+# Full Restormel pack: legacy tracked layout OR maintainer gitignored tree
+if [[ -f "docs/restormel/meta/linear-config.yml" ]]; then
+  check "docs/restormel/meta/milestones.yml"
+  check "docs/restormel/README.md"
+elif [[ -f "docs/local/restormel/meta/linear-config.yml" ]]; then
+  check "docs/local/restormel/meta/milestones.yml"
+  check "docs/local/restormel/README.md"
+fi
 
 if grep -qE '^docs/\*' .gitignore 2>/dev/null; then
   echo "WARNING: .gitignore contains a broad '^docs/*' rule — Git may stop tracking most of docs/. Remove it if you need the full tree in the repo." >&2
@@ -23,10 +32,10 @@ fi
 
 if [[ "$missing" -ne 0 ]]; then
   echo "" >&2
-  echo "Fix: from repo root run:" >&2
-  echo "  git fetch origin && git checkout origin/main -- docs/" >&2
-  echo "Or reset to main: git pull origin main" >&2
+  echo "Fix: refresh the public docs slice from remote main:" >&2
+  echo "  git fetch origin && git checkout origin/main -- docs/README.md docs/LOCAL_DOCS.md docs/sophia/" >&2
+  echo "For the maintainer-only pack (Restormel, operations, archive), see docs/LOCAL_DOCS.md" >&2
   exit 1
 fi
 
-echo "OK: core docs paths present under docs/"
+echo "OK: required documentation paths present"

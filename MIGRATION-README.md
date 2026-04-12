@@ -7,7 +7,7 @@ This repository is now scaffolded to grow into a single Restormel monorepo while
 - The live SOPHIA SvelteKit application still runs from the repository root.
 - `apps/sophia` is a placeholder location for the future app package once relocation is safe.
 - `packages/*` marks the first shared package boundaries to extract into incrementally.
-- Production GCP is operated via **GitHub Actions** and **`gcloud`**; see `docs/operations/gcp-infrastructure.md`.
+- Production GCP is operated via **GitHub Actions** and **`gcloud`**; see `docs/local/operations/gcp-infrastructure.md` when the maintainer doc pack is present ([`docs/LOCAL_DOCS.md`](docs/LOCAL_DOCS.md)).
 
 ## Intended structure
 
@@ -32,4 +32,4 @@ This repository is now scaffolded to grow into a single Restormel monorepo while
 
 ## Next step
 
-Phase 1 platform packages are consumed from **npm**; see [`docs/restormel/PHASE1-EXTRACTION-STATUS.md`](docs/restormel/PHASE1-EXTRACTION-STATUS.md). Further extraction (e.g. `packages/aaif` → npm, app relocation to `apps/sophia`) can proceed when ready.
+Phase 1 platform packages are consumed from **npm**; see [`docs/local/restormel/PHASE1-EXTRACTION-STATUS.md`](docs/local/restormel/PHASE1-EXTRACTION-STATUS.md) when the maintainer doc pack is present. Further extraction (e.g. `packages/aaif` → npm, app relocation to `apps/sophia`) can proceed when ready.

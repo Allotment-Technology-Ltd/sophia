@@ -13,8 +13,8 @@ last_reviewed: 2026-03-13
 
 - created the active `docs/sophia/` source-of-truth set
 - aligned SOPHIA documentation to the agreed model: `Restormel = platform`, `SOPHIA = showcase/reference app`
-- normalised active platform docs under `docs/restormel/`
-- moved superseded plans and historical implementation material into the new archive categories
+- normalised active platform docs under `docs/restormel/` (later relocated to `docs/local/` for public-repo hygiene; see `docs/LOCAL_DOCS.md`)
+- moved superseded plans and historical implementation material into archive categories (now under `docs/local/archive/` in maintainer checkouts)
 - converted conflicting root-level SOPHIA roadmap/status/architecture docs into redirect stubs
 
 ## 2026-03-13
@@ -27,4 +27,4 @@ last_reviewed: 2026-03-13
 
 ## Before 2026-03-13
 
-Older product and implementation history remains available in `docs/archive/` and in Git history.
+Older product and implementation history remains available under `docs/local/archive/` when the maintainer pack is present, and in Git history.

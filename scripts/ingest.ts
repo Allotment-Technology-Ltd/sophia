@@ -222,7 +222,7 @@ function applyIngestEmbeddingEnvOverrides(): void {
 	if (bd) process.env.VERTEX_EMBED_BATCH_DELAY_MS = bd;
 }
 
-/** Post-store: queue low faithfulness claims for human review (see docs/operations/ingestion-sep-preset-discipline.md). */
+/** Post-store: queue low faithfulness claims for human review (see docs/local/operations/ingestion-sep-preset-discipline.md). */
 const INGEST_POST_STORE_LOW_VALIDATION_THRESHOLD = (() => {
 	const raw = process.env.INGEST_POST_STORE_LOW_VALIDATION_REVIEW_THRESHOLD?.trim();
 	if (!raw) return null;
@@ -4390,7 +4390,7 @@ async function main() {
 				if (typeof existingDim === 'number' && existingDim > 0 && existingDim !== EMBEDDING_DIMENSIONS) {
 					throw new Error(
 						`[INTEGRITY] Existing claim embeddings are ${existingDim}-dim, but configured embedding output is ${EMBEDDING_DIMENSIONS}-dim (${configuredEmbeddingProvider.name}:${EMBEDDING_MODEL}). ` +
-							`Run a full corpus re-embed / index migration (see docs/operations/ingestion-embedding-lock.md), or unset strict mode: leave INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM unset/default during migration.`
+							`Run a full corpus re-embed / index migration (see docs/local/operations/ingestion-embedding-lock.md), or unset strict mode: leave INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM unset/default during migration.`
 					);
 				}
 			}

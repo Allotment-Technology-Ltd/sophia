@@ -14,11 +14,15 @@ from typing import Dict, Tuple
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def resolve_docs_root() -> Path:
-    for candidate in (REPO_ROOT / "docs" / "restormel", REPO_ROOT / "docs" / "Restormel"):
-        if candidate.exists():
+def resolve_docs_root() -> Path | None:
+    for candidate in (
+        REPO_ROOT / "docs" / "local" / "restormel",
+        REPO_ROOT / "docs" / "restormel",
+        REPO_ROOT / "docs" / "Restormel",
+    ):
+        if candidate.is_dir():
             return candidate
-    return REPO_ROOT / "docs" / "restormel"
+    return None
 
 
 DOCS_ROOT = resolve_docs_root()
@@ -97,6 +101,12 @@ def main() -> int:
     today = dt.date.today()
     stale: list[dict] = []
     warnings: list[str] = []
+
+    if DOCS_ROOT is None:
+        print("No docs/restormel tree (public checkout). Skipping stale-doc scan.")
+        if args.github_summary:
+            write_github_summary([], args.days)
+        return 0
 
     for path in sorted(DOCS_ROOT.rglob("*.md")):
         text = path.read_text(encoding="utf-8")

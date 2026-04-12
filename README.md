@@ -9,7 +9,7 @@ last_reviewed: 2026-04-11
 
 SOPHIA is the showcase and reference application for the Restormel platform.
 
-This repository combines the live SOPHIA product implementation with the Restormel platform narrative. **Only a small set of documentation is published in the clone**; deeper runbooks, archive, and platform packs stay local or in private storage.
+This repository combines the live SOPHIA product implementation with the Restormel platform direction. **Public GitHub** carries a small SOPHIA-facing documentation slice plus [`docs/LOCAL_DOCS.md`](docs/LOCAL_DOCS.md) explaining how maintainers keep the full Restormel, operations, reference, and archive trees **locally** under `docs/local/` (gitignored, not pushed to the public remote). Deeper runbooks and platform packs are not in the public `docs/` tree.
 
 ## Project identity
 
@@ -22,10 +22,9 @@ This repository combines the live SOPHIA product implementation with the Restorm
 <!-- GENERATED:key-links:start -->
 | Area | Why it matters | Start here |
 | --- | --- | --- |
-| SOPHIA docs | Current showcase app docs, architecture, roadmap, and domain status. | [SOPHIA Documentation](docs/sophia/README.md) |
-| Restormel docs | Platform strategy, architecture, delivery planning, and reference automation. | [Restormel Documentation](docs/restormel/README.md) |
-| Documentation hub | Cross-repo docs navigation, active/reference/archive split, and entry points. | [Documentation index](docs/README.md) |
-| Archive | Historical plans and superseded materials kept for traceability. | [Documentation Archive](docs/archive/README.md) |
+| SOPHIA docs | Public showcase app docs: architecture, roadmap, domain status, changelog. | [SOPHIA Documentation](docs/sophia/README.md) |
+| Documentation hub | Public documentation index and how to obtain the maintainer doc pack. | [Documentation index](docs/README.md) |
+| Maintainer doc pack | Restormel platform pack, operations, reference, archive (local only; not on public Git). | [Maintainer documentation pack](docs/LOCAL_DOCS.md) |
 <!-- GENERATED:key-links:end -->
 
 ## Documentation map
@@ -35,10 +34,8 @@ Use the active docs surfaces below before reaching for older repo notes or archi
 <!-- GENERATED:repo-doc-map:start -->
 | Status | Surface | Docs | Scope | Entry point |
 | --- | --- | --- | --- | --- |
-| Active | SOPHIA | 10 | Showcase app identity, architecture, roadmap, domains, and changelog. | [SOPHIA Documentation](docs/sophia/README.md) |
-| Active | Restormel | 47 | Platform strategy, modularisation, delivery controls, and product planning. | [Restormel Documentation](docs/restormel/README.md) |
-| Reference | Reference docs | 19 | Supporting API, architecture, operations, product, and learning references. | [Reference Documentation](docs/reference/README.md) |
-| Archived | Archive | 64 | Historical strategy, architecture, delivery, product, and experiment material. | [Documentation Archive](docs/archive/README.md) |
+| Public | SOPHIA | 7 | Showcase app identity, architecture, roadmap, domains, and changelog. | [SOPHIA Documentation](docs/sophia/README.md) |
+| Maintainer | Full doc tree | — | Restormel platform pack, operations runbooks, reference library, and archive (not on public Git; see LOCAL_DOCS). | [Maintainer documentation pack](docs/LOCAL_DOCS.md) |
 <!-- GENERATED:repo-doc-map:end -->
 
 ## Current priorities snapshot
@@ -54,16 +51,7 @@ These lists are pulled from the current active SOPHIA and Restormel docs so the 
 5. Preserve historical material for traceability, but keep it out of the active instructional surface.
 
 ### Restormel
-1. Contracts
-2. Graph-core + observability
-3. Restormel Graph MVP
-4. GraphRAG extraction
-5. Hosted GraphRAG
-6. Reasoning extraction
-7. BYOK/providers
-8. SOPHIA migration
-9. Public launch
-10. Marketplace readiness
+_(Priority order lives in the maintainer doc pack: `docs/local/restormel/04-delivery/19-milestone-plan-with-exit-criteria.md`. See `docs/LOCAL_DOCS.md`.)_
 <!-- GENERATED:current-priorities:end -->
 
 ## Repository structure
@@ -72,12 +60,16 @@ The codebase still contains both product implementation and platform extraction 
 
 <!-- GENERATED:repo-structure:start -->
 - [`src/`](src) SvelteKit application, server logic, and UI surfaces.
-- [`docs/`](docs) Public, reference, and archived documentation surfaces.
+- [`docs/`](docs) Public documentation index plus SOPHIA narrative; full pack under docs/local/ for maintainers.
 - [`scripts/`](scripts) Operational tooling, ingestion utilities, and docs automation.
 - [`tests/`](tests) Playwright end-to-end coverage.
 - [`data/`](data) Source data and ingestion inputs.
-- [`docs/operations/gcp-infrastructure.md`](docs/operations/gcp-infrastructure.md) — production GCP layout; app deploys via [`deploy.yml`](.github/workflows/deploy.yml) (`gcloud run deploy`).
+- Maintainer GCP layout (when `docs/local/` is populated): `docs/local/operations/gcp-infrastructure.md` — production layout; app deploys via [`deploy.yml`](.github/workflows/deploy.yml) (`gcloud run deploy`).
 <!-- GENERATED:repo-structure:end -->
+
+## Active vs maintainer-only
+
+Use `docs/sophia/` for the **public** SOPHIA product narrative (architecture, roadmap, domains, changelog). Platform planning packs, runbooks, reference libraries, and archives live in the **maintainer documentation tree** under `docs/local/` when populated; see [`docs/LOCAL_DOCS.md`](docs/LOCAL_DOCS.md).
 
 ## Local development
 
@@ -102,13 +94,13 @@ More pointers: [docs/README.md](docs/README.md).
 
 ## Documentation on disk
 
-The full **`docs/`** tree (Restormel `meta/*.yml`, operations runbooks, archive, etc.) is **tracked in Git**. If files are missing locally, you are usually behind **`main`** or a **broad `docs/*` `.gitignore`** stopped Git from checking them out.
+On **`main`**, Git tracks a **small public `docs/` slice** (index, `LOCAL_DOCS.md`, and `docs/sophia/*`). The full Restormel, operations, and archive trees live under **`docs/local/`** on maintainer machines only — see [`docs/LOCAL_DOCS.md`](docs/LOCAL_DOCS.md).
 
-**Refresh everything under `docs/` from remote `main`:**
+**Refresh the public slice from remote `main`:**
 
 ```bash
 git fetch origin
-git checkout origin/main -- docs/
+git checkout origin/main -- docs/README.md docs/LOCAL_DOCS.md docs/sophia/
 ```
 
 **Or update the whole repo:**
@@ -117,10 +109,10 @@ git checkout origin/main -- docs/
 git pull origin main
 ```
 
-**Sanity check** (fails if core paths are missing):
+**Sanity check** (public paths; optionally Restormel meta if that tree exists locally):
 
 ```bash
 pnpm run docs:verify-present
 ```
 
-**If `git pull` says “Need to specify how to reconcile divergent branches”:** use an explicit strategy, e.g. `git pull --rebase origin main`, or commit/stash then `git fetch origin && git rebase origin/main`. To commit staged work and push after pulling latest scripts: `pnpm run git:sync-main -- "your message"` (requires `package.json` from current `main`).
+**If `git pull` says “Need to specify how to reconcile divergent branches”:** use an explicit strategy, e.g. `git pull --rebase origin main`, or commit/stash then `git fetch origin && git rebase origin/main`. To sync with the scripted workflow: `pnpm run git:sync-main -- "your message"` (see `scripts/git-sync-and-push-main.sh`).

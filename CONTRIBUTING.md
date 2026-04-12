@@ -5,7 +5,7 @@ source_of_truth: false
 last_reviewed: 2026-03-13
 ---
 
-> Contribution guidance only. Current product and architecture truth lives under docs/sophia/ and docs/restormel/.
+> Contribution guidance only. Current product and architecture truth for the public repo lives under `docs/sophia/`. The full Restormel and operations doc pack is maintained under `docs/local/` on maintainer machines — see `docs/LOCAL_DOCS.md`.
 
 # Contributing to SOPHIA
 
@@ -86,16 +86,16 @@ pnpm test:e2e       # Playwright E2E (requires SOPHIA_TEST_TOKEN)
 
 The engine (`src/lib/server/engine.ts`) and its prompts (`src/lib/server/prompts/`) are the core of the project. Useful contributions here include:
 
-- **Prompt improvements** — better role separation, tighter counterargument instructions, improved synthesis hedging calibration. The current weakness is that Pass 3 (Synthesis) sometimes over-hedges when the Critique is very strong. See [docs/evaluation-methodology.md](docs/evaluation-methodology.md) for the scoring rubric.
+- **Prompt improvements** — better role separation, tighter counterargument instructions, improved synthesis hedging calibration. The current weakness is that Pass 3 (Synthesis) sometimes over-hedges when the Critique is very strong. If you have the maintainer doc pack, see `docs/local/archive/experiments/phase-1-evaluation-methodology.md` for the scoring rubric; otherwise rely on `src/lib/server/engine.test.ts` and reviewer judgment.
 - **Verification pass** — the fourth pass (`/api/verify`) is functional but its prompt can be refined. Five confidence tiers currently; calibration against ground truth is not yet done.
 - **New retrieval strategies** — `src/lib/server/retrieval.ts`. The current pipeline is: embed → top-K vector search → graph expand → deduplicate. Alternative traversal strategies (e.g. argument-centric retrieval, relation-type filtering) are worth exploring.
 - **Engine tests** — `src/lib/server/engine.test.ts` has unit coverage for parsing helpers. Integration tests covering the full retrieval → engine → SSE path are missing.
 
-When making prompt changes, run at least the evaluation test cases from [docs/evaluation-methodology.md](docs/evaluation-methodology.md) and compare scores before and after.
+When making prompt changes, run the engine unit tests and any evaluation harness you maintain locally; methodology notes live in the maintainer archive path above when `docs/local/` is populated.
 
 ### 2. Knowledge graph
 
-Adding philosophical domains is the highest-leverage contribution for expanding SOPHIA's coverage. The full operational process is documented in [docs/runbooks/domain-expansion-runbook.md](docs/runbooks/domain-expansion-runbook.md). Summary:
+Adding philosophical domains is the highest-leverage contribution for expanding SOPHIA's coverage. The full operational process is documented in `docs/local/reference/operations/runbooks/domain-expansion-runbook.md` when the maintainer doc pack is present ([`docs/LOCAL_DOCS.md`](docs/LOCAL_DOCS.md)). Summary:
 
 1. Create a source list (`data/source-list-{domain}.json`) using the existing files as a template.
 2. Run `scripts/curate-source.ts` on each source to check reachability, detect PDFs, and get a token estimate.
@@ -141,7 +141,7 @@ New components go in `src/lib/components/`. Follow the existing naming and props
 1. Open an issue first for anything substantial (new domain, engine change, major UI feature). This avoids duplicated work and lets us confirm the direction before implementation.
 2. Branch from `main` for engine/UI work; branch from `domain-expansion` for knowledge graph additions.
 3. Include a test for any changed logic in the engine or ingestion pipeline.
-4. Update the relevant documentation in the same PR (schema changes → `docs/argument-graph.md`; prompt changes → `docs/prompts-reference.md`; phase completions → `ROADMAP.md` + `STATUS.md`).
+4. Update the relevant documentation in the same PR (schema changes → `docs/local/reference/architecture/argument-graph.md` when present; prompt changes → `docs/local/reference/architecture/prompts-reference.md`; phase completions → `ROADMAP.md` + `STATUS.md`).
 5. PRs adding a new knowledge domain must include the quality-report output showing all four acceptance criteria passing.
 
 ---

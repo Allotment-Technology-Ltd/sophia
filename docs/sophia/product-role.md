@@ -42,7 +42,7 @@ SOPHIA is responsible for the philosophy-specific user experience: queries, peda
 - not the place to maintain a second competing platform roadmap
 - not the canonical home for reusable package boundaries or ecosystem-wide monetisation policy
 
-Those belong in `docs/restormel/`.
+Those belong in the Restormel doc pack under `docs/local/restormel/` when the maintainer tree is present ([`docs/LOCAL_DOCS.md`](../LOCAL_DOCS.md)).
 
 ## Practical operating rule
 

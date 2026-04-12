@@ -4,7 +4,7 @@
 Scope for first iteration:
 - Parse milestones, epics, and design surfaces from delivery docs.
 - Create/update Linear issues in a deterministic way.
-- Persist created IDs in docs/restormel/meta/linear-map.yml to prevent duplicates.
+- Persist created IDs under `<restormel-docs-root>/meta/linear-map.yml` (see resolve_docs_root) to prevent duplicates.
 
 TODO:
 - Add explicit Linear project/milestone entity sync when API interactions are validated.
@@ -28,10 +28,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def resolve_docs_root() -> Path:
-    for candidate in (REPO_ROOT / "docs" / "restormel", REPO_ROOT / "docs" / "Restormel"):
-        if candidate.exists():
+    for candidate in (
+        REPO_ROOT / "docs" / "local" / "restormel",
+        REPO_ROOT / "docs" / "restormel",
+        REPO_ROOT / "docs" / "Restormel",
+    ):
+        if candidate.is_dir():
             return candidate
-    return REPO_ROOT / "docs" / "restormel"
+    return REPO_ROOT / "docs" / "local" / "restormel"
 
 
 DOCS_ROOT = resolve_docs_root()

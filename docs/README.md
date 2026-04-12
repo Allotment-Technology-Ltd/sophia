@@ -7,24 +7,18 @@ last_reviewed: 2026-04-11
 
 # Documentation index
 
-This is the landing page for the repository documentation surface. The tree includes full Restormel planning, operations runbooks, reference material, and archive — not only the smallest public slice.
+This is the landing page for the **public** documentation surface shipped with the repository.
 
-The structure is intentionally simple:
-
-- [`docs/sophia/`](sophia/README.md) holds the active SOPHIA showcase/reference-app narrative
-- [`docs/restormel/`](restormel/README.md) holds the active Restormel platform strategy, architecture, and delivery pack
-- [`docs/reference/`](reference/README.md) holds maintained supporting reference material
-- [`docs/archive/`](archive/README.md) preserves historical and superseded material
+- [`docs/sophia/`](sophia/README.md) — active SOPHIA showcase/reference-app narrative (architecture, roadmap, product role, domains, changelog).
+- [`docs/LOCAL_DOCS.md`](LOCAL_DOCS.md) — how to populate **`docs/local/`** with the Restormel platform pack, operations runbooks, reference library, archive, and related notes **without publishing them on public Git**.
 
 ## Documentation surfaces
 
 <!-- GENERATED:docs-map:start -->
 | Surface | Status | Docs | Use it for | Entry point |
 | --- | --- | --- | --- | --- |
-| SOPHIA | Active | 10 | Showcase/reference app documentation. | [SOPHIA Documentation](sophia/README.md) |
-| Restormel | Active | 47 | Platform planning, architecture, and delivery docs. | [Restormel Documentation](restormel/README.md) |
-| Reference | Reference | 19 | Supporting implementation and operational references. | [Reference Documentation](reference/README.md) |
-| Archive | Archived | 64 | Historical material preserved for traceability. | [Documentation Archive](archive/README.md) |
+| SOPHIA | Public | 7 | Showcase/reference app documentation shipped with the public repo. | [SOPHIA Documentation](sophia/README.md) |
+| Maintainer pack | Local only | — | Restormel, operations, reference, and archive material under docs/local/ (not published on public Git). | [Maintainer documentation pack](LOCAL_DOCS.md) |
 <!-- GENERATED:docs-map:end -->
 
 ## Key entry points
@@ -38,22 +32,20 @@ Start with the entry points below before browsing deeper folders.
 | Current State | [Current State](sophia/current-state.md) |
 | Architecture | [Architecture](sophia/architecture.md) |
 | Roadmap | [Roadmap](sophia/roadmap.md) |
-| Restormel Documentation | [Restormel Documentation](restormel/README.md) |
-| Restormel Platform: Milestone Plan with Exit Criteria | [Restormel Platform: Milestone Plan with Exit Criteria](restormel/04-delivery/19-milestone-plan-with-exit-criteria.md) |
-| Reference Documentation | [Reference Documentation](reference/README.md) |
-| Documentation Archive | [Documentation Archive](archive/README.md) |
+| Changelog | [Changelog](sophia/changelog.md) |
+| Maintainer documentation pack | [Maintainer documentation pack](LOCAL_DOCS.md) |
 <!-- GENERATED:key-doc-entry-points:end -->
 
-## Active vs archive
+## Public vs maintainer-only
 
-Narrative meaning stays hand-authored in the active docs. Archived material is retained for traceability but should not be treated as current guidance unless an active document explicitly sends you there.
+Hand-authored meaning in `docs/sophia/` is what ships on the public default checkout. Historical, operational, and Restormel platform material stays under `docs/local/` for maintainers — see [`LOCAL_DOCS.md`](LOCAL_DOCS.md).
 
 <!-- GENERATED:active-vs-archive:start -->
 | Class | Current snapshot | Operating rule |
 | --- | --- | --- |
-| Active source of truth | 10 SOPHIA docs and 47 Restormel docs | Update when product, architecture, or delivery meaning changes. |
-| Supporting reference | 19 docs under docs/reference and 7 Restormel reference docs | Use for runbooks, API details, and automation context. |
-| Archived | 64 docs under docs/archive | Do not treat as current guidance; start at [Documentation Archive](archive/README.md). |
+| Public SOPHIA slice | 7 active-tagged docs under docs/sophia/ | Shipped with the public repository; keep aligned with the product surface. |
+| Maintainer-only tree | Restormel platform pack, operations runbooks, reference library, and archive under docs/local/ when populated. | [Maintainer documentation pack](LOCAL_DOCS.md) |
+| Historical / internal | Lives under docs/local/ on maintainer machines; not published on the public default checkout. | Do not treat archived paths as current guidance unless promoted into the public SOPHIA slice. |
 <!-- GENERATED:active-vs-archive:end -->
 
 ## Repository root
@@ -63,9 +55,9 @@ The top-level [README.md](../README.md) duplicates navigation paths for GitHub v
 ## If this folder looks empty or incomplete locally
 
 1. **Update from `main`:** `git pull origin main`
-2. **Force-restore `docs/` from Git** (does not delete untracked files you added under `docs/`):  
-   `git fetch origin && git checkout origin/main -- docs/`
-3. **Verify core paths:** from repo root, `pnpm run docs:verify-present`  
-   (checks e.g. `docs/restormel/meta/linear-config.yml`).
+2. **Force-restore the public slice from Git** (does not remove your untracked `docs/local/` tree):  
+   `git fetch origin && git checkout origin/main -- docs/README.md docs/LOCAL_DOCS.md docs/sophia/`
+3. **Verify paths:** from repo root, `pnpm run docs:verify-present`  
+   (public files always; Restormel meta only if `docs/restormel/` or `docs/local/restormel/` exists).
 
-If `git status` never shows changes under `docs/` when you edit tracked files, inspect **`.gitignore`** for a line like `docs/*` — that pattern hides the tree from Git and breaks CI; remove it and restore with step 2.
+If `git status` never shows changes under tracked `docs/` files when you edit them, inspect **`.gitignore`** for a line like `docs/*` — that pattern hides the tree from Git and breaks CI; remove it and restore with step 2.

@@ -3212,7 +3212,7 @@
           Drift detected: a random sample of existing claim vectors in Surreal does not match the dimension of the
           current embedding stack (new writes use that stack). Retried or restarted ingests only re-embed claims touched by
           those runs; most of the corpus can stay on an older dimension until you run a full re-embed or migrate the vector
-          index — see <code class="text-sophia-dark-muted">docs/operations/ingestion-embedding-lock.md</code>.
+          index — see <code class="text-sophia-dark-muted">docs/local/operations/ingestion-embedding-lock.md</code>.
         </p>
       {/if}
     {:else if embeddingHealthError}

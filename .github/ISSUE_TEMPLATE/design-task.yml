@@ -26,8 +26,8 @@ body:
     attributes:
       label: Linked Docs
       placeholder: |
-        - docs/restormel/05-design/21-design-backlog-by-surface.md
-        - docs/restormel/03-product/06-site-pages-outline-and-content-requirements.md
+        - docs/local/restormel/05-design/21-design-backlog-by-surface.md
+        - docs/local/restormel/03-product/06-site-pages-outline-and-content-requirements.md
     validations:
       required: true
 
@@ -60,7 +60,7 @@ body:
     attributes:
       label: Affected Areas / Packages
       placeholder: |
-        - docs/restormel/05-design/...
+        - docs/local/restormel/05-design/...
         - src/routes/...
         - static/assets/...
     validations:

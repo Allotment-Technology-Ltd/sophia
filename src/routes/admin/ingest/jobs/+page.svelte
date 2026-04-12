@@ -540,7 +540,7 @@
 			open, each refresh advances every running job (same server tick as the background poller). The job detail
 			page ticks that job on every poll. If no admin tab is open, use Cloud Run Job + Scheduler or
 			<code class="rounded bg-black/20 px-1 py-0.5 font-mono text-xs">pnpm ingestion:job-poller</code> — see
-			<span class="font-mono text-xs">docs/operations/ingestion-credits-and-workers.md</span>.
+			<span class="font-mono text-xs">docs/local/operations/ingestion-credits-and-workers.md</span>.
 		</p>
 	</header>
 

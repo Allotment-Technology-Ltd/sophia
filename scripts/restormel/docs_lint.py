@@ -12,11 +12,15 @@ from typing import Dict, Tuple
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def resolve_docs_root() -> Path:
-    for candidate in (REPO_ROOT / "docs" / "restormel", REPO_ROOT / "docs" / "Restormel"):
-        if candidate.exists():
+def resolve_docs_root() -> Path | None:
+    for candidate in (
+        REPO_ROOT / "docs" / "local" / "restormel",
+        REPO_ROOT / "docs" / "restormel",
+        REPO_ROOT / "docs" / "Restormel",
+    ):
+        if candidate.is_dir():
             return candidate
-    return REPO_ROOT / "docs" / "restormel"
+    return None
 
 
 DOCS_ROOT = resolve_docs_root()
@@ -70,6 +74,10 @@ def main() -> int:
         help="Warn about missing internal markdown link targets in key delivery docs.",
     )
     args = parser.parse_args()
+
+    if DOCS_ROOT is None:
+        print("No docs/restormel tree (public checkout). Skipping Restormel metadata lint.")
+        return 0
 
     markdown_files = sorted(DOCS_ROOT.rglob("*.md"))
     failures: list[str] = []
