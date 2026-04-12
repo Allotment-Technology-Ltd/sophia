@@ -72,8 +72,10 @@
 		<h1 class="title">Dataset &amp; topic preset coverage</h1>
 		<p class="lede">
 			Successful ingests (deduped by canonical URL) against the six SEP topic presets in
-			<code class="mono">data/sep-topic-presets.json</code>, with training governance and model-lineage
-			signals from Neon run reports. Goal: at least <strong>{data?.presetGoal ?? 10}</strong> sources per preset.
+			<code class="mono">data/sep-topic-presets.json</code>, plus Neon governance and
+			<strong>verified</strong> LLM lineage from run telemetry (Vertex / Mistral / Google only on recorded
+			stages; unknown or legacy Anthropic/OpenAI is excluded from training-acceptable counts). Goal: at least
+			<strong>{data?.presetGoal ?? 10}</strong> sources per preset.
 		</p>
 		<p class="meta">
 			{#if data?.generatedAt}
