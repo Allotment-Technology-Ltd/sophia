@@ -8,8 +8,8 @@ import { generateText } from 'ai';
 import {
 	estimateIngestLlmUsageUsd,
 	INGEST_EMBED_USD_PER_MILLION_CHARS
-} from '$lib/server/ingestion/ingestLlmTokenUsdRates.js';
-import type { IngestionStagePlan } from '$lib/server/aaif/ingestion-plan.js';
+} from '../ingestLlmTokenUsdRates.js';
+import type { IngestionStagePlan } from '../../aaif/ingestion-plan.js';
 import type {
 	StageKey,
 	StageBudget,
