@@ -46,6 +46,10 @@ import {
 	type ReviewState as PostStoreReviewState
 } from '../src/lib/server/ingestion/postStoreReview.js';
 import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.js';
+import {
+	isGoogleGenerativePlanProvider,
+	isGoogleGenerativeThroughputEnabled
+} from '../src/lib/server/googleGenerativeIngestThroughput.js';
 import { z } from 'zod';
 import {
 	estimateStageUsage,
@@ -101,6 +105,7 @@ import {
 	toSurrealRecordIdStr
 } from '../src/lib/server/surrealRecordSql.js';
 import { createIngestProviderTpmGuard } from './lib/ingestProviderTpm.js';
+import { paceMistralChatCompletion } from './lib/ingestMistralRpsPace.js';
 import { collectErrorMessageChain, isTpmOrRateLimitInError } from '../src/lib/ingestionErrorChain.js';
 import {
 	consultIngestionRecoveryAgent,
@@ -946,6 +951,15 @@ function parsePositiveFloat(value: string | undefined): number | undefined {
 	const parsed = Number(value);
 	if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
 	return parsed;
+}
+
+/** Parallel single-passage extraction batches: raise floor only when extraction is routed to Vertex / Gemini. */
+function effectiveExtractionParallelConcurrency(extractionPlanProvider: string): number {
+	const base = INGEST_EXTRACTION_CONCURRENCY;
+	if (!isGoogleGenerativeThroughputEnabled()) return base;
+	if (!isGoogleGenerativePlanProvider(extractionPlanProvider)) return base;
+	const floor = parsePositiveInt(process.env.INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR) ?? 6;
+	return Math.min(12, Math.max(base, floor));
 }
 
 /**
@@ -2055,6 +2069,9 @@ async function callStageModel(params: {
 			const estTpmTokens =
 				estimateTokens(systemPrompt) + estimateTokens(userMessage) + maxTokens;
 			await ingestTpmGuard.waitForBudget(routingProvider, estTpmTokens);
+			if (routingProvider.trim().toLowerCase() === 'mistral') {
+				await paceMistralChatCompletion(activePlan.model);
+			}
 			emitIngestTelemetry({
 				event: 'model_call_start',
 				stage,
@@ -3604,6 +3621,12 @@ async function main() {
 	if (resumeFromStage) {
 		console.log(`Resume from: ${resumeFromStage}`);
 	}
+	const extractionParallelConcurrency = effectiveExtractionParallelConcurrency(extractionPlan.provider);
+	if (extractionParallelConcurrency > INGEST_EXTRACTION_CONCURRENCY) {
+		console.log(
+			`  [INFO] Google/Vertex extraction throughput: parallel single-passage concurrency ${extractionParallelConcurrency} (env INGEST_EXTRACTION_CONCURRENCY=${INGEST_EXTRACTION_CONCURRENCY}; floor INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR=${process.env.INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR ?? '6'})`
+		);
+	}
 	console.log('');
 
 	try {
@@ -3800,13 +3823,13 @@ async function main() {
 						return 'done';
 					};
 
-					if (INGEST_EXTRACTION_CONCURRENCY > 1 && batch.length === 1) {
+					if (extractionParallelConcurrency > 1 && batch.length === 1) {
 						const groupIndices: number[] = [];
 						let j = i;
 						while (
 							j < batchQueue.length &&
 							batchQueue[j]!.length === 1 &&
-							groupIndices.length < INGEST_EXTRACTION_CONCURRENCY
+							groupIndices.length < extractionParallelConcurrency
 						) {
 							groupIndices.push(j);
 							j++;
@@ -3814,7 +3837,7 @@ async function main() {
 						if (groupIndices.length >= 2) {
 							const parallelStartLabel = batchLabel + 1;
 							console.log(
-								`\n  [PARALLEL] Extracting ${groupIndices.length} single-passage batches concurrently (max ${INGEST_EXTRACTION_CONCURRENCY})`
+								`\n  [PARALLEL] Extracting ${groupIndices.length} single-passage batches concurrently (max ${extractionParallelConcurrency})`
 							);
 							type ParResult = {
 								order: number;

@@ -2,6 +2,10 @@
  * Optional per-provider rolling token budgets to reduce TPM bursts before provider retries.
  * Env: INGEST_PROVIDER_TPM_BUDGET — comma list `provider:maxTokensPerWindow` (e.g. openai:800000,anthropic:400000).
  *       INGEST_PROVIDER_TPM_WINDOW_MS — window length in ms (default 60000).
+ *
+ * Mistral: dashboards often show **50k–600k TPM per SKU** with **≤1 RPS** on several tiers; chat pacing is handled
+ * separately (`ingestMistralRpsPace.ts`). For tight **50k TPM** SKUs, add e.g.
+ * `INGEST_PROVIDER_TPM_BUDGET=mistral:42000` so rolling usage stays under the minute cap across stages.
  */
 
 type WindowEntry = { at: number; tokens: number };
