@@ -207,6 +207,56 @@ On the same cohort, **mean** `stage_ms` / `total_wall_ms` shares were approximat
 
 **Caveat:** `total_wall_ms` is process wall clock from `run_started_at_ms` to summary; it includes planning and any gaps **not** attributed to a `stage_ms` bucket. In this snapshot many completed runs lacked `total_wall_ms` in `report_envelope` (see environment note); backfill or log-based `total_wall_ms` would widen **N** before treating percentiles as stable.
 
+### 1.5 LLM token totals and per-stage tokens (`[INGEST_TIMING]` → Neon)
+
+**From worker changes (post–this doc update):** each completed run’s `[INGEST_TIMING]` JSON includes:
+
+| Field | Meaning |
+|--------|--------|
+| `total_input_tokens` | Sum of provider-reported **input** tokens on every `generateText` call in the run |
+| `total_output_tokens` | Sum of **output** tokens on those calls |
+| `stage_input_tokens` | Map keyed by pipeline stage string (`extraction`, `relations`, `grouping`, `validation`, `remediation`, `json_repair`, …) |
+| `stage_output_tokens` | Same, for output tokens |
+| `vertex_embed_chars` | Characters passed to Vertex embedding (`trackEmbeddingCost`); **not** LLM tokens |
+
+Older envelopes lack these keys — treat null as **0** / missing in SQL.
+
+**Aggregate mean / p90 per run (90-day `done` runs with telemetry):**
+
+```sql
+WITH m AS (
+  SELECT
+    NULLIF((ir.report_envelope->'timingTelemetry'->>'total_input_tokens')::bigint, 0) AS total_in,
+    NULLIF((ir.report_envelope->'timingTelemetry'->>'total_output_tokens')::bigint, 0) AS total_out
+  FROM ingest_runs ir
+  WHERE ir.status = 'done'
+    AND ir.cancelled_by_user = false
+    AND ir.completed_at >= NOW() - INTERVAL '90 days'
+    AND ir.report_envelope ? 'timingTelemetry'
+)
+SELECT
+  COUNT(*) FILTER (WHERE total_in IS NOT NULL OR total_out IS NOT NULL) AS n_with_tokens,
+  AVG(total_in) FILTER (WHERE total_in IS NOT NULL) AS mean_input_tokens,
+  AVG(total_out) FILTER (WHERE total_out IS NOT NULL) AS mean_output_tokens,
+  percentile_cont(0.5) WITHIN GROUP (ORDER BY total_in) FILTER (WHERE total_in IS NOT NULL) AS p50_input,
+  percentile_cont(0.9) WITHIN GROUP (ORDER BY total_in) FILTER (WHERE total_in IS NOT NULL) AS p90_input,
+  percentile_cont(0.5) WITHIN GROUP (ORDER BY total_out) FILTER (WHERE total_out IS NOT NULL) AS p50_output,
+  percentile_cont(0.9) WITHIN GROUP (ORDER BY total_out) FILTER (WHERE total_out IS NOT NULL) AS p90_output
+FROM m;
+```
+
+**Per-stage share of LLM input tokens (single run or averaged in application code):** read `timingTelemetry->'stage_input_tokens'` as JSON object; divide each value by `NULLIF(total_input_tokens,0)` for **fraction of prompt tokens** attributed to that stage (same for output using `stage_output_tokens` / `total_output_tokens`).
+
+**Extrapolating ~500 more SEP entries (same pins / preset as baseline cohort):**
+
+1. Restrict the CTE to `source_type = 'sep_entry'` (and optional URL pattern `source_url LIKE '%plato.stanford.edu/entries/%'`).
+2. Let **μ** = `AVG(total_input_tokens + total_output_tokens)` (or separate means if you price in/out differently).
+3. **Point estimate:** `500 * μ` total tokens; **p90-style budget:** `500 * (p90_input + p90_output)` from the per-run distribution if you need headroom for tail articles.
+4. **Calibration:** multiply by **`claims_extracted` ratio** if new entries are systematically longer (e.g. sample mean claims per SEP run from Surreal `ingestion_log` or Neon staging if mirrored) — token use scales roughly with batches and claim count, not only URL count.
+5. **Embedding:** add `500 * AVG(vertex_embed_chars)` from the same timing JSON if present; bill as chars ÷ 1M × model rate, not as LLM tokens.
+
+**Historical runs without new fields:** sum `[INGEST_TELEMETRY]` `model_call_end` lines in `ingest_run_logs` (`input_tokens`, `output_tokens`, `stage`) or GCP Logging export — heavier than reading `report_envelope`.
+
 ---
 
 ## 2) Where extraction time goes (sub-breakdown)
