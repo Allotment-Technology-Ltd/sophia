@@ -11,7 +11,7 @@ last_reviewed: 2026-03-13
 
 SOPHIA is no longer documented as a stand-alone product strategy. It is the showcase/reference application for Restormel.
 
-In practice, this repo currently contains both the SOPHIA product surfaces and a substantial amount of emerging platform implementation. The active documentation now treats SOPHIA as the product-facing proof surface, while platform strategy and extraction plans live under `docs/restormel/`.
+In practice, this repo currently contains both the SOPHIA product surfaces and a substantial amount of emerging platform implementation. The active documentation treats SOPHIA as the product-facing proof surface; platform strategy and extraction plans live in the **maintainer documentation tree** under `docs/local/restormel/` when that pack is present (see [`docs/LOCAL_DOCS.md`](../LOCAL_DOCS.md)).
 
 ## What is live in the repo
 
@@ -47,10 +47,8 @@ In practice, this repo currently contains both the SOPHIA product surfaces and a
 
 ## What is source of truth vs supporting context
 
-- Current product/technical truth: this file and the other docs in `docs/sophia/`
-- Active platform truth: `docs/restormel/`
-- Operational runbooks and schema/prompt/API references: supporting reference docs under `docs/`
-- Historical and superseded plans: `docs/archive/`
+- Current product/technical truth: this file and the other **public** docs in `docs/sophia/`
+- Active platform truth, operational runbooks, reference library, and archive: `docs/local/` when populated ([`docs/LOCAL_DOCS.md`](../LOCAL_DOCS.md))
 
 ## Current interpretation of the repo
 

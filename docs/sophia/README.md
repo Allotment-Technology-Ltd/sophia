@@ -29,7 +29,7 @@ It exists to prove the platform in a real product: graph-grounded reasoning, ver
 | Roadmap | [Roadmap](roadmap.md) |
 | Domain Expansion | [Domain Expansion](domain-expansion.md) |
 | Changelog | [Changelog](changelog.md) |
-| Restormel Documentation | [Restormel Documentation](../restormel/README.md) |
+| Maintainer documentation pack | [Maintainer documentation pack](../LOCAL_DOCS.md) |
 <!-- GENERATED:sophia-key-links:end -->
 
 ## Active SOPHIA source-of-truth docs
@@ -41,10 +41,7 @@ It exists to prove the platform in a real product: graph-grounded reasoning, ver
 | Architecture | 2026-03-13 | [Architecture](architecture.md) |
 | Changelog | 2026-03-13 | [Changelog](changelog.md) |
 | Current State | 2026-03-13 | [Current State](current-state.md) |
-| Documentation Governance | 2026-03-13 | [Documentation Governance](documentation-governance.md) |
 | Domain Expansion | 2026-03-13 | [Domain Expansion](domain-expansion.md) |
-| Unified GCP exit and Neon migration review | 2026-03-26 | [Unified GCP exit and Neon migration review](gcp-exit-unified-migration-review.md) |
-| Graph, RAG, and ingestion — unified architecture overview | 2026-04-10 | [Graph, RAG, and ingestion — unified architecture overview](graph-rag-and-ingestion-architecture-overview.md) |
 | Product Role | 2026-03-13 | [Product Role](product-role.md) |
 | Roadmap | 2026-03-26 | [Roadmap](roadmap.md) |
 <!-- GENERATED:active-sophia-docs:end -->
@@ -75,7 +72,4 @@ This block is intentionally limited to structured snapshots taken from the activ
 
 ## Related documentation
 
-- Restormel platform docs: [../restormel/README.md](../restormel/README.md)
-- Historical material: [../archive/README.md](../archive/README.md)
-- Inventory for this rationalisation: [rationalisation-inventory.md](rationalisation-inventory.md)
-- Rationalisation summary: [rationalisation-summary.md](rationalisation-summary.md)
+Restormel platform docs, archive, and rationalisation inventory live in the maintainer tree under `docs/local/` — see [Maintainer documentation pack](../LOCAL_DOCS.md).

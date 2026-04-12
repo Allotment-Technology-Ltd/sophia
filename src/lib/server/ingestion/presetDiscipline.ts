@@ -64,7 +64,7 @@ export function assertSepPresetDiscipline(opts: {
 
 	if (opts.mode === 'strict' && !profile) {
 		throw new Error(
-			'INGEST_PRESET_DISCIPLINE=strict requires INGEST_PRESET_PROFILE (e.g. sep-benchmark-2026-04). See docs/operations/ingestion-sep-preset-discipline.md'
+			'INGEST_PRESET_DISCIPLINE=strict requires INGEST_PRESET_PROFILE (e.g. sep-benchmark-2026-04). See docs/local/operations/ingestion-sep-preset-discipline.md'
 		);
 	}
 }

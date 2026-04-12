@@ -58,7 +58,7 @@ function main(): void {
   lines.push('');
   lines.push('## Next steps');
   lines.push('');
-  lines.push('1. Bump vendored `@restormel/keys` / `@restormel/keys-svelte` tarballs when upstream releases (see `docs/restormel-integration/keys-catalog-sync.md`).');
+  lines.push('1. Bump vendored `@restormel/keys` / `@restormel/keys-svelte` tarballs when upstream releases (see `docs/local/restormel-integration/keys-catalog-sync.md`).');
   lines.push('2. For each row with differences, merge new model ids into Restormel Keys `packages/contracts/src/providers.ts` (`DEFAULT_MODEL_CATALOG`), publish `@restormel/contracts`, bump SOPHIA.');
   lines.push('3. Keep embedding / non-chat ids (e.g. Vertex `text-embedding-*`) in contracts even if Keys omits them.');
   lines.push('4. Re-run `pnpm run check` and allowed-models tests after edits.');

@@ -5,7 +5,7 @@
  * not involved — Neon is redirecting to Google using an OAuth client ID that still belongs
  * to the Firebase project (or Neon Auth → Google is configured with that client). Fix it in
  * Neon Console (Auth → Google) with a dedicated Web OAuth client and correct redirect URIs;
- * see docs/operations/neon-auth-migration.md.
+ * see docs/local/operations/neon-auth-migration.md when the maintainer doc pack is present.
  */
 import { browser } from '$app/environment';
 import { env as publicEnv } from '$env/dynamic/public';

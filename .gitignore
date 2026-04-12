@@ -26,6 +26,10 @@ data/ingested/batch-summary-*.json
 memory/
 .cursor/
 
+# Maintainer-only documentation pack (full Restormel, operations, archive, etc.).
+# See docs/LOCAL_DOCS.md. Not present on public clones; keep your checkout in sync privately.
+docs/local/
+
 # Local design documents — do not commit work-in-progress design files
 docs/design/MASTER-IMPLEMENTATION-GUIDE.md
 

@@ -9,12 +9,7 @@ last_reviewed: 2026-03-13
 
 SOPHIA is the showcase and reference application for the Restormel platform.
 
-This repository combines the live SOPHIA product implementation with the active Restormel platform planning pack. The public-facing documentation surface is intentionally split so visitors can quickly distinguish:
-- what SOPHIA is now
-- how it relates to Restormel
-- which docs are active
-- which materials are supporting reference
-- which documents are archived history
+This repository combines the live SOPHIA product implementation with the Restormel platform direction. **Public GitHub** carries a small SOPHIA-facing documentation slice plus [`docs/LOCAL_DOCS.md`](docs/LOCAL_DOCS.md) explaining how maintainers keep the full Restormel, operations, reference, and archive trees **locally** under `docs/local/` (gitignored, not pushed to the public remote).
 
 ## Project identity
 
@@ -31,10 +26,9 @@ The current repo purpose is therefore twofold:
 <!-- GENERATED:key-links:start -->
 | Area | Why it matters | Start here |
 | --- | --- | --- |
-| SOPHIA docs | Current showcase app docs, architecture, roadmap, and domain status. | [SOPHIA Documentation](docs/sophia/README.md) |
-| Restormel docs | Platform strategy, architecture, delivery planning, and reference automation. | [Restormel Documentation](docs/restormel/README.md) |
-| Documentation hub | Cross-repo docs navigation, active/reference/archive split, and entry points. | [Documentation Index](docs/README.md) |
-| Archive | Historical plans and superseded materials kept for traceability. | [Documentation Archive](docs/archive/README.md) |
+| SOPHIA docs | Public showcase app docs: architecture, roadmap, domain status, changelog. | [SOPHIA Documentation](docs/sophia/README.md) |
+| Documentation hub | Public documentation index and how to obtain the maintainer doc pack. | [Documentation Index](docs/README.md) |
+| Maintainer doc pack | Restormel platform pack, operations, reference, archive (local only; not on public Git). | [Maintainer documentation pack](docs/LOCAL_DOCS.md) |
 <!-- GENERATED:key-links:end -->
 
 ## Documentation map
@@ -44,10 +38,8 @@ Use the active docs surfaces below before reaching for older repo notes or archi
 <!-- GENERATED:repo-doc-map:start -->
 | Status | Surface | Docs | Scope | Entry point |
 | --- | --- | --- | --- | --- |
-| Active | SOPHIA | 10 | Showcase app identity, architecture, roadmap, domains, and changelog. | [SOPHIA Documentation](docs/sophia/README.md) |
-| Active | Restormel | 47 | Platform strategy, modularisation, delivery controls, and product planning. | [Restormel Documentation](docs/restormel/README.md) |
-| Reference | Reference docs | 19 | Supporting API, architecture, operations, product, and learning references. | [Reference Documentation](docs/reference/README.md) |
-| Archived | Archive | 64 | Historical strategy, architecture, delivery, product, and experiment material. | [Documentation Archive](docs/archive/README.md) |
+| Public | SOPHIA | 7 | Showcase app identity, architecture, roadmap, domains, and changelog. | [SOPHIA Documentation](docs/sophia/README.md) |
+| Maintainer | Full doc tree | — | Restormel platform pack, operations runbooks, reference library, and archive (not on public Git; see LOCAL_DOCS). | [Maintainer documentation pack](docs/LOCAL_DOCS.md) |
 <!-- GENERATED:repo-doc-map:end -->
 
 ## Current priorities snapshot
@@ -63,16 +55,7 @@ These lists are pulled from the current active SOPHIA and Restormel docs so the 
 5. Preserve historical material for traceability, but keep it out of the active instructional surface.
 
 ### Restormel
-1. Contracts
-2. Graph-core + observability
-3. Restormel Graph MVP
-4. GraphRAG extraction
-5. Hosted GraphRAG
-6. Reasoning extraction
-7. BYOK/providers
-8. SOPHIA migration
-9. Public launch
-10. Marketplace readiness
+_(Priority order lives in the maintainer doc pack: `docs/local/restormel/04-delivery/19-milestone-plan-with-exit-criteria.md`. See `docs/LOCAL_DOCS.md`.)_
 <!-- GENERATED:current-priorities:end -->
 
 ## Repository structure
@@ -81,16 +64,15 @@ The codebase still contains both product implementation and platform extraction 
 
 <!-- GENERATED:repo-structure:start -->
 - [`src/`](src) SvelteKit application, server logic, and UI surfaces.
-- [`docs/`](docs) Public, reference, and archived documentation surfaces.
+- [`docs/`](docs) Public documentation index plus SOPHIA narrative; full pack under docs/local/ for maintainers.
 - [`scripts/`](scripts) Operational tooling, ingestion utilities, and docs automation.
 - [`tests/`](tests) Playwright end-to-end coverage.
 - [`data/`](data) Source data and ingestion inputs.
-- [`docs/operations/gcp-infrastructure.md`](docs/operations/gcp-infrastructure.md) — production GCP layout; app deploys via [`deploy.yml`](.github/workflows/deploy.yml) (`gcloud run deploy`).
 <!-- GENERATED:repo-structure:end -->
 
-## Active vs archived
+## Active vs maintainer-only
 
-Use `docs/sophia/` for the current SOPHIA product narrative and `docs/restormel/` for platform strategy, architecture, roadmap, and delivery. Use `docs/reference/` for supporting operational or API detail. Use `docs/archive/` only for provenance, retrospectives, and superseded plans.
+Use `docs/sophia/` for the **public** SOPHIA product narrative (architecture, roadmap, domains, changelog). Platform planning packs, runbooks, reference libraries, and archives live in the **maintainer documentation tree** under `docs/local/` when populated; see [`docs/LOCAL_DOCS.md`](docs/LOCAL_DOCS.md).
 
 ## Local development
 

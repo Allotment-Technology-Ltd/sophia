@@ -29,8 +29,8 @@ body:
       label: Linked Docs
       description: Docs to update and related references.
       placeholder: |
-        - docs/restormel/04-delivery/20-engineering-backlog-by-epic.md
-        - docs/restormel/10-reference/github-linear-automation.md
+        - docs/local/restormel/04-delivery/20-engineering-backlog-by-epic.md
+        - docs/local/restormel/10-reference/github-linear-automation.md
     validations:
       required: true
 
@@ -64,7 +64,7 @@ body:
     attributes:
       label: Affected Areas / Packages
       placeholder: |
-        - docs/restormel/04-delivery
+        - docs/local/restormel/04-delivery
         - scripts/restormel/docs_lint.py
     validations:
       required: true
