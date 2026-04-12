@@ -12,7 +12,8 @@
  *
  * Default published steps (unless overridden below):
  *   - **ingestion_extraction / relations / grouping / json_repair / remediation / shared:** Mistral-only
- *     (`mistral-large-latest` → `mistral-medium-latest` → `mistral-small-latest`) for fine-tune lineage.
+ *     (`mistral-medium-latest` → `mistral-large-latest` → `mistral-small-latest`) for fine-tune lineage
+ *     (matches Sophia canonical pipeline: medium first for long SEP wall-clock).
  *   - **ingestion_validation:** Vertex + Anthropic + Vertex (second-opinion path; matches canonical validation).
  *
  * Optional overrides (apply to the active profile — labeler vs validation — see source):
