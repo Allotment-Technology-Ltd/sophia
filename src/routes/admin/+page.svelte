@@ -8,6 +8,13 @@
       emphasis: true
     },
     {
+      href: '/admin/metrics/dataset-coverage',
+      title: 'Dataset coverage',
+      description:
+        'SEP topic preset counts versus the 10-per-preset goal, training governance vs model-lineage acceptability, and where completed sources came from (SEP, Gutenberg, IEP, …).',
+      emphasis: false
+    },
+    {
       href: '/admin/issue-resolution',
       title: 'Issue resolution',
       description:

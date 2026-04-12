@@ -3,7 +3,6 @@
  * Used by the admin ingest worker to pass `INGEST_CATALOG_ROUTING_JSON` into `scripts/ingest.ts`.
  */
 
-import { estimateCost, defaultProviders } from '@restormel/keys';
 import type { ReasoningProvider } from '@restormel/contracts/providers';
 import {
   entryMeetsPresetStageMinimum,
@@ -20,6 +19,7 @@ import {
   type CatalogSurfaceRow
 } from '$lib/server/restormelCatalogRows';
 import { restormelFetchCatalogPayloadUncached } from '$lib/server/restormel';
+import { ingestLlmCombinedUsdPer1MReference } from '$lib/server/ingestion/ingestLlmTokenUsdRates.js';
 
 const STAGE_TO_PIPELINE_KEY: Record<IngestionLlmStageKey, string> = {
   extraction: 'ingestion_extraction',
@@ -55,9 +55,7 @@ function catalogLikeFromRow(row: CatalogSurfaceRow): CatalogLikeEntry {
 }
 
 function estimatedUsdPer1Mtokens(modelId: string): number {
-  const est = estimateCost(modelId, defaultProviders);
-  if (!est) return Number.POSITIVE_INFINITY;
-  return (est.inputPerMillion ?? 0) + (est.outputPerMillion ?? 0);
+  return ingestLlmCombinedUsdPer1MReference(modelId);
 }
 
 function rowToCanonicalRef(row: CatalogSurfaceRow): { provider: ReasoningProvider; modelId: string } | null {

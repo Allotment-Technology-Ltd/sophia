@@ -1,9 +1,9 @@
 import { generateText } from 'ai';
-import { defaultProviders, estimateCost } from '@restormel/keys';
 import type { AAIFLatency, AAIFRequest, AAIFResponse } from '@restormel/aaif';
 import type { ModelProvider } from '@restormel/contracts/providers';
 import type { ProviderApiKeys } from '$lib/server/byok/types';
 import { EMBEDDING_MODEL, embedQuery, getEmbeddingProvider } from '$lib/server/embeddings';
+import { estimateIngestLlmUsageUsd } from '$lib/server/ingestion/ingestLlmTokenUsdRates.js';
 import { resolveReasoningModelRoute, trackTokens, type ReasoningModelRoute } from '$lib/server/vertex';
 
 const DEFAULT_REASONING_OUTPUT_TOKENS: Record<'low' | 'balanced' | 'high', number> = {
@@ -33,13 +33,7 @@ function estimateReasoningCostUsd(
   inputTokens: number,
   outputTokens: number
 ): number {
-  const estimate = estimateCost(route.modelId, defaultProviders);
-  if (!estimate) return 0;
-  return (
-    ((estimate.inputPerMillion ?? 0) * inputTokens +
-      (estimate.outputPerMillion ?? 0) * outputTokens) /
-    1_000_000
-  );
+  return estimateIngestLlmUsageUsd(route.modelId, inputTokens, outputTokens);
 }
 
 function estimateEmbeddingCostUsd(input: string): number {

@@ -28,7 +28,8 @@ import {
 	CANONICAL_VOYAGE_EMBEDDING_MODEL_LABEL
 } from '$lib/ingestionCanonicalPipeline';
 import { MAX_DURABLE_INGEST_JOB_CONCURRENCY } from '$lib/ingestionJobConcurrency';
-import { sweepStalledIngestRuns } from './ingestion/ingestWatchdog';
+import { ingestRunStillOccupiesLlmConcurrencySlot } from './ingestion/ingestCapacityAtStore';
+import { sweepStalledIngestRuns, sweepWorkerOrphanIngestRuns } from './ingestion/ingestWatchdog';
 import { sanitizeIngestionJobWorkerDefaults } from './ingestionJobWorkerDefaults';
 
 const ADV_LOCK_JOB_EVENTS = 5_849_273;
@@ -690,8 +691,14 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 		skipped: refreshed.filter((r) => r.status === 'skipped').length
 	};
 
-	const runningCount = summary.running;
-	const slots = Math.max(0, job.concurrency - runningCount);
+	/** Runs in Surreal store (no LLM) do not consume a job concurrency slot. */
+	let llmSlotOccupants = 0;
+	for (const it of refreshed) {
+		if (it.status !== 'running' || !it.childRunId) continue;
+		const child = await loadChildIngestRunState(it.childRunId);
+		if (ingestRunStillOccupiesLlmConcurrencySlot(child)) llmSlotOccupants += 1;
+	}
+	const slots = Math.max(0, job.concurrency - llmSlotOccupants);
 	const pendingItems = await db
 		.select()
 		.from(ingestionJobItems)
@@ -822,6 +829,12 @@ async function listJobIdsNeedingTick(): Promise<string[]> {
 /** Advance all jobs that need ticking. Returns how many job ids were processed. */
 export async function tickAllRunningIngestionJobs(): Promise<number> {
 	if (!isNeonIngestPersistenceEnabled()) return 0;
+	const orphan = await sweepWorkerOrphanIngestRuns();
+	if (orphan.terminalized > 0) {
+		console.log(
+			`[ingestion-jobs] worker_orphan: examined=${orphan.examined} terminalized=${orphan.terminalized} auto_resumed=${orphan.autoResumed}`
+		);
+	}
 	await sweepStalledIngestRuns();
 	await applyDlqAutoReplayIfEnabled();
 	const ids = await listJobIdsNeedingTick();

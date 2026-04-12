@@ -712,6 +712,15 @@ class IngestRunManager extends EventEmitter {
     void releaseGlobalIngestSlot();
   }
 
+  /** Stage 6 has no LLM traffic; release the Neon gate so another worker can start. */
+  private releaseGlobalIngestSlotAfterLlmPhases(runId: string): void {
+    const s = this.runs.get(runId);
+    if (!s?.globalConcurrencySlotHeld) return;
+    if (!isIngestGlobalConcurrencyGateEnabled()) return;
+    s.globalConcurrencySlotHeld = false;
+    void releaseGlobalIngestSlot();
+  }
+
   private startQueuePollingIfEnabled(): void {
     if (!neonQueueEnabled()) return;
     if (this.queuePollTimer) return;
@@ -1498,12 +1507,21 @@ class IngestRunManager extends EventEmitter {
     const pinEnvFlat = modelChainLabelsToEnv(payload.model_chain);
     const embeddingEnvOverrides = embeddingPreferenceToEnv(payload.embedding_model);
     const operatorModelPins = Object.keys(pinEnvFlat).length > 0;
-    const batchEnvOverrides = {
+    const batchEnvOverrides: Record<string, string> = {
       ...batchOverridesToEnv(payload.batch_overrides),
       ...embeddingEnvOverrides,
       ...pinEnvFlat,
       ...(operatorModelPins ? { INGEST_NO_MODEL_FALLBACK: '1' } : {})
     };
+    // Durable jobs often set `forceReingest` so net-new URLs bypass Surreal `complete` short-circuit.
+    // Checkpoint resumes must NOT set INGEST_FORCE_REINGEST or ingest.ts treats it as --force-stage extracting.
+    if (options.resumeFromFailure) {
+      batchEnvOverrides.INGEST_FORCE_REINGEST = '0';
+      this.addLog(
+        runId,
+        '[ingest] checkpoint resume: INGEST_FORCE_REINGEST=0 so Neon/Surreal resume points are honored (job force-reingest does not apply to resumes).'
+      );
+    }
     const ingestPinsJsonCli = encodeIngestPinsJsonCliArg(pinEnvFlat);
     const forSync = options.forSyncOnly;
     const stopBeforeStore = forSync ? false : ingestOptInStopBeforeStore(payload);
@@ -1828,6 +1846,10 @@ class IngestRunManager extends EventEmitter {
       const st = state.stages[k]?.status;
       if (st === 'done' || st === 'error' || (st as string) === 'skipped') continue;
       this.updateStageStatus(runId, k, 'idle');
+    }
+
+    if (activeKey === 'store') {
+      this.releaseGlobalIngestSlotAfterLlmPhases(runId);
     }
   }
 

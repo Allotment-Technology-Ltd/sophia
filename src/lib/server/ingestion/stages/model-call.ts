@@ -5,8 +5,11 @@
  */
 
 import { generateText } from 'ai';
-import { estimateCost as estimateRestormelCost, defaultProviders } from '@restormel/keys';
-import type { IngestionStagePlan } from '$lib/server/aaif/ingestion-plan.js';
+import {
+	estimateIngestLlmUsageUsd,
+	INGEST_EMBED_USD_PER_MILLION_CHARS
+} from '../ingestLlmTokenUsdRates.js';
+import type { IngestionStagePlan } from '../../aaif/ingestion-plan.js';
 import type {
 	StageKey,
 	StageBudget,
@@ -66,13 +69,7 @@ export function estimateUsageCostUsd(
 	inputTokens: number,
 	outputTokens: number
 ): number {
-	const estimate = estimateRestormelCost(modelId, defaultProviders);
-	if (!estimate) return 0;
-	return (
-		((estimate.inputPerMillion ?? 0) * inputTokens +
-			(estimate.outputPerMillion ?? 0) * outputTokens) /
-		1_000_000
-	);
+	return estimateIngestLlmUsageUsd(modelId, inputTokens, outputTokens);
 }
 
 export function trackReasoningCost(
@@ -89,7 +86,7 @@ export function trackReasoningCost(
 }
 
 export function trackEmbeddingCost(costs: CostTracker, totalChars: number): number {
-	const usageCostUsd = (totalChars / 1_000_000) * 0.025;
+	const usageCostUsd = (totalChars / 1_000_000) * INGEST_EMBED_USD_PER_MILLION_CHARS;
 	costs.vertexChars += totalChars;
 	costs.totalUsd += usageCostUsd;
 	return usageCostUsd;

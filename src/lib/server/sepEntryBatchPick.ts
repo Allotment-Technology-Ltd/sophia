@@ -72,6 +72,18 @@ export function listSepTopicPresets(): SepTopicPresetMeta[] {
 	return f.presets.map((p) => ({ id: p.id, label: p.label }));
 }
 
+/** Preset ids from `data/sep-topic-presets.json` whose keywords match this catalog URL’s entry slug. */
+export function getSepEntryTopicPresetMatches(url: string): string[] {
+	const slug = entrySlugFromSepUrl(url);
+	if (!slug) return [];
+	const presets = loadPresetsFile();
+	const out: string[] = [];
+	for (const p of presets.presets) {
+		if (slugMatchesKeywords(slug, p.slugContainsAny)) out.push(p.id);
+	}
+	return out;
+}
+
 function entrySlugFromSepUrl(url: string): string | null {
 	try {
 		const u = new URL(url.trim());

@@ -4,8 +4,8 @@
  * - `report_envelope.timingTelemetry`: per-stage input/output tokens, `stage_models`, wall `stage_ms`
  * - `report_envelope.modelChain` (operator-selected extract/relate/group hints)
  *
- * Token → USD re-estimate uses the same `@restormel/keys` table as `scripts/ingest.ts` (Vertex SKUs may
- * estimate $0 if not in catalog — treat as "unknown" vs billed GCP).
+ * Token → USD re-estimate uses the same helper as `scripts/ingest.ts` (`ingestLlmTokenUsdRates`: Keys
+ * catalog plus Vertex Gemini 3 standard text supplement).
  *
  *   pnpm ops:audit-ingest-cost-by-phase-neon
  *   pnpm exec tsx --env-file=.env scripts/audit-ingest-cost-by-phase-neon.ts -- --days=365
@@ -14,7 +14,10 @@
  */
 
 import { and, eq, sql } from 'drizzle-orm';
-import { estimateCost as estimateRestormelCost, defaultProviders } from '@restormel/keys';
+import {
+	estimateIngestLlmUsageUsd,
+	INGEST_EMBED_USD_PER_MILLION_CHARS
+} from '../src/lib/server/ingestion/ingestLlmTokenUsdRates.ts';
 import { loadServerEnv } from '../src/lib/server/env.ts';
 import { getDrizzleDb } from '../src/lib/server/db/neon.ts';
 import { ingestRuns, ingestStagingMeta } from '../src/lib/server/db/schema.ts';
@@ -73,13 +76,8 @@ function modelIdFromStageModelRef(ref: string): string {
 }
 
 function estimateUsdFromTokens(modelRef: string | undefined, inputTokens: number, outputTokens: number): number {
-	if (!modelRef) return 0;
-	const mid = modelIdFromStageModelRef(modelRef);
-	const est = estimateRestormelCost(mid, defaultProviders);
-	if (!est) return 0;
-	return (
-		((est.inputPerMillion ?? 0) * inputTokens + (est.outputPerMillion ?? 0) * outputTokens) / 1_000_000
-	);
+	const ref = modelRef?.trim() ? modelIdFromStageModelRef(modelRef) : '';
+	return estimateIngestLlmUsageUsd(ref || 'unknown', inputTokens, outputTokens);
 }
 
 function bump(map: Map<string, number>, key: string, delta: number): void {
@@ -187,7 +185,7 @@ async function main(): Promise<void> {
 
 		const vChars = num(tt.vertex_embed_chars);
 		if (vChars > 0) {
-			runEstUsd += (vChars / 1_000_000) * 0.025;
+			runEstUsd += (vChars / 1_000_000) * INGEST_EMBED_USD_PER_MILLION_CHARS;
 		}
 
 		sumReestimatedUsd += runEstUsd;
@@ -233,7 +231,7 @@ async function main(): Promise<void> {
 		`  Σ snapshot USD:            $${sumSnapshotUsd.toFixed(2)}  (runs counted: ${withCostSnap}; missing = not checkpointed or pre-column)`
 	);
 	console.log(
-		`  Re-estimated from tokens:  $${sumReestimatedUsd.toFixed(2)}  (Restormel rates + $0.025/M chars embed; Vertex may be $0 in catalog)`
+		`  Re-estimated from tokens:  $${sumReestimatedUsd.toFixed(2)}  (Keys + Vertex Gemini 3 supplement + $0.025/M chars embed)`
 	);
 	console.log('');
 
@@ -285,7 +283,7 @@ async function main(): Promise<void> {
 	}
 	console.log('');
 	console.log(
-		'Note: USD snapshot is the ingest script estimate at last Neon partial save. Token re-estimate uses the same Restormel catalog as ingest; align catalog for Vertex/Gemini if you need closer totals.'
+		'Note: USD snapshot is the ingest script estimate at last Neon partial save. Token re-estimate matches ingest billing helpers (including Vertex Gemini 3 preview SKUs).'
 	);
 }
 

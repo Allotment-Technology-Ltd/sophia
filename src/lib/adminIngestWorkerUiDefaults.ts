@@ -57,7 +57,7 @@ export const ADMIN_INGEST_WORKER_UI_TOOLTIPS = {
 		'Maps to INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR (1–12, only when extraction is Vertex/Gemini and throughput mode is on). Raising reduces extraction time for single-passage batches but multiplies concurrent Gemini calls; if you increase floor, lower durable job concurrency or INGEST_EXTRACTION_CONCURRENCY to stay inside RPM/TPM.',
 
 	forceReingest:
-		'Maps to INGEST_FORCE_REINGEST. When on, re-runs from extraction even if Surreal ingestion_log is complete. Turn off for strictly net-new URLs to save cost; when on, pair with conservative concurrency if you are re-churning many URLs.',
+		'Maps to INGEST_FORCE_REINGEST. When on, re-runs from extraction even if Surreal ingestion_log is complete (same as --force-stage extracting). Leave off for normal durable batches so checkpoint resumes after cancel/deploy are not overridden—the worker forces INGEST_FORCE_REINGEST=0 on resume-from-failure spawns. Turn on only when you intentionally want full re-churn of URLs that already show complete in Surreal.',
 
 	failOnGroupingCollapse:
 		'Maps to INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE. Strict (on) fails the run on integrity issues; off only warns. If you turn off strict grouping, review downstream validation and store quality manually.',
@@ -78,7 +78,7 @@ export const ADMIN_INGEST_WORKER_UI_TOOLTIPS = {
 		'Maps to INGEST_WATCHDOG_PHASE_BASELINE_MULT. Multiplier on phase baselines for slow sources. Raising reduces false watchdog kills on heavy books; lowering catches stuck runs sooner.',
 
 	jobConcurrency:
-		`Parallel URLs per durable job (clamped to MAX_DURABLE_INGEST_JOB_CONCURRENCY, typically 3). Raising ingests more sources at once but competes with ADMIN_INGEST_MAX_CONCURRENT on the worker—if you see launch throttling or 429s, lower job concurrency before raising per-URL extraction parallelism.`,
+		`Parallel URLs per durable job (clamped to MAX_DURABLE_INGEST_JOB_CONCURRENCY, typically 3). Counts only runs that are still in LLM phases; once a child enters Surreal Stage 6 (store), its slot frees for the next pending URL while store I/O continues. Raising ingests more sources at once but competes with ADMIN_INGEST_MAX_CONCURRENT on the worker and Surreal write load—if you see launch throttling or 429s, lower job concurrency before raising per-URL extraction parallelism.`,
 
 	validateLlm:
 		'Runs cross-model validation and optional remediation—higher quality and cost. If validation is off, remediation toggles below are ignored.',
