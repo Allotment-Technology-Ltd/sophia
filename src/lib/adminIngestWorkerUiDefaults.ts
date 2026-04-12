@@ -24,7 +24,8 @@ export const ADMIN_INGEST_WORKER_UI_DEFAULTS = {
 	groupingStageTimeoutMs: '360000',
 	embeddingStageTimeoutMs: '360000',
 	jsonRepairStageTimeoutMs: '360000'
-} as const;
+};
+// Intentionally not `as const`: Svelte `$state(W.*)` must infer `string`, not literal unions, for bound inputs.
 
 /** Native `title` tooltips (hover) — keep under ~600 chars where possible for readability. */
 export const ADMIN_INGEST_WORKER_UI_TOOLTIPS = {
