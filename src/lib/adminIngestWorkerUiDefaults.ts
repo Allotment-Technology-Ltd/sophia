@@ -96,7 +96,7 @@ export const ADMIN_INGEST_WORKER_UI_TOOLTIPS = {
 		'When advisor mode is Auto: after pre-scan, overwrite the validation-stage enablement the advisor recommends. If you are intentionally running without validation for speed or quota, turn this off so pre-scan does not flip validation back on.',
 
 	groupingTargetTokens:
-		'Maps to GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS. Larger batches = fewer grouping calls but heavier requests; lower if grouping timeouts or rate limits appear.',
+		'Maps to GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS. Larger batches = fewer grouping calls but heavier requests; lower if grouping timeouts or rate limits appear. The ingest script also pre-splits grouping when estimated JSON output would exceed max_output (see INGEST_GROUPING_OUTPUT_VS_INPUT_FACTOR, INGEST_GROUPING_OUTPUT_HEADROOM, INGEST_GROUPING_MAX_CLAIMS_PER_BATCH) and raises Gemini max_output unless INGEST_GROUPING_MAX_OUTPUT_TOKENS is set. Disable pre-split with INGEST_GROUPING_PREEMPT_OUTPUT_SPLITS=0 if you intentionally run one huge batch.',
 
 	validationTargetTokens:
 		'Maps to VALIDATION_BATCH_TARGET_TOKENS (when validation is on). Larger batches bundle more claims per validation call—watch TPM; lower if validation retries spike.',
