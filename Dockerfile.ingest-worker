@@ -17,5 +17,7 @@ COPY . .
 RUN pnpm install --frozen-lockfile --ignore-scripts
 
 ENV NODE_ENV=production
+# Recover durable-job child runs left `running` after deploy (no log/heartbeat); then auto-resume from checkpoint.
+ENV INGEST_ORPHAN_LAST_OUTPUT_MS=120000
 
 CMD ["pnpm", "exec", "tsx", "scripts/ingestion-job-poller.ts", "--interval", "5"]

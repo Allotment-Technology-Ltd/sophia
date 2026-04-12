@@ -5078,6 +5078,9 @@ async function main() {
 					'[INTEGRITY] Stage 6 requires SurrealDB but no connection is open. Re-run without --stop-before-store only after Surreal is reachable, or use admin “Sync to SurrealDB”.'
 				);
 			}
+			// Orchestrator treats store as non-LLM: advance currentStageKey early so job concurrency
+			// and the global ingest gate can release before slow Surreal I/O.
+			console.log('[ROUTE] storing');
 			// ── Pre-stage 6 health check ──────────────────────────────
 			// Stages 1–5 can take 20+ minutes; verify the DB session is still
 			// alive before beginning the critical write phase.

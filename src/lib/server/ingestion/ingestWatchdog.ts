@@ -7,7 +7,9 @@ import { and, eq } from 'drizzle-orm';
 import { getDrizzleDb } from '../db/neon';
 import {
   neonListIdleStalledIngestCandidateRows,
-  neonTerminalizeIngestRunWatchdogIdle
+  neonListWorkerOrphanCandidateRunIds,
+  neonTerminalizeIngestRunWatchdogIdle,
+  neonTerminalizeWorkerOrphanIfStale
 } from '../db/ingestRunRepository';
 import {
   ingestWatchdogListQueryIdleMs,
@@ -15,6 +17,7 @@ import {
   resolveWatchdogIdleThresholdMs
 } from './ingestWatchdogPhaseBaselines';
 import { ingestionJobItems } from '../db/schema';
+import { ingestRunManager } from '../ingestRuns';
 import { isNeonIngestPersistenceEnabled } from '../neon/datastore';
 
 const DEFAULT_WATCHDOG_IDLE_MS = 300_000; // 5 minutes (release default)
@@ -140,6 +143,101 @@ export async function sweepStalledIngestRuns(): Promise<IngestWatchdogSweepResul
         requeued_items: out.requeuedItems,
         idle_ms: idleMs,
         list_idle_ms: listIdleMs
+      })}`
+    );
+  }
+
+  return out;
+}
+
+/** Stale-output threshold for deploy/worker-loss recovery; unset or &lt;60s → disabled. */
+export function getWorkerOrphanStaleMs(): number {
+  const raw = process.env.INGEST_ORPHAN_LAST_OUTPUT_MS?.trim();
+  if (raw === undefined || raw === '') return 0;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 60_000) return 0;
+  return Math.min(n, 3_600_000);
+}
+
+/** After orphan terminalization, call `resumeFromFailure` for durable job children (default on). */
+export function ingestOrphanAutoResumeEnabled(): boolean {
+  const v = (process.env.INGEST_ORPHAN_AUTO_RESUME ?? '1').trim().toLowerCase();
+  return v !== '0' && v !== 'false' && v !== 'no';
+}
+
+export type WorkerOrphanSweepResult = {
+  examined: number;
+  terminalized: number;
+  autoResumed: number;
+  runIds: string[];
+};
+
+/**
+ * Recover `ingest_runs` stuck `running` after a deploy/kill (no log/heartbeat for INGEST_ORPHAN_LAST_OUTPUT_MS).
+ * For rows linked to a durable job item, optionally auto-call `resumeFromFailure` so work continues without an open admin tab.
+ */
+export async function sweepWorkerOrphanIngestRuns(): Promise<WorkerOrphanSweepResult> {
+  const threshold = getWorkerOrphanStaleMs();
+  const out: WorkerOrphanSweepResult = {
+    examined: 0,
+    terminalized: 0,
+    autoResumed: 0,
+    runIds: []
+  };
+  if (!isNeonIngestPersistenceEnabled() || threshold <= 0) return out;
+
+  const ids = await neonListWorkerOrphanCandidateRunIds(threshold, 40);
+  out.examined = ids.length;
+  const db = getDrizzleDb();
+  const autoResume = ingestOrphanAutoResumeEnabled();
+
+  for (const runId of ids) {
+    const ok = await neonTerminalizeWorkerOrphanIfStale(runId, threshold);
+    if (!ok) continue;
+    out.terminalized += 1;
+    out.runIds.push(runId);
+
+    const jobItems = await db
+      .select({ jobId: ingestionJobItems.jobId })
+      .from(ingestionJobItems)
+      .where(and(eq(ingestionJobItems.childRunId, runId), eq(ingestionJobItems.status, 'running')));
+    const linkedToJob = jobItems.length > 0;
+
+    if (linkedToJob && autoResume) {
+      try {
+        const res = await ingestRunManager.resumeFromFailure(runId);
+        if (res.ok) {
+          out.autoResumed += 1;
+        } else {
+          console.warn(`[orphan] auto-resume skipped run=${runId}: ${res.error}`);
+        }
+      } catch (e) {
+        console.warn('[orphan] auto-resume failed', runId, e instanceof Error ? e.message : String(e));
+      }
+    }
+
+    if (linkedToJob) {
+      const { appendIngestionJobEvent } = await import('../ingestionJobs.js');
+      const jobLinks = [...new Map(jobItems.map((r) => [r.jobId, r])).values()];
+      for (const link of jobLinks) {
+        await appendIngestionJobEvent(link.jobId, 'worker_orphan_recovered', {
+          childRunId: runId,
+          thresholdMs: threshold,
+          autoResume: linkedToJob && autoResume
+        });
+      }
+    }
+  }
+
+  if (out.terminalized > 0) {
+    console.log(
+      `[INGEST_TELEMETRY] ${JSON.stringify({
+        event: 'worker_orphan_sweep',
+        ts_ms: Date.now(),
+        examined: out.examined,
+        terminalized: out.terminalized,
+        auto_resumed: out.autoResumed,
+        threshold_ms: threshold
       })}`
     );
   }

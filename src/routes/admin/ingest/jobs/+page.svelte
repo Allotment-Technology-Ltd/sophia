@@ -59,7 +59,8 @@
 	let jobGoogleThroughputEnabled = $state(true);
 	let jobGoogleExtractionFloor = $state(JOB_UI.googleExtractionConcurrencyFloor);
 	/** Re-run from extraction when Surreal `ingestion_log` is already complete (INGEST_FORCE_REINGEST). */
-	let jobForceReingest = $state(true);
+	/** Off by default: when on, sets INGEST_FORCE_REINGEST and breaks checkpoint resume (use only for intentional full re-churn). */
+	let jobForceReingest = $state(false);
 	let jobFailOnGroupingCollapse = $state(true);
 	let jobIngestLogPins = $state(false);
 	let jobRemediationEnabled = $state(true);
@@ -515,7 +516,7 @@
 				if (typeof p.jobForceReingest === 'boolean') {
 					jobForceReingest = p.jobForceReingest;
 				} else if (!('jobForceReingest' in p)) {
-					jobForceReingest = true;
+					jobForceReingest = false;
 				}
 				if (typeof p.jobFailOnGroupingCollapse === 'boolean')
 					jobFailOnGroupingCollapse = p.jobFailOnGroupingCollapse;

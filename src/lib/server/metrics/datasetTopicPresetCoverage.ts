@@ -1,0 +1,266 @@
+/**
+ * Operator metrics: completed ingests vs SEP topic presets (data/sep-topic-presets.json),
+ * training governance, and coarse model-lineage signals from Neon `ingest_runs.report_envelope`.
+ */
+
+import { and, desc, eq, isNotNull } from 'drizzle-orm';
+import { query } from '$lib/server/db';
+import { getDrizzleDb } from '$lib/server/db/neon';
+import { ingestRuns, ingestionJobItems, sourceTrainingGovernance } from '$lib/server/db/schema';
+import { inferSourceTypeFromUrl } from '$lib/server/ingestRuns';
+import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
+import { getSepEntryTopicPresetMatches, listSepTopicPresets } from '$lib/server/sepEntryBatchPick';
+import { canonicalizeAndHashSourceUrl, canonicalizeSourceUrl } from '$lib/server/sourceIdentity';
+
+export const DATASET_PRESET_COVERAGE_GOAL = 10;
+
+export function originBucketForUrl(url: string, storedSourceType?: string | null): string {
+	const inferred = inferSourceTypeFromUrl(url);
+	switch (inferred) {
+		case 'sep_entry':
+			return 'SEP';
+		case 'book':
+			return 'Gutenberg';
+		case 'iep_entry':
+			return 'IEP';
+		case 'paper': {
+			const u = url.toLowerCase();
+			if (u.includes('arxiv.org')) return 'arXiv / paper';
+			return 'arXiv / paper';
+		}
+		case 'gutenberg_text':
+			return 'Gutenberg';
+		default: {
+			const st = (storedSourceType ?? '').toLowerCase();
+			if (st.includes('sep')) return 'SEP';
+			if (st.includes('gutenberg') || st.includes('book')) return 'Gutenberg';
+			if (st.includes('iep')) return 'IEP';
+			return 'Web / institutional';
+		}
+	}
+}
+
+/** Training-module friendly: not governance-excluded and no recovery-agent / degraded-route signals in envelope. */
+export function isTrainingModuleAcceptableLineage(
+	governanceExcluded: boolean,
+	envelope: Record<string, unknown> | null | undefined
+): boolean {
+	if (governanceExcluded) return false;
+
+	if (envelope?.routingStats && typeof envelope.routingStats === 'object') {
+		const dr = (envelope.routingStats as { degradedRouteCount?: unknown }).degradedRouteCount;
+		if (typeof dr === 'number' && dr > 0) return false;
+	}
+
+	const issueSummary =
+		envelope?.issueSummary &&
+		typeof envelope.issueSummary === 'object' &&
+		!Array.isArray(envelope.issueSummary)
+			? (envelope.issueSummary as Record<string, unknown>)
+			: null;
+	if (issueSummary) {
+		if (typeof issueSummary.recovery_agent === 'number' && issueSummary.recovery_agent > 0) return false;
+		if (typeof issueSummary.circuit_open === 'number' && issueSummary.circuit_open > 0) return false;
+	}
+	return true;
+}
+
+function bump(map: Record<string, number>, key: string, n = 1): void {
+	map[key] = (map[key] ?? 0) + n;
+}
+
+export type PresetCoverageRow = {
+	id: string;
+	label: string;
+	goal: number;
+	ingestedCount: number;
+	trainingAcceptableCount: number;
+	trainingNotAcceptableCount: number;
+	byOrigin: Record<string, number>;
+};
+
+export type DatasetTopicPresetCoverageResult = {
+	generatedAt: string;
+	neonIngestPersistence: boolean;
+	surrealIngestionLogMerged: boolean;
+	presetGoal: number;
+	presets: PresetCoverageRow[];
+	totals: {
+		uniqueSourcesCompleted: number;
+		trainingAcceptableCount: number;
+		trainingNotAcceptableCount: number;
+		byOrigin: Record<string, number>;
+	};
+	/** SEP completes whose slug did not match any preset keywords. */
+	sepIngestedOutsidePresets: number;
+	note: string;
+};
+
+async function loadSurrealCompleteUrls(): Promise<string[]> {
+	if (!process.env.SURREAL_URL?.trim()) return [];
+	try {
+		const rows = await query<Array<{ source_url?: string; canonical_url?: string }>>(
+			`SELECT source_url, canonical_url FROM ingestion_log WHERE status = 'complete';`,
+			{}
+		);
+		if (!Array.isArray(rows)) return [];
+		const out: string[] = [];
+		for (const r of rows) {
+			for (const u of [r.source_url, r.canonical_url]) {
+				if (typeof u === 'string' && u.trim()) out.push(u.trim());
+			}
+		}
+		return out;
+	} catch (e) {
+		console.warn('[datasetTopicPresetCoverage] Surreal ingestion_log merge failed:', e);
+		return [];
+	}
+}
+
+export async function fetchDatasetTopicPresetCoverage(): Promise<DatasetTopicPresetCoverageResult> {
+	const presetMeta = listSepTopicPresets();
+	const presetGoal = DATASET_PRESET_COVERAGE_GOAL;
+	const generatedAt = new Date().toISOString();
+
+	if (!isNeonIngestPersistenceEnabled()) {
+		return {
+			generatedAt,
+			neonIngestPersistence: false,
+			surrealIngestionLogMerged: false,
+			presetGoal,
+			presets: presetMeta.map((p) => ({
+				id: p.id,
+				label: p.label,
+				goal: presetGoal,
+				ingestedCount: 0,
+				trainingAcceptableCount: 0,
+				trainingNotAcceptableCount: 0,
+				byOrigin: {}
+			})),
+			totals: {
+				uniqueSourcesCompleted: 0,
+				trainingAcceptableCount: 0,
+				trainingNotAcceptableCount: 0,
+				byOrigin: {}
+			},
+			sepIngestedOutsidePresets: 0,
+			note: 'Neon ingest persistence is off (DATABASE_URL). Enable Neon to aggregate completed `ingest_runs` and governance rows.'
+		};
+	}
+
+	const db = getDrizzleDb();
+
+	const govRows = await db.select().from(sourceTrainingGovernance);
+	const governanceExcludedByHash = new Map<string, boolean>();
+	for (const r of govRows) {
+		governanceExcludedByHash.set(r.canonicalUrlHash, r.excludeFromModelTraining === true);
+	}
+
+	type Row = { canonicalUrl: string; sourceType: string; envelope: Record<string, unknown> | null };
+	const byCanonical = new Map<string, Row>();
+
+	const runRows = await db
+		.select({
+			sourceUrl: ingestRuns.sourceUrl,
+			sourceType: ingestRuns.sourceType,
+			completedAt: ingestRuns.completedAt,
+			reportEnvelope: ingestRuns.reportEnvelope
+		})
+		.from(ingestRuns)
+		.where(and(eq(ingestRuns.status, 'done'), isNotNull(ingestRuns.completedAt)))
+		.orderBy(desc(ingestRuns.completedAt));
+
+	for (const r of runRows) {
+		const c = canonicalizeSourceUrl(r.sourceUrl);
+		if (!c || byCanonical.has(c)) continue;
+		const env =
+			r.reportEnvelope && typeof r.reportEnvelope === 'object' && !Array.isArray(r.reportEnvelope)
+				? (r.reportEnvelope as Record<string, unknown>)
+				: null;
+		byCanonical.set(c, { canonicalUrl: c, sourceType: r.sourceType, envelope: env });
+	}
+
+	const itemRows = await db
+		.select({ url: ingestionJobItems.url, sourceType: ingestionJobItems.sourceType })
+		.from(ingestionJobItems)
+		.where(eq(ingestionJobItems.status, 'done'));
+
+	for (const r of itemRows) {
+		const c = canonicalizeSourceUrl(r.url);
+		if (!c || byCanonical.has(c)) continue;
+		byCanonical.set(c, { canonicalUrl: c, sourceType: r.sourceType, envelope: null });
+	}
+
+	let surrealMerged = false;
+	for (const raw of await loadSurrealCompleteUrls()) {
+		const c = canonicalizeSourceUrl(raw);
+		if (!c || byCanonical.has(c)) continue;
+		byCanonical.set(c, {
+			canonicalUrl: c,
+			sourceType: inferSourceTypeFromUrl(raw),
+			envelope: null
+		});
+		surrealMerged = true;
+	}
+
+	const totalsByOrigin: Record<string, number> = {};
+	let trainingOk = 0;
+	let trainingNot = 0;
+	let sepOutside = 0;
+
+	const presetIds = presetMeta.map((p) => p.id);
+	const perPreset: Record<string, PresetCoverageRow> = {};
+	for (const p of presetMeta) {
+		perPreset[p.id] = {
+			id: p.id,
+			label: p.label,
+			goal: presetGoal,
+			ingestedCount: 0,
+			trainingAcceptableCount: 0,
+			trainingNotAcceptableCount: 0,
+			byOrigin: {}
+		};
+	}
+
+	for (const row of byCanonical.values()) {
+		const identity = canonicalizeAndHashSourceUrl(row.canonicalUrl);
+		const hash = identity?.canonicalUrlHash ?? '';
+		const govEx = hash ? (governanceExcludedByHash.get(hash) ?? false) : false;
+		const acceptable = isTrainingModuleAcceptableLineage(govEx, row.envelope);
+		const origin = originBucketForUrl(row.canonicalUrl, row.sourceType);
+
+		bump(totalsByOrigin, origin);
+		if (acceptable) trainingOk += 1;
+		else trainingNot += 1;
+
+		const presetsHit = getSepEntryTopicPresetMatches(row.canonicalUrl);
+		const isSep = origin === 'SEP';
+		if (isSep && presetsHit.length === 0) sepOutside += 1;
+
+		for (const pid of presetIds) {
+			if (!presetsHit.includes(pid)) continue;
+			const cell = perPreset[pid]!;
+			cell.ingestedCount += 1;
+			bump(cell.byOrigin, origin);
+			if (acceptable) cell.trainingAcceptableCount += 1;
+			else cell.trainingNotAcceptableCount += 1;
+		}
+	}
+
+	return {
+		generatedAt,
+		neonIngestPersistence: true,
+		surrealIngestionLogMerged: surrealMerged,
+		presetGoal,
+		presets: presetIds.map((id) => perPreset[id]!),
+		totals: {
+			uniqueSourcesCompleted: byCanonical.size,
+			trainingAcceptableCount: trainingOk,
+			trainingNotAcceptableCount: trainingNot,
+			byOrigin: totalsByOrigin
+		},
+		sepIngestedOutsidePresets: sepOutside,
+		note:
+			'Training “acceptable” = not excluded in Neon `source_training_governance` and no recovery-agent or circuit-open issues plus no degraded routing counts in the latest run report envelope when present. Sources deduped by canonical URL (most recent Neon `ingest_runs` row wins, then job items, then Surreal `ingestion_log`).'
+	};
+}

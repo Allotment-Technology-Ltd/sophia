@@ -577,3 +577,124 @@ export async function neonTerminalizeIngestRunWatchdogIdle(
     return true;
   });
 }
+
+const ADV_LOCK_WORKER_ORPHAN = 5_849_268;
+
+/**
+ * When `INGEST_ORPHAN_LAST_OUTPUT_MS` > 0, the poller uses this to recover `ingest_runs` left `running`
+ * after a deploy/worker kill (no log/heartbeat vs threshold). Only `status=running` (not queued / awaiting_sync).
+ */
+export async function neonTerminalizeWorkerOrphanIfStale(
+  runId: string,
+  thresholdMs: number
+): Promise<boolean> {
+  if (!isNeonIngestPersistenceEnabled() || thresholdMs <= 0) return false;
+  const logLine = `[ORPHAN] worker_stale run_id=${runId} threshold_ms=${thresholdMs} (INGEST_ORPHAN_LAST_OUTPUT_MS)`;
+  const errMsg = `worker_orphan_timeout: no worker log/heartbeat for ${thresholdMs}ms (INGEST_ORPHAN_LAST_OUTPUT_MS); worker process likely restarted. With INGEST_ORPHAN_AUTO_RESUME=1, the poller resumes durable job children from checkpoint.`;
+  const db = getDrizzleDb();
+
+  return await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${ADV_LOCK_WORKER_ORPHAN}, hashtext(${runId}))`);
+    const updated = await tx
+      .update(ingestRuns)
+      .set({
+        status: 'error',
+        error: errMsg,
+        completedAt: new Date(),
+        updatedAt: new Date(),
+        lastFailureStage: 'watchdog',
+        currentAction: 'Worker orphan: stale output'
+      })
+      .where(
+        and(
+          eq(ingestRuns.id, runId),
+          eq(ingestRuns.status, 'running'),
+          eq(ingestRuns.cancelledByUser, false),
+          isNull(ingestRuns.completedAt),
+          sql`(
+            (
+              (${ingestRuns.lastOutputAt} IS NOT NULL OR ${ingestRuns.workerHeartbeatAt} IS NOT NULL)
+              AND (
+                (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint
+                - GREATEST(
+                    COALESCE(${ingestRuns.lastOutputAt}, 0::bigint),
+                    COALESCE(${ingestRuns.workerHeartbeatAt}, 0::bigint)
+                  )
+              ) > ${thresholdMs}
+            )
+            OR (
+              ${ingestRuns.lastOutputAt} IS NULL
+              AND ${ingestRuns.workerHeartbeatAt} IS NULL
+              AND (EXTRACT(EPOCH FROM NOW()) - EXTRACT(EPOCH FROM ${ingestRuns.createdAt})) * 1000 > ${thresholdMs}
+            )
+          )`
+        )
+      )
+      .returning({ id: ingestRuns.id });
+
+    if (updated.length === 0) return false;
+
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(${ADV_LOCK_INGEST_LOGS}, hashtext(${runId}))`);
+    const [logRow] = await tx
+      .select({ m: sql<number>`COALESCE(MAX(${ingestRunLogs.seq}), 0)`.mapWith(Number) })
+      .from(ingestRunLogs)
+      .where(eq(ingestRunLogs.runId, runId));
+    const logSeq = (logRow?.m ?? 0) + 1;
+    await tx.insert(ingestRunLogs).values({ runId, seq: logSeq, line: logLine });
+
+    const [issueRow] = await tx
+      .select({ m: sql<number>`COALESCE(MAX(${ingestRunIssues.seq}), 0)`.mapWith(Number) })
+      .from(ingestRunIssues)
+      .where(eq(ingestRunIssues.runId, runId));
+    const issueSeq = (issueRow?.m ?? 0) + 1;
+    await tx.insert(ingestRunIssues).values({
+      runId,
+      seq: issueSeq,
+      kind: 'watchdog',
+      severity: 'high',
+      stageHint: 'watchdog',
+      message: errMsg,
+      rawLine: logLine
+    });
+
+    return true;
+  });
+}
+
+export async function neonListWorkerOrphanCandidateRunIds(
+  thresholdMs: number,
+  limit: number
+): Promise<string[]> {
+  if (!isNeonIngestPersistenceEnabled() || thresholdMs <= 0) return [];
+  const cap = Math.max(1, Math.min(80, limit));
+  const db = getDrizzleDb();
+  const rows = await db
+    .select({ id: ingestRuns.id })
+    .from(ingestRuns)
+    .where(
+      and(
+        eq(ingestRuns.status, 'running'),
+        eq(ingestRuns.cancelledByUser, false),
+        isNull(ingestRuns.completedAt),
+        sql`(
+            (
+              (${ingestRuns.lastOutputAt} IS NOT NULL OR ${ingestRuns.workerHeartbeatAt} IS NOT NULL)
+              AND (
+                (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint
+                - GREATEST(
+                    COALESCE(${ingestRuns.lastOutputAt}, 0::bigint),
+                    COALESCE(${ingestRuns.workerHeartbeatAt}, 0::bigint)
+                  )
+              ) > ${thresholdMs}
+            )
+            OR (
+              ${ingestRuns.lastOutputAt} IS NULL
+              AND ${ingestRuns.workerHeartbeatAt} IS NULL
+              AND (EXTRACT(EPOCH FROM NOW()) - EXTRACT(EPOCH FROM ${ingestRuns.createdAt})) * 1000 > ${thresholdMs}
+            )
+          )`
+      )
+    )
+    .limit(cap);
+  return rows.map((r) => r.id);
+}
