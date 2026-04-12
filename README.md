@@ -64,7 +64,7 @@ The codebase still contains both product implementation and platform extraction 
 - [`scripts/`](scripts) Operational tooling, ingestion utilities, and docs automation.
 - [`tests/`](tests) Playwright end-to-end coverage.
 - [`data/`](data) Source data and ingestion inputs.
-- [`docs/local/operations/gcp-infrastructure.md`](docs/local/operations/gcp-infrastructure.md) — production GCP layout (maintainer doc pack); app deploys via [`deploy.yml`](.github/workflows/deploy.yml) (`gcloud run deploy`).
+- Maintainer GCP layout (when `docs/local/` is populated): `docs/local/operations/gcp-infrastructure.md` — production layout; app deploys via [`deploy.yml`](.github/workflows/deploy.yml) (`gcloud run deploy`).
 <!-- GENERATED:repo-structure:end -->
 
 ## Active vs maintainer-only

@@ -319,16 +319,13 @@ def render_root_repo_structure(from_file: Path) -> str:
         if path.exists():
             link = relative_link(from_file, path)
             lines.append(f"- [`{directory}/`]({link}) {description}")
-    gcp_candidates = (
-        REPO_ROOT / "docs" / "local" / "operations" / "gcp-infrastructure.md",
-        REPO_ROOT / "docs" / "operations" / "gcp-infrastructure.md",
-    )
     deploy_yml = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
-    gcp_doc = next((p for p in gcp_candidates if p.is_file()), None)
-    if gcp_doc is not None and deploy_yml.is_file():
+    if deploy_yml.is_file():
+        # Do not link to gcp-infrastructure.md — it lives only under docs/local/ on maintainer clones
+        # and would make this block differ between CI and local checkouts.
         lines.append(
-            f"- [`{gcp_doc.relative_to(REPO_ROOT).as_posix()}`]({relative_link(from_file, gcp_doc)}) "
-            "— production GCP layout (maintainer doc pack); app deploys via "
+            "- Maintainer GCP layout (when `docs/local/` is populated): "
+            "`docs/local/operations/gcp-infrastructure.md` — production layout; app deploys via "
             f"[`deploy.yml`]({relative_link(from_file, deploy_yml)}) (`gcloud run deploy`)."
         )
     return "\n".join(lines)
