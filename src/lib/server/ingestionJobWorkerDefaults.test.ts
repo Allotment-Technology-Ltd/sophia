@@ -45,4 +45,20 @@ describe('sanitizeIngestionJobWorkerDefaults', () => {
     const o = sanitizeIngestionJobWorkerDefaults({ forceReingest: true });
     expect(o?.forceReingest).toBe(true);
   });
+
+  it('accepts Google throughput toggle and extraction floor', () => {
+    const o = sanitizeIngestionJobWorkerDefaults({
+      googleGenerativeThroughput: false,
+      googleExtractionConcurrencyFloor: 8
+    });
+    expect(o?.googleGenerativeThroughput).toBe(false);
+    expect(o?.googleExtractionConcurrencyFloor).toBe(8);
+  });
+
+  it('drops Google extraction floor outside 1–12', () => {
+    expect(
+      sanitizeIngestionJobWorkerDefaults({ googleExtractionConcurrencyFloor: 99 })
+        ?.googleExtractionConcurrencyFloor
+    ).toBeUndefined();
+  });
 });

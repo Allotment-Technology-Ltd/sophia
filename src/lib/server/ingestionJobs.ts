@@ -22,7 +22,11 @@ import {
 	type IngestRunPayload,
 	type IngestRunState
 } from './ingestRuns';
-import { resolveEmbeddingFingerprint, resolvePipelineVersion } from './ingestionPipelineMetadata';
+import { resolvePipelineVersion } from './ingestionPipelineMetadata';
+import {
+	CANONICAL_VOYAGE_EMBEDDING_FINGERPRINT,
+	CANONICAL_VOYAGE_EMBEDDING_MODEL_LABEL
+} from '$lib/ingestionCanonicalPipeline';
 import { MAX_DURABLE_INGEST_JOB_CONCURRENCY } from '$lib/ingestionJobConcurrency';
 import { sweepStalledIngestRuns } from './ingestion/ingestWatchdog';
 import { sanitizeIngestionJobWorkerDefaults } from './ingestionJobWorkerDefaults';
@@ -456,7 +460,7 @@ export async function createIngestionJob(
 		Math.min(MAX_DURABLE_INGEST_JOB_CONCURRENCY, args.concurrency ?? 2)
 	);
 	const pipelineVersion = resolvePipelineVersion();
-	const embeddingFingerprint = resolveEmbeddingFingerprint();
+	const embeddingFingerprint = CANONICAL_VOYAGE_EMBEDDING_FINGERPRINT;
 	const workerDefaults = sanitizeIngestionJobWorkerDefaults(args.workerDefaults) ?? {};
 
 	await db.insert(ingestionJobs).values({
@@ -713,13 +717,14 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 		const jobBatchOverrides = sanitizeIngestionJobWorkerDefaults(jobDefaultsRaw) ?? {};
 		const batchOverrides = { ...jobBatchOverrides };
 		if (batchOverrides.ingestProvider === undefined) {
-			batchOverrides.ingestProvider = 'mistral';
+			batchOverrides.ingestProvider = 'auto';
 		}
 		const payload: IngestRunPayload = {
 			source_url: it.url,
 			source_type: it.sourceType,
 			validate: job.validateLlm === true,
 			stop_before_store: false,
+			embedding_model: CANONICAL_VOYAGE_EMBEDDING_MODEL_LABEL,
 			model_chain: { extract: 'auto', relate: 'auto', group: 'auto', validate: 'auto' },
 			queue_record_id: it.queueRecordId ?? undefined,
 			pipeline_version: job.pipelineVersion ?? undefined,

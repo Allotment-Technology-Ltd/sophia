@@ -76,6 +76,13 @@ export function sanitizeIngestionJobWorkerDefaults(raw: unknown): BO | undefined
     out.failOnGroupingPositionCollapse = o.failOnGroupingPositionCollapse;
   }
   if (typeof o.ingestLogPins === 'boolean') out.ingestLogPins = o.ingestLogPins;
+  if (typeof o.googleGenerativeThroughput === 'boolean') {
+    out.googleGenerativeThroughput = o.googleGenerativeThroughput;
+  }
+  const googleFloor = asInt(o.googleExtractionConcurrencyFloor);
+  if (googleFloor != null && googleFloor >= 1 && googleFloor <= 12) {
+    out.googleExtractionConcurrencyFloor = googleFloor;
+  }
   if (typeof o.ingestRemediationEnabled === 'boolean') {
     out.ingestRemediationEnabled = o.ingestRemediationEnabled;
   }

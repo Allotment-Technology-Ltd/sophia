@@ -4,8 +4,8 @@
  *
  * Default is **strict** with an allowlist so Restormel resolve, catalog routing JSON, or
  * historical pins cannot silently reintroduce disallowed vendors (e.g. OpenAI/Anthropic) on
- * sensitive surfaces. **Mistral + Vertex** are allowed by default (extraction/json_repair stay
- * Mistral-first in canonical config; relations/grouping/remediation use Vertex primary).
+ * sensitive surfaces. **Mistral + Vertex** are allowed by default (canonical extraction is
+ * Gemini-on-Vertex first with Mistral fallbacks; json_repair stays Mistral-primary).
  * Override with `INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS`. Disable locally with
  * `INGEST_FINETUNE_LABELER_STRICT=0`.
  */
@@ -30,8 +30,8 @@ export function ingestFinetuneLabelerStrictEnabled(env: NodeJS.ProcessEnv = proc
 
 /**
  * When strict mode is on, only these providers may appear in the effective model chain for
- * {@link FINETUNE_SENSITIVE_LLM_STAGES}. Default: `mistral`, `vertex` (GCP enterprise path for
- * relate / group / remediate; extraction remains Mistral-primary in canonical pipeline).
+ * {@link FINETUNE_SENSITIVE_LLM_STAGES}. Default: `mistral`, `vertex` (Gemini-on-Vertex primaries
+ * with Mistral fallbacks on sensitive stages per canonical pipeline).
  */
 export function parseFinetuneLabelerAllowedProviders(env: NodeJS.ProcessEnv = process.env): string[] {
 	const raw = env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS?.trim();

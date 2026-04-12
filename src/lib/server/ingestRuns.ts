@@ -101,6 +101,13 @@ export interface IngestRunPayload {
     ingestProvider?: 'auto' | 'anthropic' | 'vertex' | 'mistral';
     /** When true, worker logs `[INGEST_PINS]` diagnostics (`INGEST_LOG_PINS=1`). */
     ingestLogPins?: boolean;
+    /**
+     * When false, disables faster Google/Vertex throughput defaults (`INGEST_GOOGLE_GENERATIVE_THROUGHPUT=0`).
+     * Omitted leaves worker default (on).
+     */
+    googleGenerativeThroughput?: boolean;
+    /** Floor for parallel single-passage extraction when extraction is Vertex/Gemini (`INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR`). */
+    googleExtractionConcurrencyFloor?: number;
     /** Per-run model call timeout for most ingest stages (`scripts/ingest.ts` → `INGEST_MODEL_TIMEOUT_MS`). */
     ingestModelTimeoutMs?: number;
     /** Per-run validation-stage default timeout (`VALIDATION_MODEL_TIMEOUT_MS` — fallback when stage env unset). */
@@ -179,6 +186,8 @@ function batchOverridesToEnv(
     failOnGroupingPositionCollapse,
     ingestProvider,
     ingestLogPins,
+    googleGenerativeThroughput,
+    googleExtractionConcurrencyFloor,
     ingestModelTimeoutMs,
     validationModelTimeoutMs,
     ingestStageValidationTimeoutMs,
@@ -260,6 +269,13 @@ function batchOverridesToEnv(
   }
   if (typeof ingestLogPins === 'boolean') {
     out.INGEST_LOG_PINS = ingestLogPins ? '1' : '0';
+  }
+  if (typeof googleGenerativeThroughput === 'boolean') {
+    out.INGEST_GOOGLE_GENERATIVE_THROUGHPUT = googleGenerativeThroughput ? '1' : '0';
+  }
+  const googleFloor = asPositiveInt(googleExtractionConcurrencyFloor);
+  if (googleFloor != null && googleFloor >= 1 && googleFloor <= 12) {
+    out.INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR = String(googleFloor);
   }
 
   const ingestTimeout = asPositiveInt(ingestModelTimeoutMs);

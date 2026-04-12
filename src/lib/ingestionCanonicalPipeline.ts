@@ -6,6 +6,9 @@
  * `scripts/ingest.ts` may still filter cross-tier fallbacks via `INGEST_FINETUNE_LABELER_*` on
  * sensitive stages. Restormel steers the primary route when ingest-provider is `auto` without pins.
  *
+ * **Durable Neon jobs** force {@link CANONICAL_VOYAGE_EMBEDDING_MODEL_LABEL} on each child so the corpus
+ * stays on **1024-dim Voyage** embeddings (Vertex text-embedding-005 is 768-dim and must not mix in).
+ *
  * Vertex Gemini IDs must stay aligned with current Vertex model pages (including preview ids):
  * https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-flash
  * https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-1-pro
@@ -38,16 +41,21 @@ export type IngestionLlmStageKey =
 
 export type CanonicalModelRef = { provider: ModelProvider; modelId: string };
 
+/** Stable admin label merged into durable job child runs so embeddings stay Voyage 1024-dim. */
+export const CANONICAL_VOYAGE_EMBEDDING_MODEL_LABEL = 'voyage__voyage-4-lite';
+
+/** Recorded on `ingestion_jobs.embedding_fingerprint` to match the forced child embedding profile. */
+export const CANONICAL_VOYAGE_EMBEDDING_FINGERPRINT = 'voyage:voyage-4-lite:1024d';
+
 /**
- * Production profile: **Mistral** for extraction + json_repair (fine-tune lineage defaults),
- * **Vertex Gemini** for relations, grouping, and remediation (capacity + long context on GCP),
- * **Vertex** validation with OpenAI/Vertex fallbacks. OpenAI/Anthropic are not canonical primaries
- * on sensitive stages; allowlist in `ingestionFinetuneLabelerPolicy` enforces defaults at runtime.
- *
- * Extraction uses **mistral-medium-latest** first; long SEP runs often need medium before large.
+ * Production profile: **Vertex Gemini** for extraction, relations, grouping, validation, and remediation
+ * (capacity + long context on GCP billing). **Mistral** is the first fallback on heavy stages and remains
+ * primary only for **json_repair** (short, structured JSON fixes, gentler on free-tier burst limits).
+ * OpenAI appears only in validation fallbacks for cross-vendor checks. Allowlist in
+ * `ingestionFinetuneLabelerPolicy` keeps sensitive stages on `mistral` + `vertex` only by default.
  */
 export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, CanonicalModelRef> = {
-	extraction: { provider: 'mistral', modelId: 'mistral-medium-latest' },
+	extraction: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 	relations: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 	grouping: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 	/** Distinct from labeler stages: second opinion from another provider improves faithfulness checks. */
@@ -58,10 +66,12 @@ export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, Ca
 
 /**
  * Ordered fallbacks after primary exhausts transient retries (429/5xx/timeout).
- * Relations / grouping / remediation: heavier Vertex then Mistral tiers. Extraction: Mistral sizes.
+ * Heavy stages: deeper Gemini then Mistral sizes. json_repair: Gemini flash then larger Mistral tiers.
  */
 export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, CanonicalModelRef[]> = {
 	extraction: [
+		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
+		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
 		{ provider: 'mistral', modelId: 'mistral-large-latest' },
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	],
@@ -89,6 +99,7 @@ export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, C
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	],
 	json_repair: [
+		{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 		{ provider: 'mistral', modelId: 'mistral-large-latest' },
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	]

@@ -46,8 +46,8 @@ describe('planIngestionStage', () => {
     });
 
     expect(mockResolveExtractionModelRoute).toHaveBeenCalledWith({
-      requestedProvider: 'mistral',
-      requestedModelId: 'mistral-large-latest',
+      requestedProvider: 'vertex',
+      requestedModelId: 'gemini-3-flash-preview',
       routeId: 'interactive',
       failureMode: 'degraded_default',
       restormelContext: {
