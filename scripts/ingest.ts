@@ -23,7 +23,10 @@ import { Surreal } from 'surrealdb';
 import { signinSurrealWithFallback } from './lib/surrealSignin.js';
 import { resolveSurrealRpcUrl } from '../src/lib/server/surrealEnv.ts';
 import { generateText } from 'ai';
-import { estimateCost as estimateRestormelCost, defaultProviders } from '@restormel/keys';
+import {
+	estimateIngestLlmUsageUsd,
+	INGEST_EMBED_USD_PER_MILLION_CHARS
+} from '../src/lib/server/ingestion/ingestLlmTokenUsdRates.ts';
 import {
 	embedTexts,
 	EMBEDDING_DIMENSIONS,
@@ -404,12 +407,7 @@ function estimateCostUsd(): string {
 }
 
 function estimateUsageCostUsd(modelId: string, inputTokens: number, outputTokens: number): number {
-	const estimate = estimateRestormelCost(modelId, defaultProviders);
-	if (!estimate) return 0;
-	return (
-		((estimate.inputPerMillion ?? 0) * inputTokens + (estimate.outputPerMillion ?? 0) * outputTokens) /
-		1_000_000
-	);
+	return estimateIngestLlmUsageUsd(modelId, inputTokens, outputTokens);
 }
 
 function trackReasoningCost(modelId: string, inputTokens: number, outputTokens: number): number {
@@ -421,7 +419,7 @@ function trackReasoningCost(modelId: string, inputTokens: number, outputTokens: 
 }
 
 function trackEmbeddingCost(totalChars: number): number {
-	const usageCostUsd = (totalChars / 1_000_000) * 0.025;
+	const usageCostUsd = (totalChars / 1_000_000) * INGEST_EMBED_USD_PER_MILLION_CHARS;
 	costs.vertexChars += totalChars;
 	costs.totalUsd += usageCostUsd;
 	return usageCostUsd;

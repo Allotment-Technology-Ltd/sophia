@@ -18,7 +18,7 @@ import {
 } from '$lib/server/restormelCatalogRows';
 import { restormelFetchCatalogPayloadUncached, restormelListProjectModels } from '$lib/server/restormel';
 import { filterCatalogEntriesByOperatorByokActive } from '$lib/server/byok/filterCatalogEntriesByOperatorByok';
-import { defaultProviders, estimateCost } from '@restormel/keys';
+import { getIngestLlmUsdPerMillion } from '$lib/server/ingestion/ingestLlmTokenUsdRates.js';
 
 type FallbackPricedEntry = {
 	costTier: 'low' | 'medium' | 'high';
@@ -58,9 +58,9 @@ function compactFromEntries(
 ) {
 	return entries.map((entry) => {
 		const estimate =
-			estimateCost(entry.modelId, defaultProviders) ??
-			estimateCost(`${entry.provider}/${entry.modelId}`, defaultProviders) ??
-			estimateCost(`${entry.provider}:${entry.modelId}`, defaultProviders);
+			getIngestLlmUsdPerMillion(entry.modelId) ??
+			getIngestLlmUsdPerMillion(`${entry.provider}/${entry.modelId}`) ??
+			getIngestLlmUsdPerMillion(`${entry.provider}:${entry.modelId}`);
 		const tier =
 			entry.costTier === 'low' || entry.costTier === 'medium' || entry.costTier === 'high'
 				? entry.costTier

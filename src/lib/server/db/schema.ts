@@ -123,6 +123,10 @@ export const ingestStagingMeta = pgTable('ingest_staging_meta', {
   sourceJson: jsonb('source_json').$type<Record<string, unknown> | null>(),
   stageCompleted: text('stage_completed').notNull().default(''),
   costUsdSnapshot: doublePrecision('cost_usd_snapshot'),
+  /** First observed `cost_usd_snapshot` before a Neon backfill corrected pricing (audit trail). */
+  costUsdSnapshotPrior: doublePrecision('cost_usd_snapshot_prior'),
+  /** When `cost_usd_snapshot` was last rewritten by `scripts/backfill-ingest-cost-usd-snapshot-neon.ts`. */
+  costUsdSnapshotBackfilledAt: timestamp('cost_usd_snapshot_backfilled_at', { withTimezone: true }),
   extractionProgress: jsonb('extraction_progress').$type<Record<string, unknown> | null>(),
   groupingProgress: jsonb('grouping_progress').$type<Record<string, unknown> | null>(),
   validationProgress: jsonb('validation_progress').$type<Record<string, unknown> | null>(),

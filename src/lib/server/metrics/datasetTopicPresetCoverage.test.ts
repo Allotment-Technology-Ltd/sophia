@@ -18,6 +18,14 @@ describe('datasetTopicPresetCoverage', () => {
 		);
 	});
 
+	it('originBucketForUrl uses host check for arXiv (not substring)', () => {
+		expect(originBucketForUrl('https://arxiv.org/abs/2301.00001', 'paper')).toBe('arXiv / paper');
+		expect(originBucketForUrl('https://export.arxiv.org/api/query', 'paper')).toBe('arXiv / paper');
+		// PDF path is "paper" but host must not match via path substring (arxiv.org.evil.com ≠ arxiv.org)
+		expect(originBucketForUrl('https://arxiv.org.evil.com/fake.pdf', 'paper')).toBe('Academic paper');
+		expect(originBucketForUrl('https://example.org/research.pdf', 'paper')).toBe('Academic paper');
+	});
+
 	it('isTrainingModuleAcceptableLineage rejects governance excluded', () => {
 		expect(isTrainingModuleAcceptableLineage(true, {})).toBe(false);
 	});

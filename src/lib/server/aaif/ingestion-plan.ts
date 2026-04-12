@@ -1,4 +1,3 @@
-import { estimateCost, defaultProviders } from '@restormel/keys';
 import type { AAIFLatency, AAIFRequest } from '@restormel/aaif';
 import type { ModelProvider } from '@restormel/contracts/providers';
 import type { RestormelFallbackCandidate } from '../restormel.js';
@@ -12,6 +11,7 @@ import {
   resolveReasoningModelRoute,
   type ReasoningModelRoute
 } from '../vertex.js';
+import { estimateIngestLlmUsageUsd } from '../ingestion/ingestLlmTokenUsdRates.js';
 export type IngestionStage =
   | 'extraction'
   | 'relations'
@@ -347,12 +347,7 @@ export function buildIngestionStageUsageEstimates(
 }
 
 function estimateReasoningCostUsd(route: ReasoningModelRoute, inputTokens: number, outputTokens: number): number {
-  const estimate = estimateCost(route.modelId, defaultProviders);
-  if (!estimate) return 0;
-  return (
-    ((estimate.inputPerMillion ?? 0) * inputTokens + (estimate.outputPerMillion ?? 0) * outputTokens) /
-    1_000_000
-  );
+  return estimateIngestLlmUsageUsd(route.modelId, inputTokens, outputTokens);
 }
 
 function estimateEmbeddingCostUsd(context: IngestionPlanningContext): number {

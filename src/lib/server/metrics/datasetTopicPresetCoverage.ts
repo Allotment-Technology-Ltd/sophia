@@ -14,6 +14,11 @@ import { canonicalizeAndHashSourceUrl, canonicalizeSourceUrl } from '$lib/server
 
 export const DATASET_PRESET_COVERAGE_GOAL = 10;
 
+function hostnameIsArxiv(hostname: string): boolean {
+	const h = hostname.toLowerCase();
+	return h === 'arxiv.org' || h.endsWith('.arxiv.org');
+}
+
 export function originBucketForUrl(url: string, storedSourceType?: string | null): string {
 	const inferred = inferSourceTypeFromUrl(url);
 	switch (inferred) {
@@ -24,9 +29,13 @@ export function originBucketForUrl(url: string, storedSourceType?: string | null
 		case 'iep_entry':
 			return 'IEP';
 		case 'paper': {
-			const u = url.toLowerCase();
-			if (u.includes('arxiv.org')) return 'arXiv / paper';
-			return 'arXiv / paper';
+			try {
+				const host = new URL(url.trim()).hostname;
+				if (hostnameIsArxiv(host)) return 'arXiv / paper';
+			} catch {
+				// non-absolute or malformed URL — do not substring-match on arxiv.org (CodeQL / open redirects)
+			}
+			return 'Academic paper';
 		}
 		case 'gutenberg_text':
 			return 'Gutenberg';
