@@ -2,14 +2,14 @@
 status: active
 owner: adam
 source_of_truth: false
-last_reviewed: 2026-03-13
+last_reviewed: 2026-04-11
 ---
 
 # SOPHIA
 
 SOPHIA is the showcase and reference application for the Restormel platform.
 
-This repository combines the live SOPHIA product implementation with the Restormel platform direction. **Public GitHub** carries a small SOPHIA-facing documentation slice plus [`docs/LOCAL_DOCS.md`](docs/LOCAL_DOCS.md) explaining how maintainers keep the full Restormel, operations, reference, and archive trees **locally** under `docs/local/` (gitignored, not pushed to the public remote).
+This repository combines the live SOPHIA product implementation with the Restormel platform direction. **Public GitHub** carries a small SOPHIA-facing documentation slice plus [`docs/LOCAL_DOCS.md`](docs/LOCAL_DOCS.md) explaining how maintainers keep the full Restormel, operations, reference, and archive trees **locally** under `docs/local/` (gitignored, not pushed to the public remote). Deeper runbooks and platform packs are not in the public `docs/` tree.
 
 ## Project identity
 
@@ -17,17 +17,13 @@ This repository combines the live SOPHIA product implementation with the Restorm
 
 `SOPHIA` is the showcase/reference app that proves the platform in a real product: graph-grounded reasoning, verification, explainability, BYOK, billing, API surfaces, and philosophy learning all meet here first.
 
-The current repo purpose is therefore twofold:
-- operate SOPHIA as a real application
-- document and steer the extraction of reusable Restormel platform capabilities from the same codebase
-
 ## Start here
 
 <!-- GENERATED:key-links:start -->
 | Area | Why it matters | Start here |
 | --- | --- | --- |
 | SOPHIA docs | Public showcase app docs: architecture, roadmap, domain status, changelog. | [SOPHIA Documentation](docs/sophia/README.md) |
-| Documentation hub | Public documentation index and how to obtain the maintainer doc pack. | [Documentation Index](docs/README.md) |
+| Documentation hub | Public documentation index and how to obtain the maintainer doc pack. | [Documentation index](docs/README.md) |
 | Maintainer doc pack | Restormel platform pack, operations, reference, archive (local only; not on public Git). | [Maintainer documentation pack](docs/LOCAL_DOCS.md) |
 <!-- GENERATED:key-links:end -->
 
@@ -68,6 +64,7 @@ The codebase still contains both product implementation and platform extraction 
 - [`scripts/`](scripts) Operational tooling, ingestion utilities, and docs automation.
 - [`tests/`](tests) Playwright end-to-end coverage.
 - [`data/`](data) Source data and ingestion inputs.
+- [`docs/local/operations/gcp-infrastructure.md`](docs/local/operations/gcp-infrastructure.md) — production GCP layout (maintainer doc pack); app deploys via [`deploy.yml`](.github/workflows/deploy.yml) (`gcloud run deploy`).
 <!-- GENERATED:repo-structure:end -->
 
 ## Active vs maintainer-only
@@ -85,6 +82,7 @@ pnpm dev
 ```
 
 Useful commands:
+
 - `pnpm check`
 - `pnpm test`
 - `pnpm dev:prod-db`
@@ -92,4 +90,29 @@ Useful commands:
 - `pnpm python:deps`
 - `pnpm python:check`
 
-For operational runbooks, API reference, and deeper implementation notes, use [docs/README.md](docs/README.md).
+More pointers: [docs/README.md](docs/README.md).
+
+## Documentation on disk
+
+On **`main`**, Git tracks a **small public `docs/` slice** (index, `LOCAL_DOCS.md`, and `docs/sophia/*`). The full Restormel, operations, and archive trees live under **`docs/local/`** on maintainer machines only — see [`docs/LOCAL_DOCS.md`](docs/LOCAL_DOCS.md).
+
+**Refresh the public slice from remote `main`:**
+
+```bash
+git fetch origin
+git checkout origin/main -- docs/README.md docs/LOCAL_DOCS.md docs/sophia/
+```
+
+**Or update the whole repo:**
+
+```bash
+git pull origin main
+```
+
+**Sanity check** (public paths; optionally Restormel meta if that tree exists locally):
+
+```bash
+pnpm run docs:verify-present
+```
+
+**If `git pull` says “Need to specify how to reconcile divergent branches”:** use an explicit strategy, e.g. `git pull --rebase origin main`, or commit/stash then `git fetch origin && git rebase origin/main`. To sync with the scripted workflow: `pnpm run git:sync-main -- "your message"` (see `scripts/git-sync-and-push-main.sh`).

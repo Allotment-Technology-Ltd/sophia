@@ -2,7 +2,7 @@
 status: active
 owner: adam
 source_of_truth: true
-last_reviewed: 2026-03-13
+last_reviewed: 2026-04-11
 ---
 
 # SOPHIA Documentation
@@ -37,7 +37,7 @@ It exists to prove the platform in a real product: graph-grounded reasoning, ver
 <!-- GENERATED:active-sophia-docs:start -->
 | Document | Last reviewed | Link |
 | --- | --- | --- |
-| SOPHIA Documentation | 2026-03-13 | [SOPHIA Documentation](README.md) |
+| SOPHIA Documentation | 2026-04-11 | [SOPHIA Documentation](README.md) |
 | Architecture | 2026-03-13 | [Architecture](architecture.md) |
 | Changelog | 2026-03-13 | [Changelog](changelog.md) |
 | Current State | 2026-03-13 | [Current State](current-state.md) |
@@ -72,4 +72,4 @@ This block is intentionally limited to structured snapshots taken from the activ
 
 ## Related documentation
 
-Restormel platform docs, archive, and rationalisation inventory live in the maintainer tree under `docs/local/` — see [Maintainer documentation pack](../LOCAL_DOCS.md).
+Restormel platform docs, ingestion operations runbooks, archive, and rationalisation inventory live in the maintainer tree under `docs/local/` (for example `docs/local/restormel/`, `docs/local/operations/`, `docs/local/archive/`, `docs/local/sophia/rationalisation-inventory.md`) — see [Maintainer documentation pack](../LOCAL_DOCS.md).

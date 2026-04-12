@@ -2,10 +2,10 @@
 status: active
 owner: adam
 source_of_truth: false
-last_reviewed: 2026-03-13
+last_reviewed: 2026-04-11
 ---
 
-# Documentation Index
+# Documentation index
 
 This is the landing page for the **public** documentation surface shipped with the repository.
 
@@ -47,3 +47,17 @@ Hand-authored meaning in `docs/sophia/` is what ships on the public default chec
 | Maintainer-only tree | Restormel platform pack, operations runbooks, reference library, and archive under docs/local/ when populated. | [Maintainer documentation pack](LOCAL_DOCS.md) |
 | Historical / internal | Lives under docs/local/ on maintainer machines; not published on the public default checkout. | Do not treat archived paths as current guidance unless promoted into the public SOPHIA slice. |
 <!-- GENERATED:active-vs-archive:end -->
+
+## Repository root
+
+The top-level [README.md](../README.md) duplicates navigation paths for GitHub visitors (including generated tables maintained by `scripts/restormel/update_repo_docs.py`).
+
+## If this folder looks empty or incomplete locally
+
+1. **Update from `main`:** `git pull origin main`
+2. **Force-restore the public slice from Git** (does not remove your untracked `docs/local/` tree):  
+   `git fetch origin && git checkout origin/main -- docs/README.md docs/LOCAL_DOCS.md docs/sophia/`
+3. **Verify paths:** from repo root, `pnpm run docs:verify-present`  
+   (public files always; Restormel meta only if `docs/restormel/` or `docs/local/restormel/` exists).
+
+If `git status` never shows changes under tracked `docs/` files when you edit them, inspect **`.gitignore`** for a line like `docs/*` — that pattern hides the tree from Git and breaks CI; remove it and restore with step 2.

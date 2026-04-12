@@ -12,4 +12,4 @@ last_reviewed: 2026-03-13
 
 The active SOPHIA current-state document now lives at [docs/sophia/current-state.md](docs/sophia/current-state.md).
 
-Historical checkpoints and operational snapshots live under `docs/local/archive/` when the maintainer documentation pack is present ([docs/LOCAL_DOCS.md](docs/LOCAL_DOCS.md)).
+Historical checkpoints and operational snapshots are not part of the public documentation slice; when you use the maintainer pack they live under `docs/local/archive/` ([docs/LOCAL_DOCS.md](docs/LOCAL_DOCS.md)).

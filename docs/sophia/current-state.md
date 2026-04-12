@@ -47,8 +47,8 @@ In practice, this repo currently contains both the SOPHIA product surfaces and a
 
 ## What is source of truth vs supporting context
 
-- Current product/technical truth: this file and the other **public** docs in `docs/sophia/`
-- Active platform truth, operational runbooks, reference library, and archive: `docs/local/` when populated ([`docs/LOCAL_DOCS.md`](../LOCAL_DOCS.md))
+- Current product/technical truth: this file and the other **public** docs in `docs/sophia/` (see [Documentation index](../README.md)).
+- Active platform truth, operational runbooks, reference library, and archive: `docs/local/` when populated ([`docs/LOCAL_DOCS.md`](../LOCAL_DOCS.md)).
 
 ## Current interpretation of the repo
 

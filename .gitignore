@@ -18,6 +18,8 @@ temp/
 tmp/
 data/backups/*/
 data/backups/
+# Surreal CLI exports (`surreal export` → *.surql); may contain production graph data
+backups/
 data/reports/*.md
 data/reports/*.json
 data/reports/
@@ -32,6 +34,14 @@ docs/local/
 
 # Local design documents — do not commit work-in-progress design files
 docs/design/MASTER-IMPLEMENTATION-GUIDE.md
+
+# Operator batch manifests / inventories (local only)
+data/relabel-inventory.csv
+data/relabel-inventory.json
+data/relabel-neon-*.json
+data/sep-reingest-sources.txt
+data/sep-reingest-sources.json
+data/sep-reingest-sources-urls.txt
 
 # Repomix outputs (large generated packs — do not commit; keep *.config.json tracked)
 repomix-output.xml

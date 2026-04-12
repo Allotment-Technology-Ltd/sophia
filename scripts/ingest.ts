@@ -448,6 +448,14 @@ interface IngestTimingPayload {
 	recovery_agent_backoff_ms_total: number;
 	embed_wall_ms: number;
 	store_wall_ms: number;
+	/** Sum of provider-reported input + output tokens across all `generateText` calls in this run (LLM stages only). */
+	total_input_tokens: number;
+	total_output_tokens: number;
+	/** Per-stage sums of input/output tokens (same keys as `model_calls`, e.g. `extraction`, `relations`). */
+	stage_input_tokens: Record<string, number>;
+	stage_output_tokens: Record<string, number>;
+	/** Vertex embedding path: characters counted for billing (`trackEmbeddingCost`); not LLM tokens. */
+	vertex_embed_chars: number;
 	/** Set when logging the final summary line (wall clock for entire run). */
 	total_wall_ms?: number;
 }
@@ -646,13 +654,28 @@ function createEmptyTiming(): IngestTimingPayload {
 		recovery_agent_invocations: 0,
 		recovery_agent_backoff_ms_total: 0,
 		embed_wall_ms: 0,
-		store_wall_ms: 0
+		store_wall_ms: 0,
+		total_input_tokens: 0,
+		total_output_tokens: 0,
+		stage_input_tokens: {},
+		stage_output_tokens: {},
+		vertex_embed_chars: 0
 	};
 }
 
 function bumpStageMs(key: string, ms: number): void {
 	if (!activeIngestTiming) return;
 	activeIngestTiming.stage_ms[key] = (activeIngestTiming.stage_ms[key] ?? 0) + ms;
+}
+
+function bumpStageTokens(stage: string, inputTokens: number, outputTokens: number): void {
+	if (!activeIngestTiming) return;
+	const inn = Math.max(0, Math.trunc(inputTokens));
+	const outt = Math.max(0, Math.trunc(outputTokens));
+	activeIngestTiming.total_input_tokens += inn;
+	activeIngestTiming.total_output_tokens += outt;
+	activeIngestTiming.stage_input_tokens[stage] = (activeIngestTiming.stage_input_tokens[stage] ?? 0) + inn;
+	activeIngestTiming.stage_output_tokens[stage] = (activeIngestTiming.stage_output_tokens[stage] ?? 0) + outt;
 }
 
 function ingestElapsedWallMs(): number {
@@ -691,7 +714,11 @@ function logIngestTimingHumanBlock(t: IngestTimingPayload, totalWallMs: number):
 		row('Stage 5 · validating', sm.validating ?? 0),
 		row('Stage 5b · remediating', sm.remediating ?? 0),
 		row('Stage 6 · storing', sm.storing ?? t.store_wall_ms ?? 0),
-		`    ${'Total (this run)'.padEnd(26)} ${formatDuration(totalWallMs)}`
+		`    ${'Total (this run)'.padEnd(26)} ${formatDuration(totalWallMs)}`,
+		`    ${'LLM tokens (in / out)'.padEnd(26)} ${t.total_input_tokens.toLocaleString()} / ${t.total_output_tokens.toLocaleString()}`,
+		t.vertex_embed_chars > 0
+			? `    ${'Vertex embed chars'.padEnd(26)} ${t.vertex_embed_chars.toLocaleString()}`
+			: ''
 	].filter((l) => l.length > 0 && !l.match(/^[\s]*$/));
 	console.log(lines.join('\n'));
 }
@@ -699,6 +726,7 @@ function logIngestTimingHumanBlock(t: IngestTimingPayload, totalWallMs: number):
 function logIngestTimingSummary(): void {
 	if (!activeIngestTiming) return;
 	const totalWallMs = Date.now() - activeIngestTiming.run_started_at_ms;
+	activeIngestTiming.vertex_embed_chars = costs.vertexChars;
 	const payload: IngestTimingPayload = { ...activeIngestTiming, total_wall_ms: totalWallMs };
 	logIngestTimingHumanBlock(payload, totalWallMs);
 	console.log(`[INGEST_TIMING] ${JSON.stringify(payload)}`);
@@ -2074,6 +2102,9 @@ async function callStageModel(params: {
 			});
 			const inputTokens = result.usage?.inputTokens ?? 0;
 			const outputTokens = result.usage?.outputTokens ?? 0;
+			if (activeIngestTiming) {
+				bumpStageTokens(stage, inputTokens, outputTokens);
+			}
 			ingestTpmGuard.recordUsage(routingProvider, inputTokens + outputTokens);
 			const usageCostUsd = trackReasoningCost(activePlan.model, inputTokens, outputTokens);
 			if (result.finishReason === 'length') {
