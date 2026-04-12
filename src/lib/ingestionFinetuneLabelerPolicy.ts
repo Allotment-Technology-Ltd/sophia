@@ -2,9 +2,12 @@
  * Fine-tune / training-data lineage: restrict which LLM providers may run stages whose
  * outputs are persisted as claims, relations, arguments, repairs, or remediated passages.
  *
- * Default is **strict** (Mistral-only unless overridden) so Restormel resolve, catalog
- * routing JSON, or historical pins cannot silently reintroduce OpenAI/Anthropic/Vertex on
- * those surfaces. Disable locally with `INGEST_FINETUNE_LABELER_STRICT=0`.
+ * Default is **strict** with an allowlist so Restormel resolve, catalog routing JSON, or
+ * historical pins cannot silently reintroduce disallowed vendors (e.g. OpenAI/Anthropic) on
+ * sensitive surfaces. **Mistral + Vertex** are allowed by default (extraction/json_repair stay
+ * Mistral-first in canonical config; relations/grouping/remediation use Vertex primary).
+ * Override with `INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS`. Disable locally with
+ * `INGEST_FINETUNE_LABELER_STRICT=0`.
  */
 import type { IngestionLlmStageKey } from './ingestionCanonicalPipeline.js';
 
@@ -27,11 +30,12 @@ export function ingestFinetuneLabelerStrictEnabled(env: NodeJS.ProcessEnv = proc
 
 /**
  * When strict mode is on, only these providers may appear in the effective model chain for
- * {@link FINETUNE_SENSITIVE_LLM_STAGES}. Default single entry: `mistral`.
+ * {@link FINETUNE_SENSITIVE_LLM_STAGES}. Default: `mistral`, `vertex` (GCP enterprise path for
+ * relate / group / remediate; extraction remains Mistral-primary in canonical pipeline).
  */
 export function parseFinetuneLabelerAllowedProviders(env: NodeJS.ProcessEnv = process.env): string[] {
 	const raw = env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS?.trim();
-	if (!raw) return ['mistral'];
+	if (!raw) return ['mistral', 'vertex'];
 	return raw
 		.split(/[,|]/)
 		.map((s) => s.trim().toLowerCase())

@@ -22,9 +22,9 @@ describe('ingestionFinetuneLabelerPolicy', () => {
 		expect(ingestFinetuneLabelerStrictEnabled(process.env)).toBe(false);
 	});
 
-	it('defaults allowed providers to mistral', () => {
+	it('defaults allowed providers to mistral and vertex', () => {
 		delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;
-		expect(parseFinetuneLabelerAllowedProviders(process.env)).toEqual(['mistral']);
+		expect(parseFinetuneLabelerAllowedProviders(process.env)).toEqual(['mistral', 'vertex']);
 	});
 
 	it('parses INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS', () => {
@@ -46,6 +46,20 @@ describe('ingestionFinetuneLabelerPolicy', () => {
 		];
 		expect(filterModelTiersForFinetunePolicy('extraction', tiers, process.env)).toEqual([
 			{ provider: 'mistral', modelId: 'mistral-large-latest' }
+		]);
+	});
+
+	it('keeps vertex and mistral on relations when strict with defaults', () => {
+		process.env.INGEST_FINETUNE_LABELER_STRICT = '1';
+		delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;
+		const tiers = [
+			{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
+			{ provider: 'mistral', modelId: 'mistral-medium-latest' },
+			{ provider: 'openai', modelId: 'gpt-4o-mini' }
+		];
+		expect(filterModelTiersForFinetunePolicy('relations', tiers, process.env)).toEqual([
+			{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
+			{ provider: 'mistral', modelId: 'mistral-medium-latest' }
 		]);
 	});
 

@@ -39,27 +39,26 @@ export type IngestionLlmStageKey =
 export type CanonicalModelRef = { provider: ModelProvider; modelId: string };
 
 /**
- * Primary models tuned for: structured JSON at extract/relate/group on **Mistral** (fine-tune
- * lineage / API ToS path), cross-vendor **validation** (Vertex reviews Mistral pipeline output),
- * JSON repair + remediation on Mistral so OpenAI/Anthropic never rewrite persisted training slices.
+ * Production profile: **Mistral** for extraction + json_repair (fine-tune lineage defaults),
+ * **Vertex Gemini** for relations, grouping, and remediation (capacity + long context on GCP),
+ * **Vertex** validation with OpenAI/Vertex fallbacks. OpenAI/Anthropic are not canonical primaries
+ * on sensitive stages; allowlist in `ingestionFinetuneLabelerPolicy` enforces defaults at runtime.
  *
- * Labeler stages (extract / relate / group / remediation) use **medium first**: long SEP sources
- * often exceed wall-clock budgets on `mistral-large-latest` before the first token burst; medium
- * completes reliably, then large is used as a fallback tier for harder batches.
+ * Extraction uses **mistral-medium-latest** first; long SEP runs often need medium before large.
  */
 export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, CanonicalModelRef> = {
 	extraction: { provider: 'mistral', modelId: 'mistral-medium-latest' },
-	relations: { provider: 'mistral', modelId: 'mistral-medium-latest' },
-	grouping: { provider: 'mistral', modelId: 'mistral-medium-latest' },
+	relations: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
+	grouping: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 	/** Distinct from labeler stages: second opinion from another provider improves faithfulness checks. */
 	validation: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
-	remediation: { provider: 'mistral', modelId: 'mistral-medium-latest' },
+	remediation: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 	json_repair: { provider: 'mistral', modelId: 'mistral-medium-latest' }
 };
 
 /**
  * Ordered fallbacks after primary exhausts transient retries (429/5xx/timeout).
- * For Mistral labeler stages: try **larger** tiers after medium; validation uses alternate vendors.
+ * Relations / grouping / remediation: heavier Vertex then Mistral tiers. Extraction: Mistral sizes.
  */
 export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, CanonicalModelRef[]> = {
 	extraction: [
@@ -67,10 +66,14 @@ export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, C
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	],
 	relations: [
+		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
+		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
 		{ provider: 'mistral', modelId: 'mistral-large-latest' },
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	],
 	grouping: [
+		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
+		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
 		{ provider: 'mistral', modelId: 'mistral-large-latest' },
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	],
@@ -80,6 +83,8 @@ export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, C
 		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' }
 	],
 	remediation: [
+		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
+		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
 		{ provider: 'mistral', modelId: 'mistral-large-latest' },
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	],
