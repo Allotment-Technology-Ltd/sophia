@@ -6,6 +6,8 @@
 #
 #   deploy paths (src, scripts, drizzle, Docker, lockfile, …)  →
 #   deploy-neon-migrate + deploy-container-image (parallel) + app-deploy (Cloud Run + poller + health).
+#   Neon migrate also runs when only `drizzle/**` or `scripts/neon-migrate.ts` changes (`neon_migrate` filter),
+#   so SQL migrations are never skipped while a docs-only push skips migrate + image + deploy.
 #   Ingest fixes (scripts/ingest.ts, verify-cloud-run-ingest-modules, runtime COPY in Dockerfile) ship on
 #   the same image as the web app; sophia + sophia-ingestion-job-poller + sophia-ingest-worker all use the pushed commit tag.
 #   docs/**, repomix*.json  →  no image build or Cloud Run deploy (workflow_dispatch --force still works).
@@ -129,6 +131,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       deploy: ${{ steps.filter.outputs.deploy }}
+      neon_migrate: ${{ steps.filter.outputs.neon_migrate }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -138,6 +141,9 @@ jobs:
         id: filter
         with:
           filters: |
+            neon_migrate:
+              - 'drizzle/**'
+              - 'scripts/neon-migrate.ts'
             deploy:
               - 'src/**'
               - 'scripts/**'
@@ -265,12 +271,20 @@ jobs:
         uses: github/codeql-action/analyze@v4
 
   # ── 3a. Neon migrations (parallel with container image; must finish before Cloud Run) ──
+  # Applies every pending `drizzle/*.sql` in lexical order via `pnpm db:migrate:ci` → `scripts/neon-migrate.ts`.
+  # Runs on main when deploy-related paths OR migration-only paths (`neon_migrate`) change, or on manual force.
   deploy-neon-migrate:
     if: >
       success() &&
       github.ref == 'refs/heads/main' &&
       (
-        (github.event_name == 'push' && needs.changes.outputs.deploy == 'true') ||
+        (
+          github.event_name == 'push' &&
+          (
+            needs.changes.outputs.deploy == 'true' ||
+            needs.changes.outputs.neon_migrate == 'true'
+          )
+        ) ||
         (github.event_name == 'workflow_dispatch' && inputs.force_app_deploy == true)
       )
     needs: [changes, security]

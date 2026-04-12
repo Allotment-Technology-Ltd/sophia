@@ -404,3 +404,19 @@ export const reembedJobEvents = pgTable(
   })
 );
 
+/** Per-source training / export exclusion (canonical URL hash). */
+export const sourceTrainingGovernance = pgTable(
+  'source_training_governance',
+  {
+    canonicalUrlHash: text('canonical_url_hash').primaryKey(),
+    sourceUrl: text('source_url').notNull(),
+    excludeFromModelTraining: boolean('exclude_from_model_training').notNull().default(false),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+  },
+  (t) => ({
+    sourceUrlIdx: index('idx_source_training_governance_source_url').on(t.sourceUrl)
+  })
+);
+

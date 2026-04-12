@@ -88,6 +88,12 @@ import {
 	noteIngestStageModelSuccessInDb
 } from '../src/lib/server/db/ingestModelHealth.js';
 import {
+	getSourceTrainingGovernanceExcluded,
+	resolveExcludeSourceFromModelTrainingForIngest,
+	upsertSourceTrainingGovernanceOnIngestComplete
+} from '../src/lib/server/db/sourceTrainingGovernance.js';
+import { isNeonIngestPersistenceEnabled } from '../src/lib/server/neon/datastore.ts';
+import {
 	SOURCE_ID_STRING_ARRAY_ONE_SQL,
 	SOURCE_ID_STRING_SQL,
 	recordKeyForTable,
@@ -3376,6 +3382,9 @@ async function main() {
 		console.error(
 			'  INGEST_FORCE_REINGEST=1          Durable-job / operator re-ingest: treat as --force-stage extracting (skip early exit when ingestion_log is complete)'
 		);
+		console.error(
+			'  INGEST_EXCLUDE_SOURCE_FROM_MODEL_TRAINING=1   Mark stored source as excluded from model-training exports (Neon + Surreal); Neon upsert is sticky-OR'
+		);
 		console.error('\nResume is automatic — re-run the same source to pick up where it left off.');
 		process.exit(1);
 	}
@@ -3408,6 +3417,7 @@ async function main() {
 		}
 	}
 	assertValidSourceMetadata(sourceMeta);
+	const excludeFromModelTraining = resolveExcludeSourceFromModelTrainingForIngest();
 	assertSepPresetDiscipline({
 		sourceType: sourceMeta.source_type,
 		mode: parsePresetDisciplineMode(process.env.INGEST_PRESET_DISCIPLINE),
@@ -4973,6 +4983,16 @@ async function main() {
 					e instanceof Error ? e.message : String(e)
 				);
 			}
+			try {
+				await db.query(
+					'DEFINE FIELD IF NOT EXISTS exclude_from_model_training ON source TYPE bool DEFAULT false'
+				);
+			} catch (e) {
+				console.warn(
+					'  [WARN] Could not DEFINE FIELD exclude_from_model_training on source:',
+					e instanceof Error ? e.message : String(e)
+				);
+			}
 			const RELATION_TABLES_ALL = [
 				'supports',
 				'contradicts',
@@ -5032,6 +5052,11 @@ async function main() {
 
 			// 6b. Create source record
 			console.log('  Creating source record...');
+			let surrealExcludeFromModelTraining = excludeFromModelTraining;
+			if (isNeonIngestPersistenceEnabled()) {
+				const neonExcluded = await getSourceTrainingGovernanceExcluded(sourceMeta.canonical_url_hash);
+				surrealExcludeFromModelTraining = surrealExcludeFromModelTraining || neonExcluded;
+			}
 			const sourceContentFields = INGEST_STORE_RECORD_TEXT_HASH
 				? `,
 					ingest_source_text_sha256: $ingest_source_text_sha256`
@@ -5049,7 +5074,8 @@ async function main() {
 					deletion_state: $deletion_state,
 					ingested_at: time::now(),
 					claim_count: $claim_count,
-					status: $status${sourceContentFields}
+					status: $status,
+					exclude_from_model_training: $exclude_from_model_training${sourceContentFields}
 				}`,
 				{
 					title: sourceMeta.title,
@@ -5063,6 +5089,7 @@ async function main() {
 					deletion_state: sourceMeta.deletion_state ?? undefined,
 					claim_count: allClaims.length,
 					status: shouldValidate ? 'validated' : 'ingested',
+					exclude_from_model_training: surrealExcludeFromModelTraining,
 					...(INGEST_STORE_RECORD_TEXT_HASH ? { ingest_source_text_sha256: sourceTextSha256 } : {})
 				}
 			);
@@ -5659,6 +5686,22 @@ async function main() {
 						validationResult.claims.length)
 				)
 			: null;
+
+		if (isNeonIngestPersistenceEnabled()) {
+			try {
+				await upsertSourceTrainingGovernanceOnIngestComplete({
+					canonicalUrlHash: sourceMeta.canonical_url_hash,
+					sourceUrl: sourceMeta.url,
+					excludeFromModelTraining: excludeFromModelTraining
+				});
+			} catch (governanceError) {
+				console.warn(
+					`  [WARN] Neon source_training_governance upsert failed: ${
+						governanceError instanceof Error ? governanceError.message : String(governanceError)
+					}`
+				);
+			}
+		}
 
 		await updateIngestionLog(db, sourceMeta.url, {
 			status: 'complete',

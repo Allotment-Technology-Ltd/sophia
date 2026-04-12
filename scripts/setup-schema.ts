@@ -77,6 +77,7 @@ export async function setupSchema(existingDb?: Surreal) {
 			DEFINE FIELD IF NOT EXISTS status ON source TYPE string
 				DEFAULT 'pending'
 				ASSERT $value IN ['pending', 'ingested', 'validated', 'quarantined'];
+			DEFINE FIELD IF NOT EXISTS exclude_from_model_training ON source TYPE bool DEFAULT false;
 		`);
 		console.log('[SETUP] ✓ Table: source');
 

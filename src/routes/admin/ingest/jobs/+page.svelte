@@ -102,8 +102,9 @@
 		return h;
 	}
 
-	function parseOptionalInt(input: string, min: number, max: number): number | undefined {
-		const t = input.trim();
+	/** Number inputs use `bind:value` on string-initialized state → runtime value can be `number`; coerce before `.trim()`. */
+	function parseOptionalInt(input: string | number | null | undefined, min: number, max: number): number | undefined {
+		const t = String(input ?? '').trim();
 		if (!t) return undefined;
 		const n = Number(t);
 		if (!Number.isFinite(n)) return undefined;
@@ -134,7 +135,7 @@
 			o.ingestRemediationEnabled = jobRemediationEnabled;
 			o.ingestRemediationRevalidate = jobRemediationRevalidate;
 		}
-		const idleRaw = jobWatchdogPhaseIdleJson.trim();
+		const idleRaw = String(jobWatchdogPhaseIdleJson ?? '').trim();
 		if (idleRaw) {
 			try {
 				const parsed = JSON.parse(idleRaw);
@@ -145,7 +146,7 @@
 				return { ok: false, error: 'Watchdog phase idle JSON is not valid JSON.' };
 			}
 		}
-		const multRaw = jobWatchdogBaselineMult.trim();
+		const multRaw = String(jobWatchdogBaselineMult ?? '').trim();
 		if (multRaw) {
 			const m = Number(multRaw);
 			if (!Number.isFinite(m) || m < 0.5 || m > 10) {
@@ -314,7 +315,7 @@
 						1,
 						Math.min(MAX_DURABLE_INGEST_JOB_CONCURRENCY, Math.trunc(concurrency) || 2)
 					),
-					notes: notes.trim() || null,
+					notes: String(notes ?? '').trim() || null,
 					validate: validateLlm,
 					merge_into_latest_running_job: mergeIntoRunningJob,
 					...(workerBuild.payload && Object.keys(workerBuild.payload).length > 0
@@ -458,13 +459,29 @@
 			const raw = localStorage.getItem(JOB_WORKER_SETTINGS_KEY);
 			if (raw) {
 				const p = JSON.parse(raw) as Record<string, unknown>;
-				if (typeof p.jobExtractionConcurrency === 'string') jobExtractionConcurrency = p.jobExtractionConcurrency;
-				if (typeof p.jobExtractionMaxTokens === 'string') jobExtractionMaxTokens = p.jobExtractionMaxTokens;
-				if (typeof p.jobPassageInsertConcurrency === 'string')
-					jobPassageInsertConcurrency = p.jobPassageInsertConcurrency;
-				if (typeof p.jobClaimInsertConcurrency === 'string') jobClaimInsertConcurrency = p.jobClaimInsertConcurrency;
-				if (typeof p.jobRemediationMaxClaims === 'string') jobRemediationMaxClaims = p.jobRemediationMaxClaims;
-				if (typeof p.jobRelationsOverlap === 'string') jobRelationsOverlap = p.jobRelationsOverlap;
+				const strOrNum = (v: unknown): string =>
+					typeof v === 'string' ? v : typeof v === 'number' && Number.isFinite(v) ? String(v) : '';
+				if (typeof p.jobExtractionConcurrency === 'string' || typeof p.jobExtractionConcurrency === 'number') {
+					jobExtractionConcurrency = strOrNum(p.jobExtractionConcurrency);
+				}
+				if (typeof p.jobExtractionMaxTokens === 'string' || typeof p.jobExtractionMaxTokens === 'number') {
+					jobExtractionMaxTokens = strOrNum(p.jobExtractionMaxTokens);
+				}
+				if (
+					typeof p.jobPassageInsertConcurrency === 'string' ||
+					typeof p.jobPassageInsertConcurrency === 'number'
+				) {
+					jobPassageInsertConcurrency = strOrNum(p.jobPassageInsertConcurrency);
+				}
+				if (typeof p.jobClaimInsertConcurrency === 'string' || typeof p.jobClaimInsertConcurrency === 'number') {
+					jobClaimInsertConcurrency = strOrNum(p.jobClaimInsertConcurrency);
+				}
+				if (typeof p.jobRemediationMaxClaims === 'string' || typeof p.jobRemediationMaxClaims === 'number') {
+					jobRemediationMaxClaims = strOrNum(p.jobRemediationMaxClaims);
+				}
+				if (typeof p.jobRelationsOverlap === 'string' || typeof p.jobRelationsOverlap === 'number') {
+					jobRelationsOverlap = strOrNum(p.jobRelationsOverlap);
+				}
 				if (
 					p.jobIngestProvider === 'auto' ||
 					p.jobIngestProvider === 'anthropic' ||
@@ -486,7 +503,9 @@
 					jobRemediationRevalidate = p.jobRemediationRevalidate;
 				if (typeof p.jobWatchdogPhaseIdleJson === 'string')
 					jobWatchdogPhaseIdleJson = p.jobWatchdogPhaseIdleJson;
-				if (typeof p.jobWatchdogBaselineMult === 'string') jobWatchdogBaselineMult = p.jobWatchdogBaselineMult;
+				if (typeof p.jobWatchdogBaselineMult === 'string' || typeof p.jobWatchdogBaselineMult === 'number') {
+					jobWatchdogBaselineMult = strOrNum(p.jobWatchdogBaselineMult);
+				}
 			}
 		} catch {
 			/* ignore */
