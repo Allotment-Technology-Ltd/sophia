@@ -351,6 +351,13 @@
     lastFailureStageKey: string | null;
     completedAtMs: number | null;
     createdAtMs: number | null;
+    /** Rule-based fleet tuning hints (no LLM); from report envelope */
+    metricsAdvisory?: {
+      severity?: string;
+      recommendations?: string[];
+      guardrails?: string[];
+      signals?: Record<string, number>;
+    } | null;
   };
   let firestoreReportDetail = $state<FirestoreReportDetail | null>(null);
   let firestoreReportLoadError = $state('');
@@ -3411,6 +3418,35 @@
               <li><span class="text-sophia-dark-dim">{k}:</span> {v}</li>
             {/each}
           </ul>
+        </div>
+      {/if}
+      {#if firestoreReportDetail.metricsAdvisory && typeof firestoreReportDetail.metricsAdvisory === 'object'}
+        {@const adv = firestoreReportDetail.metricsAdvisory}
+        <div class="mt-4 rounded border border-sophia-dark-border/70 bg-sophia-dark-bg/30 p-4" role="region" aria-label="Metrics advisory">
+          <p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">
+            Metrics advisory (rule-based)
+          </p>
+          <p class="mt-2 font-mono text-xs text-sophia-dark-muted">
+            Severity: <span class="text-sophia-dark-text">{adv.severity ?? '—'}</span> — from
+            <span class="font-mono text-sophia-dark-text">timingTelemetry</span> + log heuristics. Not an LLM; see
+            <span class="font-mono text-sophia-dark-text">pnpm ops:ingest-tuning-report-neon</span> for fleet rollups.
+          </p>
+          {#if Array.isArray(adv.recommendations) && adv.recommendations.length > 0}
+            <p class="mt-3 font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Recommendations</p>
+            <ul class="mt-2 list-disc space-y-2 pl-5 text-xs leading-relaxed text-sophia-dark-muted">
+              {#each adv.recommendations as rec (rec)}
+                <li>{rec}</li>
+              {/each}
+            </ul>
+          {/if}
+          {#if Array.isArray(adv.guardrails) && adv.guardrails.length > 0}
+            <p class="mt-3 font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Guardrails</p>
+            <ul class="mt-2 list-disc space-y-2 pl-5 text-xs leading-relaxed text-sophia-dark-muted">
+              {#each adv.guardrails as g (g)}
+                <li>{g}</li>
+              {/each}
+            </ul>
+          {/if}
         </div>
       {/if}
       {#if firestoreReportDetail.terminalError}

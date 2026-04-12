@@ -13,6 +13,10 @@ import {
 import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 import { parseIngestSelfHealLine } from '$lib/server/ingestion/selfHealLog';
+import {
+  buildIngestMetricsAdvisory,
+  scanLogLinesForIngestSignals
+} from '$lib/server/ingestion/ingestRunMetricsAdvisor';
 
 export type IngestIssueKind =
   | 'warning'
@@ -468,6 +472,8 @@ function buildIngestRunReportEnvelope(state: IngestRunSnapshotForReport): Record
         : null,
     issueSelfHealSummary
   };
+  const logSignals = scanLogLinesForIngestSignals(state.logLines);
+  const metricsAdvisory = buildIngestMetricsAdvisory(timingTelemetry, logSignals);
   return {
     runId: state.id,
     actorEmail: state.actorEmail ?? null,
@@ -483,6 +489,7 @@ function buildIngestRunReportEnvelope(state: IngestRunSnapshotForReport): Record
     routingStats,
     timingTelemetry,
     selfHealTelemetry,
+    metricsAdvisory,
     createdAtMs: state.createdAt,
     completedAtMs: state.completedAt ?? Date.now(),
     terminalError: state.error ?? null,
@@ -517,37 +524,23 @@ export async function persistIngestRunReport(state: IngestRunSnapshotForReport):
     }
 
     const ref = sophiaDocumentsDb.collection(FIRESTORE_COLLECTION).doc(state.id);
-    const payload = state.payload;
-    const routingStats = summarizeRoutingFromLogLines(state.logLines);
-    const timingTelemetry = parseIngestTimingFromLogLines(state.logLines);
-    const issueSelfHealSummaryFs = summarizeSelfHealFromIssues(state.issues);
-    const selfHealTelemetry = {
-      recoveryAgentInvocations:
-        typeof timingTelemetry?.recovery_agent_invocations === 'number'
-          ? timingTelemetry.recovery_agent_invocations
-          : null,
-      recoveryAgentBackoffMsTotal:
-        typeof timingTelemetry?.recovery_agent_backoff_ms_total === 'number'
-          ? timingTelemetry.recovery_agent_backoff_ms_total
-          : null,
-      issueSelfHealSummary: issueSelfHealSummaryFs
-    };
     await ref.set(
       {
-        runId: state.id,
-        actorEmail: state.actorEmail ?? null,
-        status: state.status,
-        sourceUrl: payload.source_url,
-        sourceType: payload.source_type,
-        pipelinePreset: payload.pipeline_preset ?? null,
-        validate: payload.validate === true,
-        stopBeforeStore: payload.stop_before_store !== false,
-        modelChain: payload.model_chain,
-        embeddingModel: payload.embedding_model ?? null,
-        batchOverrides: payload.batch_overrides ?? null,
-        routingStats,
-        timingTelemetry,
-        selfHealTelemetry,
+        runId: envelope.runId,
+        actorEmail: envelope.actorEmail,
+        status: envelope.status,
+        sourceUrl: envelope.sourceUrl,
+        sourceType: envelope.sourceType,
+        pipelinePreset: envelope.pipelinePreset,
+        validate: envelope.validate,
+        stopBeforeStore: envelope.stopBeforeStore,
+        modelChain: envelope.modelChain,
+        embeddingModel: envelope.embeddingModel,
+        batchOverrides: envelope.batchOverrides,
+        routingStats: envelope.routingStats,
+        timingTelemetry: envelope.timingTelemetry,
+        selfHealTelemetry: envelope.selfHealTelemetry,
+        metricsAdvisory: envelope.metricsAdvisory,
         createdAt: Timestamp.fromMillis(state.createdAt),
         completedAt: Timestamp.fromMillis(state.completedAt ?? Date.now()),
         terminalError: state.error ?? null,
