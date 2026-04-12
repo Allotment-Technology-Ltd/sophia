@@ -51,6 +51,8 @@ export const GET: RequestHandler = async ({ locals, params }) => {
         timingTelemetry:
           env.timingTelemetry && typeof env.timingTelemetry === 'object' ? env.timingTelemetry : null,
         routingStats: env.routingStats && typeof env.routingStats === 'object' ? env.routingStats : null,
+        metricsAdvisory:
+          env.metricsAdvisory && typeof env.metricsAdvisory === 'object' ? env.metricsAdvisory : null,
         completedAtMs,
         createdAtMs
       });
@@ -78,6 +80,8 @@ export const GET: RequestHandler = async ({ locals, params }) => {
       lastFailureStageKey: typeof d.lastFailureStageKey === 'string' ? d.lastFailureStageKey : null,
       timingTelemetry: d.timingTelemetry && typeof d.timingTelemetry === 'object' ? d.timingTelemetry : null,
       routingStats: d.routingStats && typeof d.routingStats === 'object' ? d.routingStats : null,
+      metricsAdvisory:
+        d.metricsAdvisory && typeof d.metricsAdvisory === 'object' ? d.metricsAdvisory : null,
       completedAtMs: typeof d.completedAt?.toMillis === 'function' ? d.completedAt.toMillis() : null,
       createdAtMs: typeof d.createdAt?.toMillis === 'function' ? d.createdAt.toMillis() : null
     });

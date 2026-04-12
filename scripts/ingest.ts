@@ -35,6 +35,7 @@ import {
 	emitIngestTelemetry,
 	runWithIngestTelemetryHeartbeat
 } from '../src/lib/server/ingestion/ingestionTelemetry.js';
+import { buildIngestMetricsAdvisory } from '../src/lib/server/ingestion/ingestRunMetricsAdvisor.js';
 import {
 	assertSepPresetDiscipline,
 	buildSepPresetFingerprint,
@@ -752,7 +753,14 @@ function logIngestTimingSummary(): void {
 	const payload: IngestTimingPayload = { ...activeIngestTiming, total_wall_ms: totalWallMs };
 	logIngestTimingHumanBlock(payload, totalWallMs);
 	console.log(`[INGEST_TIMING] ${JSON.stringify(payload)}`);
+	const metricsAdvisory = buildIngestMetricsAdvisory(payload as unknown as Record<string, unknown>, {});
+	console.log(`[INGEST_METRICS_ADVISORY] ${JSON.stringify(metricsAdvisory)}`);
 	emitIngestTelemetry({ event: 'ingest_timing_complete', ...payload });
+	emitIngestTelemetry({
+		event: 'ingest_metrics_advisory',
+		severity: metricsAdvisory.severity,
+		recommendation_count: metricsAdvisory.recommendations.length
+	});
 	activeIngestTiming = null;
 }
 
