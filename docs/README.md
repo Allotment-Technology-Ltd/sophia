@@ -2,25 +2,55 @@
 status: active
 owner: adam
 source_of_truth: false
-last_reviewed: 2026-04-11
+last_reviewed: 2026-03-13
 ---
 
-# Documentation index
+# Documentation Index
 
-This repository intentionally ships **only a small public documentation set** (product overview, architecture, one operations slice, and Stoa context). Deeper runbooks, internal reviews, archive material, and the full Restormel planning pack are **not** in the public tree.
+This is the landing page for the repository documentation surface.
 
-## Entry points
+The structure is intentionally simple:
+- [`docs/sophia/`](sophia/README.md) holds the active SOPHIA showcase/reference-app narrative
+- [`docs/restormel/`](restormel/README.md) holds the active Restormel platform strategy, architecture, and delivery pack
+- [`docs/reference/`](reference/README.md) holds maintained supporting reference material
+- [`docs/archive/`](archive/README.md) preserves historical and superseded material
 
-| Document | Use it for |
+## Documentation surfaces
+
+<!-- GENERATED:docs-map:start -->
+| Surface | Status | Docs | Use it for | Entry point |
+| --- | --- | --- | --- | --- |
+| SOPHIA | Active | 10 | Showcase/reference app documentation. | [SOPHIA Documentation](sophia/README.md) |
+| Restormel | Active | 47 | Platform planning, architecture, and delivery docs. | [Restormel Documentation](restormel/README.md) |
+| Reference | Reference | 19 | Supporting implementation and operational references. | [Reference Documentation](reference/README.md) |
+| Archive | Archived | 64 | Historical material preserved for traceability. | [Documentation Archive](archive/README.md) |
+<!-- GENERATED:docs-map:end -->
+
+## Key entry points
+
+Start with the entry points below before browsing deeper folders.
+
+<!-- GENERATED:key-doc-entry-points:start -->
+| Document | Link |
 | --- | --- |
-| [SOPHIA Documentation](sophia/README.md) | What the showcase app is and how to read the core SOPHIA docs. |
-| [Architecture](sophia/architecture.md) | System shape and major components. |
-| [Roadmap](sophia/roadmap.md) | Planned direction (high level). |
-| [Current state](sophia/current-state.md) | Where the product stands today. |
-| [Restormel overview](restormel/README.md) | Platform framing; not the full internal planning pack. |
-| [Stoa game](stoa_game/README.md) | Game-mode documentation for contributors. |
-| [Ingestion credits and workers](operations/ingestion-credits-and-workers.md) | GCP / Neon ingestion operations and durable jobs. |
+| SOPHIA Documentation | [SOPHIA Documentation](sophia/README.md) |
+| Current State | [Current State](sophia/current-state.md) |
+| Architecture | [Architecture](sophia/architecture.md) |
+| Roadmap | [Roadmap](sophia/roadmap.md) |
+| Restormel Documentation | [Restormel Documentation](restormel/README.md) |
+| Restormel Platform: Milestone Plan with Exit Criteria | [Restormel Platform: Milestone Plan with Exit Criteria](restormel/04-delivery/19-milestone-plan-with-exit-criteria.md) |
+| Reference Documentation | [Reference Documentation](reference/README.md) |
+| Documentation Archive | [Documentation Archive](archive/README.md) |
+<!-- GENERATED:key-doc-entry-points:end -->
 
-## Repository root
+## Active vs archive
 
-The top-level [README.md](../README.md) duplicates the shortest navigation paths for GitHub visitors.
+Narrative meaning stays hand-authored in the active docs. Archived material is retained for traceability but should not be treated as current guidance unless an active document explicitly sends you there.
+
+<!-- GENERATED:active-vs-archive:start -->
+| Class | Current snapshot | Operating rule |
+| --- | --- | --- |
+| Active source of truth | 10 SOPHIA docs and 47 Restormel docs | Update when product, architecture, or delivery meaning changes. |
+| Supporting reference | 19 docs under docs/reference and 7 Restormel reference docs | Use for runbooks, API details, and automation context. |
+| Archived | 64 docs under docs/archive | Do not treat as current guidance; start at [Documentation Archive](archive/README.md). |
+<!-- GENERATED:active-vs-archive:end -->

@@ -12,4 +12,4 @@ last_reviewed: 2026-03-13
 
 The active SOPHIA roadmap now lives at [docs/sophia/roadmap.md](docs/sophia/roadmap.md).
 
-Historical roadmap and planning material is kept outside the public documentation slice in this repository.
+Historical roadmap and planning material has been moved into [docs/archive/](docs/archive/README.md).

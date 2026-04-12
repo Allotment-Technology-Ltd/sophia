@@ -52,7 +52,7 @@ Deferred from the ingestion preset refinement plan — implement when analytics 
 
 ### Phase 5 — Golden-set release gate
 
-- Maintain a **small golden corpus** (e.g. one SEP, one long book, one PhilPapers-style paper) and run your ingestion benchmark procedure (see `scripts/` and internal ops notes) before promoting preset or catalog changes.
+- Maintain a **small golden corpus** (e.g. one SEP, one long book, one PhilPapers-style paper) and run the procedure in [ingestion-benchmarks.md](../operations/ingestion-benchmarks.md) before promoting preset or catalog changes.
 - **Ship** only when wall time and cost move as intended without a proportional rise in `json_repair`, `batch_split`, or failed stages vs the prior baseline.
 
 ## Explicitly de-emphasised
@@ -63,4 +63,4 @@ The following are no longer maintained as separate active SOPHIA source-of-truth
 - parallel architecture hardening narratives
 - superseded implementation packs that duplicate current-state or architecture guidance
 
-Those materials are preserved outside this public documentation slice.
+Those materials are preserved in `docs/archive/`.
