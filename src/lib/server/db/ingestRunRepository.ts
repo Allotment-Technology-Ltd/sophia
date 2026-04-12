@@ -34,6 +34,7 @@ export async function neonCreateIngestRun(state: IngestRunState): Promise<void> 
     lastOutputAt: state.lastOutputAt ?? null,
     workerHeartbeatAt: state.workerHeartbeatAt ?? null,
     cancelledByUser: state.cancelledByUser === true,
+    excludeFromBatchSuggest: state.excludeFromBatchSuggest === true,
     syncStartedAt: state.syncStartedAt ? new Date(state.syncStartedAt) : null,
     syncCompletedAt: state.syncCompletedAt ? new Date(state.syncCompletedAt) : null,
     reportEnvelope: null,
@@ -257,6 +258,7 @@ export async function neonLoadIngestRun(runId: string): Promise<IngestRunState |
     processStartedAt: undefined,
     processExitedAt: undefined,
     cancelledByUser: row.cancelledByUser,
+    excludeFromBatchSuggest: row.excludeFromBatchSuggest === true,
     simulationInterval: null,
     syncSimulationTimeout: null,
     actorEmail: row.actorEmail ?? '',
@@ -265,6 +267,46 @@ export async function neonLoadIngestRun(runId: string): Promise<IngestRunState |
   };
 
   return state;
+}
+
+/** Persists operator preference for SEP batch URL helper exclusion. Returns rows updated (0 or 1). */
+export async function neonUpdateExcludeFromBatchSuggest(
+  runId: string,
+  value: boolean
+): Promise<number> {
+  if (!isNeonIngestPersistenceEnabled()) return 0;
+  const db = getDrizzleDb();
+  const updated = await db
+    .update(ingestRuns)
+    .set({ excludeFromBatchSuggest: value, updatedAt: new Date() })
+    .where(eq(ingestRuns.id, runId))
+    .returning({ id: ingestRuns.id });
+  return updated.length;
+}
+
+/**
+ * Mark a child ingest run abandoned when its durable job is stopped (works for `queued` rows that
+ * `cancelRun` cannot finalize in-process, and for workers not colocated with the admin API).
+ */
+export async function neonAbandonIngestRunForJobCancel(runId: string): Promise<number> {
+  if (!isNeonIngestPersistenceEnabled()) return 0;
+  const db = getDrizzleDb();
+  const msg = 'Ingestion cancelled (durable job stopped by operator).';
+  const updated = await db
+    .update(ingestRuns)
+    .set({
+      cancelledByUser: true,
+      status: 'error',
+      error: msg,
+      completedAt: new Date(),
+      updatedAt: new Date(),
+      currentAction: 'Job cancelled'
+    })
+    .where(
+      and(eq(ingestRuns.id, runId), inArray(ingestRuns.status, ['queued', 'running', 'awaiting_sync']))
+    )
+    .returning({ id: ingestRuns.id });
+  return updated.length;
 }
 
 /**

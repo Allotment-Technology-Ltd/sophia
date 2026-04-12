@@ -129,6 +129,15 @@ async function loadIngestedUrlSet(): Promise<Set<string>> {
 			if (c) out.add(c);
 		}
 
+		const suppressed = await db
+			.select({ sourceUrl: ingestRuns.sourceUrl })
+			.from(ingestRuns)
+			.where(eq(ingestRuns.excludeFromBatchSuggest, true));
+		for (const r of suppressed) {
+			const c = canonicalizeSourceUrl(r.sourceUrl);
+			if (c) out.add(c);
+		}
+
 		const items = await db
 			.select({ url: ingestionJobItems.url })
 			.from(ingestionJobItems)

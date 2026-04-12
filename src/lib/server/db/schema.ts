@@ -59,6 +59,11 @@ export const ingestRuns = pgTable(
     /** Bumped by worker telemetry heartbeats during long model calls (separate from log-driven last_output_at). */
     workerHeartbeatAt: bigint('worker_heartbeat_at', { mode: 'number' }),
     cancelledByUser: boolean('cancelled_by_user').notNull().default(false),
+    /**
+     * When true, this run's `source_url` (canonicalized) is treated like a completed ingest for
+     * admin SEP batch URL picking ("Exclude already ingested"), so failed/abandoned URLs stay out of suggestions.
+     */
+    excludeFromBatchSuggest: boolean('exclude_from_batch_suggest').notNull().default(false),
     syncStartedAt: timestamp('sync_started_at', { withTimezone: true }),
     syncCompletedAt: timestamp('sync_completed_at', { withTimezone: true }),
     reportEnvelope: jsonb('report_envelope').$type<Record<string, unknown> | null>(),

@@ -53,6 +53,8 @@
 	let pollInFlight = $state(false);
 	let retryBusy = $state(false);
 	let retryMessage = $state('');
+	let cancelJobBusy = $state(false);
+	let cancelJobMessage = $state('');
 	let itemActionBusyId = $state<string | null>(null);
 	let itemActionMessage = $state('');
 	/** From API — max starts per URL (INGEST_JOB_ITEM_MAX_ATTEMPTS). */
@@ -151,6 +153,18 @@
 		items.filter((i) => i.status === 'error' && Boolean(i.dlqEnqueuedAt)).length
 	);
 
+	const hasPendingOrRunning = $derived(
+		items.some((i) => i.status === 'pending' || i.status === 'running')
+	);
+
+	const canStopEntireJob = $derived(
+		Boolean(
+			job &&
+				job.status !== 'cancelled' &&
+				(job.status === 'running' || (job.status === 'done' && hasPendingOrRunning))
+		)
+	);
+
 	async function postItemModify(
 		itemId: string,
 		action: 'requeue_to_pending' | 'cancel'
@@ -179,6 +193,34 @@
 			itemActionMessage = e instanceof Error ? e.message : 'Action failed';
 		} finally {
 			itemActionBusyId = null;
+		}
+	}
+
+	async function postCancelEntireJob(): Promise<void> {
+		const jobId = currentJobId();
+		if (!jobId) return;
+		const ok = window.confirm(
+			'Stop this entire ingestion job? Pending URLs will not start; running URLs are abandoned in Neon (in-flight workers may take a moment to exit). You can start a new job afterward.'
+		);
+		if (!ok) return;
+		cancelJobBusy = true;
+		cancelJobMessage = '';
+		try {
+			const res = await fetch(`/api/admin/ingest/jobs/${encodeURIComponent(jobId)}/cancel`, {
+				method: 'POST',
+				headers: await authHeaders()
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				throw new Error(typeof body?.error === 'string' ? body.error : 'Cancel request failed');
+			}
+			cancelJobMessage = `Job stopped. Pending cancelled: ${body?.pendingCancelled ?? '—'}, running abandoned: ${body?.runningAbandoned ?? '—'}.`;
+			await fetchDetail();
+			await fetchEvents();
+		} catch (e) {
+			cancelJobMessage = e instanceof Error ? e.message : 'Cancel failed';
+		} finally {
+			cancelJobBusy = false;
 		}
 	}
 
@@ -270,10 +312,11 @@
 			if (token !== pollToken) return;
 			const j = job;
 			const terminal =
-				j &&
-				j.status === 'done' &&
-				(typeof j.summary?.pending === 'number' ? j.summary.pending : 0) === 0 &&
-				(typeof j.summary?.running === 'number' ? j.summary.running : 0) === 0;
+				(j &&
+					j.status === 'done' &&
+					(typeof j.summary?.pending === 'number' ? j.summary.pending : 0) === 0 &&
+					(typeof j.summary?.running === 'number' ? j.summary.running : 0) === 0) ||
+				j?.status === 'cancelled';
 			const baseMs = terminal ? 30_000 : 5000;
 			const delayMs = ok ? baseMs : Math.min(60_000, baseMs * 3);
 			arm(delayMs);
@@ -345,8 +388,36 @@
 			</dl>
 			<p class="mt-4 text-sm text-sophia-dark-muted">
 				Summary: total {job.summary?.total ?? '—'}, pending {job.summary?.pending ?? '—'}, running
-				{job.summary?.running ?? '—'}, done {job.summary?.done ?? '—'}, error {job.summary?.error ?? '—'}
+				{job.summary?.running ?? '—'}, done {job.summary?.done ?? '—'}, error {job.summary?.error ?? '—'}, cancelled
+				{job.summary?.cancelled ?? '—'}
 			</p>
+
+			{#if canStopEntireJob}
+				<div class="mt-5 border-t border-[var(--color-border)] pt-5" role="region" aria-label="Stop entire job">
+					<h2 class="font-serif text-lg text-sophia-dark-text">Stop entire job</h2>
+					<p class="mt-2 text-sm text-sophia-dark-muted">
+						Use this when a batch is failing repeatedly after a config change. No further URLs are launched from
+						this job; pending rows are cancelled and in-flight child runs are marked abandoned in Neon so you can
+						start a fresh job from the list page.
+					</p>
+					{#if cancelJobMessage}
+						<p
+							class="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+							role="status"
+						>
+							{cancelJobMessage}
+						</p>
+					{/if}
+					<button
+						type="button"
+						class="mt-4 inline-flex min-h-[44px] items-center justify-center rounded-lg border border-red-500/50 bg-red-500/15 px-5 py-3 font-mono text-sm font-medium text-red-100 transition hover:bg-red-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+						disabled={cancelJobBusy || retryBusy}
+						onclick={() => void postCancelEntireJob()}
+					>
+						{cancelJobBusy ? 'Stopping…' : 'Stop entire job'}
+					</button>
+				</div>
+			{/if}
 			<p class="mt-2 text-sm text-sophia-dark-muted">
 				Automatic retry: each URL may start up to <span class="font-mono text-sophia-dark-text">{itemMaxAttempts}</span>
 				time(s) (server <code class="rounded bg-black/20 px-1 py-0.5 font-mono text-[11px]">INGEST_JOB_ITEM_MAX_ATTEMPTS</code>).

@@ -18,7 +18,8 @@ import {
   neonCreateIngestRun,
   neonLoadIngestRun,
   neonMergePayloadAndVersion,
-  neonPersistIngestRunSnapshot
+  neonPersistIngestRunSnapshot,
+  neonUpdateExcludeFromBatchSuggest
 } from '$lib/server/db/ingestRunRepository';
 import { appendIssueFromLogLine, persistIngestRunReport, type IngestIssueRecord } from '$lib/server/ingestRunIssues';
 import { buildOperatorByokProcessEnv } from '$lib/server/byok/buildOperatorIngestEnv';
@@ -427,6 +428,8 @@ export interface IngestRunSummary {
   sourceType: string;
   currentStageKey?: string | null;
   error?: string;
+  /** Neon: exclude this run's URL from admin SEP batch URL helper when "exclude ingested" is on. */
+  excludeFromBatchSuggest?: boolean;
 }
 
 export interface IngestRunState {
@@ -467,6 +470,11 @@ export interface IngestRunState {
   issues: IngestIssueRecord[];
   /** Throttle for merging live run state into Firestore `ingestion_run_reports` while still running. */
   lastReportPersistAt?: number;
+  /**
+   * Neon-only operator flag: canonical `source_url` is merged into SEP catalog batch exclusion
+   * (alongside completed ingests) when the admin helper uses "Exclude already ingested".
+   */
+  excludeFromBatchSuggest?: boolean;
   /** When true, a row in `ingest_concurrency_gate` was acquired (see INGEST_GLOBAL_CONCURRENCY_GATE). */
   globalConcurrencySlotHeld?: boolean;
   /** Durable payload revision (Neon); incremented when resume merges model_chain / batch_overrides. */
@@ -925,7 +933,8 @@ class IngestRunManager extends EventEmitter {
       issues: [],
       lastReportPersistAt: undefined,
       payloadVersion: 1,
-      globalConcurrencySlotHeld: holdGlobalSlot
+      globalConcurrencySlotHeld: holdGlobalSlot,
+      excludeFromBatchSuggest: false
     };
 
     this.runs.set(runId, state);
@@ -962,6 +971,30 @@ class IngestRunManager extends EventEmitter {
     return loaded ?? undefined;
   }
 
+  /**
+   * Operator: persist Neon `exclude_from_batch_suggest` and refresh this process copy of the run.
+   */
+  async setExcludeFromBatchSuggest(
+    runId: string,
+    value: boolean
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (!isNeonIngestPersistenceEnabled()) {
+      return { ok: false, error: 'Neon ingest persistence is not enabled for this environment.' };
+    }
+    const n = await neonUpdateExcludeFromBatchSuggest(runId, value);
+    if (n === 0) {
+      return { ok: false, error: 'Run not found in Neon (check run id).' };
+    }
+    const mem = this.runs.get(runId);
+    if (mem) {
+      mem.excludeFromBatchSuggest = value;
+      return { ok: true };
+    }
+    const loaded = await neonLoadIngestRun(runId);
+    if (loaded) this.runs.set(runId, loaded);
+    return { ok: true };
+  }
+
   /** Newest first. Only runs still held in memory (lost on server restart). */
   listRuns(): IngestRunSummary[] {
     const out: IngestRunSummary[] = [];
@@ -974,7 +1007,8 @@ class IngestRunManager extends EventEmitter {
         sourceUrl: state.payload.source_url,
         sourceType: state.payload.source_type,
         currentStageKey: state.currentStageKey ?? null,
-        error: state.error
+        error: state.error,
+        excludeFromBatchSuggest: state.excludeFromBatchSuggest === true
       });
     }
     out.sort((a, b) => b.createdAt - a.createdAt);

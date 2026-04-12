@@ -7,7 +7,7 @@ import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lte, or, sql } from 'dr
 import type { InferSelectModel } from 'drizzle-orm';
 import { getDrizzleDb } from './db/neon';
 import { ingestionJobEvents, ingestionJobItems, ingestionJobs } from './db/schema';
-import { neonLoadIngestRun } from './db/ingestRunRepository';
+import { neonAbandonIngestRunForJobCancel, neonLoadIngestRun } from './db/ingestRunRepository';
 import { isNeonIngestPersistenceEnabled } from './neon/datastore';
 import {
 	classifyIngestJobErrorMessage,
@@ -1046,6 +1046,112 @@ export async function modifyIngestionJobItem(
 	}
 
 	return { ok: false, error: 'Only error or in-flight (running) items can be cancelled from this action.' };
+}
+
+const JOB_CANCELLED_ITEM_NOTE = 'job_cancelled_by_operator';
+
+/**
+ * Stop a durable ingestion job: no further URLs launch, pending items are cancelled, running items
+ * are abandoned (child `ingest_runs` rows updated in Neon so workers cannot claim queued children).
+ * Idempotent if the job is already `cancelled`.
+ */
+export async function cancelEntireIngestionJob(
+	jobId: string
+): Promise<
+	| {
+			ok: true;
+			previousStatus: string;
+			pendingCancelled: number;
+			runningAbandoned: number;
+	  }
+	| { ok: false; error: string }
+> {
+	if (!isNeonIngestPersistenceEnabled()) return { ok: false, error: 'Neon ingest persistence is not enabled.' };
+	const id = jobId.trim();
+	if (!id) return { ok: false, error: 'Missing job id.' };
+
+	const db = getDrizzleDb();
+	const job = await db.query.ingestionJobs.findFirst({
+		where: eq(ingestionJobs.id, id)
+	});
+	if (!job) return { ok: false, error: 'Job not found.' };
+
+	if (job.status === 'cancelled') {
+		return { ok: true, previousStatus: 'cancelled', pendingCancelled: 0, runningAbandoned: 0 };
+	}
+
+	const items = await db.select().from(ingestionJobItems).where(eq(ingestionJobItems.jobId, id));
+	const pendingItems = items.filter((i) => i.status === 'pending');
+	const runningItems = items.filter((i) => i.status === 'running');
+	const hasOpen = pendingItems.length > 0 || runningItems.length > 0;
+
+	if (job.status === 'done' && !hasOpen) {
+		return { ok: false, error: 'Job is already finished.' };
+	}
+
+	await db
+		.update(ingestionJobs)
+		.set({ status: 'cancelled', updatedAt: new Date(), completedAt: new Date() })
+		.where(eq(ingestionJobs.id, id));
+
+	let pendingCancelled = 0;
+	for (const it of pendingItems) {
+		await db
+			.update(ingestionJobItems)
+			.set({
+				status: 'cancelled',
+				lastError: JOB_CANCELLED_ITEM_NOTE,
+				updatedAt: new Date()
+			})
+			.where(eq(ingestionJobItems.id, it.id));
+		pendingCancelled += 1;
+	}
+
+	let runningAbandoned = 0;
+	for (const it of runningItems) {
+		const rid = it.childRunId?.trim();
+		if (rid) {
+			await neonAbandonIngestRunForJobCancel(rid);
+		}
+		await db
+			.update(ingestionJobItems)
+			.set({
+				status: 'cancelled',
+				lastError: rid ? JOB_CANCELLED_ITEM_NOTE : 'job_cancelled_no_child_run',
+				updatedAt: new Date()
+			})
+			.where(eq(ingestionJobItems.id, it.id));
+		runningAbandoned += 1;
+	}
+
+	const refreshed = await db.select().from(ingestionJobItems).where(eq(ingestionJobItems.jobId, id));
+	const summary = {
+		total: refreshed.length,
+		pending: refreshed.filter((r) => r.status === 'pending').length,
+		running: refreshed.filter((r) => r.status === 'running').length,
+		done: refreshed.filter((r) => r.status === 'done').length,
+		error: refreshed.filter((r) => r.status === 'error').length,
+		cancelled: refreshed.filter((r) => r.status === 'cancelled').length,
+		skipped: refreshed.filter((r) => r.status === 'skipped').length
+	};
+
+	await db
+		.update(ingestionJobs)
+		.set({
+			summary,
+			updatedAt: new Date(),
+			completedAt: new Date()
+		})
+		.where(eq(ingestionJobs.id, id));
+
+	await appendIngestionJobEvent(id, 'job_cancelled', {
+		previousStatus: job.status,
+		pendingCancelled,
+		runningAbandoned,
+		summary
+	});
+
+	return { ok: true, previousStatus: job.status, pendingCancelled, runningAbandoned };
 }
 
 export type IngestionJobRow = InferSelectModel<typeof ingestionJobs>;

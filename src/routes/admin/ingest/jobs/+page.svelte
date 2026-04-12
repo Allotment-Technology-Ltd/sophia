@@ -592,8 +592,10 @@
 			<p class="text-sm leading-6 text-sophia-dark-muted">
 				Build a batch from <span class="font-mono text-xs">data/sep-entry-urls.json</span> by topic preset (slug
 				substrings) and optional extra keywords. “Exclude already ingested” merges Neon
-				<span class="font-mono text-xs">ingest_runs</span> / job items (<span class="font-mono text-xs">done</span>)
-				with Surreal <span class="font-mono text-xs">ingestion_log</span> rows where
+				<span class="font-mono text-xs">ingest_runs</span> / job items (<span class="font-mono text-xs">done</span>),
+				any run flagged <span class="font-mono text-xs">exclude_from_batch_suggest</span> (set from
+				<strong class="text-sophia-dark-text">Admin → Ingest → Review &amp; run</strong> on a terminal run), with
+				Surreal <span class="font-mono text-xs">ingestion_log</span> rows where
 				<span class="font-mono text-xs">status = complete</span>.
 			</p>
 			<div class="flex flex-wrap items-end gap-4">
@@ -638,7 +640,7 @@
 					bind:checked={sepExcludeIngested}
 					class="h-5 w-5 rounded border-[var(--color-border)]"
 				/>
-				<span class="text-sm text-sophia-dark-text">Exclude URLs already ingested (Neon + Surreal)</span>
+				<span class="text-sm text-sophia-dark-text">Exclude URLs already ingested or operator-suppressed (Neon + Surreal)</span>
 			</label>
 			{#if sepLastStats}
 				<p class="font-mono text-xs text-sophia-dark-muted">{sepLastStats}</p>

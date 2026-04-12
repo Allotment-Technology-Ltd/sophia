@@ -55,6 +55,7 @@
     "ops:phase0-timing-extrapolate-neon": "tsx scripts/extrapolate-phase0-timing-neon.ts",
     "ops:phase0-telemetry-from-neon-logs": "tsx scripts/aggregate-phase0-ingest-telemetry-neon-logs.ts",
     "ops:audit-ingest-extraction-models-neon": "tsx scripts/audit-ingest-extraction-models-neon.ts",
+    "ops:audit-ingest-cost-by-phase-neon": "tsx --env-file=.env scripts/audit-ingest-cost-by-phase-neon.ts",
     "ops:audit-ingest-training-volume": "tsx scripts/audit-ingest-training-volume.ts",
     "ops:relabel-inventory": "tsx --env-file=.env scripts/relabel-programme.ts inventory",
     "ops:relabel-sidecar": "tsx scripts/relabel-programme.ts training-sidecar",
