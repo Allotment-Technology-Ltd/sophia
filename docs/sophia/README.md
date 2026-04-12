@@ -20,18 +20,41 @@ It exists to prove the platform in a real product: graph-grounded reasoning, ver
 
 ## Key links
 
+<!-- GENERATED:sophia-key-links:start -->
 | Document | Link |
 | --- | --- |
 | Current State | [Current State](current-state.md) |
 | Architecture | [Architecture](architecture.md) |
+| Product Role | [Product Role](product-role.md) |
 | Roadmap | [Roadmap](roadmap.md) |
-| Restormel (short overview) | [Restormel Documentation](../restormel/README.md) |
-| Documentation hub | [Documentation Index](../README.md) |
+| Domain Expansion | [Domain Expansion](domain-expansion.md) |
+| Changelog | [Changelog](changelog.md) |
+| Restormel Documentation | [Restormel Documentation](../restormel/README.md) |
+<!-- GENERATED:sophia-key-links:end -->
+
+## Active SOPHIA source-of-truth docs
+
+<!-- GENERATED:active-sophia-docs:start -->
+| Document | Last reviewed | Link |
+| --- | --- | --- |
+| SOPHIA Documentation | 2026-04-11 | [SOPHIA Documentation](README.md) |
+| Architecture | 2026-03-13 | [Architecture](architecture.md) |
+| Changelog | 2026-03-13 | [Changelog](changelog.md) |
+| Current State | 2026-03-13 | [Current State](current-state.md) |
+| Documentation Governance | 2026-03-13 | [Documentation Governance](documentation-governance.md) |
+| Domain Expansion | 2026-03-13 | [Domain Expansion](domain-expansion.md) |
+| Unified GCP exit and Neon migration review | 2026-03-26 | [Unified GCP exit and Neon migration review](gcp-exit-unified-migration-review.md) |
+| Graph, RAG, and ingestion — unified architecture overview | 2026-04-10 | [Graph, RAG, and ingestion — unified architecture overview](graph-rag-and-ingestion-architecture-overview.md) |
+| Product Role | 2026-03-13 | [Product Role](product-role.md) |
+| Roadmap | 2026-03-26 | [Roadmap](roadmap.md) |
+<!-- GENERATED:active-sophia-docs:end -->
 
 ## Current focus
 
-### Active priorities
+This block is intentionally limited to structured snapshots taken from the active SOPHIA docs.
 
+<!-- GENERATED:sophia-current-focus:start -->
+### Active priorities
 1. Keep SOPHIA documentation small, current, and aligned to the Restormel platform model.
 2. Maintain SOPHIA as a convincing reference application across reasoning, API, and learning surfaces.
 3. Continue domain growth with explicit status and promotion criteria rather than parallel undocumented expansions.
@@ -39,19 +62,21 @@ It exists to prove the platform in a real product: graph-grounded reasoning, ver
 5. Preserve historical material for traceability, but keep it out of the active instructional surface.
 
 ### Roadmap themes
-
-- Keep SOPHIA credible as the showcase app
-- Separate showcase truth from platform truth
-- Stabilise domain growth
-- Improve evidence and explainability
-- Support platform extraction without forking the narrative
+- 1. Keep SOPHIA credible as the showcase app
+- 2. Separate showcase truth from platform truth
+- 3. Stabilise domain growth
+- 4. Improve evidence and explainability
+- 5. Support platform extraction without forking the narrative
 
 ### Live showcase domains
-
 - Ethics
 - Philosophy of Mind
+<!-- GENERATED:sophia-current-focus:end -->
 
 ## Related documentation
 
-- Restormel platform (public stub): [../restormel/README.md](../restormel/README.md)
-- Ingestion operations (public slice): [../operations/ingestion-credits-and-workers.md](../operations/ingestion-credits-and-workers.md)
+- Restormel platform: [../restormel/README.md](../restormel/README.md)
+- Ingestion operations: [../operations/ingestion-credits-and-workers.md](../operations/ingestion-credits-and-workers.md)
+- Historical material: [../archive/README.md](../archive/README.md)
+- Inventory for this rationalisation: [rationalisation-inventory.md](rationalisation-inventory.md)
+- Rationalisation summary: [rationalisation-summary.md](rationalisation-summary.md)
