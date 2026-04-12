@@ -66,6 +66,7 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
     createdAt: state.createdAt,
     completedAt: state.completedAt,
     syncStartedAt: state.syncStartedAt,
-    syncCompletedAt: state.syncCompletedAt
+    syncCompletedAt: state.syncCompletedAt,
+    excludeFromBatchSuggest: state.excludeFromBatchSuggest === true
   });
 };

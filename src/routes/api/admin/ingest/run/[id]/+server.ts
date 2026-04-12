@@ -25,6 +25,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
     issueCount: state.issues.length,
     error: state.error,
     createdAt: state.createdAt,
-    completedAt: state.completedAt
+    completedAt: state.completedAt,
+    excludeFromBatchSuggest: state.excludeFromBatchSuggest === true
   });
 };

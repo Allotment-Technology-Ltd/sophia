@@ -372,6 +372,10 @@
   let runIdleForMs = $state<number | null>(null);
   let runProcessStartedAt = $state<number | null>(null);
   let runProcessExitedAt = $state<number | null>(null);
+  /** Neon `exclude_from_batch_suggest`: keep URL out of SEP catalog batch helper when excluding ingested. */
+  let runExcludeFromBatchSuggest = $state(false);
+  let batchSuggestFlagBusy = $state(false);
+  let batchSuggestFlagError = $state('');
   let showRawLog = $state(false);
   /** Structured issues parsed from worker logs (also persisted to Firestore when the run ends or pauses for sync). */
   type RunCapturedIssue = {
@@ -2608,6 +2612,8 @@
       }
 
       runId = id;
+      runExcludeFromBatchSuggest = false;
+      batchSuggestFlagError = '';
       lastAppliedRunStatus = null;
       flowState = 'running';
       runCapturedIssues = [];
@@ -2767,6 +2773,8 @@
     runIdleForMs = null;
     runProcessStartedAt = null;
     runProcessExitedAt = null;
+    runExcludeFromBatchSuggest = false;
+    batchSuggestFlagError = '';
     completionMessage = '';
     syncDurationLabel = '';
     executionNotice = '';
@@ -2826,6 +2834,9 @@
     runCurrentAction = typeof body?.currentAction === 'string' ? body.currentAction : null;
     runLastFailureStage = typeof body?.lastFailureStageKey === 'string' ? body.lastFailureStageKey : null;
     runResumable = body?.resumable === true;
+    if (typeof body?.excludeFromBatchSuggest === 'boolean') {
+      runExcludeFromBatchSuggest = body.excludeFromBatchSuggest;
+    }
     runProcessAlive = body?.processAlive === true;
     runProcessId = typeof body?.processId === 'number' ? body.processId : null;
     runLastOutputAt = typeof body?.lastOutputAt === 'number' ? body.lastOutputAt : null;
@@ -2894,6 +2905,8 @@
     runProcessStartedAt = null;
     runProcessExitedAt = null;
     runCapturedIssues = [];
+    runExcludeFromBatchSuggest = false;
+    batchSuggestFlagError = '';
     completionMessage = '';
     syncDurationLabel = '';
     executionNotice = '';
@@ -2908,6 +2921,28 @@
       context === 'cancel'
         ? 'That run no longer exists on the server (for example after a restart). The monitor was cleared—you can start a new ingestion below.'
         : 'This run is no longer on the server (in-memory runs are cleared when the app restarts). Your source and pipeline settings are unchanged—start a new run when ready.';
+  }
+
+  async function patchExcludeFromBatchSuggest(next: boolean): Promise<void> {
+    if (!runId.trim()) return;
+    batchSuggestFlagBusy = true;
+    batchSuggestFlagError = '';
+    try {
+      const response = await fetch(`/api/admin/ingest/run/${encodeURIComponent(runId)}/exclude-batch-suggest`, {
+        method: 'PATCH',
+        headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ excludeFromBatchSuggest: next })
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(typeof body?.error === 'string' ? body.error : 'Failed to update batch-suggest flag.');
+      }
+      runExcludeFromBatchSuggest = next;
+    } catch (e) {
+      batchSuggestFlagError = e instanceof Error ? e.message : 'Failed to update flag.';
+    } finally {
+      batchSuggestFlagBusy = false;
+    }
   }
 
   function tryParseIngestTimingFromLog(lines: string[]): void {
@@ -4611,6 +4646,31 @@
                   </button>
                 {:else}
                   <div class="mt-4 rounded-lg border border-sophia-dark-border bg-sophia-dark-bg/60 px-4 py-3 font-mono text-xs text-sophia-dark-muted">Run ID: <span class="text-sophia-dark-text">{runId || '—'}</span></div>
+                  {#if runId.trim() !== ''}
+                    <div class="mt-3 rounded border border-sophia-dark-border bg-sophia-dark-bg/35 p-3">
+                      <label class="flex cursor-pointer items-start gap-3">
+                        <input
+                          type="checkbox"
+                          class="mt-1 rounded border-sophia-dark-border"
+                          checked={runExcludeFromBatchSuggest}
+                          disabled={batchSuggestFlagBusy}
+                          onchange={(e) =>
+                            void patchExcludeFromBatchSuggest((e.currentTarget as HTMLInputElement).checked)}
+                        />
+                        <span class="min-w-0 text-sm leading-snug text-sophia-dark-muted">
+                          <span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                            >Batch URL helper</span
+                          >
+                          <span class="mt-1 block"
+                            >Exclude this source URL from the durable jobs SEP catalog helper when “Exclude already ingested” is on (Neon <code class="text-sophia-dark-text">exclude_from_batch_suggest</code>).</span
+                          >
+                        </span>
+                      </label>
+                      {#if batchSuggestFlagError}
+                        <p class="mt-2 font-mono text-xs text-sophia-dark-copper">{batchSuggestFlagError}</p>
+                      {/if}
+                    </div>
+                  {/if}
                   <div class="mt-3 rounded border border-sophia-dark-border bg-sophia-dark-bg/40 p-3 font-mono text-xs text-sophia-dark-muted">
                     <p>Worker: <span class={runProcessAlive ? 'text-sophia-dark-sage' : 'text-sophia-dark-copper'}>{processHealthLabel()}</span></p>
                     <p class="mt-1">PID: <span class="text-sophia-dark-text">{runProcessId ?? '—'}</span></p>
