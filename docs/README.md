@@ -59,3 +59,13 @@ Narrative meaning stays hand-authored in the active docs. Archived material is r
 ## Repository root
 
 The top-level [README.md](../README.md) duplicates navigation paths for GitHub visitors (including generated tables maintained by `scripts/restormel/update_repo_docs.py`).
+
+## If this folder looks empty or incomplete locally
+
+1. **Update from `main`:** `git pull origin main`
+2. **Force-restore `docs/` from Git** (does not delete untracked files you added under `docs/`):  
+   `git fetch origin && git checkout origin/main -- docs/`
+3. **Verify core paths:** from repo root, `pnpm docs:verify-present`  
+   (checks e.g. `docs/restormel/meta/linear-config.yml`).
+
+If `git status` never shows changes under `docs/` when you edit tracked files, inspect **`.gitignore`** for a line like `docs/*` — that pattern hides the tree from Git and breaks CI; remove it and restore with step 2.

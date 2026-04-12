@@ -99,3 +99,26 @@ Useful commands:
 - `pnpm python:check`
 
 More pointers: [docs/README.md](docs/README.md).
+
+## Documentation on disk
+
+The full **`docs/`** tree (Restormel `meta/*.yml`, operations runbooks, archive, etc.) is **tracked in Git**. If files are missing locally, you are usually behind **`main`** or a **broad `docs/*` `.gitignore`** stopped Git from checking them out.
+
+**Refresh everything under `docs/` from remote `main`:**
+
+```bash
+git fetch origin
+git checkout origin/main -- docs/
+```
+
+**Or update the whole repo:**
+
+```bash
+git pull origin main
+```
+
+**Sanity check** (fails if core paths are missing):
+
+```bash
+pnpm docs:verify-present
+```
