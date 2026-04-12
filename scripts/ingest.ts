@@ -46,6 +46,10 @@ import {
 	type ReviewState as PostStoreReviewState
 } from '../src/lib/server/ingestion/postStoreReview.js';
 import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.js';
+import {
+	isGoogleGenerativePlanProvider,
+	isGoogleGenerativeThroughputEnabled
+} from '../src/lib/server/googleGenerativeIngestThroughput.js';
 import { z } from 'zod';
 import {
 	estimateStageUsage,
@@ -101,6 +105,7 @@ import {
 	toSurrealRecordIdStr
 } from '../src/lib/server/surrealRecordSql.js';
 import { createIngestProviderTpmGuard } from './lib/ingestProviderTpm.js';
+import { paceMistralChatCompletion } from './lib/ingestMistralRpsPace.js';
 import { collectErrorMessageChain, isTpmOrRateLimitInError } from '../src/lib/ingestionErrorChain.js';
 import {
 	consultIngestionRecoveryAgent,
@@ -273,6 +278,16 @@ const GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS =
 const GROUPING_ANTHROPIC_TOKEN_ESTIMATE_MULTIPLIER = Math.max(
 	1,
 	Number(process.env.GROUPING_ANTHROPIC_TOKEN_ESTIMATE_MULTIPLIER || '2.2')
+);
+/** Heuristic: structured grouping JSON output vs claim JSON input (tune if you see truncation before pre-split triggers). */
+const GROUPING_OUTPUT_VS_INPUT_FACTOR = Math.max(
+	1,
+	Math.min(4, Number(process.env.INGEST_GROUPING_OUTPUT_VS_INPUT_FACTOR ?? '1.85') || 1.85)
+);
+/** Fraction of maxOutputTokens used as ceiling for {@link estimatedGroupingStructuredOutputTokens} pre-split. */
+const GROUPING_OUTPUT_HEADROOM = Math.max(
+	0.5,
+	Math.min(0.95, Number(process.env.INGEST_GROUPING_OUTPUT_HEADROOM ?? '0.78') || 0.78)
 );
 const VALIDATION_BATCH_TARGET_TOKENS =
 	parsePositiveInt(process.env.VALIDATION_BATCH_TARGET_TOKENS) ?? 100_000;
@@ -948,6 +963,15 @@ function parsePositiveFloat(value: string | undefined): number | undefined {
 	return parsed;
 }
 
+/** Parallel single-passage extraction batches: raise floor only when extraction is routed to Vertex / Gemini. */
+function effectiveExtractionParallelConcurrency(extractionPlanProvider: string): number {
+	const base = INGEST_EXTRACTION_CONCURRENCY;
+	if (!isGoogleGenerativeThroughputEnabled()) return base;
+	if (!isGoogleGenerativePlanProvider(extractionPlanProvider)) return base;
+	const floor = parsePositiveInt(process.env.INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR) ?? 6;
+	return Math.min(12, Math.max(base, floor));
+}
+
 /**
  * Providers routed via `createOpenAI(...).chat(model)` map `system` to role `developer`
  * (AI SDK v2 compatibility). Mistral and several other strict Chat Completions APIs only
@@ -1290,6 +1314,61 @@ function splitGroupingBatchInHalf(batch: GroupingBatch): [GroupingBatch, Groupin
 		return { claims: batchClaims, relations: batchRelations };
 	};
 	return [sub(firstClaims), sub(secondClaims)];
+}
+
+function resolveGroupingMaxOutputTokens(plan: IngestionStagePlan): number {
+	const raw = parsePositiveInt(process.env.INGEST_GROUPING_MAX_OUTPUT_TOKENS);
+	if (raw != null) return Math.min(200_000, Math.max(4_096, raw));
+	const p = (plan.provider ?? '').trim().toLowerCase();
+	const m = (plan.model ?? '').trim().toLowerCase();
+	if ((p === 'vertex' || p === 'google') && m.includes('gemini')) {
+		return 65_536;
+	}
+	return 32_768;
+}
+
+function estimatedGroupingStructuredOutputTokens(batch: GroupingBatch): number {
+	const claimsJson = JSON.stringify(batch.claims, null, 2);
+	return Math.ceil(estimateTokens(claimsJson) * GROUPING_OUTPUT_VS_INPUT_FACTOR);
+}
+
+function groupingBatchLikelyExceedsMaxOutput(batch: GroupingBatch, maxOutputTokens: number): boolean {
+	const maxClaims = parsePositiveInt(process.env.INGEST_GROUPING_MAX_CLAIMS_PER_BATCH);
+	if (maxClaims != null && batch.claims.length > maxClaims) return true;
+	const estOut = estimatedGroupingStructuredOutputTokens(batch);
+	return estOut > Math.floor(maxOutputTokens * GROUPING_OUTPUT_HEADROOM);
+}
+
+/**
+ * Split wide grouping batches before the first model call so JSON output is unlikely to hit max_output.
+ */
+function subdivideGroupingBatchesForOutputHeadroom(
+	batches: GroupingBatch[],
+	maxOutputTokens: number
+): GroupingBatch[] {
+	const preemptOff = (process.env.INGEST_GROUPING_PREEMPT_OUTPUT_SPLITS ?? '1').trim();
+	if (preemptOff === '0' || preemptOff.toLowerCase() === 'false' || preemptOff.toLowerCase() === 'off') {
+		return batches;
+	}
+	let out = [...batches];
+	for (let guard = 0; guard < 400; guard++) {
+		const i = out.findIndex((b) => groupingBatchLikelyExceedsMaxOutput(b, maxOutputTokens));
+		if (i === -1) break;
+		const halves = splitGroupingBatchInHalf(out[i]!);
+		if (!halves) break;
+		const est = estimatedGroupingStructuredOutputTokens(out[i]!);
+		const budget = Math.floor(maxOutputTokens * GROUPING_OUTPUT_HEADROOM);
+		console.log(
+			`  [PREEMPT] Splitting grouping batch ${i + 1}/${out.length} before model call — est. structured output ~${est.toLocaleString()} tok > ${budget.toLocaleString()} tok budget (${out[i]!.claims.length} claims)`
+		);
+		out.splice(i, 1, halves[0], halves[1]);
+	}
+	return out;
+}
+
+function isGroupingMaxTokensTruncation(err: unknown): boolean {
+	const msg = collectErrorMessageChain(err instanceof Error ? err : new Error(String(err)));
+	return /truncated|max_tokens reached|max_tokens|finish.?reason.*length/i.test(msg);
 }
 
 function buildRelationsBatches(
@@ -2055,6 +2134,9 @@ async function callStageModel(params: {
 			const estTpmTokens =
 				estimateTokens(systemPrompt) + estimateTokens(userMessage) + maxTokens;
 			await ingestTpmGuard.waitForBudget(routingProvider, estTpmTokens);
+			if (routingProvider.trim().toLowerCase() === 'mistral') {
+				await paceMistralChatCompletion(activePlan.model);
+			}
 			emitIngestTelemetry({
 				event: 'model_call_start',
 				stage,
@@ -3604,6 +3686,12 @@ async function main() {
 	if (resumeFromStage) {
 		console.log(`Resume from: ${resumeFromStage}`);
 	}
+	const extractionParallelConcurrency = effectiveExtractionParallelConcurrency(extractionPlan.provider);
+	if (extractionParallelConcurrency > INGEST_EXTRACTION_CONCURRENCY) {
+		console.log(
+			`  [INFO] Google/Vertex extraction throughput: parallel single-passage concurrency ${extractionParallelConcurrency} (env INGEST_EXTRACTION_CONCURRENCY=${INGEST_EXTRACTION_CONCURRENCY}; floor INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR=${process.env.INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR ?? '6'})`
+		);
+	}
 	console.log('');
 
 	try {
@@ -3800,13 +3888,13 @@ async function main() {
 						return 'done';
 					};
 
-					if (INGEST_EXTRACTION_CONCURRENCY > 1 && batch.length === 1) {
+					if (extractionParallelConcurrency > 1 && batch.length === 1) {
 						const groupIndices: number[] = [];
 						let j = i;
 						while (
 							j < batchQueue.length &&
 							batchQueue[j]!.length === 1 &&
-							groupIndices.length < INGEST_EXTRACTION_CONCURRENCY
+							groupIndices.length < extractionParallelConcurrency
 						) {
 							groupIndices.push(j);
 							j++;
@@ -3814,7 +3902,7 @@ async function main() {
 						if (groupIndices.length >= 2) {
 							const parallelStartLabel = batchLabel + 1;
 							console.log(
-								`\n  [PARALLEL] Extracting ${groupIndices.length} single-passage batches concurrently (max ${INGEST_EXTRACTION_CONCURRENCY})`
+								`\n  [PARALLEL] Extracting ${groupIndices.length} single-passage batches concurrently (max ${extractionParallelConcurrency})`
 							);
 							type ParResult = {
 								order: number;
@@ -4223,8 +4311,10 @@ async function main() {
 				}
 
 				let groupingBatches = buildGroupingBatches(allClaims, relations, groupingBatchTarget);
+				const groupingMaxOut = resolveGroupingMaxOutputTokens(groupingPlan);
+				groupingBatches = subdivideGroupingBatchesForOutputHeadroom(groupingBatches, groupingMaxOut);
 				console.log(
-					`  [INFO] Grouping in ${groupingBatches.length} batch(es), target ~${groupingBatchTarget.toLocaleString()} tokens`
+					`  [INFO] Grouping in ${groupingBatches.length} batch(es), target ~${groupingBatchTarget.toLocaleString()} tokens (max_output ${groupingMaxOut.toLocaleString()} for ${groupingPlan.provider}/${groupingPlan.model})`
 				);
 				let groupedOutputs: GroupingOutput[] = [];
 				let startGroupingBatchIndex = 0;
@@ -4255,6 +4345,9 @@ async function main() {
 					relationCount: relations.length
 				};
 				let batchIndex = startGroupingBatchIndex;
+				const groupingSplitOnTruncation = !['0', 'false', 'off', 'no'].includes(
+					(process.env.INGEST_GROUPING_SPLIT_ON_TRUNCATION ?? '1').trim().toLowerCase()
+				);
 				while (batchIndex < groupingBatches.length) {
 					const batch = groupingBatches[batchIndex]!;
 					const claimsJson = JSON.stringify(batch.claims, null, 2);
@@ -4263,15 +4356,37 @@ async function main() {
 						`  [BATCH ${batchIndex + 1}/${groupingBatches.length}] ${batch.claims.length} claims, ${batch.relations.length} relations (~${estimateTokens(claimsJson).toLocaleString()} claim tokens)`
 					);
 					const grpUserMsg = GROUPING_USER(claimsJson, relationsJson);
-					const grpRawResponse = await callStageModel({
-						stage: 'grouping',
-						plan: groupingPlan,
-						budget: groupingBudget,
-						tracker: groupingTracker,
-						systemPrompt: GROUPING_SYSTEM,
-						userMessage: grpUserMsg,
-						planningContext: groupingPlanningContext
-					});
+					let grpRawResponse: string;
+					try {
+						grpRawResponse = await callStageModel({
+							stage: 'grouping',
+							plan: groupingPlan,
+							budget: groupingBudget,
+							tracker: groupingTracker,
+							systemPrompt: GROUPING_SYSTEM,
+							userMessage: grpUserMsg,
+							maxTokens: groupingMaxOut,
+							planningContext: groupingPlanningContext
+						});
+					} catch (groupingCallErr) {
+						if (groupingSplitOnTruncation && isGroupingMaxTokensTruncation(groupingCallErr)) {
+							const halves = splitGroupingBatchInHalf(batch);
+							if (halves) {
+								console.warn(
+									`  [SPLIT] Grouping batch ${batchIndex + 1}/${groupingBatches.length} hit max_output / truncation — splitting into two smaller batches and retrying`
+								);
+								groupingBatches.splice(batchIndex, 1, halves[0], halves[1]);
+								partial.grouping_progress = {
+									grouped_outputs_so_far: groupedOutputs,
+									next_batch_index: batchIndex,
+									total_batches: groupingBatches.length
+								};
+								await savePartialResults(slug, partial);
+								continue;
+							}
+						}
+						throw groupingCallErr;
+					}
 					saveGroupingDebugRaw(slug, batchIndex, grpRawResponse);
 					logStageCost('Grouping', groupingTracker, groupingPlan);
 

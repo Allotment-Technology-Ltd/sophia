@@ -14,6 +14,7 @@
 import { GoogleAuth } from 'google-auth-library';
 
 import { loadServerEnv } from './env';
+import { isGoogleGenerativeThroughputEnabled } from './googleGenerativeIngestThroughput.js';
 
 type EmbeddingTaskType = 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY';
 
@@ -31,14 +32,33 @@ interface EmbeddingProvider {
 const EMBED_MAX_RETRIES = Number(process.env.VERTEX_EMBED_MAX_RETRIES || process.env.EMBED_MAX_RETRIES || '6');
 const EMBED_RETRY_BASE_MS = Number(process.env.VERTEX_EMBED_RETRY_BASE_MS || process.env.EMBED_RETRY_BASE_MS || '1500');
 
-/** Read fresh each batch so workers can tune VERTEX_EMBED_* / INGEST_EMBED_* without re-importing this module. */
-function readEmbedBatchConfig(): { batchSize: number; delayMs: number } {
+function embedBatchDelayMsExplicitlyConfigured(): boolean {
+	for (const key of ['VERTEX_EMBED_BATCH_DELAY_MS', 'INGEST_EMBED_BATCH_DELAY_MS', 'EMBED_BATCH_DELAY_MS'] as const) {
+		const v = process.env[key];
+		if (v != null && String(v).trim() !== '') return true;
+	}
+	return false;
+}
+
+/**
+ * Read fresh each batch so workers can tune VERTEX_EMBED_* / INGEST_EMBED_* without re-importing this module.
+ * When `embeddingProviderName` is `vertex` and throughput mode is on, default inter-batch delay is **0**
+ * unless delay env vars are explicitly set (so Voyage-only workloads stay unchanged).
+ */
+function readEmbedBatchConfig(embeddingProviderName: string): { batchSize: number; delayMs: number } {
+	loadServerEnv();
 	const rawSize = Number(process.env.VERTEX_EMBED_BATCH_SIZE || process.env.EMBED_BATCH_SIZE || '250');
 	const rawDelay = Number(process.env.VERTEX_EMBED_BATCH_DELAY_MS || process.env.EMBED_BATCH_DELAY_MS || '80');
-	return {
-		batchSize: Math.max(1, Number.isFinite(rawSize) ? Math.trunc(rawSize) : 250),
-		delayMs: Math.max(0, Number.isFinite(rawDelay) ? Math.trunc(rawDelay) : 80)
-	};
+	const batchSize = Math.max(1, Number.isFinite(rawSize) ? Math.trunc(rawSize) : 250);
+	let delayMs = Math.max(0, Number.isFinite(rawDelay) ? Math.trunc(rawDelay) : 80);
+	if (
+		embeddingProviderName === 'vertex' &&
+		isGoogleGenerativeThroughputEnabled() &&
+		!embedBatchDelayMsExplicitlyConfigured()
+	) {
+		delayMs = 0;
+	}
+	return { batchSize, delayMs };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -319,9 +339,9 @@ export async function embedTexts(
 	const provider = resolveProvider();
 
 	try {
-		const firstCfg = readEmbedBatchConfig();
+		const firstCfg = readEmbedBatchConfig(provider.name);
 		console.log(
-			`[EMBED] Embedding ${texts.length} texts via ${provider.name} in batches of up to ${firstCfg.batchSize}...`
+			`[EMBED] Embedding ${texts.length} texts via ${provider.name} in batches of up to ${firstCfg.batchSize} (inter-batch delay ${firstCfg.delayMs}ms)...`
 		);
 
 		let sessionToken: string | null = null;
@@ -335,7 +355,7 @@ export async function embedTexts(
 		let i = 0;
 		let batchNum = 0;
 		while (i < texts.length) {
-			const { batchSize: BATCH_SIZE, delayMs: batchDelayMs } = readEmbedBatchConfig();
+			const { batchSize: BATCH_SIZE, delayMs: batchDelayMs } = readEmbedBatchConfig(provider.name);
 			const batch = texts.slice(i, i + BATCH_SIZE);
 			batchNum += 1;
 			console.log(`[EMBED] Batch ${batchNum}: embedding ${batch.length} texts`);

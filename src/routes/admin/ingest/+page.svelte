@@ -15,6 +15,10 @@
     type CoachSettingTweak,
     type IngestionCoachOutput
   } from '$lib/ingestionCoachSchema';
+  import {
+    ADMIN_INGEST_WORKER_UI_DEFAULTS as W,
+    ADMIN_INGEST_WORKER_UI_TOOLTIPS as WT
+  } from '$lib/adminIngestWorkerUiDefaults';
 
   type StageStatus = 'idle' | 'running' | 'done' | 'error' | 'skipped';
   type FlowState = 'setup' | 'running' | 'awaiting_sync' | 'done' | 'error';
@@ -396,20 +400,20 @@
   let routingError = $state('');
   let routes = $state<AdminRouteRecord[]>([]);
   let batchOverridesOpen = $state(false);
-  let batchExtractionMaxTokensPerSection = $state('');
-  let batchGroupingTargetTokens = $state('');
-  let batchValidationTargetTokens = $state('');
-  let batchRelationsTargetTokens = $state('');
-  let batchEmbedBatchSize = $state('');
+  let batchExtractionMaxTokensPerSection = $state(W.extractionMaxTokensPerSection);
+  let batchGroupingTargetTokens = $state(W.groupingTargetTokens);
+  let batchValidationTargetTokens = $state(W.validationTargetTokens);
+  let batchRelationsTargetTokens = $state(W.relationsTargetTokens);
+  let batchEmbedBatchSize = $state(W.embedBatchSize);
   /** Per-run worker timeouts (ms); merged into ingest child env via `batch_overrides`. */
-  let batchIngestModelTimeoutMs = $state('');
-  let batchValidationModelTimeoutMs = $state('');
-  let batchValidationStageTimeoutMs = $state('');
-  let batchExtractionStageTimeoutMs = $state('');
-  let batchRelationsStageTimeoutMs = $state('');
-  let batchGroupingStageTimeoutMs = $state('');
-  let batchEmbeddingStageTimeoutMs = $state('');
-  let batchJsonRepairStageTimeoutMs = $state('');
+  let batchIngestModelTimeoutMs = $state(W.ingestModelTimeoutMs);
+  let batchValidationModelTimeoutMs = $state(W.validationModelTimeoutMs);
+  let batchValidationStageTimeoutMs = $state(W.validationStageTimeoutMs);
+  let batchExtractionStageTimeoutMs = $state(W.extractionStageTimeoutMs);
+  let batchRelationsStageTimeoutMs = $state(W.relationsStageTimeoutMs);
+  let batchGroupingStageTimeoutMs = $state(W.groupingStageTimeoutMs);
+  let batchEmbeddingStageTimeoutMs = $state(W.embeddingStageTimeoutMs);
+  let batchJsonRepairStageTimeoutMs = $state(W.jsonRepairStageTimeoutMs);
   let pipelineDebugOpen = $state(false);
   type IngestWorkerDiagnostics = {
     keysBaseHost: string | null;
@@ -432,13 +436,15 @@
   let embeddingHealthBusy = $state(false);
   let embeddingHealthError = $state('');
   let batchOverridesError = $state('');
-  const INGEST_SETTINGS_STORAGE_KEY = 'sophia.admin.ingestSettings.v1';
+  const INGEST_SETTINGS_STORAGE_KEY = 'sophia.admin.ingestSettings.v2';
   type IngestionAdvisorModeUi = 'off' | 'shadow' | 'auto';
   let ingestionAdvisorModeUi = $state<IngestionAdvisorModeUi>('off');
   let ingestionAdvisorAutoApplyPreset = $state(true);
   let ingestionAdvisorAutoApplyValidation = $state(true);
   let workerIngestProvider = $state<'auto' | 'anthropic' | 'vertex'>('auto');
-  let workerRelationsOverlapClaims = $state('');
+  let workerRelationsOverlapClaims = $state(W.relationsBatchOverlapClaims);
+  let workerGoogleThroughputEnabled = $state(true);
+  let workerGoogleExtractionFloor = $state(W.googleExtractionConcurrencyFloor);
   let workerFailOnGroupingCollapse = $state(true);
   /** Maps to `INGEST_LOG_PINS` on the ingest worker. */
   let workerIngestLogPins = $state(false);
@@ -2480,12 +2486,16 @@
     failOnGroupingPositionCollapse: boolean;
     ingestLogPins: boolean;
     relationsBatchOverlapClaims?: number;
+    googleGenerativeThroughput?: boolean;
+    googleExtractionConcurrencyFloor?: number;
   } {
     const o: {
       ingestProvider: 'auto' | 'anthropic' | 'vertex';
       failOnGroupingPositionCollapse: boolean;
       ingestLogPins: boolean;
       relationsBatchOverlapClaims?: number;
+      googleGenerativeThroughput?: boolean;
+      googleExtractionConcurrencyFloor?: number;
     } = {
       ingestProvider: workerIngestProvider,
       failOnGroupingPositionCollapse: workerFailOnGroupingCollapse,
@@ -2497,6 +2507,15 @@
       if (Number.isFinite(n)) {
         const i = Math.trunc(n);
         if (i >= 1 && i <= 99) o.relationsBatchOverlapClaims = i;
+      }
+    }
+    if (!workerGoogleThroughputEnabled) o.googleGenerativeThroughput = false;
+    const gRaw = workerGoogleExtractionFloor.trim();
+    if (gRaw !== '') {
+      const gn = Number(gRaw);
+      if (Number.isFinite(gn)) {
+        const gi = Math.trunc(gn);
+        if (gi >= 1 && gi <= 12) o.googleExtractionConcurrencyFloor = gi;
       }
     }
     return o;
@@ -2513,8 +2532,15 @@
           ingestionAdvisorAutoApplyValidation,
           workerIngestProvider,
           workerRelationsOverlapClaims,
+          workerGoogleThroughputEnabled,
+          workerGoogleExtractionFloor,
           workerFailOnGroupingCollapse,
           workerIngestLogPins,
+          batchExtractionMaxTokensPerSection,
+          batchGroupingTargetTokens,
+          batchValidationTargetTokens,
+          batchRelationsTargetTokens,
+          batchEmbedBatchSize,
           batchIngestModelTimeoutMs,
           batchValidationModelTimeoutMs,
           batchValidationStageTimeoutMs,
@@ -3051,7 +3077,8 @@
 
   onMount(() => {
     try {
-      const raw = localStorage.getItem(INGEST_SETTINGS_STORAGE_KEY);
+      const raw =
+        localStorage.getItem(INGEST_SETTINGS_STORAGE_KEY) ?? localStorage.getItem('sophia.admin.ingestSettings.v1');
       if (raw) {
         const p = JSON.parse(raw) as Record<string, unknown>;
         if (p.ingestionAdvisorMode === 'off' || p.ingestionAdvisorMode === 'shadow' || p.ingestionAdvisorMode === 'auto') {
@@ -3072,6 +3099,12 @@
         }
         if (typeof p.workerRelationsOverlapClaims === 'string') {
           workerRelationsOverlapClaims = p.workerRelationsOverlapClaims;
+        }
+        if (typeof p.workerGoogleThroughputEnabled === 'boolean') {
+          workerGoogleThroughputEnabled = p.workerGoogleThroughputEnabled;
+        }
+        if (typeof p.workerGoogleExtractionFloor === 'string') {
+          workerGoogleExtractionFloor = p.workerGoogleExtractionFloor;
         }
         if (typeof p.workerFailOnGroupingCollapse === 'boolean') {
           workerFailOnGroupingCollapse = p.workerFailOnGroupingCollapse;
@@ -3103,10 +3136,41 @@
         if (typeof p.batchJsonRepairStageTimeoutMs === 'string') {
           batchJsonRepairStageTimeoutMs = p.batchJsonRepairStageTimeoutMs;
         }
+        if (typeof p.batchExtractionMaxTokensPerSection === 'string') {
+          batchExtractionMaxTokensPerSection = p.batchExtractionMaxTokensPerSection;
+        }
+        if (typeof p.batchGroupingTargetTokens === 'string') {
+          batchGroupingTargetTokens = p.batchGroupingTargetTokens;
+        }
+        if (typeof p.batchValidationTargetTokens === 'string') {
+          batchValidationTargetTokens = p.batchValidationTargetTokens;
+        }
+        if (typeof p.batchRelationsTargetTokens === 'string') {
+          batchRelationsTargetTokens = p.batchRelationsTargetTokens;
+        }
+        if (typeof p.batchEmbedBatchSize === 'string') {
+          batchEmbedBatchSize = p.batchEmbedBatchSize;
+        }
         if (typeof p.pipelineDebugOpen === 'boolean') {
           pipelineDebugOpen = p.pipelineDebugOpen;
         }
       }
+      const nz = (s: string, d: string) => (String(s ?? '').trim() === '' ? d : String(s));
+      workerRelationsOverlapClaims = nz(workerRelationsOverlapClaims, W.relationsBatchOverlapClaims);
+      workerGoogleExtractionFloor = nz(workerGoogleExtractionFloor, W.googleExtractionConcurrencyFloor);
+      batchExtractionMaxTokensPerSection = nz(batchExtractionMaxTokensPerSection, W.extractionMaxTokensPerSection);
+      batchGroupingTargetTokens = nz(batchGroupingTargetTokens, W.groupingTargetTokens);
+      batchValidationTargetTokens = nz(batchValidationTargetTokens, W.validationTargetTokens);
+      batchRelationsTargetTokens = nz(batchRelationsTargetTokens, W.relationsTargetTokens);
+      batchEmbedBatchSize = nz(batchEmbedBatchSize, W.embedBatchSize);
+      batchIngestModelTimeoutMs = nz(batchIngestModelTimeoutMs, W.ingestModelTimeoutMs);
+      batchValidationModelTimeoutMs = nz(batchValidationModelTimeoutMs, W.validationModelTimeoutMs);
+      batchValidationStageTimeoutMs = nz(batchValidationStageTimeoutMs, W.validationStageTimeoutMs);
+      batchExtractionStageTimeoutMs = nz(batchExtractionStageTimeoutMs, W.extractionStageTimeoutMs);
+      batchRelationsStageTimeoutMs = nz(batchRelationsStageTimeoutMs, W.relationsStageTimeoutMs);
+      batchGroupingStageTimeoutMs = nz(batchGroupingStageTimeoutMs, W.groupingStageTimeoutMs);
+      batchEmbeddingStageTimeoutMs = nz(batchEmbeddingStageTimeoutMs, W.embeddingStageTimeoutMs);
+      batchJsonRepairStageTimeoutMs = nz(batchJsonRepairStageTimeoutMs, W.jsonRepairStageTimeoutMs);
     } catch {
       /* ignore */
     }
@@ -3531,19 +3595,25 @@
               >
                 <p class="font-mono text-[0.68rem] uppercase tracking-[0.12em] text-sophia-dark-dim">Worker and advisor defaults</p>
                 <p class="mt-1 text-xs text-sophia-dark-muted">
-                  Saved in this browser. These replace the old <span class="font-mono">.env</span> knobs for admin runs and
-                  pre-scan; CLI-only ingest can still use environment variables. After changing the advisor mode, run
-                  <span class="font-mono">Source</span> pre-scan again so the Cost tab “last pre-scan” summary updates.
+                  Saved in this browser (v2 settings). Numeric fields load the same baseline as the ingest worker / scripts defaults; hover
+                  controls for env var names, rate-limit tradeoffs, and what to lower if you raise something else. CLI-only ingest can still use
+                  environment variables. After changing the advisor mode, run <span class="font-mono">Source</span> pre-scan again so the Cost tab
+                  “last pre-scan” summary updates.
                 </p>
                 <div class="mt-4 space-y-4">
                   <div>
-                    <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="ingest-advisor-mode">
+                    <label
+                      class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                      for="ingest-advisor-mode"
+                      title={WT.ingestionAdvisorMode}
+                    >
                       Ingestion advisor (pre-scan)
                     </label>
                     <select
                       id="ingest-advisor-mode"
                       disabled={runInProgress()}
                       bind:value={ingestionAdvisorModeUi}
+                      title={WT.ingestionAdvisorMode}
                       class="mt-1 w-full max-w-md rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
                     >
                       <option value="off">Off — heuristics only (no extra model on pre-scan)</option>
@@ -3552,21 +3622,29 @@
                     </select>
                     {#if ingestionAdvisorModeUi === 'auto'}
                       <div class="mt-3 flex flex-wrap gap-4">
-                        <label class="flex cursor-pointer items-center gap-2 font-mono text-xs text-sophia-dark-muted">
+                        <label
+                          class="flex cursor-pointer items-center gap-2 font-mono text-xs text-sophia-dark-muted"
+                          title={WT.ingestionAdvisorAutoApplyPreset}
+                        >
                           <input
                             type="checkbox"
                             disabled={runInProgress()}
                             bind:checked={ingestionAdvisorAutoApplyPreset}
                             class="rounded border-sophia-dark-border"
+                            title={WT.ingestionAdvisorAutoApplyPreset}
                           />
                           Auto-apply production model picks
                         </label>
-                        <label class="flex cursor-pointer items-center gap-2 font-mono text-xs text-sophia-dark-muted">
+                        <label
+                          class="flex cursor-pointer items-center gap-2 font-mono text-xs text-sophia-dark-muted"
+                          title={WT.ingestionAdvisorAutoApplyValidation}
+                        >
                           <input
                             type="checkbox"
                             disabled={runInProgress()}
                             bind:checked={ingestionAdvisorAutoApplyValidation}
                             class="rounded border-sophia-dark-border"
+                            title={WT.ingestionAdvisorAutoApplyValidation}
                           />
                           Auto-apply validation toggle
                         </label>
@@ -3575,23 +3653,35 @@
                   </div>
                   <div class="grid gap-4 sm:grid-cols-2">
                     <div>
-                      <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="ingest-provider">
+                      <label
+                        class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                        for="ingest-provider"
+                        title={WT.ingestProvider}
+                      >
                         Ingest provider preference
                       </label>
                       <select
                         id="ingest-provider"
                         disabled={runInProgress()}
                         bind:value={workerIngestProvider}
+                        title={WT.ingestProvider}
                         class="mt-1 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
                       >
                         <option value="auto">auto</option>
                         <option value="vertex">vertex</option>
                         <option value="anthropic">anthropic</option>
                       </select>
-                      <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">Passed to <span class="font-mono">scripts/ingest.ts</span> as <span class="font-mono">INGEST_PROVIDER</span>.</p>
+                      <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                        Passed to <span class="font-mono">scripts/ingest.ts</span> as <span class="font-mono">INGEST_PROVIDER</span>. Hover the
+                        control for tradeoffs.
+                      </p>
                     </div>
                     <div>
-                      <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="relations-overlap">
+                      <label
+                        class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                        for="relations-overlap"
+                        title={WT.relationsBatchOverlapClaims}
+                      >
                         Relations batch overlap (claims)
                       </label>
                       <input
@@ -3600,35 +3690,78 @@
                         min="1"
                         max="99"
                         step="1"
-                        placeholder="default from worker env"
+                        title={WT.relationsBatchOverlapClaims}
                         value={workerRelationsOverlapClaims}
                         oninput={(e) => (workerRelationsOverlapClaims = (e.currentTarget as HTMLInputElement).value)}
                         disabled={runInProgress()}
                         class="mt-1 w-full rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
                       />
                       <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
-                        Optional. Maps to <span class="font-mono">RELATIONS_BATCH_OVERLAP_CLAIMS</span>.
+                        Default <span class="font-mono text-sophia-dark-text">4</span> — maps to <span class="font-mono">RELATIONS_BATCH_OVERLAP_CLAIMS</span>.
                       </p>
                     </div>
                   </div>
-                  <label class="flex cursor-pointer items-start gap-2 font-mono text-xs text-sophia-dark-muted">
+                  <div class="grid gap-4 sm:grid-cols-2">
+                    <label
+                      class="flex cursor-pointer items-start gap-2 font-mono text-xs text-sophia-dark-muted sm:col-span-2"
+                      title={WT.googleThroughput}
+                    >
+                      <input
+                        type="checkbox"
+                        disabled={runInProgress()}
+                        bind:checked={workerGoogleThroughputEnabled}
+                        class="mt-0.5 rounded border-sophia-dark-border"
+                        title={WT.googleThroughput}
+                      />
+                      <span>
+                        Google / Vertex throughput mode (parallel extraction + Vertex embed pacing when embedding is Vertex).
+                        <span class="block text-[0.65rem] text-sophia-dark-dim mt-1">INGEST_GOOGLE_GENERATIVE_THROUGHPUT</span>
+                      </span>
+                    </label>
+                    <div>
+                      <label
+                        class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                        for="google-extract-floor"
+                        title={WT.googleExtractionFloor}
+                      >
+                        Google extraction concurrency floor
+                      </label>
+                      <input
+                        id="google-extract-floor"
+                        type="number"
+                        min="1"
+                        max="12"
+                        title={WT.googleExtractionFloor}
+                        step="1"
+                        bind:value={workerGoogleExtractionFloor}
+                        disabled={runInProgress()}
+                        class="mt-1 w-full max-w-xs rounded border border-sophia-dark-border bg-sophia-dark-bg px-3 py-2 font-mono text-xs text-sophia-dark-text disabled:opacity-60"
+                      />
+                      <p class="mt-1 text-[0.65rem] text-sophia-dark-dim">
+                        <span class="font-mono">INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR</span> when extraction is Vertex/Gemini.
+                      </p>
+                    </div>
+                  </div>
+                  <label class="flex cursor-pointer items-start gap-2 font-mono text-xs text-sophia-dark-muted" title={WT.failOnGroupingCollapse}>
                     <input
                       type="checkbox"
                       disabled={runInProgress()}
                       bind:checked={workerFailOnGroupingCollapse}
                       class="mt-0.5 rounded border-sophia-dark-border"
+                      title={WT.failOnGroupingCollapse}
                     />
                     <span>
                       Fail ingest when grouping positions collapse (strict integrity). Uncheck to only warn.
                       <span class="block text-[0.65rem] text-sophia-dark-dim mt-1">INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE</span>
                     </span>
                   </label>
-                  <label class="flex cursor-pointer items-start gap-2 font-mono text-xs text-sophia-dark-muted">
+                  <label class="flex cursor-pointer items-start gap-2 font-mono text-xs text-sophia-dark-muted" title={WT.ingestLogPins}>
                     <input
                       type="checkbox"
                       disabled={runInProgress()}
                       bind:checked={workerIngestLogPins}
                       class="mt-0.5 rounded border-sophia-dark-border"
+                      title={WT.ingestLogPins}
                     />
                     <span>
                       Log Expand pin and routing diagnostics on the worker (extra <span class="font-mono">[INGEST_PINS]</span> lines in
@@ -3652,10 +3785,11 @@
                   </summary>
                   <div class="mt-4 space-y-4">
                     <p class="text-xs text-sophia-dark-muted">
-                      Per-run worker timeout overrides (milliseconds). Leave blank to use the server
-                      <span class="font-mono">.env</span> defaults (ingest typically uses 180000 ms fallbacks). Stage-specific fields map to
-                      <span class="font-mono">INGEST_STAGE_*_TIMEOUT_MS</span> in
-                      <span class="font-mono">scripts/ingest.ts</span>. Saved in this browser with worker defaults above.
+                      Per-run worker timeout overrides (milliseconds). Fields default to the same 360000 ms baseline as the ingest worker /
+                      <span class="font-mono">scripts/ingest.ts</span>; the server may still apply stricter caps from
+                      <span class="font-mono">.env</span>. Stage-specific values map to
+                      <span class="font-mono">INGEST_STAGE_*_TIMEOUT_MS</span>. Saved in this browser with worker defaults above; hover each control
+                      for pairing advice.
                     </p>
                     {#if ingestWorkerDiagnostics}
                       <div class="rounded border border-sophia-dark-border/70 bg-sophia-dark-bg/25 p-4">
@@ -3692,7 +3826,11 @@
                     </p>
                     <div class="mt-2 grid gap-4 sm:grid-cols-2">
                       <div>
-                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-ingest-timeout">
+                        <label
+                          class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                          for="dbg-ingest-timeout"
+                          title={WT.ingestModelTimeoutMs}
+                        >
                           Ingest model timeout (ms)
                         </label>
                         <input
@@ -3701,7 +3839,7 @@
                           min="10000"
                           max="3600000"
                           step="1000"
-                          placeholder="e.g. 300000"
+                          title={WT.ingestModelTimeoutMs}
                           value={batchIngestModelTimeoutMs}
                           oninput={(e) =>
                             (batchIngestModelTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
@@ -3713,7 +3851,11 @@
                         </p>
                       </div>
                       <div>
-                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-validation-timeout">
+                        <label
+                          class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                          for="dbg-validation-timeout"
+                          title={WT.validationModelTimeoutMs}
+                        >
                           Validation model timeout (ms)
                         </label>
                         <input
@@ -3722,7 +3864,7 @@
                           min="10000"
                           max="3600000"
                           step="1000"
-                          placeholder="e.g. 300000"
+                          title={WT.validationModelTimeoutMs}
                           value={batchValidationModelTimeoutMs}
                           oninput={(e) =>
                             (batchValidationModelTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
@@ -3745,7 +3887,11 @@
                     </p>
                     <div class="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                       <div>
-                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-validation-stage-timeout">
+                        <label
+                          class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                          for="dbg-validation-stage-timeout"
+                          title={WT.validationStageTimeoutMs}
+                        >
                           Validation (ms)
                         </label>
                         <input
@@ -3754,7 +3900,7 @@
                           min="10000"
                           max="3600000"
                           step="1000"
-                          placeholder="e.g. 300000"
+                          title={WT.validationStageTimeoutMs}
                           value={batchValidationStageTimeoutMs}
                           oninput={(e) =>
                             (batchValidationStageTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
@@ -3766,7 +3912,11 @@
                         </p>
                       </div>
                       <div>
-                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-extraction-timeout">
+                        <label
+                          class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                          for="dbg-extraction-timeout"
+                          title={WT.extractionStageTimeoutMs}
+                        >
                           Extraction (ms)
                         </label>
                         <input
@@ -3775,7 +3925,7 @@
                           min="10000"
                           max="3600000"
                           step="1000"
-                          placeholder="e.g. 600000"
+                          title={WT.extractionStageTimeoutMs}
                           value={batchExtractionStageTimeoutMs}
                           oninput={(e) =>
                             (batchExtractionStageTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
@@ -3787,7 +3937,11 @@
                         </p>
                       </div>
                       <div>
-                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-relations-timeout">
+                        <label
+                          class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                          for="dbg-relations-timeout"
+                          title={WT.relationsStageTimeoutMs}
+                        >
                           Relations (ms)
                         </label>
                         <input
@@ -3796,7 +3950,7 @@
                           min="10000"
                           max="3600000"
                           step="1000"
-                          placeholder="e.g. 300000"
+                          title={WT.relationsStageTimeoutMs}
                           value={batchRelationsStageTimeoutMs}
                           oninput={(e) =>
                             (batchRelationsStageTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
@@ -3808,7 +3962,11 @@
                         </p>
                       </div>
                       <div>
-                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-grouping-timeout">
+                        <label
+                          class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                          for="dbg-grouping-timeout"
+                          title={WT.groupingStageTimeoutMs}
+                        >
                           Grouping (ms)
                         </label>
                         <input
@@ -3817,7 +3975,7 @@
                           min="10000"
                           max="3600000"
                           step="1000"
-                          placeholder="e.g. 300000"
+                          title={WT.groupingStageTimeoutMs}
                           value={batchGroupingStageTimeoutMs}
                           oninput={(e) =>
                             (batchGroupingStageTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
@@ -3829,7 +3987,11 @@
                         </p>
                       </div>
                       <div>
-                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-embedding-timeout">
+                        <label
+                          class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                          for="dbg-embedding-timeout"
+                          title={WT.embeddingStageTimeoutMs}
+                        >
                           Embedding (ms)
                         </label>
                         <input
@@ -3838,7 +4000,7 @@
                           min="10000"
                           max="3600000"
                           step="1000"
-                          placeholder="e.g. 600000"
+                          title={WT.embeddingStageTimeoutMs}
                           value={batchEmbeddingStageTimeoutMs}
                           oninput={(e) =>
                             (batchEmbeddingStageTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
@@ -3850,7 +4012,11 @@
                         </p>
                       </div>
                       <div>
-                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="dbg-json-repair-timeout">
+                        <label
+                          class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                          for="dbg-json-repair-timeout"
+                          title={WT.jsonRepairStageTimeoutMs}
+                        >
                           JSON repair (ms)
                         </label>
                         <input
@@ -3859,7 +4025,7 @@
                           min="10000"
                           max="3600000"
                           step="1000"
-                          placeholder="e.g. 120000"
+                          title={WT.jsonRepairStageTimeoutMs}
                           value={batchJsonRepairStageTimeoutMs}
                           oninput={(e) =>
                             (batchJsonRepairStageTimeoutMs = (e.currentTarget as HTMLInputElement).value)}
@@ -3959,15 +4125,18 @@
                   </summary>
                   <div class="mt-3 space-y-3">
                     <p class="text-xs text-sophia-dark-muted">
-                      Leave blank to use server defaults. Overrides are merged into the child process environment
-                      for <code class="text-sophia-dark-text">scripts/ingest.ts</code>. Use each field’s guidance
-                      when <span class="font-mono text-sophia-dark-dim">ingestion_run_reports</span> or the offline coach
-                      point at truncation, batch splits, retries, or stage-specific pressure.
+                      Values default to the current ingest script / worker baseline (same as durable jobs). Hover each field for env vars and
+                      rate-limit pairing notes. Overrides are merged into the child process environment for
+                      <code class="text-sophia-dark-text">scripts/ingest.ts</code>.
                     </p>
 
                     <div class="grid gap-4 sm:grid-cols-2">
                       <div>
-                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="bo-extraction">
+                        <label
+                          class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                          for="bo-extraction"
+                          title={WT.extractionMaxTokensPerSection}
+                        >
                           Extraction max tokens per section
                         </label>
                         <details class="mt-1 rounded border border-sophia-dark-border/60 bg-sophia-dark-bg/30 px-3 py-2">
@@ -3987,7 +4156,7 @@
                           min="1000"
                           max="20000"
                           step="100"
-                          placeholder="e.g. 3500"
+                          title={WT.extractionMaxTokensPerSection}
                           value={batchExtractionMaxTokensPerSection}
                           oninput={(e) => (batchExtractionMaxTokensPerSection = (e.currentTarget as HTMLInputElement).value)}
                           disabled={runInProgress()}
@@ -3996,7 +4165,11 @@
                       </div>
 
                       <div>
-                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="bo-grouping">
+                        <label
+                          class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                          for="bo-grouping"
+                          title={WT.groupingTargetTokens}
+                        >
                           Grouping target tokens
                         </label>
                         <details class="mt-1 rounded border border-sophia-dark-border/60 bg-sophia-dark-bg/30 px-3 py-2">
@@ -4015,7 +4188,7 @@
                           min="10000"
                           max="400000"
                           step="1000"
-                          placeholder="e.g. 80000"
+                          title={WT.groupingTargetTokens}
                           value={batchGroupingTargetTokens}
                           oninput={(e) => (batchGroupingTargetTokens = (e.currentTarget as HTMLInputElement).value)}
                           disabled={runInProgress()}
@@ -4024,7 +4197,11 @@
                       </div>
 
                       <div>
-                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="bo-validation">
+                        <label
+                          class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                          for="bo-validation"
+                          title={WT.validationTargetTokens}
+                        >
                           Validation target tokens
                         </label>
                         <details class="mt-1 rounded border border-sophia-dark-border/60 bg-sophia-dark-bg/30 px-3 py-2">
@@ -4043,7 +4220,7 @@
                           min="10000"
                           max="400000"
                           step="1000"
-                          placeholder="e.g. 70000"
+                          title={WT.validationTargetTokens}
                           value={batchValidationTargetTokens}
                           oninput={(e) => (batchValidationTargetTokens = (e.currentTarget as HTMLInputElement).value)}
                           disabled={runInProgress() || !runValidate}
@@ -4052,7 +4229,11 @@
                       </div>
 
                       <div>
-                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="bo-relations">
+                        <label
+                          class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                          for="bo-relations"
+                          title={WT.relationsTargetTokens}
+                        >
                           Relations batch target tokens
                         </label>
                         <details class="mt-1 rounded border border-sophia-dark-border/60 bg-sophia-dark-bg/30 px-3 py-2">
@@ -4071,7 +4252,7 @@
                           min="5000"
                           max="250000"
                           step="1000"
-                          placeholder="e.g. 20000"
+                          title={WT.relationsTargetTokens}
                           value={batchRelationsTargetTokens}
                           oninput={(e) => (batchRelationsTargetTokens = (e.currentTarget as HTMLInputElement).value)}
                           disabled={runInProgress()}
@@ -4080,7 +4261,11 @@
                       </div>
 
                       <div>
-                        <label class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim" for="bo-embed">
+                        <label
+                          class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+                          for="bo-embed"
+                          title={WT.embedBatchSize}
+                        >
                           Embedding batch size
                         </label>
                         <details class="mt-1 rounded border border-sophia-dark-border/60 bg-sophia-dark-bg/30 px-3 py-2">
@@ -4098,7 +4283,7 @@
                           min="25"
                           max="2000"
                           step="25"
-                          placeholder="e.g. 150"
+                          title={WT.embedBatchSize}
                           value={batchEmbedBatchSize}
                           oninput={(e) => (batchEmbedBatchSize = (e.currentTarget as HTMLInputElement).value)}
                           disabled={runInProgress()}

@@ -3,6 +3,13 @@ import * as path from 'path';
 import { parse as parseHTML } from 'node-html-parser';
 import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.js';
 
+/** SEP / IEP pages use legacy markup (often unclosed tags). Without this, `node-html-parser` can drop `#article-content` / `#main-text` and yield empty extracts. */
+const HTML_PARSE_OPTS = { parseNoneClosedTags: true as const };
+
+function parseHtmlDocument(html: string) {
+	return parseHTML(html, HTML_PARSE_OPTS);
+}
+
 const VALID_SOURCE_TYPES = ['sep_entry', 'iep_entry', 'book', 'paper', 'institutional'];
 const DATA_SOURCES_DIR = './data/sources';
 
@@ -104,7 +111,7 @@ async function fetchUrl(url: string, options?: { cacheKey?: string }): Promise<s
  * Extract Stanford Encyclopedia of Philosophy entry
  */
 function extractSepEntry(html: string): { text: string; title: string; author: string[] } {
-	const root = parseHTML(html);
+	const root = parseHtmlDocument(html);
 
 	// Find main article content (SEP has used #main-text, #article-content, .entry-content, etc.)
 	const mainSelectors = [
@@ -212,6 +219,11 @@ function extractSepEntry(html: string): { text: string; title: string; author: s
 	}
 
 	const text = mainContent.text.trim();
+	if (text.length < 400) {
+		throw new Error(
+			`SEP entry body is too short (${text.length} chars) after extraction — page layout may have changed or HTML failed to parse.`
+		);
+	}
 	return { text, title, author };
 }
 
@@ -219,7 +231,7 @@ function extractSepEntry(html: string): { text: string; title: string; author: s
  * Extract Internet Encyclopedia of Philosophy entry
  */
 function extractIepEntry(html: string): { text: string; title: string; author: string[] } {
-	const root = parseHTML(html);
+	const root = parseHtmlDocument(html);
 
 	// Find main article
 	let mainContent = root.querySelector('.article-content');
@@ -285,7 +297,7 @@ function extractGenericContent(
 	html: string,
 	sourceType: string
 ): { text: string; title: string; author: string[] } {
-	const root = parseHTML(html);
+	const root = parseHtmlDocument(html);
 
 	// Try common content selectors
 	let mainContent =

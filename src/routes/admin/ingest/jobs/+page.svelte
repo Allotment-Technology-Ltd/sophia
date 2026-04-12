@@ -2,6 +2,10 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { getIdToken } from '$lib/authClient';
 	import { MAX_DURABLE_INGEST_JOB_CONCURRENCY } from '$lib/ingestionJobConcurrency';
+	import {
+		ADMIN_INGEST_WORKER_UI_DEFAULTS as JOB_UI,
+		ADMIN_INGEST_WORKER_UI_TOOLTIPS as JOB_TT
+	} from '$lib/adminIngestWorkerUiDefaults';
 
 	type JobSummary = {
 		total?: number;
@@ -34,24 +38,26 @@
 	let submitMessage = $state('');
 
 	let urlsInput = $state('');
-	let concurrency = $state(2);
+	let concurrency = $state(MAX_DURABLE_INGEST_JOB_CONCURRENCY);
 	let notes = $state('');
 	let validateLlm = $state(false);
 	/** Append URLs to the most recently touched running job instead of starting a second job (eases global worker cap). */
 	let mergeIntoRunningJob = $state(false);
 
-	const JOB_WORKER_SETTINGS_KEY = 'sophia.admin.ingestJobWorkerDefaults.v1';
+	const JOB_WORKER_SETTINGS_KEY = 'sophia.admin.ingestJobWorkerDefaults.v2';
 
 	/** Optional per-item worker tuning (stored on job row, merged into each child `batch_overrides`). */
 	let workerTuningOpen = $state(false);
-	let jobExtractionConcurrency = $state('');
-	let jobExtractionMaxTokens = $state('');
-	let jobPassageInsertConcurrency = $state('');
-	let jobClaimInsertConcurrency = $state('');
-	let jobRemediationMaxClaims = $state('');
-	let jobRelationsOverlap = $state('');
-	/** Default mistral for SEP / fine-tune relabel durable jobs; persisted per browser. */
-	let jobIngestProvider = $state<'auto' | 'anthropic' | 'vertex' | 'mistral'>('mistral');
+	let jobExtractionConcurrency = $state(JOB_UI.extractionConcurrency);
+	let jobExtractionMaxTokens = $state(JOB_UI.extractionMaxTokensPerSection);
+	let jobPassageInsertConcurrency = $state(JOB_UI.passageInsertConcurrency);
+	let jobClaimInsertConcurrency = $state(JOB_UI.claimInsertConcurrency);
+	let jobRemediationMaxClaims = $state(JOB_UI.remediationMaxClaims);
+	let jobRelationsOverlap = $state(JOB_UI.relationsBatchOverlapClaims);
+	/** Default `auto`: canonical Gemini-on-Vertex primaries + Mistral fallbacks; persisted per browser. */
+	let jobIngestProvider = $state<'auto' | 'anthropic' | 'vertex' | 'mistral'>('auto');
+	let jobGoogleThroughputEnabled = $state(true);
+	let jobGoogleExtractionFloor = $state(JOB_UI.googleExtractionConcurrencyFloor);
 	/** Re-run from extraction when Surreal `ingestion_log` is already complete (INGEST_FORCE_REINGEST). */
 	let jobForceReingest = $state(true);
 	let jobFailOnGroupingCollapse = $state(true);
@@ -128,6 +134,9 @@
 		const overlap = parseOptionalInt(jobRelationsOverlap, 1, 99);
 		if (overlap != null) o.relationsBatchOverlapClaims = overlap;
 		o.ingestProvider = jobIngestProvider;
+		if (!jobGoogleThroughputEnabled) o.googleGenerativeThroughput = false;
+		const gFloor = parseOptionalInt(jobGoogleExtractionFloor, 1, 12);
+		if (gFloor != null) o.googleExtractionConcurrencyFloor = gFloor;
 		if (jobForceReingest) o.forceReingest = true;
 		o.failOnGroupingPositionCollapse = jobFailOnGroupingCollapse;
 		o.ingestLogPins = jobIngestLogPins;
@@ -170,6 +179,8 @@
 					jobRemediationMaxClaims,
 					jobRelationsOverlap,
 					jobIngestProvider,
+					jobGoogleThroughputEnabled,
+					jobGoogleExtractionFloor,
 					jobFailOnGroupingCollapse,
 					jobIngestLogPins,
 					jobRemediationEnabled,
@@ -456,7 +467,9 @@
 
 	onMount(() => {
 		try {
-			const raw = localStorage.getItem(JOB_WORKER_SETTINGS_KEY);
+			const raw =
+				localStorage.getItem(JOB_WORKER_SETTINGS_KEY) ??
+				localStorage.getItem('sophia.admin.ingestJobWorkerDefaults.v1');
 			if (raw) {
 				const p = JSON.parse(raw) as Record<string, unknown>;
 				const strOrNum = (v: unknown): string =>
@@ -490,6 +503,15 @@
 				) {
 					jobIngestProvider = p.jobIngestProvider;
 				}
+				if (typeof p.jobGoogleThroughputEnabled === 'boolean') {
+					jobGoogleThroughputEnabled = p.jobGoogleThroughputEnabled;
+				}
+				if (typeof p.jobGoogleExtractionFloor === 'string' || typeof p.jobGoogleExtractionFloor === 'number') {
+					jobGoogleExtractionFloor =
+						typeof p.jobGoogleExtractionFloor === 'string'
+							? p.jobGoogleExtractionFloor
+							: String(p.jobGoogleExtractionFloor);
+				}
 				if (typeof p.jobForceReingest === 'boolean') {
 					jobForceReingest = p.jobForceReingest;
 				} else if (!('jobForceReingest' in p)) {
@@ -507,6 +529,14 @@
 					jobWatchdogBaselineMult = strOrNum(p.jobWatchdogBaselineMult);
 				}
 			}
+			const nz = (s: string, d: string) => (String(s ?? '').trim() === '' ? d : String(s));
+			jobExtractionConcurrency = nz(jobExtractionConcurrency, JOB_UI.extractionConcurrency);
+			jobExtractionMaxTokens = nz(jobExtractionMaxTokens, JOB_UI.extractionMaxTokensPerSection);
+			jobPassageInsertConcurrency = nz(jobPassageInsertConcurrency, JOB_UI.passageInsertConcurrency);
+			jobClaimInsertConcurrency = nz(jobClaimInsertConcurrency, JOB_UI.claimInsertConcurrency);
+			jobRemediationMaxClaims = nz(jobRemediationMaxClaims, JOB_UI.remediationMaxClaims);
+			jobRelationsOverlap = nz(jobRelationsOverlap, JOB_UI.relationsBatchOverlapClaims);
+			jobGoogleExtractionFloor = nz(jobGoogleExtractionFloor, JOB_UI.googleExtractionConcurrencyFloor);
 		} catch {
 			/* ignore */
 		}
@@ -534,6 +564,8 @@
 			jobRemediationMaxClaims +
 			jobRelationsOverlap +
 			jobIngestProvider +
+			jobGoogleThroughputEnabled +
+			jobGoogleExtractionFloor +
 			jobFailOnGroupingCollapse +
 			jobIngestLogPins +
 			jobRemediationEnabled +
@@ -676,12 +708,13 @@
 				></textarea>
 			</label>
 			<div class="flex flex-wrap items-end gap-4">
-				<label class="block">
+				<label class="block" title={JOB_TT.jobConcurrency}>
 					<span class="font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-dim">Concurrency</span>
 					<input
 						type="number"
 						min="1"
 						max={MAX_DURABLE_INGEST_JOB_CONCURRENCY}
+						title={JOB_TT.jobConcurrency}
 						class="mt-2 w-24 rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)]"
 						bind:value={concurrency}
 					/>
@@ -702,134 +735,174 @@
 					Worker defaults (per URL run)
 				</summary>
 				<p class="mt-2 text-sm text-sophia-dark-muted">
-					Applied to every child ingest for this job (stored on the job row). Blank fields use worker / server env.
-					Defaults are remembered in this browser. For full model routing and batch token caps, use
+					Shown numbers match the current production-friendly baseline (ingest script defaults + ingest worker caps). They are
+					stored on the job row and remembered in this browser. Hover any field for env var names and rate-limit / pairing
+					advice. Durable jobs always pin <span class="font-mono text-xs">voyage__voyage-4-lite</span> on the child (1024-dim corpus); embed
+					batch size only affects Vertex embedding runs. For full model routing, use
 					<a href="/admin/ingest" class="text-[var(--color-sage)] underline-offset-2 hover:underline">single-run ingest</a>.
 				</p>
-				<label class="mt-3 flex cursor-pointer items-center gap-3 rounded border border-[var(--color-border)]/60 bg-black/15 p-3">
-					<input type="checkbox" bind:checked={jobForceReingest} class="h-5 w-5 rounded border-[var(--color-border)]" />
+				<label
+					class="mt-3 flex cursor-pointer items-center gap-3 rounded border border-[var(--color-border)]/60 bg-black/15 p-3"
+					title={JOB_TT.forceReingest}
+				>
+					<input type="checkbox" bind:checked={jobForceReingest} class="h-5 w-5 rounded border-[var(--color-border)]" title={JOB_TT.forceReingest} />
 					<span class="text-sm text-sophia-dark-text">
 						Re-ingest — bypass “already complete” in Surreal <span class="font-mono text-xs">ingestion_log</span>
 						(<span class="font-mono text-xs">INGEST_FORCE_REINGEST</span> / <span class="font-mono text-xs">--force-stage extracting</span>). Turn off only for net-new URLs.
 					</span>
 				</label>
 				<div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-					<label class="block">
+					<label class="block" title={JOB_TT.extractionConcurrency}>
 						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Extraction parallelism</span>
 						<input
 							type="number"
 							min="1"
 							max="16"
+							title={JOB_TT.extractionConcurrency}
 							class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
 							bind:value={jobExtractionConcurrency}
 							placeholder="INGEST_EXTRACTION_CONCURRENCY"
 						/>
 					</label>
-					<label class="block">
+					<label class="block" title={JOB_TT.extractionMaxTokensPerSection}>
 						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Max tokens / section</span>
 						<input
 							type="number"
 							min="1000"
 							max="20000"
+							title={JOB_TT.extractionMaxTokensPerSection}
 							class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
 							bind:value={jobExtractionMaxTokens}
 							placeholder="INGEST_EXTRACTION_MAX_TOKENS_PER_SECTION"
 						/>
 					</label>
-					<label class="block">
+					<label class="block" title={JOB_TT.passageInsertConcurrency}>
 						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Surreal passage inserts</span>
 						<input
 							type="number"
 							min="1"
 							max="12"
+							title={JOB_TT.passageInsertConcurrency}
 							class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
 							bind:value={jobPassageInsertConcurrency}
 							placeholder="INGEST_PASSAGE_INSERT_CONCURRENCY"
 						/>
 					</label>
-					<label class="block">
+					<label class="block" title={JOB_TT.claimInsertConcurrency}>
 						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Surreal claim inserts</span>
 						<input
 							type="number"
 							min="1"
 							max="24"
+							title={JOB_TT.claimInsertConcurrency}
 							class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
 							bind:value={jobClaimInsertConcurrency}
 							placeholder="INGEST_CLAIM_INSERT_CONCURRENCY"
 						/>
 					</label>
-					<label class="block">
+					<label class="block" title={JOB_TT.remediationMaxClaims}>
 						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Remediation max claims</span>
 						<input
 							type="number"
 							min="1"
 							max="200"
+							title={JOB_TT.remediationMaxClaims}
 							class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
 							bind:value={jobRemediationMaxClaims}
 							placeholder="INGEST_REMEDIATION_MAX_CLAIMS"
 						/>
 					</label>
-					<label class="block">
+					<label class="block" title={JOB_TT.relationsBatchOverlapClaims}>
 						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Relations overlap</span>
 						<input
 							type="number"
 							min="1"
 							max="99"
+							title={JOB_TT.relationsBatchOverlapClaims}
 							class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
 							bind:value={jobRelationsOverlap}
 							placeholder="RELATIONS_BATCH_OVERLAP_CLAIMS"
 						/>
 					</label>
-					<label class="block sm:col-span-2">
+					<label class="block sm:col-span-2" title={JOB_TT.ingestProvider}>
 						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Ingest provider</span>
 						<select
+							title={JOB_TT.ingestProvider}
 							class="mt-2 w-full max-w-xs rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
 							bind:value={jobIngestProvider}
 						>
-							<option value="mistral">mistral (default — SEP relabel)</option>
-							<option value="auto">auto</option>
+							<option value="auto">auto (canonical: Gemini-first, Mistral fallback)</option>
 							<option value="vertex">vertex</option>
+							<option value="mistral">mistral</option>
 							<option value="anthropic">anthropic</option>
 						</select>
 					</label>
+					<label class="flex cursor-pointer items-center gap-3 sm:col-span-2" title={JOB_TT.googleThroughput}>
+						<input
+							type="checkbox"
+							bind:checked={jobGoogleThroughputEnabled}
+							class="h-5 w-5 rounded border-[var(--color-border)]"
+							title={JOB_TT.googleThroughput}
+						/>
+						<span class="text-sm text-sophia-dark-text">
+							Google / Vertex throughput mode (<span class="font-mono text-xs">INGEST_GOOGLE_GENERATIVE_THROUGHPUT</span>) — faster
+							parallel extraction + zero Vertex embed delay when unset
+						</span>
+					</label>
+					<label class="block sm:col-span-2" title={JOB_TT.googleExtractionFloor}>
+						<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim"
+							>Google extraction concurrency floor</span
+						>
+						<input
+							type="number"
+							min="1"
+							max="12"
+							title={JOB_TT.googleExtractionFloor}
+							class="mt-2 w-full max-w-xs rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
+							bind:value={jobGoogleExtractionFloor}
+							placeholder="INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR (default 6)"
+						/>
+					</label>
 				</div>
-				<label class="mt-3 flex cursor-pointer items-center gap-3">
-					<input type="checkbox" bind:checked={jobFailOnGroupingCollapse} class="h-5 w-5 rounded border-[var(--color-border)]" />
+				<label class="mt-3 flex cursor-pointer items-center gap-3" title={JOB_TT.failOnGroupingCollapse}>
+					<input type="checkbox" bind:checked={jobFailOnGroupingCollapse} class="h-5 w-5 rounded border-[var(--color-border)]" title={JOB_TT.failOnGroupingCollapse} />
 					<span class="text-sm text-sophia-dark-text">Fail on grouping position collapse (strict)</span>
 				</label>
-				<label class="mt-2 flex cursor-pointer items-center gap-3">
-					<input type="checkbox" bind:checked={jobIngestLogPins} class="h-5 w-5 rounded border-[var(--color-border)]" />
+				<label class="mt-2 flex cursor-pointer items-center gap-3" title={JOB_TT.ingestLogPins}>
+					<input type="checkbox" bind:checked={jobIngestLogPins} class="h-5 w-5 rounded border-[var(--color-border)]" title={JOB_TT.ingestLogPins} />
 					<span class="text-sm text-sophia-dark-text">Log routing pin diagnostics (INGEST_LOG_PINS)</span>
 				</label>
 				{#if validateLlm}
 					<div class="mt-3 space-y-2 rounded border border-[var(--color-border)]/60 bg-black/15 p-3">
 						<p class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Remediation (when validation on)</p>
-						<label class="flex cursor-pointer items-center gap-3">
-							<input type="checkbox" bind:checked={jobRemediationEnabled} class="h-5 w-5 rounded border-[var(--color-border)]" />
+						<label class="flex cursor-pointer items-center gap-3" title={JOB_TT.remediationEnabled}>
+							<input type="checkbox" bind:checked={jobRemediationEnabled} class="h-5 w-5 rounded border-[var(--color-border)]" title={JOB_TT.remediationEnabled} />
 							<span class="text-sm text-sophia-dark-text">Enable remediation pass</span>
 						</label>
-						<label class="flex cursor-pointer items-center gap-3">
-							<input type="checkbox" bind:checked={jobRemediationRevalidate} class="h-5 w-5 rounded border-[var(--color-border)]" />
+						<label class="flex cursor-pointer items-center gap-3" title={JOB_TT.remediationRevalidate}>
+							<input type="checkbox" bind:checked={jobRemediationRevalidate} class="h-5 w-5 rounded border-[var(--color-border)]" title={JOB_TT.remediationRevalidate} />
 							<span class="text-sm text-sophia-dark-text">Re-validate after remediation</span>
 						</label>
 					</div>
 				{/if}
-				<label class="mt-4 block">
+				<label class="mt-4 block" title={JOB_TT.watchdogPhaseIdleJson}>
 					<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Watchdog phase idle (JSON, ms)</span>
 					<textarea
+						title={JOB_TT.watchdogPhaseIdleJson}
 						class="mt-2 min-h-[72px] w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-xs"
 						bind:value={jobWatchdogPhaseIdleJson}
 						placeholder={JSON.stringify({ extracting: 480000, storing: 600000 })}
 						rows="3"
 					></textarea>
 				</label>
-				<label class="mt-2 block max-w-xs">
+				<label class="mt-2 block max-w-xs" title={JOB_TT.watchdogBaselineMult}>
 					<span class="font-mono text-[0.65rem] uppercase tracking-[0.1em] text-sophia-dark-dim">Watchdog baseline mult.</span>
 					<input
 						type="number"
 						min="0.5"
 						max="10"
 						step="0.1"
+						title={JOB_TT.watchdogBaselineMult}
 						class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm"
 						bind:value={jobWatchdogBaselineMult}
 						placeholder="e.g. 2.5"
@@ -837,15 +910,16 @@
 				</label>
 			</details>
 
-			<label class="flex cursor-pointer items-center gap-3">
-				<input type="checkbox" bind:checked={validateLlm} class="h-5 w-5 rounded border-[var(--color-border)]" />
+			<label class="flex cursor-pointer items-center gap-3" title={JOB_TT.validateLlm}>
+				<input type="checkbox" bind:checked={validateLlm} class="h-5 w-5 rounded border-[var(--color-border)]" title={JOB_TT.validateLlm} />
 				<span class="text-sm text-sophia-dark-text">Run LLM validation stage</span>
 			</label>
-			<label class="flex cursor-pointer items-center gap-3">
+			<label class="flex cursor-pointer items-center gap-3" title={JOB_TT.mergeIntoRunningJob}>
 				<input
 					type="checkbox"
 					bind:checked={mergeIntoRunningJob}
 					class="h-5 w-5 rounded border-[var(--color-border)]"
+					title={JOB_TT.mergeIntoRunningJob}
 				/>
 				<span class="text-sm text-sophia-dark-text">
 					If a job is already running, append these URLs to it (pending queue). Avoids a second job competing for
