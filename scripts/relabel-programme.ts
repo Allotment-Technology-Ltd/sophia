@@ -41,6 +41,8 @@ export interface RelabelInventoryRow {
 	title: string | null;
 	status: string | null;
 	claim_count: number | null;
+	/** When true, omit from training / fine-tune exports (Surreal + Neon governance). */
+	exclude_from_model_training: boolean | null;
 }
 
 export interface SepReingestRow extends RelabelInventoryRow {
@@ -57,6 +59,7 @@ interface SurrealSourceRow {
 	status?: string | null;
 	claim_count?: number | null;
 	ingested_at?: unknown;
+	exclude_from_model_training?: boolean | null;
 }
 
 function stringifySurrealId(id: unknown): string {
@@ -160,7 +163,7 @@ async function cmdInventory(argv: string[]): Promise<void> {
 	}
 
 	let surrealSql =
-		'SELECT id, title, url, canonical_url, canonical_url_hash, status, claim_count, ingested_at FROM source';
+		'SELECT id, title, url, canonical_url, canonical_url_hash, status, claim_count, ingested_at, exclude_from_model_training FROM source';
 	if (status !== 'all') {
 		surrealSql += ` WHERE string::lowercase(status) = '${status}'`;
 	}
@@ -181,7 +184,9 @@ async function cmdInventory(argv: string[]): Promise<void> {
 		ingested_at: isoFromSurrealDate(r.ingested_at),
 		title: typeof r.title === 'string' ? r.title : null,
 		status: r.status ?? null,
-		claim_count: typeof r.claim_count === 'number' ? r.claim_count : null
+		claim_count: typeof r.claim_count === 'number' ? r.claim_count : null,
+		exclude_from_model_training:
+			typeof r.exclude_from_model_training === 'boolean' ? r.exclude_from_model_training : null
 	}));
 
 	const doc = {
@@ -211,7 +216,8 @@ async function cmdInventory(argv: string[]): Promise<void> {
 			'ingested_at',
 			'title',
 			'status',
-			'claim_count'
+			'claim_count',
+			'exclude_from_model_training'
 		];
 		const lines = [
 			header.join(','),
@@ -224,7 +230,8 @@ async function cmdInventory(argv: string[]): Promise<void> {
 					csvEscape(r.ingested_at),
 					csvEscape(r.title),
 					csvEscape(r.status),
-					r.claim_count != null ? String(r.claim_count) : ''
+					r.claim_count != null ? String(r.claim_count) : '',
+					r.exclude_from_model_training != null ? String(r.exclude_from_model_training) : ''
 				].join(',')
 			)
 		];
@@ -269,7 +276,7 @@ async function cmdSepReingestList(argv: string[]): Promise<void> {
 	await db.use({ namespace: SURREAL_NAMESPACE(), database: SURREAL_DATABASE() });
 
 	let surrealSql =
-		'SELECT id, title, url, canonical_url, canonical_url_hash, source_type, status, claim_count, ingested_at FROM source WHERE (string::lowercase(type::string(source_type)) = \'sep_entry\' OR (string::contains(string::lowercase(type::string(url)), \'plato.stanford.edu\') AND string::contains(string::lowercase(type::string(url)), \'/entries/\')))';
+		'SELECT id, title, url, canonical_url, canonical_url_hash, source_type, status, claim_count, ingested_at, exclude_from_model_training FROM source WHERE (string::lowercase(type::string(source_type)) = \'sep_entry\' OR (string::contains(string::lowercase(type::string(url)), \'plato.stanford.edu\') AND string::contains(string::lowercase(type::string(url)), \'/entries/\')))';
 	if (status !== 'all') {
 		surrealSql += ` AND string::lowercase(type::string(status)) = '${status}'`;
 	}
@@ -288,7 +295,9 @@ async function cmdSepReingestList(argv: string[]): Promise<void> {
 		title: typeof r.title === 'string' ? r.title : null,
 		status: r.status ?? null,
 		claim_count: typeof r.claim_count === 'number' ? r.claim_count : null,
-		source_type: typeof r.source_type === 'string' ? r.source_type : null
+		source_type: typeof r.source_type === 'string' ? r.source_type : null,
+		exclude_from_model_training:
+			typeof r.exclude_from_model_training === 'boolean' ? r.exclude_from_model_training : null
 	}));
 
 	const seenUrl = new Set<string>();
