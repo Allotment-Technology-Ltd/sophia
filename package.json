@@ -49,6 +49,7 @@
     "neon:auth-env": "tsx --env-file=.env scripts/neon-auth-print-env.ts",
     "verify:neon-ingest-run": "tsx scripts/verify-neon-ingest-run.ts",
     "docs:verify-present": "bash scripts/verify-docs-present.sh",
+    "git:sync-main": "bash scripts/git-sync-and-push-main.sh",
     "ops:phase0-timing-from-gcp-export": "tsx scripts/aggregate-phase0-ingest-timing-gcp-export.ts",
     "ops:phase0-timing-from-neon-logs": "tsx scripts/aggregate-phase0-ingest-timing-neon-logs.ts",
     "ops:phase0-timing-extrapolate-neon": "tsx scripts/extrapolate-phase0-timing-neon.ts",
