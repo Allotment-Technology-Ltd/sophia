@@ -65,7 +65,7 @@ The top-level [README.md](../README.md) duplicates navigation paths for GitHub v
 1. **Update from `main`:** `git pull origin main`
 2. **Force-restore `docs/` from Git** (does not delete untracked files you added under `docs/`):  
    `git fetch origin && git checkout origin/main -- docs/`
-3. **Verify core paths:** from repo root, `pnpm docs:verify-present`  
+3. **Verify core paths:** from repo root, `pnpm run docs:verify-present`  
    (checks e.g. `docs/restormel/meta/linear-config.yml`).
 
 If `git status` never shows changes under `docs/` when you edit tracked files, inspect **`.gitignore`** for a line like `docs/*` — that pattern hides the tree from Git and breaks CI; remove it and restore with step 2.

@@ -120,5 +120,7 @@ git pull origin main
 **Sanity check** (fails if core paths are missing):
 
 ```bash
-pnpm docs:verify-present
+pnpm run docs:verify-present
 ```
+
+**If `git pull` says “Need to specify how to reconcile divergent branches”:** use an explicit strategy, e.g. `git pull --rebase origin main`, or commit/stash then `git fetch origin && git rebase origin/main`. To commit staged work and push after pulling latest scripts: `pnpm run git:sync-main -- "your message"` (requires `package.json` from current `main`).
