@@ -6,6 +6,8 @@
 #
 #   deploy paths (src, scripts, drizzle, Docker, lockfile, …)  →
 #   deploy-neon-migrate + deploy-container-image (parallel) + app-deploy (Cloud Run + poller + health).
+#   Ingest fixes (scripts/ingest.ts, verify-cloud-run-ingest-modules, runtime COPY in Dockerfile) ship on
+#   the same image as the web app; sophia + sophia-ingestion-job-poller + sophia-ingest-worker all use the pushed commit tag.
 #   docs/**, repomix*.json  →  no image build or Cloud Run deploy (workflow_dispatch --force still works).
 #   .gitignore alone  →  no deploy; but data/*.json baked into the image (SEP catalog) must match deploy paths.
 #
@@ -143,6 +145,8 @@ jobs:
               - 'drizzle/**'
               - 'static/**'
               - 'Dockerfile'
+              - 'Dockerfile.ingest'
+              - 'Dockerfile.ingest-worker'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
@@ -154,6 +158,7 @@ jobs:
               # Copied into runtime image (see Dockerfile); changing catalog must rebuild the image.
               - 'data/sep-entry-urls.json'
               - 'data/sep-topic-presets.json'
+              - 'data/sources/**'
 
   # ── 2. Security & quality gate (always runs) ───────────────────────────────
   security:

@@ -64,6 +64,8 @@ RUN npx tsx scripts/verify-cloud-run-ingest-modules.ts
 
 # Writable cache for fetched sources (Cloud Run: ensure no read-only root override)
 RUN mkdir -p data/sources
+# Repo-tracked sources (often empty except README); batch jobs that reference slugs without a fresh fetch need files present
+COPY --from=builder /app/data/sources ./data/sources
 # Admin SEP batch picker reads catalog + topic presets at runtime (see sepEntryBatchPick.ts)
 COPY --from=builder /app/data/sep-entry-urls.json ./data/sep-entry-urls.json
 COPY --from=builder /app/data/sep-topic-presets.json ./data/sep-topic-presets.json
