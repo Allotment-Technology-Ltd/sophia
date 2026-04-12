@@ -897,6 +897,29 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if not LINEAR_CONFIG_PATH.is_file():
+        explain = (
+            f"Restormel Linear meta not found ({LINEAR_CONFIG_PATH}). "
+            "Public checkouts omit docs/local/; populate the maintainer doc pack "
+            "(see docs/LOCAL_DOCS.md) or run from a tree that includes docs/restormel/meta/."
+        )
+        if args.mode == "dry-run":
+            print(f"Skipping Linear sync (dry-run): {explain}")
+            if args.github_summary:
+                write_summary(
+                    [
+                        "## Linear Sync",
+                        "",
+                        "**Skipped** — no `linear-config.yml` in this checkout (expected on public CI without `docs/local/`).",
+                        "",
+                        explain,
+                        "",
+                        f"Resolved docs root: `{DOCS_ROOT}`",
+                    ]
+                )
+            return 0
+        raise SyncError(explain)
+
     owners_cfg = read_yaml(OWNERS_PATH)
     milestones_cfg = read_yaml(MILESTONES_PATH)
     linear_config = load_linear_config()
