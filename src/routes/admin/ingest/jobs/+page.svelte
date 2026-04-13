@@ -273,7 +273,8 @@
 			if (preset === 'training_acceptable') {
 				const d = Math.min(730, Math.max(1, Math.trunc(Number(cohortDays)) || 90));
 				params.set('days', String(d));
-				if (validateLlm) params.set('validate', '1');
+				// Do not pass `validate=1` here: "Run LLM validation" only affects the job payload, not which Neon runs
+				// appear in the preset. (validate=true-only lists are tiny; use "Golden + training (validation-tail)" for that.)
 			}
 			const res = await fetch(`/api/admin/ingest/jobs/url-presets?${params}`, { headers: await authHeaders() });
 			const body = await res.json().catch(() => ({}));
@@ -300,8 +301,7 @@
 				presetMessage = `Loaded ${lines.length} golden URL(s)${fpNote ? ` · ${fpNote}` : ''}.`;
 			} else {
 				const win = typeof body?.days === 'number' ? body.days : Math.trunc(Number(cohortDays)) || 90;
-				const filt = validateLlm ? 'payload.validate=true only' : 'all training-acceptable (any validate flag)';
-				presetMessage = `Loaded ${lines.length} URL(s) — ${win}d, ${filt}${fpNote ? ` · ${fpNote}` : ''}.`;
+				presetMessage = `Loaded ${lines.length} unique URL(s) — ${win}d, all training-acceptable runs (any validate flag)${fpNote ? ` · ${fpNote}` : ''}.`;
 			}
 		} catch (e) {
 			presetMessage = e instanceof Error ? e.message : 'Preset failed.';
@@ -872,6 +872,7 @@
 				</button>
 				<button
 					type="button"
+					title="Training-acceptable Neon completes in the cohort window, one row per canonical URL (latest run). Ignores “Run LLM validation” — that checkbox only affects new jobs. For Neon runs that used payload.validate=true only, use Golden + training (validation-tail)."
 					class="mt-6 inline-flex min-h-[44px] items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--color-blue)_35%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-blue)_10%,var(--color-surface))] px-4 py-2 font-mono text-xs font-medium uppercase tracking-[0.06em] text-sophia-dark-text transition hover:border-[var(--color-blue)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:cursor-not-allowed disabled:opacity-50"
 					disabled={presetBusy || neonDisabled}
 					onclick={() => void fillUrlsFromJobPreset('training_acceptable')}
