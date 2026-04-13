@@ -104,6 +104,7 @@ import { isNeonIngestPersistenceEnabled } from '../src/lib/server/neon/datastore
 import {
 	SOURCE_ID_STRING_ARRAY_ONE_SQL,
 	SOURCE_ID_STRING_SQL,
+	normalizeBareWikidataQidToThinkerRecordId,
 	recordKeyForTable,
 	splitRecordTableAndKey,
 	toSurrealRecordIdStr
@@ -2815,6 +2816,9 @@ async function runThinkerIdentityLinking(args: {
 	}
 	if (authorNames.size === 0) return { authoredInserted: 0, queued: 0, skippedAmbiguous: 0 };
 
+	const authorNameList = [...authorNames];
+	const thinkerLinkProgress = authorNameList.length >= 12;
+
 	const aliasRows = await db.query<ThinkerAliasDbRow[][]>(
 		`SELECT canonical_name, wikidata_id, label, confidence, status
 		 FROM thinker_alias
@@ -2849,7 +2853,13 @@ async function runThinkerIdentityLinking(args: {
 	let authoredInserted = 0;
 	let queued = 0;
 	let skippedAmbiguous = 0;
-	for (const rawName of authorNames) {
+	for (let ni = 0; ni < authorNameList.length; ni++) {
+		const rawName = authorNameList[ni];
+		if (thinkerLinkProgress && (ni % 4 === 0 || ni === authorNameList.length - 1)) {
+			process.stdout.write(
+				`\r  [THINKER_LINK] ${ni + 1}/${authorNameList.length} author name(s)…`
+			);
+		}
 		const canonical = canonicalizeThinkerName(rawName);
 		if (!canonical) continue;
 		let winner: ThinkerIdentityCandidate | null = null;
@@ -3012,6 +3022,7 @@ async function runThinkerIdentityLinking(args: {
 		);
 		queued += 1;
 	}
+	if (thinkerLinkProgress) console.log('');
 	return { authoredInserted, queued, skippedAmbiguous };
 }
 
@@ -5456,49 +5467,93 @@ async function main() {
 					);
 				}
 
-				// 6d2. Connect claims to subject/period/work graph nodes
+				// 6d2. Connect claims to subject/period/work graph nodes (bounded parallelism +
+				// subject/period slug cache — sequential per-claim round-trips dominated wall time here).
+				const GRAPH_JOIN_CONCURRENCY = Math.max(
+					1,
+					Math.min(
+						16,
+						parseInt(process.env.INGEST_GRAPH_JOIN_CONCURRENCY || '8', 10) || 8
+					)
+				);
+				const subjectSlugByDomain = new Map<string, string | null>();
+				const periodSlugByEra = new Map<string, string | null>();
 				let claimGraphEdges = 0;
-				for (const claim of allClaims) {
-					const claimId = claimIdMap.get(claim.position_in_source);
-					if (!claimId) continue;
+				const graphJoinProgress = allClaims.length >= 24;
 
-					if (claim.domain && claim.domain.trim()) {
-						const subjectSlug = await upsertGraphNamedNode(db, 'subject', claim.domain);
-						if (subjectSlug) {
-							const inserted = await relateGraphIfAbsent(
-								db,
-								'about_subject',
-								claimId,
-								`subject:${subjectSlug}`,
-								`SET confidence = 0.95, imported_at = time::now()`
-							);
-							if (inserted) claimGraphEdges += 1;
-						}
-					}
-					if (claim.era && claim.era.trim()) {
-						const periodSlug = await upsertGraphNamedNode(db, 'period', claim.era);
-						if (periodSlug) {
-							const inserted = await relateGraphIfAbsent(
-								db,
-								'in_period',
-								claimId,
-								`period:${periodSlug}`,
-								`SET confidence = 0.9, imported_at = time::now()`
-							);
-							if (inserted) claimGraphEdges += 1;
-						}
-					}
-					if (workId) {
-						const inserted = await relateGraphIfAbsent(
-							db,
-							'cites_work',
-							claimId,
-							workId,
-							`SET confidence = 0.8, imported_at = time::now()`
-						);
-						if (inserted) claimGraphEdges += 1;
+				async function subjectSlugFor(domainRaw: string): Promise<string | null> {
+					const k = domainRaw.trim();
+					if (!k) return null;
+					const hit = subjectSlugByDomain.get(k);
+					if (hit !== undefined) return hit;
+					const slug = await upsertGraphNamedNode(db, 'subject', k);
+					subjectSlugByDomain.set(k, slug);
+					return slug;
+				}
+				async function periodSlugFor(eraRaw: string): Promise<string | null> {
+					const k = eraRaw.trim();
+					if (!k) return null;
+					const hit = periodSlugByEra.get(k);
+					if (hit !== undefined) return hit;
+					const slug = await upsertGraphNamedNode(db, 'period', k);
+					periodSlugByEra.set(k, slug);
+					return slug;
+				}
+
+				for (let gi = 0; gi < allClaims.length; gi += GRAPH_JOIN_CONCURRENCY) {
+					const chunk = allClaims.slice(gi, gi + GRAPH_JOIN_CONCURRENCY);
+					const deltas = await Promise.all(
+						chunk.map(async (claim) => {
+							let local = 0;
+							const claimId = claimIdMap.get(claim.position_in_source);
+							if (!claimId) return 0;
+
+							if (claim.domain && claim.domain.trim()) {
+								const subjectSlug = await subjectSlugFor(claim.domain);
+								if (subjectSlug) {
+									const inserted = await relateGraphIfAbsent(
+										db,
+										'about_subject',
+										claimId,
+										`subject:${subjectSlug}`,
+										`SET confidence = 0.95, imported_at = time::now()`
+									);
+									if (inserted) local += 1;
+								}
+							}
+							if (claim.era && claim.era.trim()) {
+								const periodSlug = await periodSlugFor(claim.era);
+								if (periodSlug) {
+									const inserted = await relateGraphIfAbsent(
+										db,
+										'in_period',
+										claimId,
+										`period:${periodSlug}`,
+										`SET confidence = 0.9, imported_at = time::now()`
+									);
+									if (inserted) local += 1;
+								}
+							}
+							if (workId) {
+								const inserted = await relateGraphIfAbsent(
+									db,
+									'cites_work',
+									claimId,
+									workId,
+									`SET confidence = 0.8, imported_at = time::now()`
+								);
+								if (inserted) local += 1;
+							}
+							return local;
+						})
+					);
+					claimGraphEdges += deltas.reduce((a, b) => a + b, 0);
+					const done = Math.min(gi + chunk.length, allClaims.length);
+					if (graphJoinProgress && (done % 24 === 0 || done === allClaims.length)) {
+						process.stdout.write(`\r  [GRAPH_JOIN] claims ${done}/${allClaims.length}`);
 					}
 				}
+				if (graphJoinProgress) console.log('');
 				if (claimGraphEdges > 0) {
 					console.log(`  [OK] Claim graph joins created: ${claimGraphEdges}`);
 				}
@@ -5506,8 +5561,10 @@ async function main() {
 				// 6e. Create relation records
 			console.log(`  Creating ${relations.length} relation records...`);
 			let relationsCreated = 0;
+			const relationProgress = relations.length >= 30;
 
-				for (const rel of relations) {
+				for (let ri = 0; ri < relations.length; ri++) {
+					const rel = relations[ri];
 					const fromId = claimIdMap.get(rel.from_position);
 					const toId = claimIdMap.get(rel.to_position);
 
@@ -5518,6 +5575,9 @@ async function main() {
 						continue;
 					}
 
+					if (relationProgress && (ri % 10 === 0 || ri === relations.length - 1)) {
+						process.stdout.write(`\r  [RELATIONS] ${ri + 1}/${relations.length}`);
+					}
 					try {
 						let relQuery = `RELATE $from->${rel.relation_type}->$to`;
 						const assignments = [
@@ -5621,6 +5681,7 @@ async function main() {
 						);
 					}
 				}
+				if (relationProgress) console.log('');
 				console.log(`  [OK] Created ${relationsCreated} relation records`);
 
 				// 6f. Create argument records and part_of relations
@@ -5717,14 +5778,19 @@ async function main() {
 					);
 					let authoredWorkEdges = 0;
 					for (const edge of authoredEdges?.[0] ?? []) {
-						const thinkerId =
-							typeof edge.in === 'string'
-								? edge.in
-								: typeof edge.in === 'object' &&
-										edge.in !== null &&
-										typeof (edge.in as { id?: unknown }).id === 'string'
-									? (edge.in as { id: string }).id
-									: '';
+						const inField = edge.in;
+						let thinkerIdRaw = '';
+						if (typeof inField === 'string') {
+							thinkerIdRaw = inField.trim();
+						} else if (inField && typeof inField === 'object') {
+							const o = inField as { tb?: unknown; id?: unknown };
+							if (typeof o.tb === 'string' && o.id !== undefined) {
+								thinkerIdRaw = toSurrealRecordIdStr(inField).trim();
+							} else if (typeof o.id === 'string') {
+								thinkerIdRaw = o.id.trim();
+							}
+						}
+						const thinkerId = normalizeBareWikidataQidToThinkerRecordId(thinkerIdRaw);
 						if (!thinkerId) continue;
 						const inserted = await relateGraphIfAbsent(
 							db,
