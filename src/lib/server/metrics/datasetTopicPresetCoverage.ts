@@ -93,6 +93,8 @@ export type DatasetTopicPresetCoverageResult = {
 	sepIngestedOutsidePresets: number;
 	/** Golden + training cohort progress toward validate / remediate / embed / store (Phase 2 handoff). */
 	phase1Readiness: Phase1ReadinessBlock | null;
+	/** When `phase1Readiness` is null but Neon is on: why the block was not built (operator-facing). */
+	phase1ReadinessError: string | null;
 	note: string;
 };
 
@@ -145,6 +147,8 @@ export async function fetchDatasetTopicPresetCoverage(): Promise<DatasetTopicPre
 			},
 			sepIngestedOutsidePresets: 0,
 			phase1Readiness: null,
+			phase1ReadinessError:
+				'Neon ingest persistence is off (DATABASE_URL). Phase 1 readiness needs Neon for the training-acceptable cohort query.',
 			note: 'Neon ingest persistence is off (DATABASE_URL). Enable Neon to aggregate completed `ingest_runs` and governance rows.'
 		};
 	}
@@ -249,6 +253,7 @@ export async function fetchDatasetTopicPresetCoverage(): Promise<DatasetTopicPre
 	}
 
 	let phase1Readiness: Phase1ReadinessBlock | null = null;
+	let phase1ReadinessError: string | null = null;
 	try {
 		const golden = loadGoldenExtractionEval();
 		const goldenUrls = golden.items.map((i) => i.url.trim()).filter(Boolean);
@@ -269,7 +274,8 @@ export async function fetchDatasetTopicPresetCoverage(): Promise<DatasetTopicPre
 			trainingUrlCap: PHASE1_READINESS_TRAINING_LIMIT
 		});
 	} catch (e) {
-		console.warn('[datasetTopicPresetCoverage] phase1Readiness:', e instanceof Error ? e.message : String(e));
+		phase1ReadinessError = e instanceof Error ? e.message : String(e);
+		console.warn('[datasetTopicPresetCoverage] phase1Readiness:', phase1ReadinessError);
 	}
 
 	return {
@@ -286,6 +292,7 @@ export async function fetchDatasetTopicPresetCoverage(): Promise<DatasetTopicPre
 		},
 		sepIngestedOutsidePresets: sepOutside,
 		phase1Readiness,
+		phase1ReadinessError,
 		note:
 			'Training “acceptable” requires: (1) not excluded in Neon `source_training_governance`; (2) no recovery-agent / circuit-open / degraded-route signals in the latest report envelope; (3) verified LLM lineage — `timingTelemetry.stage_models` must list `vertex`, `mistral`, or `google` for extraction, relations, and grouping (and for validation / remediation / json_repair when those keys are present). Missing or incomplete telemetry (including Surreal-only completes) counts as not usable. If telemetry is missing but `modelChain` / `model_chain` labels explicitly reference Anthropic or OpenAI, the source is rejected.'
 	};

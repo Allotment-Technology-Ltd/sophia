@@ -49,6 +49,8 @@
 		};
 		sepIngestedOutsidePresets?: number;
 		phase1Readiness?: Phase1Readiness | null;
+		/** Populated when Phase 1 block is missing (not “you skipped jobs” — see copy below). */
+		phase1ReadinessError?: string | null;
 		note?: string;
 		error?: string;
 	};
@@ -221,10 +223,27 @@
 				{/if}
 				<p class="footnote">{data.phase1Readiness.note}</p>
 			</section>
-		{:else if data.neonIngestPersistence !== false}
+		{:else}
 			<section class="card muted-card">
 				<h2 class="h2">Phase 1 cohort readiness</h2>
-				<p class="muted">No readiness block returned (generation may have skipped due to an error).</p>
+				{#if data.neonIngestPersistence === false}
+					<p class="muted">
+						Phase 1 readiness needs Neon to load the training-acceptable URL cohort. Enable
+						<code class="mono">DATABASE_URL</code> ingest persistence to populate this block.
+					</p>
+				{:else}
+					<p class="muted">
+						This section compares the <strong>golden URL list</strong> and a
+						<strong>Neon training-acceptable cohort</strong> (validate=true) to your completed-source map. It is
+						<strong>not</strong> hidden because you have not run validation jobs yet; if generation succeeded you would
+						still see counts (often many URLs “not Phase 2 ready”).
+					</p>
+				{/if}
+				{#if typeof data.phase1ReadinessError === 'string' && data.phase1ReadinessError.trim()}
+					<p class="warn-block mono" role="status">{data.phase1ReadinessError}</p>
+				{:else if data.neonIngestPersistence !== false}
+					<p class="muted">No readiness block returned (unexpected — check server logs).</p>
+				{/if}
 			</section>
 		{/if}
 
@@ -501,6 +520,17 @@
 		font-size: 0.78rem;
 		line-height: 1.5;
 		word-break: break-all;
+	}
+	.warn-block {
+		margin-top: 12px;
+		padding: 12px 14px;
+		border-radius: 10px;
+		border: 1px solid rgba(180, 83, 9, 0.45);
+		background: rgba(180, 83, 9, 0.1);
+		color: #b45309;
+		font-size: 0.82rem;
+		line-height: 1.45;
+		word-break: break-word;
 	}
 	.muted-card {
 		opacity: 0.95;
