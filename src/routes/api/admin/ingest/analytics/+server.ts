@@ -40,7 +40,9 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 
     const byStatus: Record<string, number> = {};
     const issueKindTotals: Record<string, number> = {};
+    const issueKindTotalsNoResume: Record<string, number> = {};
     let totalIssues = 0;
+    let incidentIssueEvents = 0;
     const terminalErrors: string[] = [];
 
     const bySourceType: Record<string, Bucket> = {};
@@ -94,6 +96,10 @@ export const GET: RequestHandler = async ({ locals, url }) => {
           typeof hintRaw === 'string' && hintRaw.trim() ? hintRaw.trim() : 'none';
         if (!issueKindByStageHint[kind]) issueKindByStageHint[kind] = {};
         issueKindByStageHint[kind][stageHint] = (issueKindByStageHint[kind][stageHint] ?? 0) + 1;
+        if (kind !== 'resume_checkpoint') {
+          incidentIssueEvents += 1;
+          issueKindTotalsNoResume[kind] = (issueKindTotalsNoResume[kind] ?? 0) + 1;
+        }
       }
 
       if (typeof d.terminalError === 'string' && d.terminalError.trim()) {
@@ -107,7 +113,9 @@ export const GET: RequestHandler = async ({ locals, url }) => {
       limit,
       byStatus,
       totalIssues,
+      incidentIssueEvents,
       issueKindTotals,
+      issueKindTotalsNoResume,
       bySourceType,
       byPipelinePreset,
       issueKindByStageHint,
@@ -121,7 +129,9 @@ export const GET: RequestHandler = async ({ locals, url }) => {
         limit,
         byStatus: {},
         totalIssues: 0,
+        incidentIssueEvents: 0,
         issueKindTotals: {},
+        issueKindTotalsNoResume: {},
         bySourceType: {} as Record<string, Bucket>,
         byPipelinePreset: {} as Record<string, Bucket>,
         issueKindByStageHint: {} as Record<string, Record<string, number>>,
