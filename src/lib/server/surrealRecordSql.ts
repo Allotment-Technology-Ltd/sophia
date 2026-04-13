@@ -30,6 +30,18 @@ export function toSurrealRecordIdStr(id: unknown): string {
 	return String(id ?? '').trim();
 }
 
+/**
+ * Surreal edge fields (`in` / `out`) sometimes deserialize as a bare Wikidata id (`Q123`)
+ * without the `thinker:` table prefix. `splitRecordTableAndKey` needs `table:key`.
+ */
+export function normalizeBareWikidataQidToThinkerRecordId(id: string): string {
+	const s = id.trim();
+	if (!s) return s;
+	if (s.includes(':')) return s;
+	if (/^Q\d+$/i.test(s)) return `thinker:${s}`;
+	return s;
+}
+
 /** Split `table:key` on first colon; key may contain underscores. */
 export function splitRecordTableAndKey(id: unknown): { tb: string; key: string } | null {
 	const full = toSurrealRecordIdStr(id);
