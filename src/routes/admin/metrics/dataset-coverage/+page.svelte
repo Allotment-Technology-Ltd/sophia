@@ -12,6 +12,29 @@
 		byOrigin: Record<string, number>;
 	};
 
+	type Phase1Slice = {
+		uniqueUrls: number;
+		withAnyCompletedIngest: number;
+		phase2ReadyCount: number;
+		missingFromCorpus: number;
+		notValidatePath: number;
+		incompletePipeline: number;
+		skippedSurrealStore: number;
+		sampleNotReady: string[];
+	};
+
+	type Phase1Readiness = {
+		goldenFingerprint: string;
+		trainingCohortDays: number;
+		trainingCohortValidateOnly: boolean;
+		trainingUrlCap: number;
+		golden: Phase1Slice;
+		training: Phase1Slice;
+		union: Phase1Slice;
+		allUnionUrlsPhase2Ready: boolean;
+		note: string;
+	};
+
 	type Payload = {
 		generatedAt?: string;
 		neonIngestPersistence?: boolean;
@@ -25,6 +48,7 @@
 			byOrigin: Record<string, number>;
 		};
 		sepIngestedOutsidePresets?: number;
+		phase1Readiness?: Phase1Readiness | null;
 		note?: string;
 		error?: string;
 	};
@@ -120,6 +144,89 @@
 				</ul>
 			{/if}
 		</section>
+
+		{#if data.phase1Readiness}
+			<section class="card phase1" aria-labelledby="phase1-heading">
+				<h2 id="phase1-heading" class="h2">Phase 1 cohorts → Phase 2 readiness</h2>
+				<p class="lede small">
+					Golden list (fingerprint <span class="mono">{data.phase1Readiness.goldenFingerprint}</span>) and last
+					<strong>{data.phase1Readiness.trainingCohortDays}</strong> days of training-acceptable Neon runs with
+					<strong>validate=true</strong> (capped at <span class="mono">{data.phase1Readiness.trainingUrlCap}</span> URLs),
+					compared to this report’s deduped “completed source” map. “Phase 2 ready” means validate + remediation timing +
+					embed + Surreal store on the latest envelope (skipped Surreal store counts as not ready).
+				</p>
+				<p class="gate" class:gate--ok={data.phase1Readiness.allUnionUrlsPhase2Ready}>
+					{#if data.phase1Readiness.allUnionUrlsPhase2Ready}
+						<strong>All union URLs are Phase 2 ready.</strong> You can proceed to Phase 2 planning when this matches
+						your release criteria.
+					{:else}
+						<strong>Union cohort is not fully Phase 2 ready.</strong> See counts and sample URLs below.
+					{/if}
+				</p>
+				<div class="table-wrap">
+					<table class="tbl">
+						<thead>
+							<tr>
+								<th scope="col">Cohort</th>
+								<th scope="col" class="num">URLs</th>
+								<th scope="col" class="num">In corpus</th>
+								<th scope="col" class="num">Phase 2 ready</th>
+								<th scope="col" class="num">Missing</th>
+								<th scope="col" class="num">Not validate</th>
+								<th scope="col" class="num">Incomplete</th>
+								<th scope="col" class="num">Skip store</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>Golden</td>
+								<td class="num">{data.phase1Readiness.golden.uniqueUrls}</td>
+								<td class="num">{data.phase1Readiness.golden.withAnyCompletedIngest}</td>
+								<td class="num ok">{data.phase1Readiness.golden.phase2ReadyCount}</td>
+								<td class="num">{data.phase1Readiness.golden.missingFromCorpus}</td>
+								<td class="num">{data.phase1Readiness.golden.notValidatePath}</td>
+								<td class="num">{data.phase1Readiness.golden.incompletePipeline}</td>
+								<td class="num">{data.phase1Readiness.golden.skippedSurrealStore}</td>
+							</tr>
+							<tr>
+								<td>Training (validate)</td>
+								<td class="num">{data.phase1Readiness.training.uniqueUrls}</td>
+								<td class="num">{data.phase1Readiness.training.withAnyCompletedIngest}</td>
+								<td class="num ok">{data.phase1Readiness.training.phase2ReadyCount}</td>
+								<td class="num">{data.phase1Readiness.training.missingFromCorpus}</td>
+								<td class="num">{data.phase1Readiness.training.notValidatePath}</td>
+								<td class="num">{data.phase1Readiness.training.incompletePipeline}</td>
+								<td class="num">{data.phase1Readiness.training.skippedSurrealStore}</td>
+							</tr>
+							<tr class="row-em">
+								<td><strong>Golden ∪ training</strong></td>
+								<td class="num">{data.phase1Readiness.union.uniqueUrls}</td>
+								<td class="num">{data.phase1Readiness.union.withAnyCompletedIngest}</td>
+								<td class="num ok">{data.phase1Readiness.union.phase2ReadyCount}</td>
+								<td class="num">{data.phase1Readiness.union.missingFromCorpus}</td>
+								<td class="num">{data.phase1Readiness.union.notValidatePath}</td>
+								<td class="num">{data.phase1Readiness.union.incompletePipeline}</td>
+								<td class="num">{data.phase1Readiness.union.skippedSurrealStore}</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+				{#if data.phase1Readiness.union.sampleNotReady.length > 0}
+					<h3 class="h3">Sample URLs not yet Phase 2 ready (union)</h3>
+					<ul class="sample-list mono">
+						{#each data.phase1Readiness.union.sampleNotReady as u}
+							<li>{u}</li>
+						{/each}
+					</ul>
+				{/if}
+				<p class="footnote">{data.phase1Readiness.note}</p>
+			</section>
+		{:else if data.neonIngestPersistence !== false}
+			<section class="card muted-card">
+				<h2 class="h2">Phase 1 cohort readiness</h2>
+				<p class="muted">No readiness block returned (generation may have skipped due to an error).</p>
+			</section>
+		{/if}
 
 		<section class="card" aria-labelledby="preset-heading">
 			<h2 id="preset-heading" class="h2">Per topic preset (SEP slug keywords)</h2>
@@ -364,5 +471,38 @@
 	}
 	.back a {
 		color: var(--color-text-muted);
+	}
+	.phase1 .lede.small {
+		font-size: 0.88rem;
+		margin: 0 0 14px;
+		line-height: 1.5;
+		color: var(--color-text-muted);
+		max-width: 52rem;
+	}
+	.gate {
+		margin: 0 0 16px;
+		padding: 12px 14px;
+		border-radius: 10px;
+		border: 1px solid var(--color-border);
+		background: rgba(180, 83, 9, 0.12);
+		font-size: 0.9rem;
+		line-height: 1.45;
+	}
+	.gate--ok {
+		background: rgba(45, 106, 79, 0.15);
+		border-color: rgba(45, 106, 79, 0.45);
+	}
+	.row-em td {
+		background: rgba(127, 163, 131, 0.08);
+	}
+	.sample-list {
+		margin: 8px 0 0;
+		padding-left: 1.2rem;
+		font-size: 0.78rem;
+		line-height: 1.5;
+		word-break: break-all;
+	}
+	.muted-card {
+		opacity: 0.95;
 	}
 </style>

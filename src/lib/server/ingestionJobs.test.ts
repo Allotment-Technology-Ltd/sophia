@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { getIngestionJobItemMaxAttempts } from './ingestionJobs';
+import {
+	getIngestionJobItemMaxAttempts,
+	ingestionJobAutoRequeueClearsChildRunId
+} from './ingestionJobs';
 
 describe('getIngestionJobItemMaxAttempts', () => {
 	afterEach(() => {
@@ -18,5 +21,20 @@ describe('getIngestionJobItemMaxAttempts', () => {
 	it('clamps absurd values to 20', () => {
 		process.env.INGEST_JOB_ITEM_MAX_ATTEMPTS = '999';
 		expect(getIngestionJobItemMaxAttempts()).toBe(20);
+	});
+});
+
+describe('ingestionJobAutoRequeueClearsChildRunId', () => {
+	afterEach(() => {
+		delete process.env.INGEST_JOB_AUTO_REQUEUE_CLEAR_CHILD_RUN_ID;
+	});
+
+	it('defaults false (preserve child run id for checkpoint resume)', () => {
+		expect(ingestionJobAutoRequeueClearsChildRunId()).toBe(false);
+	});
+
+	it('is true when INGEST_JOB_AUTO_REQUEUE_CLEAR_CHILD_RUN_ID=1', () => {
+		process.env.INGEST_JOB_AUTO_REQUEUE_CLEAR_CHILD_RUN_ID = '1';
+		expect(ingestionJobAutoRequeueClearsChildRunId()).toBe(true);
 	});
 });

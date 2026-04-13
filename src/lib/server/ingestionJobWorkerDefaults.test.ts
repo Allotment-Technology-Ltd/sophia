@@ -46,6 +46,15 @@ describe('sanitizeIngestionJobWorkerDefaults', () => {
     expect(o?.forceReingest).toBe(true);
   });
 
+  it('drops forceReingest when forceStage is validating (validation tail)', () => {
+    const o = sanitizeIngestionJobWorkerDefaults({
+      forceReingest: true,
+      forceStage: 'validating'
+    });
+    expect(o?.forceStage).toBe('validating');
+    expect(o?.forceReingest).toBeUndefined();
+  });
+
   it('accepts Google throughput toggle and extraction floor', () => {
     const o = sanitizeIngestionJobWorkerDefaults({
       googleGenerativeThroughput: false,

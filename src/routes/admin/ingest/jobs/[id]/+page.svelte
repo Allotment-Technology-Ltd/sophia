@@ -34,6 +34,35 @@
 		dlqReplayCount?: number;
 	};
 
+	type ChildRunSummaryRow = {
+		itemId: string;
+		childRunId: string;
+		url: string;
+		runStatus: string;
+		validate: boolean;
+		extractionModel: string | null;
+		avgFaithfulness: number | null;
+		issueCount: number;
+	};
+
+	type IssuePipelineRecentRow = {
+		runId: string;
+		url: string | null;
+		seq: number;
+		kind: string;
+		severity: string;
+		stageHint: string | null;
+		message: string;
+		createdAt: string | null;
+	};
+
+	type IssuePipelineSignals = {
+		totalIssues: number;
+		byKind: Record<string, number>;
+		byStageHint: Record<string, number>;
+		recent: IssuePipelineRecentRow[];
+	};
+
 	type EventRow = {
 		seq: number;
 		eventType: string;
@@ -41,8 +70,18 @@
 		createdAt?: string;
 	};
 
+	const emptyIssuePipelineSignals: IssuePipelineSignals = {
+		totalIssues: 0,
+		byKind: {},
+		byStageHint: {},
+		recent: []
+	};
+
 	let job = $state<JobRow | null>(null);
 	let items = $state<ItemRow[]>([]);
+	let childRunSummaries = $state<ChildRunSummaryRow[]>([]);
+	let issuePipelineSignals = $state<IssuePipelineSignals>({ ...emptyIssuePipelineSignals });
+	let issuePipelineCopyStatus = $state('');
 	let events = $state<EventRow[]>([]);
 	let lastEventSeq = $state(0);
 	let loadError = $state('');
@@ -84,6 +123,8 @@
 				neonDisabled = true;
 				job = null;
 				items = [];
+				childRunSummaries = [];
+				issuePipelineSignals = { ...emptyIssuePipelineSignals };
 				loadError =
 					typeof body?.error === 'string' ? body.error : 'Neon ingest persistence is not enabled.';
 				return;
@@ -93,6 +134,25 @@
 			}
 			job = (body?.job as JobRow) ?? null;
 			items = Array.isArray(body?.items) ? (body.items as ItemRow[]) : [];
+			childRunSummaries = Array.isArray(body?.childRunSummaries)
+				? (body.childRunSummaries as ChildRunSummaryRow[])
+				: [];
+			const rawSignals = body?.issuePipelineSignals;
+			if (
+				rawSignals &&
+				typeof rawSignals === 'object' &&
+				typeof (rawSignals as IssuePipelineSignals).totalIssues === 'number'
+			) {
+				const s = rawSignals as IssuePipelineSignals;
+				issuePipelineSignals = {
+					totalIssues: s.totalIssues,
+					byKind: s.byKind && typeof s.byKind === 'object' ? s.byKind : {},
+					byStageHint: s.byStageHint && typeof s.byStageHint === 'object' ? s.byStageHint : {},
+					recent: Array.isArray(s.recent) ? s.recent : []
+				};
+			} else {
+				issuePipelineSignals = { ...emptyIssuePipelineSignals };
+			}
 			itemMaxAttempts =
 				typeof body?.itemMaxAttempts === 'number' && Number.isFinite(body.itemMaxAttempts)
 					? body.itemMaxAttempts
@@ -101,6 +161,8 @@
 			loadError = e instanceof Error ? e.message : 'Failed to load job.';
 			job = null;
 			items = [];
+			childRunSummaries = [];
+			issuePipelineSignals = { ...emptyIssuePipelineSignals };
 		}
 	}
 
@@ -135,6 +197,20 @@
 		params.set('runId', runId);
 		params.set('monitor', '1');
 		window.location.href = `/admin/ingest?${params.toString()}`;
+	}
+
+	async function copyIssuePipelineJson(): Promise<void> {
+		if (!browser) return;
+		issuePipelineCopyStatus = '';
+		try {
+			await navigator.clipboard.writeText(JSON.stringify(issuePipelineSignals, null, 2));
+			issuePipelineCopyStatus = 'Copied JSON to clipboard.';
+			setTimeout(() => {
+				issuePipelineCopyStatus = '';
+			}, 2500);
+		} catch {
+			issuePipelineCopyStatus = 'Could not copy (clipboard permission).';
+		}
 	}
 
 	const failedCount = $derived(
@@ -386,6 +462,155 @@
 					</div>
 				{/if}
 			</dl>
+
+			{#if childRunSummaries.length > 0}
+				<div class="mt-6 border-t border-[var(--color-border)] pt-5" role="region" aria-label="Child run summaries">
+					<h2 class="font-serif text-lg text-sophia-dark-text">Child runs (Neon)</h2>
+					<p class="mt-2 text-sm text-sophia-dark-muted">
+						Latest snapshot per job item that has a <span class="font-mono text-xs">child_run_id</span>. Faithfulness
+						is averaged from <span class="font-mono text-xs">ingest_staging_validation</span> when rows exist.
+					</p>
+					<div class="mt-3 overflow-x-auto rounded-lg border border-[var(--color-border)]">
+						<table class="w-full min-w-[640px] border-collapse text-left font-mono text-xs">
+							<thead>
+								<tr class="border-b border-[var(--color-border)] bg-black/15 text-sophia-dark-dim">
+									<th class="px-3 py-2 font-normal">URL</th>
+									<th class="px-3 py-2 font-normal">Run</th>
+									<th class="px-3 py-2 font-normal">Status</th>
+									<th class="px-3 py-2 font-normal">Validate</th>
+									<th class="px-3 py-2 font-normal">Extract model</th>
+									<th class="px-3 py-2 font-normal">Avg faith.</th>
+									<th class="px-3 py-2 font-normal">Issues</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each childRunSummaries as s (s.childRunId)}
+									<tr class="border-b border-[var(--color-border)]/60 align-top text-sophia-dark-text">
+										<td class="max-w-[220px] px-3 py-2 break-all">{s.url}</td>
+										<td class="px-3 py-2">
+											<button
+												type="button"
+												class="text-left text-sophia-dark-sage underline-offset-2 hover:underline"
+												onclick={() => openChildRun(s.childRunId)}
+											>
+												{s.childRunId}
+											</button>
+										</td>
+										<td class="px-3 py-2">{s.runStatus}</td>
+										<td class="px-3 py-2">{s.validate ? 'yes' : 'no'}</td>
+										<td class="max-w-[180px] px-3 py-2 break-all">{s.extractionModel ?? '—'}</td>
+										<td class="px-3 py-2">{s.avgFaithfulness != null ? s.avgFaithfulness : '—'}</td>
+										<td class="px-3 py-2">{s.issueCount}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				</div>
+			{/if}
+
+			<div
+				class="mt-6 border-t border-[var(--color-border)] pt-5"
+				role="region"
+				aria-label="Pipeline issues from linked child runs"
+			>
+				<div class="flex flex-wrap items-end justify-between gap-3">
+					<h2 class="font-serif text-lg text-sophia-dark-text">Pipeline issues (Neon)</h2>
+					<button
+						type="button"
+						class="inline-flex min-h-[40px] items-center rounded-lg border border-[var(--color-border)] bg-black/10 px-4 py-2 font-mono text-xs text-sophia-dark-text transition hover:bg-black/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sophia-dark-sage disabled:opacity-50"
+						disabled={issuePipelineSignals.totalIssues === 0}
+						onclick={() => void copyIssuePipelineJson()}
+					>
+						Copy rollup JSON
+					</button>
+				</div>
+				<p class="mt-2 text-sm text-sophia-dark-muted">
+					Structured rows from <span class="font-mono text-xs">ingest_run_issues</span> for every
+					<span class="font-mono text-xs">child_run_id</span> still linked on this job (same scope as the child-run
+					table). Use during validation exercises to spot recurring failure modes (kind / stage) and feed pipeline
+					tuning.
+				</p>
+				{#if issuePipelineCopyStatus}
+					<p class="mt-2 text-xs text-sophia-dark-sage" role="status">{issuePipelineCopyStatus}</p>
+				{/if}
+				{#if issuePipelineSignals.totalIssues === 0}
+					<p class="mt-3 text-sm text-sophia-dark-muted">No issues recorded for linked runs yet.</p>
+				{:else}
+					<p class="mt-3 font-mono text-xs text-sophia-dark-text">
+						Total issues: {issuePipelineSignals.totalIssues}
+					</p>
+					<div class="mt-4 grid gap-6 lg:grid-cols-2">
+						<div>
+							<h3 class="text-sm font-medium text-sophia-dark-text">By kind</h3>
+							<div class="mt-2 overflow-x-auto rounded-lg border border-[var(--color-border)]">
+								<table class="w-full border-collapse text-left font-mono text-xs">
+									<tbody>
+										{#each Object.entries(issuePipelineSignals.byKind).sort((a, b) => b[1] - a[1]) as [kind, n] (kind)}
+											<tr class="border-b border-[var(--color-border)]/60 text-sophia-dark-text">
+												<td class="px-3 py-2">{kind}</td>
+												<td class="px-3 py-2 text-right tabular-nums">{n}</td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							</div>
+						</div>
+						<div>
+							<h3 class="text-sm font-medium text-sophia-dark-text">By stage hint</h3>
+							<div class="mt-2 overflow-x-auto rounded-lg border border-[var(--color-border)]">
+								<table class="w-full border-collapse text-left font-mono text-xs">
+									<tbody>
+										{#each Object.entries(issuePipelineSignals.byStageHint).sort((a, b) => b[1] - a[1]) as [stage, n] (stage)}
+											<tr class="border-b border-[var(--color-border)]/60 text-sophia-dark-text">
+												<td class="px-3 py-2">{stage}</td>
+												<td class="px-3 py-2 text-right tabular-nums">{n}</td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							</div>
+						</div>
+					</div>
+					<div class="mt-6 overflow-x-auto rounded-lg border border-[var(--color-border)]">
+						<table class="w-full min-w-[720px] border-collapse text-left font-mono text-xs">
+							<thead>
+								<tr class="border-b border-[var(--color-border)] bg-black/15 text-sophia-dark-dim">
+									<th class="px-3 py-2 font-normal">When</th>
+									<th class="px-3 py-2 font-normal">Kind</th>
+									<th class="px-3 py-2 font-normal">Stage</th>
+									<th class="px-3 py-2 font-normal">Run</th>
+									<th class="px-3 py-2 font-normal">URL</th>
+									<th class="px-3 py-2 font-normal">Message</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each issuePipelineSignals.recent as row (row.runId + ':' + row.seq)}
+									<tr class="border-b border-[var(--color-border)]/60 align-top text-sophia-dark-text">
+										<td class="whitespace-nowrap px-3 py-2 text-sophia-dark-dim">
+											{row.createdAt ?? '—'}
+										</td>
+										<td class="px-3 py-2">{row.kind}</td>
+										<td class="max-w-[120px] px-3 py-2 break-words">{row.stageHint ?? '—'}</td>
+										<td class="px-3 py-2">
+											<button
+												type="button"
+												class="text-left text-sophia-dark-sage underline-offset-2 hover:underline"
+												onclick={() => openChildRun(row.runId)}
+											>
+												{row.runId}
+											</button>
+										</td>
+										<td class="max-w-[200px] px-3 py-2 break-all">{row.url ?? '—'}</td>
+										<td class="max-w-[320px] px-3 py-2 break-words">{row.message}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
+			</div>
+
 			<p class="mt-4 text-sm text-sophia-dark-muted">
 				Summary: total {job.summary?.total ?? '—'}, pending {job.summary?.pending ?? '—'}, running
 				{job.summary?.running ?? '—'}, done {job.summary?.done ?? '—'}, error {job.summary?.error ?? '—'}, cancelled
@@ -421,7 +646,11 @@
 			<p class="mt-2 text-sm text-sophia-dark-muted">
 				Automatic retry: each URL may start up to <span class="font-mono text-sophia-dark-text">{itemMaxAttempts}</span>
 				time(s) (server <code class="rounded bg-black/20 px-1 py-0.5 font-mono text-[11px]">INGEST_JOB_ITEM_MAX_ATTEMPTS</code>).
-				Failures are re-queued to the back of the list until the cap is reached.
+				Retryable failures return to <span class="font-mono text-xs text-sophia-dark-text">pending</span>; by default the
+				same <span class="font-mono text-xs">child_run_id</span> is kept so the next tick calls checkpoint
+				<span class="font-mono text-xs">resume</span> instead of redoing completed stages. Set
+				<code class="rounded bg-black/20 px-1 py-0.5 font-mono text-[11px]">INGEST_JOB_AUTO_REQUEUE_CLEAR_CHILD_RUN_ID=1</code>
+				to force a fresh run on each auto-retry.
 			</p>
 			{#if launchCapErrorCount > 0}
 				<p

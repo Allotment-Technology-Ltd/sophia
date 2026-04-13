@@ -63,6 +63,17 @@ export function ingestOptInStopBeforeStore(payload: { stop_before_store?: boolea
   return payload.stop_before_store === true;
 }
 
+/** Mirrors `STAGES_ORDER` / `--force-stage` in `scripts/ingest.ts`. */
+export const INGEST_CLI_FORCE_STAGES = [
+  'extracting',
+  'relating',
+  'grouping',
+  'embedding',
+  'validating',
+  'remediating',
+  'storing'
+] as const;
+
 export interface IngestRunPayload {
   source_url: string;
   source_type: string;
@@ -141,6 +152,12 @@ export interface IngestRunPayload {
      * does not short-circuit (same as `--force-stage extracting`).
      */
     forceReingest?: boolean;
+    /**
+     * When set, `scripts/ingest.ts` is spawned with `--force-stage <stage>` so earlier pipeline stages are
+     * skipped if checkpoints already include their outputs (e.g. `validating` skips extract→embed).
+     * Incompatible with `forceReingest` (sanitizer clears re-ingest when this is set).
+     */
+    forceStage?: (typeof INGEST_CLI_FORCE_STAGES)[number];
   };
   model_chain: {
     extract: string;
@@ -1647,6 +1664,11 @@ class IngestRunManager extends EventEmitter {
     );
     if (payload.validate) ingestTail.push('--validate');
     if (stopBeforeStore) ingestTail.push('--stop-before-store');
+    const forceStage = payload.batch_overrides?.forceStage;
+    if (forceStage && (INGEST_CLI_FORCE_STAGES as readonly string[]).includes(forceStage)) {
+      ingestTail.push('--force-stage', forceStage);
+      this.addLog(runId, `[INGEST] --force-stage ${forceStage} (skip earlier stages when checkpoints allow)`);
+    }
 
     const { command: ingestCmd, args: ingestArgs } = buildLocalTsxSpawnArgs(ingestTail);
 

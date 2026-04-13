@@ -54,6 +54,8 @@
     "ops:phase0-timing-from-neon-logs": "tsx scripts/aggregate-phase0-ingest-timing-neon-logs.ts",
     "ops:phase0-timing-extrapolate-neon": "tsx scripts/extrapolate-phase0-timing-neon.ts",
     "ops:phase0-telemetry-from-neon-logs": "tsx scripts/aggregate-phase0-ingest-telemetry-neon-logs.ts",
+    "ops:phase0-baseline-training-cohort": "tsx scripts/aggregate-phase0-baseline-training-cohort-neon.ts",
+    "ops:phase1-export-ingestion-manifest": "tsx --env-file=.env scripts/export-phase1-ingestion-manifest.ts",
     "ops:audit-ingest-extraction-models-neon": "tsx scripts/audit-ingest-extraction-models-neon.ts",
     "ops:audit-ingest-cost-by-phase-neon": "tsx --env-file=.env scripts/audit-ingest-cost-by-phase-neon.ts",
     "ops:backfill-ingest-cost-neon": "tsx --env-file=.env scripts/backfill-ingest-cost-usd-snapshot-neon.ts",

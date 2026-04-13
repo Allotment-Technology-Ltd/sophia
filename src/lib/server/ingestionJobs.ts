@@ -3,10 +3,17 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type { InferSelectModel } from 'drizzle-orm';
 import { getDrizzleDb } from './db/neon';
-import { ingestionJobEvents, ingestionJobItems, ingestionJobs } from './db/schema';
+import {
+	ingestRunIssues,
+	ingestRuns,
+	ingestStagingValidation,
+	ingestionJobEvents,
+	ingestionJobItems,
+	ingestionJobs
+} from './db/schema';
 import { neonAbandonIngestRunForJobCancel, neonLoadIngestRun } from './db/ingestRunRepository';
 import { isNeonIngestPersistenceEnabled } from './neon/datastore';
 import {
@@ -57,10 +64,20 @@ function canAutoRequeueAfterFailure(attemptsAfterFailure: number): boolean {
 	return attemptsAfterFailure < getIngestionJobItemMaxAttempts();
 }
 
+/**
+ * When `1`, auto-requeue after retryable failures clears `child_run_id` so the next tick always starts a
+ * fresh ingest run (legacy behaviour). Default **off**: the same Neon run id is kept so the job tick can
+ * `resumeFromFailure` and continue from Surreal / Neon checkpoints instead of redoing completed stages.
+ */
+export function ingestionJobAutoRequeueClearsChildRunId(): boolean {
+	return process.env.INGEST_JOB_AUTO_REQUEUE_CLEAR_CHILD_RUN_ID === '1';
+}
+
 /** Convert eligible `error` rows to `pending` (back of queue via newer `updatedAt`). */
 async function applyAutoRequeueForJobErrors(jobId: string): Promise<void> {
 	const db = getDrizzleDb();
 	const maxA = getIngestionJobItemMaxAttempts();
+	const clearRunId = ingestionJobAutoRequeueClearsChildRunId();
 	const rows = await db
 		.select()
 		.from(ingestionJobItems)
@@ -68,11 +85,13 @@ async function applyAutoRequeueForJobErrors(jobId: string): Promise<void> {
 	for (const it of rows) {
 		if (!canAutoRequeueAfterFailure(it.attempts)) continue;
 		if (!shouldAutoRequeueIngestJobItem(it.lastError)) continue;
+		const preservedCheckpoint =
+			!clearRunId && typeof it.childRunId === 'string' && it.childRunId.trim().length > 0;
 		await db
 			.update(ingestionJobItems)
 			.set({
 				status: 'pending',
-				childRunId: null,
+				...(clearRunId ? { childRunId: null } : {}),
 				blockedUntil: null,
 				updatedAt: new Date()
 			})
@@ -82,7 +101,8 @@ async function applyAutoRequeueForJobErrors(jobId: string): Promise<void> {
 			url: it.url,
 			attempts: it.attempts,
 			maxAttempts: maxA,
-			reason: 'retry_after_failure'
+			reason: 'retry_after_failure',
+			preservedChildRunIdForResume: preservedCheckpoint
 		});
 	}
 }
@@ -747,6 +767,108 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 			ingestion_job_id: jobId,
 			batch_overrides: batchOverrides
 		};
+		const existingRunId = it.childRunId?.trim();
+		if (existingRunId) {
+			const prior = await loadChildIngestRunState(existingRunId);
+			if (!prior) {
+				await db
+					.update(ingestionJobItems)
+					.set({ childRunId: null, updatedAt: new Date() })
+					.where(eq(ingestionJobItems.id, it.id));
+				await appendIngestionJobEvent(jobId, 'item_stale_run_cleared', {
+					itemId: it.id,
+					url: it.url,
+					previousChildRunId: existingRunId,
+					reason: 'missing_ingest_run_row'
+				});
+			} else if (prior.status === 'error') {
+				const resumed = await ingestRunManager.resumeFromFailure(existingRunId);
+				if (resumed.ok) {
+					await db
+						.update(ingestionJobItems)
+						.set({
+							status: 'running',
+							lastError: null,
+							blockedUntil: null,
+							launchThrottleCount: 0,
+							updatedAt: new Date()
+						})
+						.where(eq(ingestionJobItems.id, it.id));
+					await appendIngestionJobEvent(jobId, 'item_resumed_checkpoint', {
+						itemId: it.id,
+						url: it.url,
+						childRunId: existingRunId,
+						source: 'job_tick'
+					});
+					continue;
+				}
+				await db
+					.update(ingestionJobItems)
+					.set({
+						status: 'pending',
+						childRunId: null,
+						lastError: resumed.error ?? 'resume_failed',
+						blockedUntil: null,
+						updatedAt: new Date()
+					})
+					.where(eq(ingestionJobItems.id, it.id));
+				await appendIngestionJobEvent(jobId, 'item_resume_failed', {
+					itemId: it.id,
+					url: it.url,
+					previousChildRunId: existingRunId,
+					childRunIdCleared: true,
+					error: resumed.error
+				});
+				continue;
+			} else if (prior.status === 'done') {
+				await db
+					.update(ingestionJobItems)
+					.set({
+						status: 'done',
+						lastError: null,
+						blockedUntil: null,
+						launchThrottleCount: 0,
+						updatedAt: new Date()
+					})
+					.where(eq(ingestionJobItems.id, it.id));
+				await appendIngestionJobEvent(jobId, 'item_heal_terminal_child', {
+					itemId: it.id,
+					url: it.url,
+					childRunId: existingRunId,
+					childStatus: 'done'
+				});
+				continue;
+			} else if ((prior.status as string) === 'cancelled') {
+				await db
+					.update(ingestionJobItems)
+					.set({ childRunId: null, updatedAt: new Date() })
+					.where(eq(ingestionJobItems.id, it.id));
+				await appendIngestionJobEvent(jobId, 'item_stale_run_cleared', {
+					itemId: it.id,
+					url: it.url,
+					previousChildRunId: existingRunId,
+					reason: 'child_cancelled'
+				});
+			} else {
+				await db
+					.update(ingestionJobItems)
+					.set({
+						status: 'running',
+						lastError: null,
+						blockedUntil: null,
+						launchThrottleCount: 0,
+						updatedAt: new Date()
+					})
+					.where(eq(ingestionJobItems.id, it.id));
+				await appendIngestionJobEvent(jobId, 'item_heal_non_terminal_child', {
+					itemId: it.id,
+					url: it.url,
+					childRunId: existingRunId,
+					childStatus: prior.status
+				});
+				continue;
+			}
+		}
 		try {
 			const childRunId = await ingestRunManager.createRun(payload, job.actorEmail ?? 'ingestion-job@sophia.local');
 			await db
@@ -1184,9 +1306,186 @@ export type IngestionJobRow = InferSelectModel<typeof ingestionJobs>;
 export type IngestionJobItemRow = InferSelectModel<typeof ingestionJobItems>;
 export type IngestionJobEventRow = InferSelectModel<typeof ingestionJobEvents>;
 
+export type IngestJobChildRunSummary = {
+	itemId: string;
+	childRunId: string;
+	url: string;
+	runStatus: string;
+	validate: boolean;
+	extractionModel: string | null;
+	avgFaithfulness: number | null;
+	issueCount: number;
+};
+
+/** Aggregated `ingest_run_issues` for all child runs still linked on this job (pipeline tuning / validation exercises). */
+export type IngestJobIssuePipelineRecentRow = {
+	runId: string;
+	url: string | null;
+	seq: number;
+	kind: string;
+	severity: string;
+	stageHint: string | null;
+	message: string;
+	createdAt: string | null;
+};
+
+export type IngestJobIssuePipelineSignals = {
+	totalIssues: number;
+	byKind: Record<string, number>;
+	byStageHint: Record<string, number>;
+	recent: IngestJobIssuePipelineRecentRow[];
+};
+
+async function loadIngestJobIssuePipelineSignals(jobId: string): Promise<IngestJobIssuePipelineSignals> {
+	const db = getDrizzleDb();
+	const items = await db
+		.select()
+		.from(ingestionJobItems)
+		.where(and(eq(ingestionJobItems.jobId, jobId), isNotNull(ingestionJobItems.childRunId)));
+	const runIdToUrl = new Map<string, string>();
+	for (const it of items) {
+		const rid = it.childRunId?.trim();
+		if (!rid) continue;
+		if (!runIdToUrl.has(rid)) runIdToUrl.set(rid, it.url);
+	}
+	const runIds = [...runIdToUrl.keys()];
+	if (runIds.length === 0) {
+		return { totalIssues: 0, byKind: {}, byStageHint: {}, recent: [] };
+	}
+	const [totalRow] = await db
+		.select({ n: sql<number>`count(*)::int`.mapWith(Number) })
+		.from(ingestRunIssues)
+		.where(inArray(ingestRunIssues.runId, runIds));
+	const totalIssues = totalRow?.n ?? 0;
+	const kindRows = await db
+		.select({
+			kind: ingestRunIssues.kind,
+			n: sql<number>`count(*)::int`.mapWith(Number)
+		})
+		.from(ingestRunIssues)
+		.where(inArray(ingestRunIssues.runId, runIds))
+		.groupBy(ingestRunIssues.kind);
+	const stageRows = await db
+		.select({
+			stageHint: ingestRunIssues.stageHint,
+			n: sql<number>`count(*)::int`.mapWith(Number)
+		})
+		.from(ingestRunIssues)
+		.where(inArray(ingestRunIssues.runId, runIds))
+		.groupBy(ingestRunIssues.stageHint);
+	const byKind: Record<string, number> = {};
+	for (const r of kindRows) {
+		byKind[r.kind] = r.n;
+	}
+	const byStageHint: Record<string, number> = {};
+	for (const r of stageRows) {
+		const key = r.stageHint?.trim() ? r.stageHint.trim() : '(unknown)';
+		byStageHint[key] = (byStageHint[key] ?? 0) + r.n;
+	}
+	const recentRows = await db
+		.select({
+			runId: ingestRunIssues.runId,
+			seq: ingestRunIssues.seq,
+			kind: ingestRunIssues.kind,
+			severity: ingestRunIssues.severity,
+			stageHint: ingestRunIssues.stageHint,
+			message: ingestRunIssues.message,
+			createdAt: ingestRunIssues.createdAt
+		})
+		.from(ingestRunIssues)
+		.where(inArray(ingestRunIssues.runId, runIds))
+		.orderBy(desc(ingestRunIssues.createdAt), desc(ingestRunIssues.seq))
+		.limit(60);
+	const recent: IngestJobIssuePipelineRecentRow[] = recentRows.map((r) => ({
+		runId: r.runId,
+		url: runIdToUrl.get(r.runId) ?? null,
+		seq: r.seq,
+		kind: r.kind,
+		severity: r.severity,
+		stageHint: r.stageHint,
+		message: r.message,
+		createdAt: r.createdAt?.toISOString() ?? null
+	}));
+	return { totalIssues, byKind, byStageHint, recent };
+}
+
+async function loadIngestJobChildRunSummaries(jobId: string): Promise<IngestJobChildRunSummary[]> {
+	const db = getDrizzleDb();
+	const items = await db
+		.select()
+		.from(ingestionJobItems)
+		.where(and(eq(ingestionJobItems.jobId, jobId), isNotNull(ingestionJobItems.childRunId)));
+	const withRun = items.filter((i) => typeof i.childRunId === 'string' && i.childRunId.trim());
+	const runIds = [...new Set(withRun.map((i) => i.childRunId!.trim()))];
+	if (runIds.length === 0) return [];
+
+	const runs = await db.select().from(ingestRuns).where(inArray(ingestRuns.id, runIds));
+	const byRunId = new Map(runs.map((r) => [r.id, r]));
+
+	const avgRows = await db
+		.select({
+			runId: ingestStagingValidation.runId,
+			avg: sql<number>`avg(${ingestStagingValidation.faithfulnessScore})`.mapWith(Number)
+		})
+		.from(ingestStagingValidation)
+		.where(inArray(ingestStagingValidation.runId, runIds))
+		.groupBy(ingestStagingValidation.runId);
+	const avgByRun = new Map(avgRows.map((r) => [r.runId, r.avg]));
+
+	const issueRows = await db
+		.select({
+			runId: ingestRunIssues.runId,
+			n: sql<number>`count(*)::int`.mapWith(Number)
+		})
+		.from(ingestRunIssues)
+		.where(inArray(ingestRunIssues.runId, runIds))
+		.groupBy(ingestRunIssues.runId);
+	const issuesByRun = new Map(issueRows.map((r) => [r.runId, r.n]));
+
+	const out: IngestJobChildRunSummary[] = [];
+	for (const it of withRun) {
+		const rid = it.childRunId!.trim();
+		const r = byRunId.get(rid);
+		const payload =
+			r?.payload && typeof r.payload === 'object' && !Array.isArray(r.payload)
+				? (r.payload as Record<string, unknown>)
+				: {};
+		const validate = payload.validate === true;
+		const envelope =
+			r?.reportEnvelope && typeof r.reportEnvelope === 'object' && !Array.isArray(r.reportEnvelope)
+				? (r.reportEnvelope as Record<string, unknown>)
+				: null;
+		const tt = envelope?.timingTelemetry;
+		let extractionModel: string | null = null;
+		if (tt && typeof tt === 'object' && !Array.isArray(tt)) {
+			const sm = (tt as Record<string, unknown>).stage_models;
+			if (sm && typeof sm === 'object' && !Array.isArray(sm)) {
+				const ex = (sm as Record<string, unknown>).extraction;
+				if (typeof ex === 'string' && ex.trim()) extractionModel = ex.trim();
+			}
+		}
+		const rawAvg = avgByRun.get(rid);
+		const avgFaithfulness =
+			typeof rawAvg === 'number' && Number.isFinite(rawAvg) ? Math.round(rawAvg * 10) / 10 : null;
+		out.push({
+			itemId: it.id,
+			childRunId: rid,
+			url: it.url,
+			runStatus: r?.status ?? '(unknown)',
+			validate,
+			extractionModel,
+			avgFaithfulness,
+			issueCount: issuesByRun.get(rid) ?? 0
+		});
+	}
+	return out;
+}
+
 export async function getIngestionJobDetail(jobId: string): Promise<{
 	job: IngestionJobRow;
 	items: IngestionJobItemRow[];
+	childRunSummaries: IngestJobChildRunSummary[];
+	issuePipelineSignals: IngestJobIssuePipelineSignals;
 } | null> {
 	if (!isNeonIngestPersistenceEnabled()) return null;
 	const db = getDrizzleDb();
@@ -1196,7 +1495,11 @@ export async function getIngestionJobDetail(jobId: string): Promise<{
 		.select()
 		.from(ingestionJobItems)
 		.where(eq(ingestionJobItems.jobId, jobId));
-	return { job, items };
+	const [childRunSummaries, issuePipelineSignals] = await Promise.all([
+		loadIngestJobChildRunSummaries(jobId),
+		loadIngestJobIssuePipelineSignals(jobId)
+	]);
+	return { job, items, childRunSummaries, issuePipelineSignals };
 }
 
 export async function listRecentIngestionJobs(limit: number): Promise<IngestionJobRow[]> {

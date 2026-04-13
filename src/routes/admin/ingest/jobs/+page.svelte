@@ -61,6 +61,8 @@
 	/** Re-run from extraction when Surreal `ingestion_log` is already complete (INGEST_FORCE_REINGEST). */
 	/** Off by default: when on, sets INGEST_FORCE_REINGEST and breaks checkpoint resume (use only for intentional full re-churn). */
 	let jobForceReingest = $state(false);
+	/** When on, worker passes `--force-stage validating` (skip extract→embed if checkpoints allow). Mutually exclusive with full re-ingest. */
+	let jobValidationTailOnly = $state(false);
 	let jobFailOnGroupingCollapse = $state(true);
 	let jobIngestLogPins = $state(false);
 	let jobRemediationEnabled = $state(true);
@@ -77,6 +79,11 @@
 	let sepSuggestLoading = $state(false);
 	let sepSuggestMessage = $state('');
 	let sepLastStats = $state('');
+
+	/** Rolling window for training-acceptable Neon preset (days). */
+	let cohortDays = $state(90);
+	let presetBusy = $state(false);
+	let presetMessage = $state('');
 
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 	let jobWorkerFieldsHydrated = $state(false);
@@ -138,7 +145,10 @@
 		if (!jobGoogleThroughputEnabled) o.googleGenerativeThroughput = false;
 		const gFloor = parseOptionalInt(jobGoogleExtractionFloor, 1, 12);
 		if (gFloor != null) o.googleExtractionConcurrencyFloor = gFloor;
-		if (jobForceReingest) o.forceReingest = true;
+		if (jobValidationTailOnly) {
+			o.forceStage = 'validating';
+		}
+		if (jobForceReingest && !jobValidationTailOnly) o.forceReingest = true;
 		o.failOnGroupingPositionCollapse = jobFailOnGroupingCollapse;
 		o.ingestLogPins = jobIngestLogPins;
 		if (validateLlm) {
@@ -188,7 +198,8 @@
 					jobRemediationRevalidate,
 					jobWatchdogPhaseIdleJson,
 					jobWatchdogBaselineMult,
-					jobForceReingest
+					jobForceReingest,
+					jobValidationTailOnly
 				})
 			);
 		} catch {
@@ -253,6 +264,113 @@
 		}
 	}
 
+	async function fillUrlsFromJobPreset(preset: 'golden' | 'training_acceptable'): Promise<void> {
+		presetMessage = '';
+		presetBusy = true;
+		try {
+			const params = new URLSearchParams();
+			params.set('preset', preset);
+			if (preset === 'training_acceptable') {
+				const d = Math.min(730, Math.max(1, Math.trunc(Number(cohortDays)) || 90));
+				params.set('days', String(d));
+				if (validateLlm) params.set('validate', '1');
+			}
+			const res = await fetch(`/api/admin/ingest/jobs/url-presets?${params}`, { headers: await authHeaders() });
+			const body = await res.json().catch(() => ({}));
+			if (res.status === 503) {
+				presetMessage =
+					typeof body?.error === 'string' ? body.error : 'Neon is required for the training cohort preset.';
+				return;
+			}
+			if (!res.ok) {
+				throw new Error(typeof body?.error === 'string' ? body.error : 'Preset request failed.');
+			}
+			const rawUrls = Array.isArray(body?.urls) ? body.urls : [];
+			const lines = rawUrls
+				.map((row: { url?: string }) => (typeof row?.url === 'string' ? row.url.trim() : ''))
+				.filter(Boolean);
+			if (lines.length === 0) {
+				presetMessage = 'Preset returned no URLs.';
+				return;
+			}
+			urlsInput = lines.join('\n');
+			const fp = typeof body?.cohortFingerprint === 'string' ? body.cohortFingerprint : '';
+			const fpNote = fp ? `cohort_fp=${fp}` : '';
+			if (preset === 'golden') {
+				presetMessage = `Loaded ${lines.length} golden URL(s)${fpNote ? ` · ${fpNote}` : ''}.`;
+			} else {
+				const win = typeof body?.days === 'number' ? body.days : Math.trunc(Number(cohortDays)) || 90;
+				const filt = validateLlm ? 'payload.validate=true only' : 'all training-acceptable (any validate flag)';
+				presetMessage = `Loaded ${lines.length} URL(s) — ${win}d, ${filt}${fpNote ? ` · ${fpNote}` : ''}.`;
+			}
+		} catch (e) {
+			presetMessage = e instanceof Error ? e.message : 'Preset failed.';
+		} finally {
+			presetBusy = false;
+		}
+	}
+
+	/** Golden ∪ training (validate=true) for validation-tail jobs — toggles validate + tail, clears full re-ingest. */
+	async function fillPhase1ValidationTailPresets(): Promise<void> {
+		presetMessage = '';
+		presetBusy = true;
+		validateLlm = true;
+		jobValidationTailOnly = true;
+		jobForceReingest = false;
+		try {
+			const d = Math.min(730, Math.max(1, Math.trunc(Number(cohortDays)) || 90));
+			const [gr, tr] = await Promise.all([
+				fetch('/api/admin/ingest/jobs/url-presets?preset=golden', { headers: await authHeaders() }),
+				fetch(
+					`/api/admin/ingest/jobs/url-presets?preset=training_acceptable&days=${d}&validate=1`,
+					{ headers: await authHeaders() }
+				)
+			]);
+			const goldenBody = await gr.json().catch(() => ({}));
+			const trainBody = await tr.json().catch(() => ({}));
+			if (!gr.ok) {
+				throw new Error(typeof goldenBody?.error === 'string' ? goldenBody.error : 'Golden preset failed.');
+			}
+			if (!tr.ok) {
+				throw new Error(
+					typeof trainBody?.error === 'string'
+						? trainBody.error
+						: 'Training cohort preset failed (Neon required).'
+				);
+			}
+			const goldenRows = Array.isArray(goldenBody?.urls) ? (goldenBody.urls as { url?: string }[]) : [];
+			const trainRows = Array.isArray(trainBody?.urls) ? (trainBody.urls as { url?: string }[]) : [];
+			const byKey = new Map<string, string>();
+			for (const row of goldenRows) {
+				const u = typeof row?.url === 'string' ? row.url.trim() : '';
+				if (!u) continue;
+				byKey.set(u.toLowerCase(), u);
+			}
+			for (const row of trainRows) {
+				const u = typeof row?.url === 'string' ? row.url.trim() : '';
+				if (!u) continue;
+				const k = u.toLowerCase();
+				if (!byKey.has(k)) byKey.set(k, u);
+			}
+			const lines = [...byKey.values()];
+			if (lines.length === 0) {
+				presetMessage = 'No URLs returned from golden or training presets.';
+				return;
+			}
+			urlsInput = lines.join('\n');
+			const gfp =
+				typeof goldenBody?.cohortFingerprint === 'string' ? goldenBody.cohortFingerprint : '';
+			const tfp =
+				typeof trainBody?.cohortFingerprint === 'string' ? trainBody.cohortFingerprint : '';
+			presetMessage =
+				`Loaded ${lines.length} unique URL(s) — golden (${goldenRows.length}) + training validate cohort (${trainRows.length}, ${d}d). LLM validation + validation tail are on; full re-ingest is off. Fingerprints: golden ${gfp || '—'}, training ${tfp || '—'}.`;
+		} catch (e) {
+			presetMessage = e instanceof Error ? e.message : 'Preset bundle failed.';
+		} finally {
+			presetBusy = false;
+		}
+	}
+
 	async function fillUrlsFromSepCatalog(): Promise<void> {
 		sepSuggestMessage = '';
 		sepLastStats = '';
@@ -309,6 +427,10 @@
 		const urls = parseUrls(urlsInput);
 		if (urls.length === 0) {
 			submitMessage = 'Add at least one valid URL (one per line).';
+			return;
+		}
+		if (jobValidationTailOnly && !validateLlm) {
+			submitMessage = 'Validation tail mode requires “Run LLM validation stage”.';
 			return;
 		}
 		const workerBuild = buildWorkerDefaultsPayload();
@@ -518,6 +640,11 @@
 				} else if (!('jobForceReingest' in p)) {
 					jobForceReingest = false;
 				}
+				if (typeof p.jobValidationTailOnly === 'boolean') {
+					jobValidationTailOnly = p.jobValidationTailOnly;
+				} else if (!('jobValidationTailOnly' in p)) {
+					jobValidationTailOnly = false;
+				}
 				if (typeof p.jobFailOnGroupingCollapse === 'boolean')
 					jobFailOnGroupingCollapse = p.jobFailOnGroupingCollapse;
 				if (typeof p.jobIngestLogPins === 'boolean') jobIngestLogPins = p.jobIngestLogPins;
@@ -573,9 +700,20 @@
 			jobRemediationRevalidate +
 			jobWatchdogPhaseIdleJson +
 			jobWatchdogBaselineMult +
-			jobForceReingest
+			jobForceReingest +
+			jobValidationTailOnly
 		);
 		persistJobWorkerFields();
+	});
+
+	$effect(() => {
+		if (jobValidationTailOnly) {
+			jobForceReingest = false;
+			validateLlm = true;
+		}
+	});
+	$effect(() => {
+		if (jobForceReingest) jobValidationTailOnly = false;
 	});
 </script>
 
@@ -588,9 +726,13 @@
 		<p class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-dim">Admin · Ingest</p>
 		<h1 class="mt-2 font-serif text-2xl text-sophia-dark-text sm:text-3xl">Durable ingestion jobs</h1>
 		<p class="mt-2 max-w-3xl text-sm leading-6 text-sophia-dark-muted">
-			Neon-backed multi-URL jobs: each URL runs a full pipeline including Surreal store. While this list stays
-			open, each refresh advances every running job (same server tick as the background poller). The job detail
-			page ticks that job on every poll. If no admin tab is open, use Cloud Run Job + Scheduler or
+			Neon-backed multi-URL jobs: by default each URL runs the full pipeline through Surreal store. Enable
+			<strong class="font-medium text-sophia-dark-text">Validation tail only</strong> (worker tuning) to pass
+			<code class="rounded bg-black/20 px-1 py-0.5 font-mono text-xs">--force-stage validating</code> so
+			extract / relate / group / embed are skipped only when the <strong>same</strong> child orchestration run
+			already has checkpoints through embedding (not on a brand-new run id’s first start). Store still runs when
+			reached so remediation and relation fixes persist. While this list stays open, each refresh advances every running job (same server tick as the
+			background poller). If no admin tab is open, use Cloud Run Job + Scheduler or
 			<code class="rounded bg-black/20 px-1 py-0.5 font-mono text-xs">pnpm ingestion:job-poller</code> — see
 			<span class="font-mono text-xs">docs/local/operations/ingestion-credits-and-workers.md</span>.
 		</p>
@@ -708,6 +850,50 @@
 					autocomplete="off"
 				></textarea>
 			</label>
+			<div class="flex flex-wrap items-end gap-3">
+				<label class="block w-24">
+					<span class="font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-dim">Cohort days</span>
+					<input
+						type="number"
+						min="1"
+						max="730"
+						title="Window for training-acceptable preset (Neon completed runs)"
+						class="mt-2 w-full rounded-lg border border-[var(--color-border)] bg-black/20 px-3 py-2 font-mono text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)]"
+						bind:value={cohortDays}
+					/>
+				</label>
+				<button
+					type="button"
+					class="mt-6 inline-flex min-h-[44px] items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--color-blue)_35%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-blue)_10%,var(--color-surface))] px-4 py-2 font-mono text-xs font-medium uppercase tracking-[0.06em] text-sophia-dark-text transition hover:border-[var(--color-blue)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+					disabled={presetBusy || neonDisabled}
+					onclick={() => void fillUrlsFromJobPreset('golden')}
+				>
+					{presetBusy ? 'Loading…' : 'Golden URLs'}
+				</button>
+				<button
+					type="button"
+					class="mt-6 inline-flex min-h-[44px] items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--color-blue)_35%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-blue)_10%,var(--color-surface))] px-4 py-2 font-mono text-xs font-medium uppercase tracking-[0.06em] text-sophia-dark-text transition hover:border-[var(--color-blue)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+					disabled={presetBusy || neonDisabled}
+					onclick={() => void fillUrlsFromJobPreset('training_acceptable')}
+				>
+					{presetBusy ? 'Loading…' : 'Training cohort'}
+				</button>
+				<button
+					type="button"
+					title={JOB_TT.phase1ValidationTailPresets}
+					class="mt-6 inline-flex min-h-[44px] max-w-[28rem] flex-col items-stretch justify-center rounded-lg border border-[color-mix(in_srgb,var(--color-sage)_40%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-sage)_14%,var(--color-surface))] px-4 py-2 text-left font-mono text-xs font-medium uppercase tracking-[0.06em] text-sophia-dark-text transition hover:border-[var(--color-sage)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+					disabled={presetBusy || neonDisabled}
+					onclick={() => void fillPhase1ValidationTailPresets()}
+				>
+					<span>{presetBusy ? 'Loading…' : 'Golden + training (validation-tail)'}</span>
+					<span class="mt-1 block text-[0.65rem] font-normal normal-case leading-snug text-sophia-dark-muted">
+						Fills list, turns on validate + tail only, uses training preset with validate=true
+					</span>
+				</button>
+			</div>
+			{#if presetMessage}
+				<p class="mt-2 text-sm text-sophia-dark-muted" role="status">{presetMessage}</p>
+			{/if}
 			<div class="flex flex-wrap items-end gap-4">
 				<label class="block" title={JOB_TT.jobConcurrency}>
 					<span class="font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-dim">Concurrency</span>
@@ -744,9 +930,17 @@
 				</p>
 				<label
 					class="mt-3 flex cursor-pointer items-center gap-3 rounded border border-[var(--color-border)]/60 bg-black/15 p-3"
-					title={JOB_TT.forceReingest}
+					class:opacity-50={jobValidationTailOnly}
+					class:pointer-events-none={jobValidationTailOnly}
+					title={jobValidationTailOnly ? 'Disabled while “Validation tail only” is on.' : JOB_TT.forceReingest}
 				>
-					<input type="checkbox" bind:checked={jobForceReingest} class="h-5 w-5 rounded border-[var(--color-border)]" title={JOB_TT.forceReingest} />
+					<input
+						type="checkbox"
+						bind:checked={jobForceReingest}
+						disabled={jobValidationTailOnly}
+						class="h-5 w-5 rounded border-[var(--color-border)] disabled:cursor-not-allowed"
+						title={JOB_TT.forceReingest}
+					/>
 					<span class="text-sm text-sophia-dark-text">
 						Re-ingest — bypass “already complete” in Surreal <span class="font-mono text-xs">ingestion_log</span>
 						(<span class="font-mono text-xs">INGEST_FORCE_REINGEST</span> / <span class="font-mono text-xs">--force-stage extracting</span>). Turn off only for net-new URLs.
@@ -915,6 +1109,31 @@
 				<input type="checkbox" bind:checked={validateLlm} class="h-5 w-5 rounded border-[var(--color-border)]" title={JOB_TT.validateLlm} />
 				<span class="text-sm text-sophia-dark-text">Run LLM validation stage</span>
 			</label>
+			<label class="mt-2 flex cursor-pointer items-start gap-3" title={JOB_TT.validationTailOnly}>
+				<input
+					type="checkbox"
+					bind:checked={jobValidationTailOnly}
+					class="mt-0.5 h-5 w-5 shrink-0 rounded border-[var(--color-border)]"
+					title={JOB_TT.validationTailOnly}
+				/>
+				<span class="text-sm leading-snug text-sophia-dark-text">
+					Validation tail only (<span class="font-mono text-xs">--force-stage validating</span>) — skip
+					re-extract / re-relate / re-group / re-embed when checkpoints allow; keep validation + remediation.
+					<strong class="font-medium">First start</strong> of a new child run has no checkpoints — leave this off
+					until that URL has completed through embedding on <strong class="font-medium">this</strong> run id, or
+					use <span class="font-mono text-xs">replay-ingest.ts</span> / resume-failed for the same run.
+				</span>
+			</label>
+			{#if jobValidationTailOnly}
+				<p class="mt-2 max-w-3xl rounded border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-50">
+					Re-storing in Surreal still runs if the pipeline reaches Stage 6 (needed after remediation text edits
+					or relation drops). Workers can set <span class="font-mono">INGEST_SKIP_STORE_WHEN_NO_GRAPH_CHANGES=1</span> to
+					skip Stage 6 when validation and remediation changed no graph and a <span class="font-mono">source</span> row
+					already exists (ingestion_log stays non-complete so a later run can store). For “validate only” on URLs that
+					already finished in a <em>previous</em> run, use replay / a follow-up that reuses checkpoints for that run id —
+					a new durable item id starts empty.
+				</p>
+			{/if}
 			<label class="flex cursor-pointer items-center gap-3" title={JOB_TT.mergeIntoRunningJob}>
 				<input
 					type="checkbox"
