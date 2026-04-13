@@ -1,0 +1,18 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+# project_id = "your-spike-project-id"
+# enable_gpu_compute = false
+
+project_id = ""
+
+# Optional overrides:
+# region_artifacts   = "europe-west2"
+# region_training    = "europe-west4"
+# zone_training      = "europe-west4-a"
+# zone_serving       = "europe-west2-a"
+# data_bucket_suffix = "phase2-data"
+
+# After G1 pause, set true only when ready for billable GPUs:
+# enable_gpu_compute = false
+
+# Restrict vLLM (port 8000) to known CIDRs (office / VPN / static egress):
+# admin_cidr_blocks = ["203.0.113.10/32"]
