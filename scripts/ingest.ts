@@ -1531,8 +1531,7 @@ function rebuildPendingGroupingBatches(args: {
 	groupingMaxOut: number;
 	adaptive: GroupingAdaptiveState;
 }): GroupingBatch[] {
-	const { allClaims, relations, groupingBatches, fromBatchIndex, groupingPlan, groupingMaxOut, adaptive } =
-		args;
+	const { relations, groupingBatches, fromBatchIndex, groupingPlan, groupingMaxOut, adaptive } = args;
 	const pendingClaims =
 		fromBatchIndex >= groupingBatches.length
 			? []
