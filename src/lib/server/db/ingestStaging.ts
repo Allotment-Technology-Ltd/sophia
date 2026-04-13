@@ -245,6 +245,57 @@ export async function findNeonStagingRunIdsForValidationTailByCanonicalUrlHash(
 }
 
 /**
+ * Match by slug and/or `source_json.url` / `source_json.canonical_url` (several newest rows for resume).
+ */
+export async function findNeonStagingRunIdsForValidationTailBySlugOrUrl(
+  opts: { slug: string; canonicalSourceUrl?: string },
+  maxResults = 20
+): Promise<string[]> {
+  if (!isNeonIngestPersistenceEnabled()) return [];
+  const slug = opts.slug.trim();
+  if (!slug) return [];
+  const canon = opts.canonicalSourceUrl ? canonicalizeSourceUrl(opts.canonicalSourceUrl) : null;
+  const db = getDrizzleDb();
+  const cap = Math.min(50, Math.max(1, maxResults));
+  const tailPredicate = STAGING_TAIL_SQL;
+
+  const rowsToIds = (rows: { rows: unknown[] }): string[] => {
+    const out: string[] = [];
+    for (const row of rows.rows as { runId?: unknown }[]) {
+      const id = row.runId != null && String(row.runId).trim() ? String(row.runId).trim() : null;
+      if (id) out.push(id);
+    }
+    return out;
+  };
+
+  if (canon) {
+    const rows = await db.execute(sql`
+      SELECT m.run_id AS "runId"
+      FROM ingest_staging_meta m
+      WHERE ${tailPredicate}
+        AND (
+          m.slug = ${slug}
+          OR (m.source_json->>'url') = ${canon}
+          OR (m.source_json->>'canonical_url') = ${canon}
+        )
+      ORDER BY m.updated_at DESC
+      LIMIT ${cap}
+    `);
+    return rowsToIds(rows);
+  }
+
+  const rows = await db.execute(sql`
+    SELECT m.run_id AS "runId"
+    FROM ingest_staging_meta m
+    WHERE ${tailPredicate}
+      AND m.slug = ${slug}
+    ORDER BY m.updated_at DESC
+    LIMIT ${cap}
+  `);
+  return rowsToIds(rows);
+}
+
+/**
  * When a **new** `INGEST_ORCHESTRATION_RUN_ID` has no `ingest_staging_*` rows yet, an earlier run for the
  * same source may already have staging through embedding. Find the newest compatible row by slug and/or
  * canonical `source_json.url`.
@@ -258,7 +309,6 @@ export async function findNeonStagingRunIdForValidationTailBySlug(opts: {
   if (!isNeonIngestPersistenceEnabled()) return null;
   const slug = opts.slug.trim();
   if (!slug) return null;
-  const canon = opts.canonicalSourceUrl ? canonicalizeSourceUrl(opts.canonicalSourceUrl) : null;
   const urlHash = opts.canonicalUrlHash?.trim() || null;
   const db = getDrizzleDb();
 
@@ -282,31 +332,11 @@ export async function findNeonStagingRunIdForValidationTailBySlug(opts: {
     if (byHash) return byHash;
   }
 
-  if (canon) {
-    const rows = await db.execute(sql`
-      SELECT m.run_id AS "runId"
-      FROM ingest_staging_meta m
-      WHERE ${tailPredicate}
-        AND (m.slug = ${slug} OR (m.source_json->>'url') = ${canon})
-      ORDER BY m.updated_at DESC
-      LIMIT 1
-    `);
-    const id = pick(rows);
-    if (id) return id;
-  } else {
-    const rows = await db.execute(sql`
-      SELECT m.run_id AS "runId"
-      FROM ingest_staging_meta m
-      WHERE ${tailPredicate}
-        AND m.slug = ${slug}
-      ORDER BY m.updated_at DESC
-      LIMIT 1
-    `);
-    const id = pick(rows);
-    if (id) return id;
-  }
-
-  return null;
+  const tailIds = await findNeonStagingRunIdsForValidationTailBySlugOrUrl(
+    { slug, canonicalSourceUrl: opts.canonicalSourceUrl },
+    1
+  );
+  return tailIds[0] ?? null;
 }
 
 const STAGING_TAIL_STAGE_COMPLETED = new Set([

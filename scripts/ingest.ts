@@ -82,6 +82,7 @@ import {
 	findDoneIngestRunIdsWithStagingMetaForCanonicalUrl,
 	findNeonStagingRunIdForValidationTailBySlug,
 	findNeonStagingRunIdsForValidationTailByCanonicalUrlHash,
+	findNeonStagingRunIdsForValidationTailBySlugOrUrl,
 	loadIngestPartialFromNeon,
 	saveIngestPartialToNeon
 } from '../src/lib/server/db/ingestStaging.js';
@@ -2770,16 +2771,16 @@ async function loadPartialResults(
 			}
 
 			if (canonical) {
-				const legacy = await findNeonStagingRunIdForValidationTailBySlug({
-					slug,
-					canonicalSourceUrl: canonical,
-					...(urlHash ? { canonicalUrlHash: urlHash } : {})
-				});
-				if (legacy && legacy !== runId) {
-					const p = await tryNeon(legacy);
+				const slugUrlCandidates = await findNeonStagingRunIdsForValidationTailBySlugOrUrl(
+					{ slug, canonicalSourceUrl: canonical },
+					20
+				);
+				for (const rid of slugUrlCandidates) {
+					if (rid === runId) continue;
+					const p = await tryNeon(rid);
 					if (p && embeddingTailLooksComplete(p)) {
 						console.log(
-							`  [RESUME] Loaded Neon staging from prior run ${legacy} (slug/url tail lookup; current orchestration run ${runId})`
+							`  [RESUME] Loaded Neon staging from prior run ${rid} (slug/url/canonical_url on ingest_staging_meta; current orchestration run ${runId})`
 						);
 						return p;
 					}
@@ -2796,15 +2797,13 @@ async function loadPartialResults(
 					}
 				}
 			} else {
-				const legacy = await findNeonStagingRunIdForValidationTailBySlug({
-					slug,
-					...(urlHash ? { canonicalUrlHash: urlHash } : {})
-				});
-				if (legacy && legacy !== runId) {
-					const p = await tryNeon(legacy);
+				const slugOnly = await findNeonStagingRunIdsForValidationTailBySlugOrUrl({ slug }, 20);
+				for (const rid of slugOnly) {
+					if (rid === runId) continue;
+					const p = await tryNeon(rid);
 					if (p && embeddingTailLooksComplete(p)) {
 						console.log(
-							`  [RESUME] Loaded Neon staging from prior run ${legacy} (slug-only tail lookup; current orchestration run ${runId})`
+							`  [RESUME] Loaded Neon staging from prior run ${rid} (slug-only tail lookup; current orchestration run ${runId})`
 						);
 						return p;
 					}
@@ -3390,7 +3389,8 @@ function normalizeResumeStage(
 	const hasClaims = Array.isArray(partial.claims) && partial.claims.length > 0;
 	const hasRelations = Array.isArray(partial.relations);
 	const hasArguments = Array.isArray(partial.arguments);
-	const hasEmbeddings = Array.isArray(partial.embeddings);
+	const hasEmbeddings =
+		Array.isArray(partial.embeddings) && partial.embeddings.length > 0;
 
 	if (!hasClaims) return null;
 	if (!hasRelations && ['relating', 'grouping', 'embedding', 'validating', 'storing'].includes(lastCompleted)) {
@@ -3863,11 +3863,13 @@ async function main() {
 			}
 			console.log(`[RESUME] Loaded partial results from disk (stage: ${loaded.stage_completed})`);
 		} else {
-			console.log('[RESUME] No partial results on disk — restarting from scratch');
+			console.log(
+				'[RESUME] No checkpoint (Neon ingest_staging_* or data/ingested/*-partial.json) — restarting from scratch'
+			);
 			if (forceStage) {
 				const rid = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim() ?? '';
 				const validationExtra = validationOnlyIngestIntent(forceStage)
-					? ' Re-run the full pipeline through embedding first, or fix slug/URL staging metadata.'
+					? ' Re-run the full pipeline through embedding with DATABASE_URL so Neon staging is written, or fix slug/URL/hash metadata. Surreal "complete" alone does not supply embeddings checkpoints for a new orchestration run id.'
 					: '';
 				console.error(
 					`[ERROR] --force-stage ${forceStage} requires existing checkpoints through the prior pipeline stage ` +
