@@ -320,9 +320,12 @@
 		try {
 			const d = Math.min(730, Math.max(1, Math.trunc(Number(cohortDays)) || 90));
 			const [gr, tr] = await Promise.all([
-				fetch('/api/admin/ingest/jobs/url-presets?preset=golden', { headers: await authHeaders() }),
 				fetch(
-					`/api/admin/ingest/jobs/url-presets?preset=training_acceptable&days=${d}&validate=1`,
+					`/api/admin/ingest/jobs/url-presets?preset=golden&omit_validated=1&days=${d}`,
+					{ headers: await authHeaders() }
+				),
+				fetch(
+					`/api/admin/ingest/jobs/url-presets?preset=training_acceptable&days=${d}&validate=1&omit_validated=1`,
 					{ headers: await authHeaders() }
 				)
 			]);
@@ -363,7 +366,7 @@
 			const tfp =
 				typeof trainBody?.cohortFingerprint === 'string' ? trainBody.cohortFingerprint : '';
 			presetMessage =
-				`Loaded ${lines.length} unique URL(s) — golden (${goldenRows.length}) + training validate cohort (${trainRows.length}, ${d}d). LLM validation + validation tail are on; full re-ingest is off. Fingerprints: golden ${gfp || '—'}, training ${tfp || '—'}.`;
+				`Loaded ${lines.length} unique URL(s) — golden (${goldenRows.length}) + training validate cohort (${trainRows.length}, ${d}d), omitting URLs whose latest done run already has validation telemetry. LLM validation + validation tail are on; full re-ingest is off. Fingerprints: golden ${gfp || '—'}, training ${tfp || '—'}.`;
 		} catch (e) {
 			presetMessage = e instanceof Error ? e.message : 'Preset bundle failed.';
 		} finally {

@@ -2700,9 +2700,15 @@ function saveGroupingDebugRaw(slug: string, batchIndex: number, rawResponse: str
 	console.log(`  [DEBUG] Saved grouping raw batch ${batchIndex + 1} to ${filePath}`);
 }
 
+type LoadPartialResultsOpts = {
+	forceStage?: string | null;
+	/** Used with `--force-stage validating` to locate staging written under an earlier orchestration run id. */
+	canonicalSourceUrl?: string;
+};
+
 async function loadPartialResults(
 	slug: string,
-	opts?: { forceStage?: string | null; canonicalSourceUrl?: string }
+	opts?: LoadPartialResultsOpts
 ): Promise<PartialResults | null> {
 	const runId = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim();
 	const force = opts?.forceStage ?? null;
@@ -3449,7 +3455,7 @@ function logIngestFinetunePolicySnapshot(): void {
 
 async function loadSourceTextAndMeta(
 	filePathArg: string,
-	options?: { validationStagingFallback?: boolean }
+	opts?: { validationStagingFallback?: boolean }
 ): Promise<{ txtPath: string; sourceText: string; sourceMeta: SourceMeta; slug: string }> {
 	const runId = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim();
 	const resolvedArg = path.resolve(filePathArg);
@@ -3480,13 +3486,16 @@ async function loadSourceTextAndMeta(
 				// ignore malformed meta beside a missing .txt
 			}
 		}
+		let snap = fromNeon?.source_text_snapshot;
+		let src = fromNeon?.source;
+		let usedPriorStagingForSource = false;
 		if (
-			options?.validationStagingFallback &&
-			(typeof fromNeon?.source_text_snapshot !== 'string' ||
-				fromNeon.source_text_snapshot.length === 0 ||
-				!fromNeon?.source ||
-				typeof fromNeon.source !== 'object' ||
-				Array.isArray(fromNeon.source))
+			opts?.validationStagingFallback &&
+			(typeof snap !== 'string' ||
+				snap.length === 0 ||
+				!src ||
+				typeof src !== 'object' ||
+				Array.isArray(src))
 		) {
 			const legacy = await findNeonStagingRunIdForValidationTailBySlug({
 				slug: hintSlug,
@@ -3503,14 +3512,15 @@ async function loadSourceTextAndMeta(
 					!Array.isArray(alt.source)
 				) {
 					fromNeon = alt;
+					snap = alt.source_text_snapshot;
+					src = alt.source;
+					usedPriorStagingForSource = true;
 					console.log(
 						`  [RESUME] Loaded source body from prior Neon staging run ${legacy} (validation-tail fallback; local file missing)`
 					);
 				}
 			}
 		}
-		const snap = fromNeon?.source_text_snapshot;
-		const src = fromNeon?.source;
 		if (typeof snap !== 'string' || snap.length === 0 || !src || typeof src !== 'object' || Array.isArray(src)) {
 			console.error(`[ERROR] Source text not found: ${txtPath}`);
 			console.error(
@@ -3521,9 +3531,11 @@ async function loadSourceTextAndMeta(
 		sourceText = snap;
 		sourceMeta = src as SourceMeta;
 		txtPath = path.join(process.cwd(), 'data/sources', `${hintSlug}.txt`);
-		console.log(
-			`  [RESUME] Loaded source body from Neon checkpoint (local file missing) — slug ${hintSlug}`
-		);
+		if (!usedPriorStagingForSource) {
+			console.log(
+				`  [RESUME] Loaded source body from Neon checkpoint (local file missing) — slug ${hintSlug}`
+			);
+		}
 	} else {
 		console.error(`[ERROR] Source text not found: ${txtPath}`);
 		process.exit(1);
@@ -3783,7 +3795,7 @@ async function main() {
 		const loaded = await loadPartialResults(slug, partialLoadOpts);
 		if (loaded) {
 			partial = loaded;
-			Object.assign(partial.source, sourceMeta);
+			Object.assign(partial.source as object, sourceMeta as object);
 			const normalized = normalizeResumeStage(resumeFromStage, partial);
 			if (normalized !== resumeFromStage) {
 				console.log(
@@ -3801,9 +3813,15 @@ async function main() {
 			console.log(`[RESUME] Loaded partial results from disk (stage: ${loaded.stage_completed})`);
 		} else {
 			console.log('[RESUME] No partial results on disk — restarting from scratch');
-			if (validationOnlyIngestIntent(forceStage)) {
+			if (forceStage) {
+				const rid = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim() ?? '';
+				const validationExtra = validationOnlyIngestIntent(forceStage)
+					? ' Re-run the full pipeline through embedding first, or fix slug/URL staging metadata.'
+					: '';
 				console.error(
-					'[ERROR] Validation-only ingest found no Neon/disk partials for this orchestration run (or prior done runs for this URL). Re-run the full pipeline through embedding first, or fix slug/URL staging metadata.'
+					`[ERROR] --force-stage ${forceStage} requires existing checkpoints through the prior pipeline stage ` +
+						`(expected resume point "${resumeFromStage ?? 'none'}" from Neon ingest_staging_* for this run, or a local data/ingested/*-partial.json). ` +
+						`None were found (orchestration run id: ${rid || 'unset'}). Refusing to re-run earlier stages silently.${validationExtra}`
 				);
 				await closeSurrealIfOpen(db);
 				process.exit(1);
