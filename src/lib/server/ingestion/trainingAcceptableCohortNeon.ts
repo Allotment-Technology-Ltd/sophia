@@ -8,7 +8,7 @@ import { and, desc, eq, isNotNull, sql } from 'drizzle-orm';
 import { getDrizzleDb } from '../db/neon';
 import { ingestRuns, sourceTrainingGovernance } from '../db/schema';
 import { isNeonIngestPersistenceEnabled } from '../neon/datastore';
-import { canonicalizeAndHashSourceUrl } from '../sourceIdentity';
+import { canonicalizeAndHashSourceUrl, canonicalizeSourceUrl } from '../sourceIdentity';
 import { isTrainingModuleAcceptableLineage } from './trainingAcceptableLineagePolicy';
 
 export async function loadGovernanceExcludedByHash(): Promise<Map<string, boolean>> {
@@ -70,6 +70,11 @@ export type TrainingAcceptableUrlRow = {
 	trainingAcceptable: true;
 };
 
+/**
+ * Returns up to `limit` **distinct canonical URLs**, newest qualifying run per URL (`completed_at` desc).
+ * When `validateOnly` is true, only runs whose persisted job `payload.validate === true` are considered
+ * (used for Phase 1 / validation-tail presets, not the default “Training cohort” admin button).
+ */
 export async function listTrainingAcceptableUrlsFromNeon(opts: {
 	days: number;
 	limit?: number;
@@ -85,7 +90,8 @@ export async function listTrainingAcceptableUrlsFromNeon(opts: {
 		requireStageMsTelemetry: false
 	});
 	const governanceExcludedByHash = await loadGovernanceExcludedByHash();
-	const urls: TrainingAcceptableUrlRow[] = [];
+	/** Latest qualifying run per canonical URL (`completed_at` desc scan — first hit wins). */
+	const byCanonical = new Map<string, TrainingAcceptableUrlRow>();
 	let scannedRunCount = 0;
 	for (const ir of runs) {
 		scannedRunCount++;
@@ -103,7 +109,9 @@ export async function listTrainingAcceptableUrlsFromNeon(opts: {
 				: {};
 		const validate = payload.validate === true;
 		if (opts.validateOnly && !validate) continue;
-		urls.push({
+		const canon = canonicalizeSourceUrl(ir.sourceUrl);
+		if (!canon || byCanonical.has(canon)) continue;
+		byCanonical.set(canon, {
 			url: ir.sourceUrl,
 			sourceType: ir.sourceType,
 			runId: ir.id,
@@ -111,8 +119,9 @@ export async function listTrainingAcceptableUrlsFromNeon(opts: {
 			validate,
 			trainingAcceptable: true
 		});
-		if (urls.length >= limit) break;
+		if (byCanonical.size >= limit) break;
 	}
+	const urls = [...byCanonical.values()];
 	return { urls, cohortMeta: { days: capDays, scannedRunCount } };
 }
 
