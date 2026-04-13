@@ -49,6 +49,16 @@ function isVector768(v: unknown): v is number[] {
   );
 }
 
+/** Staging claim row or JSON may hold 768-d (pgvector) or other dims (e.g. 1024 in `embeddings_json` only). */
+function isFiniteEmbeddingVector(v: unknown): v is number[] {
+  return (
+    Array.isArray(v) &&
+    v.length >= 64 &&
+    v.length <= 4096 &&
+    v.every((n) => typeof n === 'number' && Number.isFinite(n))
+  );
+}
+
 export async function saveIngestPartialToNeon(opts: {
   runId: string;
   slug: string;
@@ -197,6 +207,43 @@ export async function saveIngestPartialToNeon(opts: {
   });
 }
 
+const STAGING_TAIL_SQL = sql`
+  m.stage_completed IN ('embedding', 'validating', 'remediating', 'storing')
+  AND (
+    jsonb_array_length(COALESCE(m.embeddings_json, '[]'::jsonb)) > 0
+    OR EXISTS (SELECT 1 FROM ingest_staging_claims c WHERE c.run_id = m.run_id LIMIT 1)
+  )
+`;
+
+/**
+ * All staging rows for a source identity hash with a validation-tail–compatible checkpoint.
+ * Does **not** join `ingest_runs` — survives URL string drift on `ingest_runs.source_url` vs `source_json`.
+ */
+export async function findNeonStagingRunIdsForValidationTailByCanonicalUrlHash(
+  canonicalUrlHash: string,
+  maxResults = 20
+): Promise<string[]> {
+  if (!isNeonIngestPersistenceEnabled()) return [];
+  const h = canonicalUrlHash.trim();
+  if (!h) return [];
+  const db = getDrizzleDb();
+  const cap = Math.min(50, Math.max(1, maxResults));
+  const rows = await db.execute(sql`
+    SELECT m.run_id AS "runId"
+    FROM ingest_staging_meta m
+    WHERE ${STAGING_TAIL_SQL}
+      AND (m.source_json->>'canonical_url_hash') = ${h}
+    ORDER BY m.updated_at DESC
+    LIMIT ${cap}
+  `);
+  const out: string[] = [];
+  for (const row of rows.rows as { runId?: unknown }[]) {
+    const id = row.runId != null && String(row.runId).trim() ? String(row.runId).trim() : null;
+    if (id) out.push(id);
+  }
+  return out;
+}
+
 /**
  * When a **new** `INGEST_ORCHESTRATION_RUN_ID` has no `ingest_staging_*` rows yet, an earlier run for the
  * same source may already have staging through embedding. Find the newest compatible row by slug and/or
@@ -205,39 +252,61 @@ export async function saveIngestPartialToNeon(opts: {
 export async function findNeonStagingRunIdForValidationTailBySlug(opts: {
   slug: string;
   canonicalSourceUrl?: string;
+  /** Matches `source_json->>'canonical_url_hash'` when slug/URL text drifted between runs. */
+  canonicalUrlHash?: string;
 }): Promise<string | null> {
   if (!isNeonIngestPersistenceEnabled()) return null;
   const slug = opts.slug.trim();
   if (!slug) return null;
   const canon = opts.canonicalSourceUrl ? canonicalizeSourceUrl(opts.canonicalSourceUrl) : null;
+  const urlHash = opts.canonicalUrlHash?.trim() || null;
   const db = getDrizzleDb();
-  const rows = canon
-    ? await db.execute(sql`
-        SELECT m.run_id AS "runId"
-        FROM ingest_staging_meta m
-        WHERE m.stage_completed IN ('embedding', 'validating', 'remediating', 'storing')
-          AND (m.slug = ${slug} OR (m.source_json->>'url') = ${canon})
-          AND (
-            jsonb_array_length(COALESCE(m.embeddings_json, '[]'::jsonb)) > 0
-            OR EXISTS (SELECT 1 FROM ingest_staging_claims c WHERE c.run_id = m.run_id LIMIT 1)
-          )
-        ORDER BY m.updated_at DESC
-        LIMIT 1
-      `)
-    : await db.execute(sql`
-        SELECT m.run_id AS "runId"
-        FROM ingest_staging_meta m
-        WHERE m.stage_completed IN ('embedding', 'validating', 'remediating', 'storing')
-          AND m.slug = ${slug}
-          AND (
-            jsonb_array_length(COALESCE(m.embeddings_json, '[]'::jsonb)) > 0
-            OR EXISTS (SELECT 1 FROM ingest_staging_claims c WHERE c.run_id = m.run_id LIMIT 1)
-          )
-        ORDER BY m.updated_at DESC
-        LIMIT 1
-      `);
-  const head = rows.rows[0] as { runId?: unknown } | undefined;
-  return head?.runId != null && String(head.runId).trim() ? String(head.runId).trim() : null;
+
+  const tailPredicate = STAGING_TAIL_SQL;
+
+  const pick = (rows: { rows: unknown[] }): string | null => {
+    const head = rows.rows[0] as { runId?: unknown } | undefined;
+    return head?.runId != null && String(head.runId).trim() ? String(head.runId).trim() : null;
+  };
+
+  if (urlHash) {
+    const rows = await db.execute(sql`
+      SELECT m.run_id AS "runId"
+      FROM ingest_staging_meta m
+      WHERE ${tailPredicate}
+        AND (m.source_json->>'canonical_url_hash') = ${urlHash}
+      ORDER BY m.updated_at DESC
+      LIMIT 1
+    `);
+    const byHash = pick(rows);
+    if (byHash) return byHash;
+  }
+
+  if (canon) {
+    const rows = await db.execute(sql`
+      SELECT m.run_id AS "runId"
+      FROM ingest_staging_meta m
+      WHERE ${tailPredicate}
+        AND (m.slug = ${slug} OR (m.source_json->>'url') = ${canon})
+      ORDER BY m.updated_at DESC
+      LIMIT 1
+    `);
+    const id = pick(rows);
+    if (id) return id;
+  } else {
+    const rows = await db.execute(sql`
+      SELECT m.run_id AS "runId"
+      FROM ingest_staging_meta m
+      WHERE ${tailPredicate}
+        AND m.slug = ${slug}
+      ORDER BY m.updated_at DESC
+      LIMIT 1
+    `);
+    const id = pick(rows);
+    if (id) return id;
+  }
+
+  return null;
 }
 
 const STAGING_TAIL_STAGE_COMPLETED = new Set([
@@ -256,7 +325,7 @@ export async function findDoneIngestRunIdsWithStagingMetaForCanonicalUrl(
   const canon = canonicalizeSourceUrl(canonicalSourceUrl);
   if (!canon) return [];
   const db = getDrizzleDb();
-  const cap = Math.min(200, Math.max(1, maxScan));
+  const cap = Math.min(800, Math.max(1, maxScan));
   const runs = await db
     .select({ id: ingestRuns.id, sourceUrl: ingestRuns.sourceUrl })
     .from(ingestRuns)
@@ -347,6 +416,25 @@ export async function loadIngestPartialFromNeon(
     meta.sourceJson && typeof meta.sourceJson === 'object' && !Array.isArray(meta.sourceJson)
       ? (meta.sourceJson as Record<string, unknown>)
       : { title: slug, url: '', author: [], source_type: 'unknown', word_count: 0 };
+
+  let embeddings: number[][] | undefined =
+    meta.embeddingsJson && Array.isArray(meta.embeddingsJson) && meta.embeddingsJson.length > 0
+      ? (meta.embeddingsJson as number[][])
+      : undefined;
+  if (!embeddings && claims.length > 0) {
+    const fromClaims: number[][] = [];
+    for (const c of claims) {
+      const rec = c as Record<string, unknown>;
+      const e = rec.embedding;
+      if (isFiniteEmbeddingVector(e)) {
+        fromClaims.push(e);
+      }
+    }
+    if (fromClaims.length === claims.length) {
+      embeddings = fromClaims;
+    }
+  }
+
   const partial: Record<string, unknown> = {
     source,
     ...(meta.sourceTextSnapshot && meta.sourceTextSnapshot.length > 0
@@ -357,8 +445,7 @@ export async function loadIngestPartialFromNeon(
     claims: claims.length > 0 ? claims : undefined,
     relations: relations.length > 0 ? relations : undefined,
     arguments: arguments_,
-    embeddings:
-      meta.embeddingsJson && Array.isArray(meta.embeddingsJson) ? meta.embeddingsJson : undefined,
+    embeddings,
     validation,
     extraction_progress: meta.extractionProgress ?? undefined,
     grouping_progress: meta.groupingProgress ?? undefined,

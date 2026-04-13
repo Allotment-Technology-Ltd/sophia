@@ -1,0 +1,74 @@
+# Terraform plan for infra/gcp-phase2-spike (Phase 2 GCP).
+# Configure repository Variables first (Settings → Secrets and variables → Actions → Variables):
+#   GCP_PROJECT_ID, GCP_STATE_BUCKET, GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_TERRAFORM_SA_EMAIL
+# Until all are set, this job is skipped. See infra/gcp-phase2-spike/REMOTE_STATE_AND_CI.md
+
+name: terraform-phase2-spike
+
+on:
+  pull_request:
+    paths:
+      - 'infra/gcp-phase2-spike/**'
+      - '.github/workflows/terraform-phase2-spike.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'infra/gcp-phase2-spike/**'
+      - '.github/workflows/terraform-phase2-spike.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform:
+    name: Terraform fmt / validate / plan
+    runs-on: ubuntu-latest
+    if: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && vars.GCP_TERRAFORM_SA_EMAIL != '' && vars.GCP_PROJECT_ID != '' && vars.GCP_STATE_BUCKET != '' }}
+
+    defaults:
+      run:
+        working-directory: infra/gcp-phase2-spike
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_TERRAFORM_SA_EMAIL }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.10.0'
+          terraform_wrapper: false
+
+      - name: Write backend.tf (GCS state)
+        run: |
+          cat > backend.tf <<EOF
+          terraform {
+            backend "gcs" {
+              bucket = "${{ vars.GCP_STATE_BUCKET }}"
+              prefix = "phase2-spike/terraform"
+            }
+          }
+          EOF
+
+      - name: Terraform Format (check)
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Validate
+        env:
+          TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+        run: terraform validate
+
+      - name: Terraform Plan
+        env:
+          TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+        run: terraform plan -input=false -lock-timeout=300s -no-color

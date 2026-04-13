@@ -1122,20 +1122,22 @@
 				/>
 				<span class="text-sm leading-snug text-sophia-dark-text">
 					Validation tail only (<span class="font-mono text-xs">--force-stage validating</span>) — skip
-					re-extract / re-relate / re-group / re-embed when checkpoints allow; keep validation + remediation.
-					<strong class="font-medium">First start</strong> of a new child run has no checkpoints — leave this off
-					until that URL has completed through embedding on <strong class="font-medium">this</strong> run id, or
-					use <span class="font-mono text-xs">replay-ingest.ts</span> / resume-failed for the same run.
+					re-extract / re-relate / re-group / re-embed when <strong class="font-medium">Neon</strong> has checkpoints
+					(claims + full embeddings) for this URL: either the <strong class="font-medium">current</strong> orchestration
+					run id, or an <strong class="font-medium">earlier</strong> run the worker can attach to (same canonical URL /
+					slug in <span class="font-mono text-xs">ingest_staging_*</span>). Requires
+					<span class="font-mono text-xs">DATABASE_URL</span> on the worker. If nothing matches, ingest exits with code
+					<span class="font-mono text-xs">3</span> (no auto-retry that strips this flag — that would full re-ingest).
 				</span>
 			</label>
 			{#if jobValidationTailOnly}
 				<p class="mt-2 max-w-3xl rounded border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-50">
-					Re-storing in Surreal still runs if the pipeline reaches Stage 6 (needed after remediation text edits
-					or relation drops). Workers can set <span class="font-mono">INGEST_SKIP_STORE_WHEN_NO_GRAPH_CHANGES=1</span> to
-					skip Stage 6 when validation and remediation changed no graph and a <span class="font-mono">source</span> row
-					already exists (ingestion_log stays non-complete so a later run can store). For “validate only” on URLs that
-					already finished in a <em>previous</em> run, use replay / a follow-up that reuses checkpoints for that run id —
-					a new durable item id starts empty.
+					If validation-only fails, it is often <strong class="font-medium">not</strong> a missing code fix: the source may
+					have never persisted through embedding in Neon, or slug/URL metadata may not match a prior row. Operator
+					reference: <span class="font-mono text-[11px]">docs/local/operations/validation-only-ingest-prerequisites.md</span>.
+					Re-storing in Surreal still runs if the pipeline reaches Stage 6. Workers can set
+					<span class="font-mono">INGEST_SKIP_STORE_WHEN_NO_GRAPH_CHANGES=1</span> to skip Stage 6 when validation and
+					remediation changed no graph and a <span class="font-mono">source</span> row already exists.
 				</p>
 			{/if}
 			<label class="flex cursor-pointer items-center gap-3" title={JOB_TT.mergeIntoRunningJob}>

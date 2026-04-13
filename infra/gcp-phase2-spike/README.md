@@ -30,6 +30,10 @@ Apply when ready:
 terraform apply
 ```
 
+## Remote state, Terraform SA, and CI
+
+Step-by-step (migrate state, create **`tf-runner-…`** SA, GitHub OIDC, sample workflow): **[`REMOTE_STATE_AND_CI.md`](REMOTE_STATE_AND_CI.md)**.
+
 ## Remote state (GCS backend, recommended)
 
 This stack defines **`${project_id}-tf-state`** in [`terraform_state_bucket.tf`](terraform_state_bucket.tf) (versioning on, `europe-west2`). **Apply once** so the bucket exists, then migrate local state:
@@ -51,34 +55,30 @@ terraform init -migrate-state
 
 ## Pause checklist — `parallel-iac-prereqs` / `pause-after-iac-prereqs`
 
-Complete after first successful apply (operator sign-off):
+Complete after first successful apply (operator sign-off). **Status (2026-04-13):**
 
 - [x] Core APIs + data bucket + Artifact Registry applied (`terraform apply`).
 - [x] Provider lockfile **`.terraform.lock.hcl`** committed with this stack.
-- [ ] **Terraform state bucket** applied (run `terraform apply` again after pulling this branch if `terraform_state_bucket.tf` is new).
-- [ ] **Remote state migrated** to GCS (`init -migrate-state`) when more than one person will run Terraform.
-- [ ] **L4 quota** requests filed (see below).
+- [x] **Terraform state bucket** applied (`…-tf-state` exists).
+- [x] **Remote state migrated** to GCS (`terraform init -migrate-state` → `default.tfstate` under `phase2-spike/terraform/`).
+- [x] **L4 quota** — **default limit 1× NVIDIA L4** in **`europe-west2`** and **`europe-west4`** is enough for **one training VM (west4) + one vLLM VM (west2)** without an increase. Only file a **quota increase** if you need **more than one L4 in the same region** or a denial blocks create.
 
-## Requesting NVIDIA L4 GPU quota (Console)
+## NVIDIA L4 GPU quota (Console)
 
-Do this in your spike **project** (e.g. `sophia-ai-spike`) **before** turning on `enable_gpu_compute`.
+**If defaults are 1 per region (typical new project):** skip increase; proceed to GPU Terraform only after plan **`pause-after-g1`**.
+
+**If you need an increase** (e.g. 2+ L4 in one region):
 
 1. Open [Google Cloud Console](https://console.cloud.google.com/) → select the spike **project**.
 2. Go **IAM & Admin** → **Quotas** (or search “Quotas”).
-3. In the filter bar, choose **Service** = **Compute Engine API**.
-4. Filter **Name** or **Metric** for **L4** (labels vary; try `NVIDIA L4` / `GPUs (preemptible)` / `Committed NVIDIA L4` — pick the row that matches **per-region** GPU for **Compute**).
-5. Check rows for **Location** = **`europe-west2`** and **`europe-west4`** (request both; training defaults to **west4**, vLLM to **west2** per spike plan).
-6. Select the quota line(s) → **Edit quota** (or **Request increase**).
-7. Request enough for **one** training VM + **one** serving VM (e.g. **2** GPUs per region as a starting ask, or **1** if the form requires minimal increase). Add a note: *Sophia Phase 2 spike — single L4 for QLoRA training / vLLM*.
-8. Submit; approval can take **hours to days**. Track in **Quota** history.
-
-If the metric is only **global**, request the increase and note preferred regions in the justification.
+3. **Service** = **Compute Engine API**; filter metric name for **NVIDIA L4** / **L4**.
+4. Select **Location** = **`europe-west2`** or **`europe-west4`** as needed.
+5. **Edit quota** → enter new limit → justify (*Sophia Phase 2 spike — QLoRA + vLLM*). New projects may be asked to wait **48h** billing history before approval.
 
 `gcloud` alternative (after [installing SDK](https://cloud.google.com/sdk/docs/install)):
 
 ```bash
 gcloud config set project YOUR_PROJECT_ID
-# List L4-related quotas (IDs differ by account):
 gcloud alpha services quota list --consumer=projects/YOUR_PROJECT_ID --filter="metric.type:compute.googleapis.com" --format="table(name,metric,limit)" 2>/dev/null | head -50
 ```
 
