@@ -89,6 +89,7 @@ export function isLaunchThrottleError(message: string): boolean {
 	return (
 		m.includes('too many concurrent ingest') ||
 		m.includes('concurrent ingest workers') ||
+		m.includes('neon ingest concurrency gate') ||
 		m.includes('admin_ingest_max_concurrent') ||
 		m.includes('wait for a run to finish') ||
 		(m.includes('global ingest') && m.includes('slot'))

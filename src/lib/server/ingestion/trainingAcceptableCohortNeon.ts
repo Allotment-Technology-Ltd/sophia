@@ -70,6 +70,78 @@ export type TrainingAcceptableUrlRow = {
 	trainingAcceptable: true;
 };
 
+/** True when persisted timing shows an LLM validation pass completed (used to omit URLs from validation-tail presets). */
+export function envelopeShowsCompletedValidation(
+	envelope: Record<string, unknown> | null | undefined
+): boolean {
+	if (!envelope) return false;
+	const tt = envelope.timingTelemetry;
+	if (!tt || typeof tt !== 'object' || Array.isArray(tt)) return false;
+	const sm = (tt as { stage_models?: unknown }).stage_models;
+	if (sm && typeof sm === 'object' && !Array.isArray(sm)) {
+		const v = (sm as Record<string, unknown>).validation;
+		if (typeof v === 'string' && v.trim().length > 0) return true;
+	}
+	const ms = (tt as { stage_ms?: unknown }).stage_ms;
+	if (ms && typeof ms === 'object' && !Array.isArray(ms)) {
+		const v = (ms as Record<string, unknown>).validating;
+		if (typeof v === 'number' && v > 0) return true;
+	}
+	return false;
+}
+
+/**
+ * Drops URLs whose **latest completed** ingest in the window already recorded validation telemetry,
+ * so validation-tail-only jobs are not prefilled with sources that already ran Stage 5.
+ */
+export async function omitUrlsWithCompletedValidationTelemetry(
+	urls: string[],
+	days: number
+): Promise<string[]> {
+	if (!isNeonIngestPersistenceEnabled() || urls.length === 0) return urls;
+	const want = new Map<string, string>();
+	for (const raw of urls) {
+		const t = raw.trim();
+		if (!t) continue;
+		const c = canonicalizeSourceUrl(t);
+		if (c) want.set(c, t);
+	}
+	if (want.size === 0) return urls;
+	const capDays = Math.min(730, Math.max(1, Math.trunc(days) || 90));
+	const db = getDrizzleDb();
+	const rows = await db
+		.select()
+		.from(ingestRuns)
+		.where(
+			and(
+				eq(ingestRuns.status, 'done'),
+				eq(ingestRuns.cancelledByUser, false),
+				isNotNull(ingestRuns.completedAt),
+				isNotNull(ingestRuns.reportEnvelope),
+				sql`${ingestRuns.completedAt} >= now() - (${capDays}::int) * interval '1 day'`
+			)
+		)
+		.orderBy(desc(ingestRuns.completedAt));
+	const latestEnvelopeByCanon = new Map<string, Record<string, unknown>>();
+	for (const ir of rows) {
+		const c = canonicalizeSourceUrl(ir.sourceUrl);
+		if (!c || !want.has(c) || latestEnvelopeByCanon.has(c)) continue;
+		const env =
+			ir.reportEnvelope && typeof ir.reportEnvelope === 'object' && !Array.isArray(ir.reportEnvelope)
+				? (ir.reportEnvelope as Record<string, unknown>)
+				: null;
+		if (env) latestEnvelopeByCanon.set(c, env);
+	}
+	return urls.filter((raw) => {
+		const t = raw.trim();
+		const c = canonicalizeSourceUrl(t);
+		if (!c) return true;
+		const env = latestEnvelopeByCanon.get(c);
+		if (!env) return true;
+		return !envelopeShowsCompletedValidation(env);
+	});
+}
+
 /**
  * Returns up to `limit` **distinct canonical URLs**, newest qualifying run per URL (`completed_at` desc).
  * When `validateOnly` is true, only runs whose persisted job `payload.validate === true` are considered
@@ -79,6 +151,8 @@ export async function listTrainingAcceptableUrlsFromNeon(opts: {
 	days: number;
 	limit?: number;
 	validateOnly?: boolean;
+	/** When true, skip URLs whose latest qualifying run already has validation telemetry (validation-tail cohort). */
+	omitValidatedTelemetry?: boolean;
 }): Promise<{ urls: TrainingAcceptableUrlRow[]; cohortMeta: { days: number; scannedRunCount: number } }> {
 	if (!isNeonIngestPersistenceEnabled()) {
 		const d = Math.min(730, Math.max(1, Math.trunc(opts.days) || 90));
@@ -109,6 +183,7 @@ export async function listTrainingAcceptableUrlsFromNeon(opts: {
 				: {};
 		const validate = payload.validate === true;
 		if (opts.validateOnly && !validate) continue;
+		if (opts.omitValidatedTelemetry && envelopeShowsCompletedValidation(env)) continue;
 		const canon = canonicalizeSourceUrl(ir.sourceUrl);
 		if (!canon || byCanonical.has(canon)) continue;
 		byCanonical.set(canon, {

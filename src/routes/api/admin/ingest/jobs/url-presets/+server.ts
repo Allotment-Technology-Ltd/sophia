@@ -3,7 +3,8 @@ import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
 import {
 	cohortFingerprintFromUrlList,
-	listTrainingAcceptableUrlsFromNeon
+	listTrainingAcceptableUrlsFromNeon,
+	omitUrlsWithCompletedValidationTelemetry
 } from '$lib/server/ingestion/trainingAcceptableCohortNeon';
 import {
 	goldenExtractionEvalFingerprint,
@@ -34,18 +35,33 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 		if (preset === 'golden') {
 			const data = loadGoldenExtractionEval();
 			const def = (data.default_source_type ?? 'sep_entry').trim();
-			const rows = data.items.map((it) => ({
+			let rows = data.items.map((it) => ({
 				url: it.url.trim(),
 				source_type: (it.source_type ?? def).trim(),
 				why: typeof it.why === 'string' ? it.why : undefined
 			}));
-			const fp = goldenExtractionEvalFingerprint(data.items);
+			const omitValidated =
+				url.searchParams.get('omit_validated') === '1' ||
+				url.searchParams.get('omit_validated') === 'true';
+			if (omitValidated && isNeonIngestPersistenceEnabled() && rows.length > 0) {
+				const days = parseDays(url.searchParams.get('days'));
+				const kept = await omitUrlsWithCompletedValidationTelemetry(
+					rows.map((r) => r.url),
+					days
+				);
+				const keptLc = new Set(kept.map((u) => u.trim().toLowerCase()));
+				rows = rows.filter((r) => keptLc.has(r.url.trim().toLowerCase()));
+			}
+			const fp = goldenExtractionEvalFingerprint(
+				rows.map((r) => ({ url: r.url, source_type: r.source_type, why: r.why }))
+			);
 			return json({
 				preset: 'golden',
 				version: data.version,
 				description: data.description ?? null,
 				urlCount: rows.length,
 				cohortFingerprint: fp,
+				omitValidatedTelemetry: omitValidated,
 				urls: rows
 			});
 		}
@@ -57,12 +73,21 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 			const days = parseDays(url.searchParams.get('days'));
 			const limit = parseLimit(url.searchParams.get('limit'));
 			const validateOnly = url.searchParams.get('validate') === '1' || url.searchParams.get('validate') === 'true';
-			const { urls, cohortMeta } = await listTrainingAcceptableUrlsFromNeon({ days, limit, validateOnly });
+			const omitValidatedTelemetry =
+				url.searchParams.get('omit_validated') === '1' ||
+				url.searchParams.get('omit_validated') === 'true';
+			const { urls, cohortMeta } = await listTrainingAcceptableUrlsFromNeon({
+				days,
+				limit,
+				validateOnly,
+				omitValidatedTelemetry
+			});
 			const fp = cohortFingerprintFromUrlList(urls.map((u) => u.url));
 			return json({
 				preset: 'training_acceptable',
 				days: cohortMeta.days,
 				validateOnly,
+				omitValidatedTelemetry,
 				scannedRunCount: cohortMeta.scannedRunCount,
 				urlCount: urls.length,
 				cohortFingerprint: fp,

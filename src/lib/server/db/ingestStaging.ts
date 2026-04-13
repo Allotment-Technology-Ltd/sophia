@@ -198,8 +198,9 @@ export async function saveIngestPartialToNeon(opts: {
 }
 
 /**
- * When `--force-stage validating` runs under a **new** `INGEST_ORCHESTRATION_RUN_ID`, staging for that id
- * may be empty; find an older staging row by slug and/or canonical `source_json.url`.
+ * When a **new** `INGEST_ORCHESTRATION_RUN_ID` has no `ingest_staging_*` rows yet, an earlier run for the
+ * same source may already have staging through embedding. Find the newest compatible row by slug and/or
+ * canonical `source_json.url`.
  */
 export async function findNeonStagingRunIdForValidationTailBySlug(opts: {
   slug: string;

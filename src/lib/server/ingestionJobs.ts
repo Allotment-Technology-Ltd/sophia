@@ -44,6 +44,13 @@ import { sanitizeIngestionJobWorkerDefaults } from './ingestionJobWorkerDefaults
 
 const ADV_LOCK_JOB_EVENTS = 5_849_273;
 
+/**
+ * Serialize `tickIngestionJob` per `jobId`. Overlapping ticks (e.g. `void tickIngestionJob` on job create +
+ * ingestion poller) previously raced: both could pass `ADMIN_INGEST_MAX_CONCURRENT` before either row
+ * flipped to `running`, launching one extra child and blocking the next URL with a misleading “3 max” error.
+ */
+const tickIngestionJobTailByJobId = new Map<string, Promise<void>>();
+
 function sleepMs(ms: number): Promise<void> {
 	return new Promise((r) => setTimeout(r, ms));
 }
@@ -691,6 +698,13 @@ export async function reconcileIngestionJobView(jobId: string): Promise<void> {
 }
 
 export async function tickIngestionJob(jobId: string): Promise<void> {
+	const prev = tickIngestionJobTailByJobId.get(jobId) ?? Promise.resolve();
+	const run = prev.catch(() => {}).then(() => tickIngestionJobUnlocked(jobId));
+	tickIngestionJobTailByJobId.set(jobId, run);
+	await run;
+}
+
+async function tickIngestionJobUnlocked(jobId: string): Promise<void> {
 	if (!isNeonIngestPersistenceEnabled()) return;
 	await reconcileIngestionJobView(jobId);
 	const db = getDrizzleDb();

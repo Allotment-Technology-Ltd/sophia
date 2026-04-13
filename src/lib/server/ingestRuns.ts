@@ -928,14 +928,17 @@ class IngestRunManager extends EventEmitter {
         const ok = await tryAcquireGlobalIngestSlot(maxConcurrent);
         if (!ok) {
           throw new Error(
-            `Too many concurrent ingest workers (${maxConcurrent} max). Wait for a run to finish or raise ADMIN_INGEST_MAX_CONCURRENT.`
+            `Neon ingest concurrency gate is full (${maxConcurrent} slots in ingest_concurrency_gate; INGEST_GLOBAL_CONCURRENCY_GATE=1). Wait for a slot to release, reconcile stuck counters, or raise ADMIN_INGEST_MAX_CONCURRENT.`
           );
         }
         holdGlobalSlot = true;
-      } else if (this.activeChildProcessCount() >= maxConcurrent) {
-        throw new Error(
-          `Too many concurrent ingest workers (${maxConcurrent} max). Wait for a run to finish or raise ADMIN_INGEST_MAX_CONCURRENT.`
-        );
+      } else {
+        const activeLocal = this.activeChildProcessCount();
+        if (activeLocal >= maxConcurrent) {
+          throw new Error(
+            `Too many concurrent ingest child processes on this server instance (${activeLocal}/${maxConcurrent}; ADMIN_INGEST_MAX_CONCURRENT). Another tab, poller tick, or admin run may have started workers in parallel—job ticks are serialized per job, but the cap is global to the process. Wait for a run to finish or raise the cap if the host has headroom.`
+          );
+        }
       }
     }
 
@@ -1500,7 +1503,7 @@ class IngestRunManager extends EventEmitter {
     runId: string,
     payload: IngestRunPayload,
     sourceFile: string,
-    options: { forSyncOnly: boolean; resumeFromFailure?: boolean }
+    options: { forSyncOnly: boolean; resumeFromFailure?: boolean; ingestAutoRetry?: boolean }
   ): void {
     void this.execStartIngestChild(runId, payload, sourceFile, options);
   }
@@ -1509,7 +1512,7 @@ class IngestRunManager extends EventEmitter {
     runId: string,
     payload: IngestRunPayload,
     sourceFile: string,
-    options: { forSyncOnly: boolean; resumeFromFailure?: boolean }
+    options: { forSyncOnly: boolean; resumeFromFailure?: boolean; ingestAutoRetry?: boolean }
   ): Promise<void> {
     let operatorByokEnv: Record<string, string> = {};
     try {
@@ -1666,9 +1669,16 @@ class IngestRunManager extends EventEmitter {
     if (stopBeforeStore) ingestTail.push('--stop-before-store');
     const forceStage = payload.batch_overrides?.forceStage;
     if (forceStage && (INGEST_CLI_FORCE_STAGES as readonly string[]).includes(forceStage)) {
-      ingestTail.push('--force-stage', forceStage);
-      batchEnvOverrides.INGEST_FORCE_STAGE = forceStage;
-      this.addLog(runId, `[INGEST] --force-stage ${forceStage} (skip earlier stages when checkpoints allow)`);
+      if (options.resumeFromFailure && options.ingestAutoRetry) {
+        this.addLog(
+          runId,
+          `[INGEST] ingest auto-retry: omitting --force-stage ${forceStage} so ingest.ts resumes from Neon/Surreal partials instead of re-forcing stage order (avoids full re-extract after a mid-pipeline crash).`
+        );
+      } else {
+        ingestTail.push('--force-stage', forceStage);
+        batchEnvOverrides.INGEST_FORCE_STAGE = forceStage;
+        this.addLog(runId, `[INGEST] --force-stage ${forceStage} (skip earlier stages when checkpoints allow)`);
+      }
     }
 
     const { command: ingestCmd, args: ingestArgs } = buildLocalTsxSpawnArgs(ingestTail);
@@ -1772,7 +1782,8 @@ class IngestRunManager extends EventEmitter {
         this.addLog(runId, 'Ingest failed; retrying once automatically…');
         void this.execStartIngestChild(runId, payload, sourceFile, {
           forSyncOnly: false,
-          resumeFromFailure: true
+          resumeFromFailure: true,
+          ingestAutoRetry: true
         });
         return;
       }
