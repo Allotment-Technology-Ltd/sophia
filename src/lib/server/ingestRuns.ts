@@ -1667,6 +1667,7 @@ class IngestRunManager extends EventEmitter {
     const forceStage = payload.batch_overrides?.forceStage;
     if (forceStage && (INGEST_CLI_FORCE_STAGES as readonly string[]).includes(forceStage)) {
       ingestTail.push('--force-stage', forceStage);
+      batchEnvOverrides.INGEST_FORCE_STAGE = forceStage;
       this.addLog(runId, `[INGEST] --force-stage ${forceStage} (skip earlier stages when checkpoints allow)`);
     }
 

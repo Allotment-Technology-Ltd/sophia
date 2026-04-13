@@ -79,6 +79,8 @@ import {
 	summarizeIngestPinsForLog
 } from '../src/lib/server/ingestPinNormalization.js';
 import {
+	findDoneIngestRunIdsWithStagingMetaForCanonicalUrl,
+	findNeonStagingRunIdForValidationTailBySlug,
 	loadIngestPartialFromNeon,
 	saveIngestPartialToNeon
 } from '../src/lib/server/db/ingestStaging.js';
@@ -386,6 +388,11 @@ const STAGES_ORDER = [
 	'remediating',
 	'storing'
 ];
+
+/** Validation-only tail (`--force-stage validating` / `INGEST_FORCE_STAGE=validating`) must never fall back to full extraction. */
+function validationOnlyIngestIntent(forceStage: string | null | undefined): boolean {
+	return forceStage === 'validating';
+}
 
 function shouldRunStage(stage: string, lastCompleted: string | null | undefined): boolean {
 	if (!lastCompleted) return true;
@@ -2693,18 +2700,80 @@ function saveGroupingDebugRaw(slug: string, batchIndex: number, rawResponse: str
 	console.log(`  [DEBUG] Saved grouping raw batch ${batchIndex + 1} to ${filePath}`);
 }
 
-async function loadPartialResults(slug: string): Promise<PartialResults | null> {
+async function loadPartialResults(
+	slug: string,
+	opts?: { forceStage?: string | null; canonicalSourceUrl?: string }
+): Promise<PartialResults | null> {
 	const runId = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim();
-	if (runId && process.env.DATABASE_URL?.trim()) {
+	const force = opts?.forceStage ?? null;
+	const canonical = opts?.canonicalSourceUrl?.trim();
+	const wantsEmbeddingCheckpoint =
+		force === 'embedding' ||
+		force === 'validating' ||
+		force === 'remediating' ||
+		force === 'storing';
+
+	const embeddingTailLooksComplete = (p: PartialResults): boolean => {
+		const claims = p.claims;
+		const emb = p.embeddings;
+		if (!Array.isArray(claims) || claims.length === 0) return false;
+		if (!Array.isArray(emb) || emb.length === 0) return false;
+		return emb.length >= claims.length;
+	};
+
+	const tryNeon = async (rid: string): Promise<PartialResults | null> => {
 		try {
-			const fromNeon = await loadIngestPartialFromNeon(runId, slug);
-			if (fromNeon) {
-				return fromNeon as PartialResults;
-			}
+			const fromNeon = await loadIngestPartialFromNeon(rid, slug);
+			if (fromNeon) return fromNeon as PartialResults;
 		} catch (e) {
-			console.warn(`  [WARN] Failed to load Neon partial results: ${e}`);
+			console.warn(`  [WARN] Failed to load Neon partial results (${rid}): ${e}`);
+		}
+		return null;
+	};
+
+	if (runId && process.env.DATABASE_URL?.trim()) {
+		const direct = await tryNeon(runId);
+		if (direct) return direct;
+
+		if (wantsEmbeddingCheckpoint && canonical) {
+			const legacy = await findNeonStagingRunIdForValidationTailBySlug({
+				slug,
+				canonicalSourceUrl: canonical
+			});
+			if (legacy && legacy !== runId) {
+				const p = await tryNeon(legacy);
+				if (p && embeddingTailLooksComplete(p)) {
+					console.log(
+						`  [RESUME] Loaded Neon staging from prior run ${legacy} (slug/url tail lookup; current orchestration run ${runId})`
+					);
+					return p;
+				}
+			}
+			const candidates = await findDoneIngestRunIdsWithStagingMetaForCanonicalUrl(canonical, 80);
+			for (const rid of candidates) {
+				if (rid === runId) continue;
+				const p = await tryNeon(rid);
+				if (p && embeddingTailLooksComplete(p)) {
+					console.log(
+						`  [RESUME] Loaded Neon staging from prior done run ${rid} (canonical URL scan; current orchestration run ${runId})`
+					);
+					return p;
+				}
+			}
+		} else if (wantsEmbeddingCheckpoint) {
+			const legacy = await findNeonStagingRunIdForValidationTailBySlug({ slug });
+			if (legacy && legacy !== runId) {
+				const p = await tryNeon(legacy);
+				if (p && embeddingTailLooksComplete(p)) {
+					console.log(
+						`  [RESUME] Loaded Neon staging from prior run ${legacy} (slug-only tail lookup; current orchestration run ${runId})`
+					);
+					return p;
+				}
+			}
 		}
 	}
+
 	const partialPath = path.join(INGESTED_DIR, `${slug}-partial.json`);
 	if (!fs.existsSync(partialPath)) {
 		return null;
@@ -3379,7 +3448,8 @@ function logIngestFinetunePolicySnapshot(): void {
 }
 
 async function loadSourceTextAndMeta(
-	filePathArg: string
+	filePathArg: string,
+	options?: { validationStagingFallback?: boolean }
 ): Promise<{ txtPath: string; sourceText: string; sourceMeta: SourceMeta; slug: string }> {
 	const runId = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim();
 	const resolvedArg = path.resolve(filePathArg);
@@ -3397,7 +3467,48 @@ async function loadSourceTextAndMeta(
 		sourceText = fs.readFileSync(txtPath, 'utf-8');
 		sourceMeta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as SourceMeta;
 	} else if (runId && process.env.DATABASE_URL?.trim()) {
-		const fromNeon = await loadIngestPartialFromNeon(runId, hintSlug);
+		let fromNeon = await loadIngestPartialFromNeon(runId, hintSlug);
+		const metaPathBesideTxt = resolvedArg.replace(/\.txt$/i, '.meta.json');
+		let canonicalHint: string | undefined;
+		if (fs.existsSync(metaPathBesideTxt)) {
+			try {
+				const rawMeta = JSON.parse(fs.readFileSync(metaPathBesideTxt, 'utf-8')) as { url?: unknown };
+				if (typeof rawMeta.url === 'string' && rawMeta.url.trim()) {
+					canonicalHint = rawMeta.url.trim();
+				}
+			} catch {
+				// ignore malformed meta beside a missing .txt
+			}
+		}
+		if (
+			options?.validationStagingFallback &&
+			(typeof fromNeon?.source_text_snapshot !== 'string' ||
+				fromNeon.source_text_snapshot.length === 0 ||
+				!fromNeon?.source ||
+				typeof fromNeon.source !== 'object' ||
+				Array.isArray(fromNeon.source))
+		) {
+			const legacy = await findNeonStagingRunIdForValidationTailBySlug({
+				slug: hintSlug,
+				...(canonicalHint ? { canonicalSourceUrl: canonicalHint } : {})
+			});
+			if (legacy && legacy !== runId) {
+				const alt = await loadIngestPartialFromNeon(legacy, hintSlug);
+				if (
+					alt &&
+					typeof alt.source_text_snapshot === 'string' &&
+					alt.source_text_snapshot.length > 0 &&
+					alt.source &&
+					typeof alt.source === 'object' &&
+					!Array.isArray(alt.source)
+				) {
+					fromNeon = alt;
+					console.log(
+						`  [RESUME] Loaded source body from prior Neon staging run ${legacy} (validation-tail fallback; local file missing)`
+					);
+				}
+			}
+		}
 		const snap = fromNeon?.source_text_snapshot;
 		const src = fromNeon?.source;
 		if (typeof snap !== 'string' || snap.length === 0 || !src || typeof src !== 'object' || Array.isArray(src)) {
@@ -3474,6 +3585,17 @@ async function main() {
 		console.error(`Valid stages: ${STAGES_ORDER.join(', ')}`);
 		process.exit(1);
 	}
+	const envForceStage = process.env.INGEST_FORCE_STAGE?.trim();
+	if (
+		!forceStage &&
+		envForceStage &&
+		(STAGES_ORDER as readonly string[]).includes(envForceStage)
+	) {
+		forceStage = envForceStage;
+		console.log(
+			`[FORCE] INGEST_FORCE_STAGE=${envForceStage} (mirrors durable-job spawn when argv flags are missing)`
+		);
+	}
 	const ingestForceReingest =
 		process.env.INGEST_FORCE_REINGEST === '1' || process.env.INGEST_FORCE_REINGEST === 'true';
 	if (!forceStage && ingestForceReingest) {
@@ -3511,6 +3633,9 @@ async function main() {
 			'  INGEST_FORCE_REINGEST=1          Durable-job / operator re-ingest: treat as --force-stage extracting (skip early exit when ingestion_log is complete)'
 		);
 		console.error(
+			`  INGEST_FORCE_STAGE=<stage>       Same as --force-stage when argv is not passed (valid: ${STAGES_ORDER.join(', ')})`
+		);
+		console.error(
 			'  INGEST_EXCLUDE_SOURCE_FROM_MODEL_TRAINING=1   Mark stored source as excluded from model-training exports (Neon + Surreal); Neon upsert is sticky-OR'
 		);
 		console.error('\nResume is automatic — re-run the same source to pick up where it left off.');
@@ -3532,7 +3657,9 @@ async function main() {
 	}
 
 	// Load source files (or full text from Neon when the worker has no local data/sources copy)
-	const { txtPath, sourceText, sourceMeta, slug } = await loadSourceTextAndMeta(filePath);
+	const { txtPath, sourceText, sourceMeta, slug } = await loadSourceTextAndMeta(filePath, {
+		validationStagingFallback: validationOnlyIngestIntent(forceStage)
+	});
 	ingestSourceTextBodyForCheckpoint = sourceText;
 	if (process.env.DATABASE_URL?.trim()) {
 		const persistedFails = await loadIngestLlmFailureCountsFromDb();
@@ -3570,6 +3697,7 @@ async function main() {
 	}
 
 	const extractionBatches = buildPassageBatches(passages, sectionTokenLimit);
+	const partialLoadOpts = { forceStage, canonicalSourceUrl: sourceMeta.url };
 
 	// Admin orchestration + Neon: stages 1–5 use `--stop-before-store`; checkpoints live in Neon.
 	// Skip Surreal until Sync (Stage 6), so local runs do not need a live SurrealDB for pipeline tests.
@@ -3633,7 +3761,7 @@ async function main() {
 	}
 
 	if (!existingLog && skipSurrealForOrchestratedPhases) {
-		const early = await loadPartialResults(slug);
+		const early = await loadPartialResults(slug, partialLoadOpts);
 		if (early?.stage_completed && early.stage_completed !== 'none') {
 			resumeFromStage = early.stage_completed;
 			console.log(`[RESUME] Checkpoint (Neon/disk) — last completed stage: ${resumeFromStage}`);
@@ -3649,11 +3777,13 @@ async function main() {
 	}
 
 	// Load partial results from disk if resuming
+	const stageBeforeValidate = STAGES_ORDER[STAGES_ORDER.indexOf('validating') - 1];
 	let partial: PartialResults;
 	if (resumeFromStage) {
-		const loaded = await loadPartialResults(slug);
+		const loaded = await loadPartialResults(slug, partialLoadOpts);
 		if (loaded) {
 			partial = loaded;
+			Object.assign(partial.source, sourceMeta);
 			const normalized = normalizeResumeStage(resumeFromStage, partial);
 			if (normalized !== resumeFromStage) {
 				console.log(
@@ -3661,9 +3791,23 @@ async function main() {
 				);
 				resumeFromStage = normalized;
 			}
+			if (validationOnlyIngestIntent(forceStage) && resumeFromStage !== stageBeforeValidate) {
+				console.error(
+					`[ERROR] Validation-only ingest requires Neon checkpoints through "${stageBeforeValidate}" (claims + relations + grouping + full embeddings). Current resume point: "${resumeFromStage ?? 'none'}".`
+				);
+				await closeSurrealIfOpen(db);
+				process.exit(1);
+			}
 			console.log(`[RESUME] Loaded partial results from disk (stage: ${loaded.stage_completed})`);
 		} else {
 			console.log('[RESUME] No partial results on disk — restarting from scratch');
+			if (validationOnlyIngestIntent(forceStage)) {
+				console.error(
+					'[ERROR] Validation-only ingest found no Neon/disk partials for this orchestration run (or prior done runs for this URL). Re-run the full pipeline through embedding first, or fix slug/URL staging metadata.'
+				);
+				await closeSurrealIfOpen(db);
+				process.exit(1);
+			}
 			resumeFromStage = null;
 			partial = { source: sourceMeta, stage_completed: 'none' };
 		}
@@ -3755,6 +3899,14 @@ async function main() {
 			let allClaims: PhaseOneClaim[] = [];
 			const extractionTracker = startStageUsage('extraction');
 			const repairTracker = startStageUsage('json_repair');
+
+			if (validationOnlyIngestIntent(forceStage) && shouldRunStage('extracting', resumeFromStage)) {
+				console.error(
+					'[ERROR] Validation-only ingest would run Stage 1 (extraction); refusing (checkpoint/resume guard).'
+				);
+				await closeSurrealIfOpen(db);
+				process.exit(1);
+			}
 
 			if (shouldRunStage('extracting', resumeFromStage)) {
 				const stageExtractStart = Date.now();
