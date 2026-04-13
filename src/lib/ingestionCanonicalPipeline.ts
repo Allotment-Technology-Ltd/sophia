@@ -48,18 +48,20 @@ export const CANONICAL_VOYAGE_EMBEDDING_MODEL_LABEL = 'voyage__voyage-4-lite';
 export const CANONICAL_VOYAGE_EMBEDDING_FINGERPRINT = 'voyage:voyage-4-lite:1024d';
 
 /**
- * Production profile: **Vertex Gemini** for extraction, relations, grouping, validation, and remediation
- * (capacity + long context on GCP billing). **Mistral** is the first fallback on heavy stages and remains
- * primary only for **json_repair** (short, structured JSON fixes, gentler on free-tier burst limits).
- * OpenAI appears only in validation fallbacks for cross-vendor checks. Allowlist in
- * `ingestionFinetuneLabelerPolicy` keeps sensitive stages on `mistral` + `vertex` only by default.
+ * Production profile: **Vertex Gemini** for extraction, relations, grouping, and remediation
+ * (capacity + long context on GCP billing). **Validation** defaults to **Mistral Large** so the first
+ * verification pass is never the same route as Vertex Flash extraction (a real second opinion); OpenAI
+ * and Vertex tiers follow as fallbacks. **Mistral** is the first fallback on other heavy stages and remains
+ * primary for **json_repair** (short, structured JSON fixes, gentler on free-tier burst limits). Allowlist in
+ * `ingestionFinetuneLabelerPolicy` keeps sensitive labeler stages on `mistral` + `vertex` only by default
+ * (`validation` is not a sensitive stage, so OpenAI may appear in its chain).
  */
 export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, CanonicalModelRef> = {
 	extraction: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 	relations: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 	grouping: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
-	/** Distinct from labeler stages: second opinion from another provider improves faithfulness checks. */
-	validation: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
+	/** Never mirror extraction’s default Vertex Flash primary — cross-vendor first improves verification signal. */
+	validation: { provider: 'mistral', modelId: 'mistral-large-latest' },
 	remediation: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 	json_repair: { provider: 'mistral', modelId: 'mistral-medium-latest' }
 };
@@ -88,8 +90,9 @@ export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, C
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	],
 	validation: [
-		{ provider: 'openai', modelId: 'gpt-4o' },
 		{ provider: 'openai', modelId: 'gpt-4o-mini' },
+		{ provider: 'openai', modelId: 'gpt-4o' },
+		{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' }
 	],
 	remediation: [
