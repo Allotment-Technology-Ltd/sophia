@@ -397,6 +397,18 @@ function validationOnlyIngestIntent(forceStage: string | null | undefined): bool
 	return forceStage === 'validating';
 }
 
+/** When set to `skip`, `1`, or `true`, missing Neon tail for validation-only exits **0** (batch-friendly) instead of **3**. */
+function exitValidationOnlyNoCheckpoint(): never {
+	const v = process.env.INGEST_VALIDATION_ONLY_NO_CHECKPOINT?.trim().toLowerCase();
+	if (v === 'skip' || v === '1' || v === 'true') {
+		console.log(
+			'[SKIP] Validation-only: no Neon tail checkpoint for this source — exiting 0 (INGEST_VALIDATION_ONLY_NO_CHECKPOINT=skip). Run full ingest through embedding once if checkpoints were expected.'
+		);
+		process.exit(0);
+	}
+	process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
+}
+
 function shouldRunStage(stage: string, lastCompleted: string | null | undefined): boolean {
 	if (!lastCompleted) return true;
 	const completedIdx = STAGES_ORDER.indexOf(lastCompleted);
@@ -2875,6 +2887,8 @@ type LoadPartialResultsOpts = {
 	canonicalSourceUrl?: string;
 	/** Matches Neon `source_json.canonical_url_hash` when slug/URL text drifted between runs. */
 	canonicalUrlHash?: string;
+	/** Extra URLs (e.g. `canonical_url` in meta) to derive alternate `canonical_url_hash` for Neon lookup. */
+	extraUrlsForHashLookup?: string[];
 };
 
 async function loadPartialResults(
@@ -2885,6 +2899,7 @@ async function loadPartialResults(
 	const force = opts?.forceStage ?? null;
 	const canonical = opts?.canonicalSourceUrl?.trim();
 	const urlHash = opts?.canonicalUrlHash?.trim();
+	const extraUrls = opts?.extraUrlsForHashLookup?.filter((u) => typeof u === 'string' && u.trim()) ?? [];
 	const wantsEmbeddingCheckpoint =
 		force === 'embedding' ||
 		force === 'validating' ||
@@ -2915,15 +2930,20 @@ async function loadPartialResults(
 
 		if (wantsEmbeddingCheckpoint) {
 			/** Prefer stable identity over slug/URL text (avoids ingest_runs URL vs staging drift across many URLs). */
-			const resolvedUrlHash =
-				urlHash ||
-				(canonical ? canonicalizeAndHashSourceUrl(canonical)?.canonicalUrlHash : undefined);
+			const hashesToTry: string[] = [];
+			const pushHash = (h: string | undefined) => {
+				const t = h?.trim();
+				if (t && !hashesToTry.includes(t)) hashesToTry.push(t);
+			};
+			pushHash(urlHash);
+			if (canonical) pushHash(canonicalizeAndHashSourceUrl(canonical)?.canonicalUrlHash);
+			for (const u of extraUrls) {
+				const alt = canonicalizeAndHashSourceUrl(u.trim());
+				if (alt) pushHash(alt.canonicalUrlHash);
+			}
 
-			if (resolvedUrlHash) {
-				const hashCandidates = await findNeonStagingRunIdsForValidationTailByCanonicalUrlHash(
-					resolvedUrlHash,
-					20
-				);
+			for (const h of hashesToTry) {
+				const hashCandidates = await findNeonStagingRunIdsForValidationTailByCanonicalUrlHash(h, 20);
 				for (const rid of hashCandidates) {
 					if (rid === runId) continue;
 					const p = await tryNeon(rid);
@@ -3944,10 +3964,13 @@ async function main() {
 	}
 
 	const extractionBatches = buildPassageBatches(passages, sectionTokenLimit);
-	const partialLoadOpts = {
+	const cu = sourceMeta.canonical_url?.trim();
+	const su = sourceMeta.url?.trim();
+	const partialLoadOpts: LoadPartialResultsOpts = {
 		forceStage,
 		canonicalSourceUrl: sourceMeta.url,
-		canonicalUrlHash: sourceMeta.canonical_url_hash
+		canonicalUrlHash: sourceMeta.canonical_url_hash,
+		...(cu && cu !== su ? { extraUrlsForHashLookup: [cu] } : {})
 	};
 
 	// Admin orchestration + Neon: stages 1–5 use `--stop-before-store`; checkpoints live in Neon.
@@ -4048,6 +4071,13 @@ async function main() {
 			console.log(
 				'[RESUME] No checkpoint (Neon ingest_staging_* or data/ingested/*-partial.json) — restarting from scratch'
 			);
+			if (validationOnlyIngestIntent(forceStage)) {
+				console.warn(
+					`  [RESUME] Hint: no tail-compatible ingest_staging_meta for slug=${slug} url=${canonical ?? '(none)'}. ` +
+						`Sources that never finished through embedding (or only have empty staging shells) cannot validation-only resume. ` +
+						`Set INGEST_VALIDATION_ONLY_NO_CHECKPOINT=skip for exit 0 in batch jobs when skipping is OK.`
+				);
+			}
 			if (forceStage) {
 				const rid = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim() ?? '';
 				const validationExtra = validationOnlyIngestIntent(forceStage)
@@ -4059,6 +4089,9 @@ async function main() {
 						`None were found (orchestration run id: ${rid || 'unset'}). Refusing to re-run earlier stages silently.${validationExtra}`
 				);
 				await closeSurrealIfOpen(db);
+				if (validationOnlyIngestIntent(forceStage)) {
+					exitValidationOnlyNoCheckpoint();
+				}
 				process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
 			}
 			resumeFromStage = null;
@@ -4182,7 +4215,7 @@ async function main() {
 					'[ERROR] Validation-only ingest would run Stage 1 (extraction); refusing (checkpoint/resume guard).'
 				);
 				await closeSurrealIfOpen(db);
-				process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
+				exitValidationOnlyNoCheckpoint();
 			}
 
 			if (shouldRunStage('extracting', resumeFromStage)) {

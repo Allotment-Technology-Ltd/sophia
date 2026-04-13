@@ -117,6 +117,9 @@ export function classifyIngestLogLine(line: string, seq: number): IngestIssueRec
   if (trimmed.startsWith('[INGEST_TELEMETRY]') || trimmed.startsWith('[WATCHDOG]')) {
     return null;
   }
+  if (trimmed.startsWith('[SKIP]')) {
+    return null;
+  }
 
   const selfHeal = parseIngestSelfHealLine(trimmed);
   if (selfHeal) {
@@ -274,6 +277,9 @@ export function classifyIngestLogLine(line: string, seq: number): IngestIssueRec
   }
 
   if (/\[RESUME\]/i.test(trimmed) || /Mid-extraction checkpoint/i.test(trimmed)) {
+    // Narrative lines duplicated by stronger resume signals (load / no-checkpoint / rollback).
+    if (/^\[RESUME\]\s*Previous status:/i.test(trimmed)) return null;
+    if (/^\[RESUME\]\s*Last completed stage:/i.test(trimmed)) return null;
     return {
       seq,
       ts: Date.now(),
