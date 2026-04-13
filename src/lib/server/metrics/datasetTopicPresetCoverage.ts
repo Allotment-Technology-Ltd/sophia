@@ -3,10 +3,16 @@
  * training governance, and coarse model-lineage signals from Neon `ingest_runs.report_envelope`.
  */
 
-import { and, desc, eq, isNotNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { query } from '$lib/server/db';
 import { getDrizzleDb } from '$lib/server/db/neon';
-import { ingestRuns, ingestionJobItems, sourceTrainingGovernance } from '$lib/server/db/schema';
+import {
+	ingestRuns,
+	ingestStagingClaims,
+	ingestStagingRelations,
+	ingestionJobItems,
+	sourceTrainingGovernance
+} from '$lib/server/db/schema';
 import { inferSourceTypeFromUrl } from '$lib/server/ingestRuns';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 import { goldenExtractionEvalFingerprint, loadGoldenExtractionEval } from '$lib/server/ingestion/goldenExtractionEval';
@@ -18,7 +24,7 @@ import {
 import { listTrainingAcceptableUrlsFromNeon } from '$lib/server/ingestion/trainingAcceptableCohortNeon';
 import { getSepEntryTopicPresetMatches, listSepTopicPresets } from '$lib/server/sepEntryBatchPick';
 import { canonicalizeAndHashSourceUrl, canonicalizeSourceUrl } from '$lib/server/sourceIdentity';
-import { buildPhase1ReadinessBlock, type Phase1ReadinessBlock } from './phase1CohortReadiness';
+import { buildPhase1ReadinessBlock, type Phase1CoverageRow, type Phase1ReadinessBlock } from './phase1CohortReadiness';
 
 export const DATASET_PRESET_COVERAGE_GOAL = 10;
 
@@ -77,6 +83,28 @@ export type PresetCoverageRow = {
 	byOrigin: Record<string, number>;
 };
 
+/**
+ * Neon staging counts scoped to the **same URL dedupe** as this report: latest `ingest_runs` row per canonical URL
+ * (by `completed_at` desc). Job-only / Surreal-only completes have no `run_id` and are excluded from staging totals.
+ */
+export type DatasetStagingSupervisionMetrics = {
+	/** Canonical URLs whose winning complete row is a Neon run (staging addressable). */
+	neonBackedSourceCount: number;
+	/** Rows in `ingest_staging_claims` for those latest Neon runs. */
+	dedupedClaimRows: number;
+	/**
+	 * Sum over latest runs of `COUNT(DISTINCT position_in_source)` among claims — passage slots with ≥1 claim,
+	 * not necessarily every extracted passage.
+	 */
+	dedupedPassageSlotsWithClaims: number;
+	/** Rows in `ingest_staging_relations` for those runs (directed edge rows). */
+	dedupedRelationRows: number;
+	trainingAcceptableNeonBackedSourceCount: number;
+	trainingAcceptableDedupedClaimRows: number;
+	trainingAcceptableDedupedPassageSlotsWithClaims: number;
+	trainingAcceptableDedupedRelationRows: number;
+};
+
 export type DatasetTopicPresetCoverageResult = {
 	generatedAt: string;
 	neonIngestPersistence: boolean;
@@ -95,8 +123,48 @@ export type DatasetTopicPresetCoverageResult = {
 	phase1Readiness: Phase1ReadinessBlock | null;
 	/** When `phase1Readiness` is null but Neon is on: why the block was not built (operator-facing). */
 	phase1ReadinessError: string | null;
+	/** Staging claim / passage-slot / relation scale for latest Neon run per URL; null when Neon persistence is off. */
+	stagingSupervision: DatasetStagingSupervisionMetrics | null;
+	/** Populated when staging aggregation failed (operator-facing). */
+	stagingSupervisionError: string | null;
 	note: string;
 };
+
+async function aggregateStagingForRunIds(
+	db: ReturnType<typeof getDrizzleDb>,
+	runIds: string[]
+): Promise<Pick<DatasetStagingSupervisionMetrics, 'dedupedClaimRows' | 'dedupedPassageSlotsWithClaims' | 'dedupedRelationRows'>> {
+	if (runIds.length === 0) {
+		return { dedupedClaimRows: 0, dedupedPassageSlotsWithClaims: 0, dedupedRelationRows: 0 };
+	}
+
+	const perRunSlots = await db
+		.select({
+			runId: ingestStagingClaims.runId,
+			slots: sql<number>`count(distinct ${ingestStagingClaims.positionInSource})::int`.mapWith(Number)
+		})
+		.from(ingestStagingClaims)
+		.where(inArray(ingestStagingClaims.runId, runIds))
+		.groupBy(ingestStagingClaims.runId);
+
+	const dedupedPassageSlotsWithClaims = perRunSlots.reduce((s, r) => s + (r.slots ?? 0), 0);
+
+	const [claimAgg] = await db
+		.select({ n: sql<number>`count(*)::int`.mapWith(Number) })
+		.from(ingestStagingClaims)
+		.where(inArray(ingestStagingClaims.runId, runIds));
+
+	const [relAgg] = await db
+		.select({ n: sql<number>`count(*)::int`.mapWith(Number) })
+		.from(ingestStagingRelations)
+		.where(inArray(ingestStagingRelations.runId, runIds));
+
+	return {
+		dedupedClaimRows: claimAgg?.n ?? 0,
+		dedupedPassageSlotsWithClaims,
+		dedupedRelationRows: relAgg?.n ?? 0
+	};
+}
 
 async function loadSurrealCompleteUrls(): Promise<string[]> {
 	if (!process.env.SURREAL_URL?.trim()) return [];
@@ -149,6 +217,8 @@ export async function fetchDatasetTopicPresetCoverage(): Promise<DatasetTopicPre
 			phase1Readiness: null,
 			phase1ReadinessError:
 				'Neon ingest persistence is off (DATABASE_URL). Phase 1 readiness needs Neon for the training-acceptable cohort query.',
+			stagingSupervision: null,
+			stagingSupervisionError: null,
 			note: 'Neon ingest persistence is off (DATABASE_URL). Enable Neon to aggregate completed `ingest_runs` and governance rows.'
 		};
 	}
@@ -161,11 +231,11 @@ export async function fetchDatasetTopicPresetCoverage(): Promise<DatasetTopicPre
 		governanceExcludedByHash.set(r.canonicalUrlHash, r.excludeFromModelTraining === true);
 	}
 
-	type Row = { canonicalUrl: string; sourceType: string; envelope: Record<string, unknown> | null };
-	const byCanonical = new Map<string, Row>();
+	const byCanonical = new Map<string, Phase1CoverageRow>();
 
 	const runRows = await db
 		.select({
+			id: ingestRuns.id,
 			sourceUrl: ingestRuns.sourceUrl,
 			sourceType: ingestRuns.sourceType,
 			completedAt: ingestRuns.completedAt,
@@ -182,7 +252,7 @@ export async function fetchDatasetTopicPresetCoverage(): Promise<DatasetTopicPre
 			r.reportEnvelope && typeof r.reportEnvelope === 'object' && !Array.isArray(r.reportEnvelope)
 				? (r.reportEnvelope as Record<string, unknown>)
 				: null;
-		byCanonical.set(c, { canonicalUrl: c, sourceType: r.sourceType, envelope: env });
+		byCanonical.set(c, { canonicalUrl: c, sourceType: r.sourceType, envelope: env, neonRunId: r.id });
 	}
 
 	const itemRows = await db
@@ -278,6 +348,52 @@ export async function fetchDatasetTopicPresetCoverage(): Promise<DatasetTopicPre
 		console.warn('[datasetTopicPresetCoverage] phase1Readiness:', phase1ReadinessError);
 	}
 
+	const allNeonRunIds: string[] = [];
+	const trainingOkNeonRunIds: string[] = [];
+	for (const row of byCanonical.values()) {
+		const rid = row.neonRunId?.trim();
+		if (!rid) continue;
+		allNeonRunIds.push(rid);
+		const identity = canonicalizeAndHashSourceUrl(row.canonicalUrl);
+		const hash = identity?.canonicalUrlHash ?? '';
+		const govEx = hash ? (governanceExcludedByHash.get(hash) ?? false) : false;
+		if (isTrainingModuleAcceptableLineage(govEx, row.envelope)) {
+			trainingOkNeonRunIds.push(rid);
+		}
+	}
+	const uniqueAllRunIds = [...new Set(allNeonRunIds)];
+	const uniqueTrainingOkRunIds = [...new Set(trainingOkNeonRunIds)];
+
+	let stagingSupervision: DatasetStagingSupervisionMetrics | null = null;
+	let stagingSupervisionError: string | null = null;
+	try {
+		const [allAgg, trainAgg] = await Promise.all([
+			aggregateStagingForRunIds(db, uniqueAllRunIds),
+			aggregateStagingForRunIds(db, uniqueTrainingOkRunIds)
+		]);
+		stagingSupervision = {
+			neonBackedSourceCount: uniqueAllRunIds.length,
+			...allAgg,
+			trainingAcceptableNeonBackedSourceCount: uniqueTrainingOkRunIds.length,
+			trainingAcceptableDedupedClaimRows: trainAgg.dedupedClaimRows,
+			trainingAcceptableDedupedPassageSlotsWithClaims: trainAgg.dedupedPassageSlotsWithClaims,
+			trainingAcceptableDedupedRelationRows: trainAgg.dedupedRelationRows
+		};
+	} catch (e) {
+		stagingSupervisionError = e instanceof Error ? e.message : String(e);
+		console.warn('[datasetTopicPresetCoverage] stagingSupervision:', stagingSupervisionError);
+		stagingSupervision = {
+			neonBackedSourceCount: uniqueAllRunIds.length,
+			dedupedClaimRows: 0,
+			dedupedPassageSlotsWithClaims: 0,
+			dedupedRelationRows: 0,
+			trainingAcceptableNeonBackedSourceCount: uniqueTrainingOkRunIds.length,
+			trainingAcceptableDedupedClaimRows: 0,
+			trainingAcceptableDedupedPassageSlotsWithClaims: 0,
+			trainingAcceptableDedupedRelationRows: 0
+		};
+	}
+
 	return {
 		generatedAt,
 		neonIngestPersistence: true,
@@ -293,6 +409,8 @@ export async function fetchDatasetTopicPresetCoverage(): Promise<DatasetTopicPre
 		sepIngestedOutsidePresets: sepOutside,
 		phase1Readiness,
 		phase1ReadinessError,
+		stagingSupervision,
+		stagingSupervisionError,
 		note:
 			'Training “acceptable” requires: (1) not excluded in Neon `source_training_governance`; (2) no recovery-agent / circuit-open / degraded-route signals in the latest report envelope; (3) verified LLM lineage — `timingTelemetry.stage_models` must list `vertex`, `mistral`, or `google` for extraction, relations, and grouping (and for validation / remediation / json_repair when those keys are present). Missing or incomplete telemetry (including Surreal-only completes) counts as not usable. If telemetry is missing but `modelChain` / `model_chain` labels explicitly reference Anthropic or OpenAI, the source is rejected.'
 	};

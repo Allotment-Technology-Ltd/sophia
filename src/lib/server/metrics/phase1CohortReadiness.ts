@@ -32,7 +32,15 @@ export type Phase1ReadinessBlock = {
 	note: string;
 };
 
-type CoverageRow = { canonicalUrl: string; sourceType: string; envelope: Record<string, unknown> | null };
+export type Phase1CoverageRow = {
+	canonicalUrl: string;
+	sourceType: string;
+	envelope: Record<string, unknown> | null;
+	/** Present when this URL’s latest complete row came from Neon `ingest_runs` (staging keyed by run id). */
+	neonRunId?: string | null;
+};
+
+type CoverageRow = Phase1CoverageRow;
 
 type ReadinessClass = 'ready' | 'missing' | 'no_validate' | 'incomplete' | 'skipped_store';
 
@@ -162,7 +170,7 @@ function unionUrls(a: string[], b: string[]): string[] {
 }
 
 export function buildPhase1ReadinessBlock(params: {
-	byCanonical: Map<string, CoverageRow>;
+	byCanonical: Map<string, Phase1CoverageRow>;
 	goldenUrls: string[];
 	trainingUrls: string[];
 	goldenFingerprint: string;

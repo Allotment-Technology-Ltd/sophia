@@ -21,12 +21,31 @@ export async function loadGovernanceExcludedByHash(): Promise<Map<string, boolea
 	return governanceExcludedByHash;
 }
 
-/** Completed runs in the window with durable `timingTelemetry.stage_ms` (same filter as Phase 0 aggregate). */
+export type DoneIngestRunsQueryOpts = {
+	/**
+	 * When true (default), require `reportEnvelope.timingTelemetry.stage_ms` — matches Phase 0 cost aggregate
+	 * (`scripts/aggregate-phase0-baseline-training-cohort-neon.ts`). When false, any completed run with a
+	 * non-null `reportEnvelope` is eligible; `listTrainingAcceptableUrlsFromNeon` then applies
+	 * `isTrainingModuleAcceptableLineage` so the preset aligns with dataset coverage “training acceptable” counts
+	 * (which only need `timingTelemetry.stage_models`, not `stage_ms`).
+	 */
+	requireStageMsTelemetry?: boolean;
+};
+
+/** Completed runs in the time window (optional `stage_ms` filter for cost telemetry vs cohort URL lists). */
 export async function queryDoneIngestRunsWithStageMsTelemetry(
-	days: number
+	days: number,
+	opts?: DoneIngestRunsQueryOpts
 ): Promise<(typeof ingestRuns.$inferSelect)[]> {
 	const db = getDrizzleDb();
 	const capDays = Math.min(730, Math.max(1, Math.trunc(days) || 90));
+	const requireMs = opts?.requireStageMsTelemetry !== false;
+	const stagePredicates = requireMs
+		? [
+				sql`${ingestRuns.reportEnvelope} ? 'timingTelemetry'`,
+				sql`${ingestRuns.reportEnvelope}->'timingTelemetry' ? 'stage_ms'`
+			]
+		: [isNotNull(ingestRuns.reportEnvelope)];
 	return db
 		.select()
 		.from(ingestRuns)
@@ -36,8 +55,7 @@ export async function queryDoneIngestRunsWithStageMsTelemetry(
 				eq(ingestRuns.cancelledByUser, false),
 				isNotNull(ingestRuns.completedAt),
 				sql`${ingestRuns.completedAt} >= now() - (${capDays}::int) * interval '1 day'`,
-				sql`${ingestRuns.reportEnvelope} ? 'timingTelemetry'`,
-				sql`${ingestRuns.reportEnvelope}->'timingTelemetry' ? 'stage_ms'`
+				...stagePredicates
 			)
 		)
 		.orderBy(desc(ingestRuns.completedAt));
@@ -63,7 +81,9 @@ export async function listTrainingAcceptableUrlsFromNeon(opts: {
 	}
 	const limit = Math.max(1, Math.min(5000, opts.limit ?? 500));
 	const capDays = Math.min(730, Math.max(1, Math.trunc(opts.days) || 90));
-	const runs = await queryDoneIngestRunsWithStageMsTelemetry(capDays);
+	const runs = await queryDoneIngestRunsWithStageMsTelemetry(capDays, {
+		requireStageMsTelemetry: false
+	});
 	const governanceExcludedByHash = await loadGovernanceExcludedByHash();
 	const urls: TrainingAcceptableUrlRow[] = [];
 	let scannedRunCount = 0;
