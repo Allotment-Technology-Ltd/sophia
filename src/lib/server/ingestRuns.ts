@@ -31,6 +31,7 @@ import {
   neonRestoreSourceTextToDataSources
 } from '$lib/server/db/ingestStaging';
 import { encodeIngestCatalogRoutingJsonB64 } from '$lib/server/ingestCatalogRouting';
+import { tryParseIngestSourceUrl } from '$lib/server/sourceIdentity';
 import { resolveEmbeddingFingerprint, resolvePipelineVersion } from '$lib/server/ingestionPipelineMetadata';
 import {
   INGEST_PIN_STAGE_SUFFIXES,
@@ -537,17 +538,14 @@ function neonQueueEnabled(): boolean {
 }
 
 export function inferSourceTypeFromUrl(sourceUrl: string): string {
-  try {
-    const url = new URL(sourceUrl);
-    const host = url.hostname.toLowerCase();
-    const pathname = url.pathname.toLowerCase();
-    if (host === 'plato.stanford.edu' || host.endsWith('.plato.stanford.edu')) return 'sep_entry';
-    if (host === 'iep.utm.edu' || host.endsWith('.iep.utm.edu')) return 'iep_entry';
-    if (host === 'gutenberg.org' || host.endsWith('.gutenberg.org')) return 'book';
-    if (pathname.endsWith('.pdf') || host === 'arxiv.org' || host.endsWith('.arxiv.org')) return 'paper';
-  } catch {
-    // fall through
-  }
+  const url = tryParseIngestSourceUrl(sourceUrl);
+  if (!url) return 'institutional';
+  const host = url.hostname.toLowerCase();
+  const pathname = url.pathname.toLowerCase();
+  if (host === 'plato.stanford.edu' || host.endsWith('.plato.stanford.edu')) return 'sep_entry';
+  if (host === 'iep.utm.edu' || host.endsWith('.iep.utm.edu')) return 'iep_entry';
+  if (host === 'gutenberg.org' || host.endsWith('.gutenberg.org')) return 'book';
+  if (pathname.endsWith('.pdf') || host === 'arxiv.org' || host.endsWith('.arxiv.org')) return 'paper';
   return 'institutional';
 }
 
