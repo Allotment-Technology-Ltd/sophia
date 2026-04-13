@@ -10,6 +10,11 @@ import { ingestRuns, ingestionJobItems, sourceTrainingGovernance } from '$lib/se
 import { inferSourceTypeFromUrl } from '$lib/server/ingestRuns';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 import { goldenExtractionEvalFingerprint, loadGoldenExtractionEval } from '$lib/server/ingestion/goldenExtractionEval';
+import {
+	isTrainingModuleAcceptableLineage,
+	trainingLineageTimingVerdict,
+	type TrainingLineageTimingVerdict
+} from '$lib/server/ingestion/trainingAcceptableLineagePolicy';
 import { listTrainingAcceptableUrlsFromNeon } from '$lib/server/ingestion/trainingAcceptableCohortNeon';
 import { getSepEntryTopicPresetMatches, listSepTopicPresets } from '$lib/server/sepEntryBatchPick';
 import { canonicalizeAndHashSourceUrl, canonicalizeSourceUrl } from '$lib/server/sourceIdentity';
@@ -56,11 +61,7 @@ export function originBucketForUrl(url: string, storedSourceType?: string | null
 	}
 }
 
-export {
-	isTrainingModuleAcceptableLineage,
-	trainingLineageTimingVerdict,
-	type TrainingLineageTimingVerdict
-} from '$lib/server/ingestion/trainingAcceptableLineagePolicy';
+export { isTrainingModuleAcceptableLineage, trainingLineageTimingVerdict, type TrainingLineageTimingVerdict };
 
 function bump(map: Record<string, number>, key: string, n = 1): void {
 	map[key] = (map[key] ?? 0) + n;

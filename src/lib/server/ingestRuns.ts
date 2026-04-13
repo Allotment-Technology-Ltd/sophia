@@ -1664,10 +1664,10 @@ class IngestRunManager extends EventEmitter {
     );
     if (payload.validate) ingestTail.push('--validate');
     if (stopBeforeStore) ingestTail.push('--stop-before-store');
-    const fs = payload.batch_overrides?.forceStage;
-    if (fs && (INGEST_CLI_FORCE_STAGES as readonly string[]).includes(fs)) {
-      ingestTail.push('--force-stage', fs);
-      this.addLog(runId, `[INGEST] --force-stage ${fs} (skip earlier stages when checkpoints allow)`);
+    const forceStage = payload.batch_overrides?.forceStage;
+    if (forceStage && (INGEST_CLI_FORCE_STAGES as readonly string[]).includes(forceStage)) {
+      ingestTail.push('--force-stage', forceStage);
+      this.addLog(runId, `[INGEST] --force-stage ${forceStage} (skip earlier stages when checkpoints allow)`);
     }
 
     const { command: ingestCmd, args: ingestArgs } = buildLocalTsxSpawnArgs(ingestTail);

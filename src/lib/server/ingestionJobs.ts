@@ -838,7 +838,7 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 					childStatus: 'done'
 				});
 				continue;
-			} else if (prior.status === 'cancelled') {
+			} else if ((prior.status as string) === 'cancelled') {
 				await db
 					.update(ingestionJobItems)
 					.set({ childRunId: null, updatedAt: new Date() })
