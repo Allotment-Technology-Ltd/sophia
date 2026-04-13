@@ -1,0 +1,13 @@
+# Optional: remote state in GCS (recommended for team use).
+#
+# 1. Apply this stack once so `google_storage_bucket.terraform_state` exists
+#    (bucket name = "${project_id}-tf-state", see terraform_state_bucket.tf).
+# 2. Copy this file to `backend.tf`, set `bucket` to `terraform output -raw terraform_state_bucket_name`.
+# 3. Run `terraform init -migrate-state` and confirm migration.
+#
+# terraform {
+#   backend "gcs" {
+#     bucket = "YOUR_PROJECT_ID-tf-state"
+#     prefix = "phase2-spike/terraform"
+#   }
+# }
