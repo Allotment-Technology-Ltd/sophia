@@ -41,6 +41,7 @@ import {
 } from './ingestion/ingestCapacityAtStore';
 import { sweepStalledIngestRuns, sweepWorkerOrphanIngestRuns } from './ingestion/ingestWatchdog';
 import { sanitizeIngestionJobWorkerDefaults } from './ingestionJobWorkerDefaults';
+import { canonicalizeSourceUrl } from './sourceIdentity';
 
 const ADV_LOCK_JOB_EVENTS = 5_849_273;
 
@@ -55,10 +56,17 @@ function sleepMs(ms: number): Promise<void> {
 	return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Random 0..max ms delay between spawning child runs (spread load). Env INGEST_JOB_LAUNCH_JITTER_MS. */
+/** Random 0..max ms delay between spawning child runs (spread load). Env INGEST_JOB_LAUNCH_JITTER_MS (default 800). */
 function ingestJobLaunchJitterMs(): number {
-	const r = parseInt(process.env.INGEST_JOB_LAUNCH_JITTER_MS ?? '0', 10);
+	const r = parseInt(process.env.INGEST_JOB_LAUNCH_JITTER_MS ?? '800', 10);
 	return Number.isFinite(r) && r > 0 ? Math.min(30_000, r) : 0;
+}
+
+/** Persist canonical HTTP(S) URL on job items when parseable (reduces duplicate rows and fetch mismatches). */
+function normalizeIngestionJobItemUrl(raw: string): string {
+	const trimmed = raw.trim();
+	const c = canonicalizeSourceUrl(trimmed);
+	return c ?? trimmed;
 }
 
 /** Max total starts per job item (initial + retries). Env `INGEST_JOB_ITEM_MAX_ATTEMPTS`, default 2. */
@@ -429,12 +437,12 @@ export async function appendUrlsToIngestionJob(
 		.select({ url: ingestionJobItems.url })
 		.from(ingestionJobItems)
 		.where(eq(ingestionJobItems.jobId, jobId));
-	const seen = new Set(existingRows.map((r) => r.url.trim()));
+	const seen = new Set(existingRows.map((r) => normalizeIngestionJobItemUrl(r.url)));
 
 	let added = 0;
 	let skippedDuplicate = 0;
 	for (const raw of urls) {
-		const u = raw.trim();
+		const u = normalizeIngestionJobItemUrl(raw);
 		if (!u) continue;
 		if (seen.has(u)) {
 			skippedDuplicate += 1;
@@ -470,7 +478,9 @@ export async function createIngestionJob(
 ): Promise<{ id: string; merged?: boolean } | null> {
 	if (!isNeonIngestPersistenceEnabled()) return null;
 	const db = getDrizzleDb();
-	const urls = [...new Set(args.urls.map((u) => u.trim()).filter(Boolean))];
+	const urls = [
+		...new Set(args.urls.map((u) => normalizeIngestionJobItemUrl(u)).filter((u) => u.length > 0))
+	];
 	if (urls.length === 0) throw new Error('At least one URL is required');
 
 	if ((process.env.INGEST_JOB_PREFLIGHT ?? '').trim() === '1') {
@@ -1340,13 +1350,15 @@ export type IngestJobIssuePipelineRecentRow = {
 	severity: string;
 	stageHint: string | null;
 	message: string;
+	/** Truncated worker log line when persisted (forensics). */
+	rawLine: string | null;
 	createdAt: string | null;
 };
 
 export type IngestJobIssuePipelineSignals = {
 	totalIssues: number;
-	/** Same child runs as `totalIssues`, excluding routine `[RESUME]` checkpoint rows (`resume_checkpoint`). */
-	totalIssuesLessResume: number;
+	/** Excludes `resume_checkpoint` (lifecycle noise) for rollup dashboards. */
+	incidentIssueCount: number;
 	byKind: Record<string, number>;
 	byStageHint: Record<string, number>;
 	recent: IngestJobIssuePipelineRecentRow[];
@@ -1366,22 +1378,18 @@ async function loadIngestJobIssuePipelineSignals(jobId: string): Promise<IngestJ
 	}
 	const runIds = [...runIdToUrl.keys()];
 	if (runIds.length === 0) {
-		return { totalIssues: 0, totalIssuesLessResume: 0, byKind: {}, byStageHint: {}, recent: [] };
+		return { totalIssues: 0, incidentIssueCount: 0, byKind: {}, byStageHint: {}, recent: [] };
 	}
 	const [totalRow] = await db
 		.select({ n: sql<number>`count(*)::int`.mapWith(Number) })
 		.from(ingestRunIssues)
 		.where(inArray(ingestRunIssues.runId, runIds));
 	const totalIssues = totalRow?.n ?? 0;
-	const [lessResumeRow] = await db
-		.select({
-			n: sql<number>`count(*) FILTER (WHERE ${ingestRunIssues.kind} <> 'resume_checkpoint')::int`.mapWith(
-				Number
-			)
-		})
+	const [incidentRow] = await db
+		.select({ n: sql<number>`count(*)::int`.mapWith(Number) })
 		.from(ingestRunIssues)
-		.where(inArray(ingestRunIssues.runId, runIds));
-	const totalIssuesLessResume = lessResumeRow?.n ?? 0;
+		.where(and(inArray(ingestRunIssues.runId, runIds), sql`${ingestRunIssues.kind} <> 'resume_checkpoint'`));
+	const incidentIssueCount = incidentRow?.n ?? 0;
 	const kindRows = await db
 		.select({
 			kind: ingestRunIssues.kind,
@@ -1415,6 +1423,7 @@ async function loadIngestJobIssuePipelineSignals(jobId: string): Promise<IngestJ
 			severity: ingestRunIssues.severity,
 			stageHint: ingestRunIssues.stageHint,
 			message: ingestRunIssues.message,
+			rawLine: ingestRunIssues.rawLine,
 			createdAt: ingestRunIssues.createdAt
 		})
 		.from(ingestRunIssues)
@@ -1429,9 +1438,10 @@ async function loadIngestJobIssuePipelineSignals(jobId: string): Promise<IngestJ
 		severity: r.severity,
 		stageHint: r.stageHint,
 		message: r.message,
+		rawLine: r.rawLine ?? null,
 		createdAt: r.createdAt?.toISOString() ?? null
 	}));
-	return { totalIssues, totalIssuesLessResume, byKind, byStageHint, recent };
+	return { totalIssues, incidentIssueCount, byKind, byStageHint, recent };
 }
 
 async function loadIngestJobChildRunSummaries(jobId: string): Promise<IngestJobChildRunSummary[]> {

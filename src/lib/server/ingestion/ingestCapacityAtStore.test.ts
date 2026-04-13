@@ -29,6 +29,15 @@ describe('ingestCapacityAtStore', () => {
 		);
 	});
 
+	it('awaiting_sync still occupies (stop-before-store preview)', () => {
+		expect(
+			ingestRunStillOccupiesLlmConcurrencySlot({
+				status: 'awaiting_sync',
+				currentStageKey: 'validate'
+			})
+		).toBe(true);
+	});
+
 	it('null run occupies (conservative)', () => {
 		expect(ingestRunStillOccupiesLlmConcurrencySlot(null)).toBe(true);
 	});

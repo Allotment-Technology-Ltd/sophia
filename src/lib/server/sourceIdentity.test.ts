@@ -3,7 +3,8 @@ import {
 	buildSourceUrlFetchCandidates,
 	canonicalizeAndHashSourceUrl,
 	canonicalizeSourceUrl,
-	hashCanonicalUrl
+	hashCanonicalUrl,
+	tryParseIngestSourceUrl
 } from './sourceIdentity';
 
 describe('canonicalizeSourceUrl', () => {
@@ -47,5 +48,22 @@ describe('buildSourceUrlFetchCandidates', () => {
 		const c = buildSourceUrlFetchCandidates('https://plato.stanford.edu/entries/justice');
 		expect(c).toContain('https://plato.stanford.edu/entries/justice');
 		expect(c).toContain('https://plato.stanford.edu/entries/justice/');
+	});
+});
+
+describe('tryParseIngestSourceUrl', () => {
+	it('maps web.stanford.edu SEP paths to plato', () => {
+		const u = tryParseIngestSourceUrl(
+			'https://web.stanford.edu/class/cs224w/readings/Zinman_sep.htm'
+		);
+		expect(u?.hostname).toBe('web.stanford.edu');
+		const sep = tryParseIngestSourceUrl('https://web.stanford.edu/entries/consciousness/');
+		expect(sep?.hostname).toBe('plato.stanford.edu');
+	});
+
+	it('normalizes unicode hyphen lookalikes', () => {
+		const u = tryParseIngestSourceUrl('https://plato.stanford.edu/entries/foo\u2011bar/');
+		expect(u?.hostname).toBe('plato.stanford.edu');
+		expect(u?.pathname).toContain('foo-bar');
 	});
 });

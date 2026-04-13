@@ -69,6 +69,17 @@ function inferStageFromLine(line: string): string | null {
   const selfHeal = parseIngestSelfHealLine(line);
   if (selfHeal?.stage) return selfHeal.stage;
 
+  const low = line.toLowerCase();
+  if (/\[resume\]/i.test(line)) {
+    if (/mid-?grouping|grouping checkpoint|stage\s*3/i.test(low)) return 'group';
+    if (/mid-?embed|embedding checkpoint|stage\s*4/i.test(low)) return 'embed';
+    if (/validat/i.test(low)) return 'validate';
+    if (/relat/i.test(low)) return 'relate';
+    if (/extract|passage|stage\s*1/i.test(low)) return 'extract';
+    if (/store|sync|surreal|stage\s*6/i.test(low)) return 'store';
+    return 'resume';
+  }
+
   const m =
     line.match(/\[ROUTE\]\s+([a-z_]+)/i) ||
     line.match(/\[RETRY\]\s+([a-z_]+)/i) ||
@@ -84,6 +95,16 @@ function inferStageFromLine(line: string): string | null {
     return s;
   }
   return null;
+}
+
+const WARN_MESSAGE_MAX = 280;
+
+/** One-line summary for operator-visible issue rows (avoid generic copy when the log line is informative). */
+function summarizeWorkerLineForIssueMessage(prefix: string, rawLine: string): string {
+  const t = rawLine.trim();
+  const stripped = t.replace(/^\s*\[(?:WARN|RETRY|BUDGET|FIX|SPLIT|RESUME|INFO)\]\s*/i, '').trim();
+  const body = (stripped || t).slice(0, WARN_MESSAGE_MAX);
+  return body.length ? `${prefix}: ${body}` : prefix;
 }
 
 /**
@@ -187,7 +208,7 @@ export function classifyIngestLogLine(line: string, seq: number): IngestIssueRec
       kind: 'ingest_retry',
       severity: 'high',
       stageHint,
-      message: 'Ingest failed; automatic retry from checkpoint.',
+      message: summarizeWorkerLineForIssueMessage('Ingest retry from checkpoint', rawLine),
       rawLine
     };
   }
@@ -199,7 +220,7 @@ export function classifyIngestLogLine(line: string, seq: number): IngestIssueRec
       kind: 'json_repair',
       severity: 'medium',
       stageHint: stageHint ?? 'json_repair',
-      message: 'JSON repair or fix path engaged (malformed model output).',
+      message: summarizeWorkerLineForIssueMessage('JSON repair engaged', rawLine),
       rawLine
     };
   }
@@ -211,7 +232,7 @@ export function classifyIngestLogLine(line: string, seq: number): IngestIssueRec
       kind: 'parse_or_schema',
       severity: 'medium',
       stageHint,
-      message: 'JSON parse or schema validation failed before repair.',
+      message: summarizeWorkerLineForIssueMessage('Parse or schema validation failed', rawLine),
       rawLine
     };
   }
@@ -223,7 +244,7 @@ export function classifyIngestLogLine(line: string, seq: number): IngestIssueRec
       kind: 'batch_split',
       severity: 'medium',
       stageHint: stageHint ?? 'extract',
-      message: 'Batch split (size or truncation recovery).',
+      message: summarizeWorkerLineForIssueMessage('Batch split', rawLine),
       rawLine
     };
   }
@@ -235,7 +256,7 @@ export function classifyIngestLogLine(line: string, seq: number): IngestIssueRec
       kind: 'retry',
       severity: 'medium',
       stageHint,
-      message: 'Model call retry after transient failure.',
+      message: summarizeWorkerLineForIssueMessage('Model retry', rawLine),
       rawLine
     };
   }
@@ -247,7 +268,7 @@ export function classifyIngestLogLine(line: string, seq: number): IngestIssueRec
       kind: 'budget',
       severity: 'high',
       stageHint,
-      message: 'Stage budget / cap involved.',
+      message: summarizeWorkerLineForIssueMessage('Stage budget', rawLine),
       rawLine
     };
   }
@@ -259,7 +280,7 @@ export function classifyIngestLogLine(line: string, seq: number): IngestIssueRec
       kind: 'resume_checkpoint',
       severity: 'info',
       stageHint,
-      message: 'Resume from checkpoint or mid-pipeline state.',
+      message: summarizeWorkerLineForIssueMessage('Resume checkpoint', rawLine),
       rawLine
     };
   }
@@ -295,7 +316,7 @@ export function classifyIngestLogLine(line: string, seq: number): IngestIssueRec
       kind: 'warning',
       severity: 'medium',
       stageHint,
-      message: 'Warning from worker or model path.',
+      message: summarizeWorkerLineForIssueMessage('Worker warning', rawLine),
       rawLine
     };
   }

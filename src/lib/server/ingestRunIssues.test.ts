@@ -42,6 +42,28 @@ describe('parseIngestTimingFromLogLines', () => {
 	});
 });
 
+describe('classifyIngestLogLine stage + message enrichment', () => {
+	it('infers group stage for mid-grouping resume lines', () => {
+		const issue = classifyIngestLogLine(
+			'  [RESUME] Mid-grouping checkpoint — resuming at batch 2/5',
+			0
+		);
+		expect(issue?.kind).toBe('resume_checkpoint');
+		expect(issue?.stageHint).toBe('group');
+		expect(issue?.message).toContain('Mid-grouping');
+	});
+
+	it('summarizes [WARN] lines in the issue message', () => {
+		const issue = classifyIngestLogLine(
+			'  [WARN] grouping vertex/gemini failed: HTTP 429 | body: …',
+			0
+		);
+		expect(issue?.kind).toBe('warning');
+		expect(issue?.stageHint).toBe('group');
+		expect(issue?.message).toContain('HTTP 429');
+	});
+});
+
 describe('classifyIngestLogLine self-heal', () => {
 	it('classifies recovery_agent signal', () => {
 		const line = formatIngestSelfHealLine({

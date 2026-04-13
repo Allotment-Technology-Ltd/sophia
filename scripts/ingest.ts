@@ -1363,11 +1363,15 @@ function estimatedGroupingStructuredOutputTokens(batch: GroupingBatch): number {
 	return Math.ceil(estimateTokens(claimsJson) * GROUPING_OUTPUT_VS_INPUT_FACTOR);
 }
 
-function groupingBatchLikelyExceedsMaxOutput(batch: GroupingBatch, maxOutputTokens: number): boolean {
+function groupingBatchLikelyExceedsMaxOutput(
+	batch: GroupingBatch,
+	maxOutputTokens: number,
+	outputHeadroomFraction: number = GROUPING_OUTPUT_HEADROOM
+): boolean {
 	const maxClaims = parsePositiveInt(process.env.INGEST_GROUPING_MAX_CLAIMS_PER_BATCH);
 	if (maxClaims != null && batch.claims.length > maxClaims) return true;
 	const estOut = estimatedGroupingStructuredOutputTokens(batch);
-	return estOut > Math.floor(maxOutputTokens * GROUPING_OUTPUT_HEADROOM);
+	return estOut > Math.floor(maxOutputTokens * outputHeadroomFraction);
 }
 
 /**
@@ -1375,7 +1379,8 @@ function groupingBatchLikelyExceedsMaxOutput(batch: GroupingBatch, maxOutputToke
  */
 function subdivideGroupingBatchesForOutputHeadroom(
 	batches: GroupingBatch[],
-	maxOutputTokens: number
+	maxOutputTokens: number,
+	outputHeadroomFraction: number = GROUPING_OUTPUT_HEADROOM
 ): GroupingBatch[] {
 	const preemptOff = (process.env.INGEST_GROUPING_PREEMPT_OUTPUT_SPLITS ?? '1').trim();
 	if (preemptOff === '0' || preemptOff.toLowerCase() === 'false' || preemptOff.toLowerCase() === 'off') {
@@ -1383,18 +1388,179 @@ function subdivideGroupingBatchesForOutputHeadroom(
 	}
 	let out = [...batches];
 	for (let guard = 0; guard < 400; guard++) {
-		const i = out.findIndex((b) => groupingBatchLikelyExceedsMaxOutput(b, maxOutputTokens));
+		const i = out.findIndex((b) =>
+			groupingBatchLikelyExceedsMaxOutput(b, maxOutputTokens, outputHeadroomFraction)
+		);
 		if (i === -1) break;
 		const halves = splitGroupingBatchInHalf(out[i]!);
 		if (!halves) break;
 		const est = estimatedGroupingStructuredOutputTokens(out[i]!);
-		const budget = Math.floor(maxOutputTokens * GROUPING_OUTPUT_HEADROOM);
+		const budget = Math.floor(maxOutputTokens * outputHeadroomFraction);
 		console.log(
 			`  [PREEMPT] Splitting grouping batch ${i + 1}/${out.length} before model call — est. structured output ~${est.toLocaleString()} tok > ${budget.toLocaleString()} tok budget (${out[i]!.claims.length} claims)`
 		);
 		out.splice(i, 1, halves[0], halves[1]);
 	}
 	return out;
+}
+
+/** Mid–Stage 3 tuning: tighten batching after truncation / repair / collapse without restarting finished batches. */
+type GroupingAdaptiveState = {
+	effectiveTargetTokens: number;
+	effectiveOutputHeadroom: number;
+	truncationSplits: number;
+	jsonRepairBatches: number;
+	collapseSplits: number;
+	regroupEvents: number;
+	timeoutExtensions: number;
+};
+
+function ingestGroupingAdaptiveEnabled(): boolean {
+	const v = (process.env.INGEST_GROUPING_ADAPTIVE ?? '1').trim().toLowerCase();
+	return v !== '0' && v !== 'false' && v !== 'off' && v !== 'no';
+}
+
+function createGroupingAdaptiveState(initialTargetTokens: number): GroupingAdaptiveState {
+	return {
+		effectiveTargetTokens: initialTargetTokens,
+		effectiveOutputHeadroom: GROUPING_OUTPUT_HEADROOM,
+		truncationSplits: 0,
+		jsonRepairBatches: 0,
+		collapseSplits: 0,
+		regroupEvents: 0,
+		timeoutExtensions: 0
+	};
+}
+
+function groupingAdaptiveShrinkRatio(): number {
+	const r = Number(process.env.INGEST_GROUPING_ADAPT_SHRINK_RATIO ?? '0.72');
+	if (!Number.isFinite(r) || r <= 0.2 || r >= 1) return 0.72;
+	return r;
+}
+
+function groupingAdaptiveHeadroomStep(): number {
+	const r = Number(process.env.INGEST_GROUPING_ADAPT_HEADROOM_STEP ?? '0.06');
+	if (!Number.isFinite(r) || r <= 0 || r > 0.2) return 0.06;
+	return r;
+}
+
+function groupingAdaptiveMinTargetTokens(): number {
+	return parsePositiveInt(process.env.INGEST_GROUPING_ADAPT_MIN_TARGET_TOKENS) ?? 8_000;
+}
+
+function groupingAdaptiveMinOutputHeadroom(): number {
+	const r = Number(process.env.INGEST_GROUPING_ADAPT_MIN_HEADROOM ?? '0.58');
+	if (!Number.isFinite(r) || r < 0.35 || r > 0.92) return 0.58;
+	return r;
+}
+
+function groupingAdaptiveSlowCallMs(): number {
+	return parsePositiveInt(process.env.INGEST_GROUPING_ADAPT_SLOW_CALL_MS) ?? 240_000;
+}
+
+function groupingAdaptiveTimeoutGrowMs(): number {
+	return parsePositiveInt(process.env.INGEST_GROUPING_ADAPT_TIMEOUT_GROW_MS) ?? 120_000;
+}
+
+function groupingAdaptiveMaxTimeoutExtensions(): number {
+	return parsePositiveInt(process.env.INGEST_GROUPING_ADAPT_MAX_TIMEOUT_EXTENSIONS) ?? 3;
+}
+
+function groupingAdaptiveMaxRegroups(): number {
+	return parsePositiveInt(process.env.INGEST_GROUPING_ADAPT_MAX_REGROUPS) ?? 24;
+}
+
+function claimsUnionFromGroupingBatches(batches: GroupingBatch[], fromIndex: number): PhaseOneClaim[] {
+	const byPos = new Map<number, PhaseOneClaim>();
+	for (let i = fromIndex; i < batches.length; i++) {
+		for (const c of batches[i]!.claims) {
+			byPos.set(c.position_in_source, c);
+		}
+	}
+	return [...byPos.values()].sort((a, b) => a.position_in_source - b.position_in_source);
+}
+
+function relationsSubsetForClaims(
+	relations: PhaseOneRelation[],
+	claims: PhaseOneClaim[]
+): PhaseOneRelation[] {
+	const pos = new Set(claims.map((c) => c.position_in_source));
+	return relations.filter(
+		(r) => pos.has(r.from_position) && pos.has(r.to_position)
+	);
+}
+
+function tightenGroupingAdaptiveAfterStress(state: GroupingAdaptiveState, reason: string): void {
+	const prevTarget = state.effectiveTargetTokens;
+	const prevHeadroom = state.effectiveOutputHeadroom;
+	state.effectiveTargetTokens = Math.max(
+		groupingAdaptiveMinTargetTokens(),
+		Math.floor(state.effectiveTargetTokens * groupingAdaptiveShrinkRatio())
+	);
+	state.effectiveOutputHeadroom = Math.max(
+		groupingAdaptiveMinOutputHeadroom(),
+		state.effectiveOutputHeadroom - groupingAdaptiveHeadroomStep()
+	);
+	console.log(
+		`  [ADAPT] Grouping batch plan tightened (${reason}): target ${Math.round(prevTarget).toLocaleString()} → ${Math.round(state.effectiveTargetTokens).toLocaleString()} tok; output headroom ${prevHeadroom.toFixed(2)} → ${state.effectiveOutputHeadroom.toFixed(2)}`
+	);
+}
+
+function maybeExtendGroupingTimeoutAfterSlowCall(
+	groupingBudget: StageBudget,
+	state: GroupingAdaptiveState,
+	wallMs: number
+): void {
+	const slowMs = groupingAdaptiveSlowCallMs();
+	const grow = groupingAdaptiveTimeoutGrowMs();
+	const maxExt = groupingAdaptiveMaxTimeoutExtensions();
+	if (wallMs < slowMs || grow <= 0 || state.timeoutExtensions >= maxExt) return;
+	state.timeoutExtensions += 1;
+	groupingBudget.timeoutMs += grow;
+	console.log(
+		`  [ADAPT] Slow grouping call (${Math.round(wallMs / 1000)}s wall) — extended stage timeout by +${Math.round(grow / 1000)}s (cap ${maxExt} extensions per run)`
+	);
+}
+
+function rebuildPendingGroupingBatches(args: {
+	allClaims: PhaseOneClaim[];
+	relations: PhaseOneRelation[];
+	groupingBatches: GroupingBatch[];
+	fromBatchIndex: number;
+	groupingPlan: IngestionStagePlan;
+	groupingMaxOut: number;
+	adaptive: GroupingAdaptiveState;
+}): GroupingBatch[] {
+	const { relations, groupingBatches, fromBatchIndex, groupingPlan, groupingMaxOut, adaptive } = args;
+	const pendingClaims =
+		fromBatchIndex >= groupingBatches.length
+			? []
+			: claimsUnionFromGroupingBatches(groupingBatches, fromBatchIndex);
+	if (pendingClaims.length === 0) return groupingBatches;
+
+	const capped = capIngestBatchTargetForPlan({
+		stage: 'grouping',
+		requested: Math.round(adaptive.effectiveTargetTokens),
+		provider: groupingPlan.provider,
+		model: groupingPlan.model
+	});
+	let rebuilt = buildGroupingBatches(
+		pendingClaims,
+		relationsSubsetForClaims(relations, pendingClaims),
+		capped.value
+	);
+	rebuilt = subdivideGroupingBatchesForOutputHeadroom(
+		rebuilt,
+		groupingMaxOut,
+		adaptive.effectiveOutputHeadroom
+	);
+	const head = groupingBatches.slice(0, fromBatchIndex);
+	const merged = [...head, ...rebuilt];
+	adaptive.regroupEvents += 1;
+	console.log(
+		`  [ADAPT] Regrouped pending work from batch ${fromBatchIndex + 1}: ${groupingBatches.length - fromBatchIndex} → ${rebuilt.length} pending batch(es) (${merged.length} total)`
+	);
+	return merged;
 }
 
 function isGroupingMaxTokensTruncation(err: unknown): boolean {
@@ -3696,6 +3862,9 @@ async function main() {
 		console.error('\nEnv (optional):');
 		console.error('  INGEST_VALIDATION_MODE=off|cli|full|sampled   Default cli; off ignores --validate; full/sampled forces validation');
 		console.error('  INGEST_EMBED_BATCH_SIZE / INGEST_EMBED_BATCH_DELAY_MS   Aliases for VERTEX_EMBED_* (embedding throughput)');
+		console.error(
+			'  INGEST_GROUPING_ADAPTIVE=1 (default)   Mid–Stage 3: shrink batch targets + preempt headroom after truncation / JSON repair / collapse; INGEST_GROUPING_ADAPT_* knobs tune shrink ratio, floors, regroup cap, slow-call timeout growth'
+		);
 		console.error('\nRestormel route env vars (optional):');
 		console.error('  RESTORMEL_INGEST_ROUTE_ID, RESTORMEL_INGEST_VALIDATION_ROUTE_ID');
 		console.error('  RESTORMEL_INGEST_EXTRACTION_ROUTE_ID, RESTORMEL_INGEST_RELATIONS_ROUTE_ID, RESTORMEL_INGEST_GROUPING_ROUTE_ID, RESTORMEL_INGEST_JSON_REPAIR_ROUTE_ID');
@@ -4616,9 +4785,19 @@ async function main() {
 					);
 				}
 
-				let groupingBatches = buildGroupingBatches(allClaims, relations, groupingBatchTarget);
 				const groupingMaxOut = resolveGroupingMaxOutputTokens(groupingPlan);
-				groupingBatches = subdivideGroupingBatchesForOutputHeadroom(groupingBatches, groupingMaxOut);
+				let groupingBatches = buildGroupingBatches(allClaims, relations, groupingBatchTarget);
+				let groupingAdaptive: GroupingAdaptiveState | null = null;
+				if (ingestGroupingAdaptiveEnabled()) {
+					groupingAdaptive = createGroupingAdaptiveState(groupingBatchTarget);
+					groupingBatches = subdivideGroupingBatchesForOutputHeadroom(
+						groupingBatches,
+						groupingMaxOut,
+						groupingAdaptive.effectiveOutputHeadroom
+					);
+				} else {
+					groupingBatches = subdivideGroupingBatchesForOutputHeadroom(groupingBatches, groupingMaxOut);
+				}
 				console.log(
 					`  [INFO] Grouping in ${groupingBatches.length} batch(es), target ~${groupingBatchTarget.toLocaleString()} tokens (max_output ${groupingMaxOut.toLocaleString()} for ${groupingPlan.provider}/${groupingPlan.model})`
 				);
@@ -4663,6 +4842,7 @@ async function main() {
 					);
 					const grpUserMsg = GROUPING_USER(claimsJson, relationsJson);
 					let grpRawResponse: string;
+					const groupingCallStarted = Date.now();
 					try {
 						grpRawResponse = await callStageModel({
 							stage: 'grouping',
@@ -4681,7 +4861,24 @@ async function main() {
 								console.warn(
 									`  [SPLIT] Grouping batch ${batchIndex + 1}/${groupingBatches.length} hit max_output / truncation — splitting into two smaller batches and retrying`
 								);
-								groupingBatches.splice(batchIndex, 1, halves[0], halves[1]);
+								if (
+									groupingAdaptive &&
+									groupingAdaptive.regroupEvents < groupingAdaptiveMaxRegroups()
+								) {
+									groupingAdaptive.truncationSplits += 1;
+									tightenGroupingAdaptiveAfterStress(groupingAdaptive, 'truncation');
+									groupingBatches = rebuildPendingGroupingBatches({
+										allClaims,
+										relations,
+										groupingBatches,
+										fromBatchIndex: batchIndex,
+										groupingPlan,
+										groupingMaxOut,
+										adaptive: groupingAdaptive
+									});
+								} else {
+									groupingBatches.splice(batchIndex, 1, halves[0], halves[1]);
+								}
 								partial.grouping_progress = {
 									grouped_outputs_so_far: groupedOutputs,
 									next_batch_index: batchIndex,
@@ -4693,10 +4890,18 @@ async function main() {
 						}
 						throw groupingCallErr;
 					}
+					if (groupingAdaptive) {
+						maybeExtendGroupingTimeoutAfterSlowCall(
+							groupingBudget,
+							groupingAdaptive,
+							Date.now() - groupingCallStarted
+						);
+					}
 					saveGroupingDebugRaw(slug, batchIndex, grpRawResponse);
 					logStageCost('Grouping', groupingTracker, groupingPlan);
 
 					let batchArguments: GroupingOutput;
+					let groupingUsedJsonRepair = false;
 					try {
 						const parsed = parseJsonResponse(grpRawResponse);
 						batchArguments = GroupingOutputSchema.parse(normalizeGroupingPayload(parsed));
@@ -4718,9 +4923,27 @@ async function main() {
 						);
 						const fixedParsed = parseJsonResponse(fixedResponse);
 						batchArguments = GroupingOutputSchema.parse(normalizeGroupingPayload(fixedParsed));
+						groupingUsedJsonRepair = true;
 						console.log(
 							`  [OK] Fixed and identified ${batchArguments.length} arguments in batch ${batchIndex + 1}`
 						);
+					}
+					if (
+						groupingAdaptive &&
+						groupingUsedJsonRepair &&
+						groupingAdaptive.regroupEvents < groupingAdaptiveMaxRegroups()
+					) {
+						groupingAdaptive.jsonRepairBatches += 1;
+						tightenGroupingAdaptiveAfterStress(groupingAdaptive, 'json_repair');
+						groupingBatches = rebuildPendingGroupingBatches({
+							allClaims,
+							relations,
+							groupingBatches,
+							fromBatchIndex: batchIndex + 1,
+							groupingPlan,
+							groupingMaxOut,
+							adaptive: groupingAdaptive
+						});
 					}
 
 					const batchHealth = analyzeGroupingReferenceHealth(batchArguments);
@@ -4730,7 +4953,24 @@ async function main() {
 							console.warn(
 								`  [SPLIT] Grouping batch ${batchIndex + 1} collapsed claim references (${batchHealth.uniquePositions} unique positions / ${batchHealth.totalReferences} refs) — splitting into two smaller batches`
 							);
-							groupingBatches.splice(batchIndex, 1, halves[0], halves[1]);
+							if (
+								groupingAdaptive &&
+								groupingAdaptive.regroupEvents < groupingAdaptiveMaxRegroups()
+							) {
+								groupingAdaptive.collapseSplits += 1;
+								tightenGroupingAdaptiveAfterStress(groupingAdaptive, 'reference_collapse');
+								groupingBatches = rebuildPendingGroupingBatches({
+									allClaims,
+									relations,
+									groupingBatches,
+									fromBatchIndex: batchIndex,
+									groupingPlan,
+									groupingMaxOut,
+									adaptive: groupingAdaptive
+								});
+							} else {
+								groupingBatches.splice(batchIndex, 1, halves[0], halves[1]);
+							}
 							partial.grouping_progress = {
 								grouped_outputs_so_far: groupedOutputs,
 								next_batch_index: batchIndex,

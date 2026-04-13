@@ -53,12 +53,13 @@
 		severity: string;
 		stageHint: string | null;
 		message: string;
+		rawLine?: string | null;
 		createdAt: string | null;
 	};
 
 	type IssuePipelineSignals = {
 		totalIssues: number;
-		totalIssuesLessResume: number;
+		incidentIssueCount: number;
 		byKind: Record<string, number>;
 		byStageHint: Record<string, number>;
 		recent: IssuePipelineRecentRow[];
@@ -73,7 +74,7 @@
 
 	const emptyIssuePipelineSignals: IssuePipelineSignals = {
 		totalIssues: 0,
-		totalIssuesLessResume: 0,
+		incidentIssueCount: 0,
 		byKind: {},
 		byStageHint: {},
 		recent: []
@@ -146,10 +147,17 @@
 				typeof (rawSignals as IssuePipelineSignals).totalIssues === 'number'
 			) {
 				const s = rawSignals as IssuePipelineSignals;
+				const incidentRaw = (s as { incidentIssueCount?: unknown }).incidentIssueCount;
+				const legacyLessResume = (s as { totalIssuesLessResume?: unknown }).totalIssuesLessResume;
+				const incidentIssueCount =
+					typeof incidentRaw === 'number' && Number.isFinite(incidentRaw)
+						? incidentRaw
+						: typeof legacyLessResume === 'number' && Number.isFinite(legacyLessResume)
+							? legacyLessResume
+							: s.totalIssues;
 				issuePipelineSignals = {
 					totalIssues: s.totalIssues,
-					totalIssuesLessResume:
-						typeof s.totalIssuesLessResume === 'number' ? s.totalIssuesLessResume : s.totalIssues,
+					incidentIssueCount,
 					byKind: s.byKind && typeof s.byKind === 'object' ? s.byKind : {},
 					byStageHint: s.byStageHint && typeof s.byStageHint === 'object' ? s.byStageHint : {},
 					recent: Array.isArray(s.recent) ? s.recent : []
@@ -523,7 +531,10 @@
 					<button
 						type="button"
 						class="inline-flex min-h-[40px] items-center rounded-lg border border-[var(--color-border)] bg-black/10 px-4 py-2 font-mono text-xs text-sophia-dark-text transition hover:bg-black/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sophia-dark-sage disabled:opacity-50"
-						disabled={issuePipelineSignals.totalIssues === 0}
+						disabled={
+							issuePipelineSignals.totalIssues === 0 &&
+							issuePipelineSignals.incidentIssueCount === 0
+						}
 						onclick={() => void copyIssuePipelineJson()}
 					>
 						Copy rollup JSON
@@ -542,9 +553,12 @@
 					<p class="mt-3 text-sm text-sophia-dark-muted">No issues recorded for linked runs yet.</p>
 				{:else}
 					<p class="mt-3 font-mono text-xs text-sophia-dark-text">
-						Actionable rows (excl. <span class="font-mono">resume_checkpoint</span>):
-						{issuePipelineSignals.totalIssuesLessResume} — all rows:
-						{issuePipelineSignals.totalIssues}
+						Total issues: {issuePipelineSignals.totalIssues}
+						{#if issuePipelineSignals.incidentIssueCount !== issuePipelineSignals.totalIssues}
+							<span class="text-sophia-dark-dim">
+								· incidents (excl. resume_checkpoint): {issuePipelineSignals.incidentIssueCount}
+							</span>
+						{/if}
 					</p>
 					<div class="mt-4 grid gap-6 lg:grid-cols-2">
 						<div>
@@ -588,6 +602,7 @@
 									<th class="px-3 py-2 font-normal">Run</th>
 									<th class="px-3 py-2 font-normal">URL</th>
 									<th class="px-3 py-2 font-normal">Message</th>
+									<th class="px-3 py-2 font-normal">Raw line</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -609,6 +624,9 @@
 										</td>
 										<td class="max-w-[200px] px-3 py-2 break-all">{row.url ?? '—'}</td>
 										<td class="max-w-[320px] px-3 py-2 break-words">{row.message}</td>
+										<td class="max-w-[280px] px-3 py-2 break-words text-sophia-dark-dim">
+											{row.rawLine?.trim() ? row.rawLine : '—'}
+										</td>
 									</tr>
 								{/each}
 							</tbody>

@@ -3,7 +3,8 @@ import * as path from 'path';
 import { parse as parseHTML } from 'node-html-parser';
 import {
 	buildSourceUrlFetchCandidates,
-	canonicalizeAndHashSourceUrl
+	canonicalizeAndHashSourceUrl,
+	tryParseIngestSourceUrl
 } from '../src/lib/server/sourceIdentity.js';
 
 /** SEP / IEP pages use legacy markup (often unclosed tags). Without this, `node-html-parser` can drop `#article-content` / `#main-text` and yield empty extracts. */
@@ -61,9 +62,31 @@ function createSlug(text: string): string {
 		.substring(0, 50);
 }
 
+function upgradePlatoToHttps(fetchUrl: string): string {
+	try {
+		const u = new URL(fetchUrl);
+		if (u.protocol === 'http:' && u.hostname.toLowerCase() === 'plato.stanford.edu') {
+			u.protocol = 'https:';
+			return u.toString();
+		}
+	} catch {
+		// ignore
+	}
+	return fetchUrl;
+}
+
 /**
- * Fetch URL content
+ * Fetch URL content (follow redirects; retry plato.stanford.edu on http→https if needed).
  */
+function isHttpPlatoUrl(rawUrl: string): boolean {
+	try {
+		const parsed = new URL(rawUrl);
+		return parsed.protocol === 'http:' && parsed.hostname === 'plato.stanford.edu';
+	} catch {
+		return false;
+	}
+}
+
 async function fetchUrl(url: string, options?: { cacheKey?: string }): Promise<string> {
 	const cacheKey = options?.cacheKey;
 	const cachePath =
@@ -79,7 +102,18 @@ async function fetchUrl(url: string, options?: { cacheKey?: string }): Promise<s
 		}
 	}
 
-	const candidates = buildSourceUrlFetchCandidates(url);
+	const baseCandidates = buildSourceUrlFetchCandidates(url);
+	const candidates: string[] = [];
+	const seen = new Set<string>();
+	for (const c of baseCandidates) {
+		for (const v of [upgradePlatoToHttps(c), c]) {
+			if (!seen.has(v)) {
+				seen.add(v);
+				candidates.push(v);
+			}
+		}
+	}
+
 	const headers: Record<string, string> = {
 		'User-Agent':
 			'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -89,19 +123,25 @@ async function fetchUrl(url: string, options?: { cacheKey?: string }): Promise<s
 
 	let lastErr = 'no attempts';
 	for (let i = 0; i < candidates.length; i++) {
-		const tryUrl = candidates[i]!;
-		console.log(`[FETCH] Downloading (${i + 1}/${candidates.length}) ${tryUrl}...`);
+		let current = candidates[i]!;
+		console.log(`[FETCH] Downloading (${i + 1}/${candidates.length}) ${current}...`);
 		try {
-			const response = await fetch(tryUrl, {
-				redirect: 'follow',
-				headers
-			});
+			let response = await fetch(current, { redirect: 'follow', headers });
+			if (!response.ok && isHttpPlatoUrl(current)) {
+				const httpsUrl = upgradePlatoToHttps(current);
+				if (httpsUrl !== current) {
+					console.log(`[FETCH] Retrying over HTTPS: ${httpsUrl}`);
+					response = await fetch(httpsUrl, { redirect: 'follow', headers });
+					current = httpsUrl;
+				}
+			}
 			if (!response.ok) {
 				lastErr = `HTTP ${response.status}: ${response.statusText}`;
 				continue;
 			}
+			const effectiveUrl = response.url || current;
 			const contentType = response.headers.get('content-type') || '';
-			if (contentType.includes('application/pdf') || tryUrl.toLowerCase().endsWith('.pdf')) {
+			if (contentType.includes('application/pdf') || effectiveUrl.toLowerCase().endsWith('.pdf')) {
 				lastErr = 'Response is PDF, not HTML';
 				continue;
 			}
@@ -425,7 +465,11 @@ async function main() {
 	}
 
 	try {
-		const sourceIdentity = canonicalizeAndHashSourceUrl(url);
+		const parsed = tryParseIngestSourceUrl(url);
+		if (!parsed) {
+			throw new Error(`Unsupported or invalid source URL: ${url}`);
+		}
+		const sourceIdentity = canonicalizeAndHashSourceUrl(parsed.toString());
 		if (!sourceIdentity) {
 			throw new Error(`Unsupported or invalid source URL: ${url}`);
 		}
