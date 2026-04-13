@@ -1,4 +1,5 @@
 import type { IngestRunPayload } from './ingestRuns';
+import { INGEST_CLI_FORCE_STAGES } from './ingestRuns';
 
 type BO = NonNullable<IngestRunPayload['batch_overrides']>;
 
@@ -92,8 +93,20 @@ export function sanitizeIngestionJobWorkerDefaults(raw: unknown): BO | undefined
   if (typeof o.ingestRemediationForceRelationsRerun === 'boolean') {
     out.ingestRemediationForceRelationsRerun = o.ingestRemediationForceRelationsRerun;
   }
+  const forceStageRaw = o.forceStage;
+  if (
+    typeof forceStageRaw === 'string' &&
+    (INGEST_CLI_FORCE_STAGES as readonly string[]).includes(forceStageRaw)
+  ) {
+    out.forceStage = forceStageRaw as BO['forceStage'];
+  }
+
   if (typeof o.forceReingest === 'boolean') {
     out.forceReingest = o.forceReingest;
+  }
+  // `INGEST_FORCE_REINGEST` is equivalent to `--force-stage extracting` and would override a validation tail.
+  if (out.forceStage && out.forceStage !== 'extracting') {
+    delete out.forceReingest;
   }
 
   const tBounds = (n: number | null) => n != null && n >= 10_000 && n <= 3_600_000;

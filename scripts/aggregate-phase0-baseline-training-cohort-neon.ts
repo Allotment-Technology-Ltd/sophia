@@ -11,101 +11,18 @@
  * Requires DATABASE_URL (via `loadServerEnv`: .env / .env.local). Read-only.
  */
 
-import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { inArray, sql } from 'drizzle-orm';
 import { loadServerEnv } from '../src/lib/server/env.ts';
 import { getDrizzleDb } from '../src/lib/server/db/neon.ts';
-import { ingestRunIssues, ingestRuns, sourceTrainingGovernance } from '../src/lib/server/db/schema.ts';
+import { ingestRunIssues, ingestRuns } from '../src/lib/server/db/schema.ts';
 import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.ts';
+import { isTrainingModuleAcceptableLineage } from '../src/lib/server/ingestion/trainingAcceptableLineagePolicy.ts';
+import {
+	loadGovernanceExcludedByHash,
+	queryDoneIngestRunsWithStageMsTelemetry
+} from '../src/lib/server/ingestion/trainingAcceptableCohortNeon.ts';
 
 loadServerEnv();
-
-/** Duplicated from `datasetTopicPresetCoverage.ts` so this script runs under plain `tsx` (no `$lib` alias). */
-const TRAINING_LINEAGE_REQUIRED_STAGES = ['extraction', 'relations', 'grouping'] as const;
-const TRAINING_LINEAGE_OPTIONAL_STAGES = ['validation', 'remediation', 'json_repair'] as const;
-const TRAINING_APPROVED_INFERENCE_PROVIDERS = new Set(['vertex', 'mistral', 'google']);
-
-function parseProviderFromStageModelRef(ref: string): string | null {
-	const t = ref.trim().toLowerCase();
-	const i = t.indexOf('/');
-	if (i <= 0) return null;
-	return t.slice(0, i);
-}
-
-function readModelChainLabels(envelope: Record<string, unknown>): Record<string, string> | null {
-	const raw = envelope.modelChain ?? envelope.model_chain;
-	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-	const out: Record<string, string> = {};
-	for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-		if (typeof v === 'string' && v.trim()) out[k] = v.trim();
-	}
-	return Object.keys(out).length > 0 ? out : null;
-}
-
-function modelChainLabelsImplyBlockedTrainingVendors(envelope: Record<string, unknown>): boolean {
-	const chain = readModelChainLabels(envelope);
-	if (!chain) return false;
-	const blocked =
-		/\b(anthropic|openai)\b|\bclaude\b|\bgpt[-_]?(4|3|5)\b|\bgpt-4o\b|\bo[13]-|azure\s*openai/i;
-	for (const v of Object.values(chain)) {
-		if (blocked.test(v)) return true;
-	}
-	return false;
-}
-
-function trainingLineageTimingVerdict(
-	envelope: Record<string, unknown> | null | undefined
-): 'ok' | 'blocked' | 'unknown' {
-	if (!envelope) return 'unknown';
-	const tt = envelope.timingTelemetry;
-	if (!tt || typeof tt !== 'object' || Array.isArray(tt)) return 'unknown';
-	const sm = (tt as { stage_models?: unknown }).stage_models;
-	if (!sm || typeof sm !== 'object' || Array.isArray(sm)) return 'unknown';
-
-	for (const st of TRAINING_LINEAGE_REQUIRED_STAGES) {
-		const ref = (sm as Record<string, unknown>)[st];
-		if (typeof ref !== 'string' || !ref.trim()) return 'unknown';
-		const p = parseProviderFromStageModelRef(ref);
-		if (!p || !TRAINING_APPROVED_INFERENCE_PROVIDERS.has(p)) return 'blocked';
-	}
-
-	for (const st of TRAINING_LINEAGE_OPTIONAL_STAGES) {
-		const ref = (sm as Record<string, unknown>)[st];
-		if (typeof ref !== 'string' || !ref.trim()) continue;
-		const p = parseProviderFromStageModelRef(ref);
-		if (!p || !TRAINING_APPROVED_INFERENCE_PROVIDERS.has(p)) return 'blocked';
-	}
-
-	return 'ok';
-}
-
-function isTrainingModuleAcceptableLineage(
-	governanceExcluded: boolean,
-	envelope: Record<string, unknown> | null | undefined
-): boolean {
-	if (governanceExcluded) return false;
-	if (!envelope) return false;
-
-	if (envelope.routingStats && typeof envelope.routingStats === 'object') {
-		const dr = (envelope.routingStats as { degradedRouteCount?: unknown }).degradedRouteCount;
-		if (typeof dr === 'number' && dr > 0) return false;
-	}
-
-	const issueSummary =
-		envelope.issueSummary && typeof envelope.issueSummary === 'object' && !Array.isArray(envelope.issueSummary)
-			? (envelope.issueSummary as Record<string, unknown>)
-			: null;
-	if (issueSummary) {
-		if (typeof issueSummary.recovery_agent === 'number' && issueSummary.recovery_agent > 0) return false;
-		if (typeof issueSummary.circuit_open === 'number' && issueSummary.circuit_open > 0) return false;
-	}
-
-	const lineage = trainingLineageTimingVerdict(envelope);
-	if (lineage === 'blocked') return false;
-	if (lineage === 'ok') return true;
-
-	if (modelChainLabelsImplyBlockedTrainingVendors(envelope)) return false;
-	return false;
-}
 
 function parseDays(): number {
 	const raw = process.argv.find((a) => a.startsWith('--days='))?.slice('--days='.length);
@@ -254,26 +171,8 @@ async function main() {
 	}
 
 	const db = getDrizzleDb();
-	const govRows = await db.select().from(sourceTrainingGovernance);
-	const governanceExcludedByHash = new Map<string, boolean>();
-	for (const r of govRows) {
-		governanceExcludedByHash.set(r.canonicalUrlHash, r.excludeFromModelTraining === true);
-	}
-
-	const runs = await db
-		.select()
-		.from(ingestRuns)
-		.where(
-			and(
-				eq(ingestRuns.status, 'done'),
-				eq(ingestRuns.cancelledByUser, false),
-				isNotNull(ingestRuns.completedAt),
-				sql`${ingestRuns.completedAt} >= now() - (${days}::int) * interval '1 day'`,
-				sql`${ingestRuns.reportEnvelope} ? 'timingTelemetry'`,
-				sql`${ingestRuns.reportEnvelope}->'timingTelemetry' ? 'stage_ms'`
-			)
-		)
-		.orderBy(desc(ingestRuns.completedAt));
+	const governanceExcludedByHash = await loadGovernanceExcludedByHash();
+	const runs = await queryDoneIngestRunsWithStageMsTelemetry(days);
 
 	const projected: TimingRow[] = [];
 	for (const ir of runs) {

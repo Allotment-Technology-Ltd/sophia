@@ -366,6 +366,16 @@ const INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM = (() => {
 const INGEST_SAVE_GROUPING_RAW =
 	(process.env.INGEST_SAVE_GROUPING_RAW || 'false').toLowerCase() === 'true';
 
+/**
+ * When true with `--validate`, skip Surreal Stage 6 if remediation dropped no edges, changed no claim text,
+ * did not re-run relations/grouping, and did not re-embed repaired claims — and a `source` row already exists.
+ * Opt-in: faithfulness-only updates (e.g. remediation revalidation) are not written to Surreal when store is skipped.
+ */
+function ingestSkipStoreWhenNoGraphChanges(): boolean {
+	const raw = (process.env.INGEST_SKIP_STORE_WHEN_NO_GRAPH_CHANGES ?? '').trim().toLowerCase();
+	return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
 // ─── Stage ordering for resume logic ──────────────────────────────────────
 const STAGES_ORDER = [
 	'extracting',
@@ -481,6 +491,9 @@ interface IngestTimingPayload {
 	vertex_embed_chars: number;
 	/** Set when logging the final summary line (wall clock for entire run). */
 	total_wall_ms?: number;
+	/** Stage 6 skipped: see `INGEST_SKIP_STORE_WHEN_NO_GRAPH_CHANGES` + `skipped_surreal_store_reason`. */
+	skipped_surreal_store_no_graph_changes?: boolean;
+	skipped_surreal_store_reason?: string;
 }
 
 let activeIngestTiming: IngestTimingPayload | null = null;
@@ -3409,6 +3422,21 @@ async function loadSourceTextAndMeta(
 	return { txtPath, sourceText, sourceMeta, slug };
 }
 
+/** Existing Surreal `source` row for this URL/hash, if any (Stage 6 idempotency / store-skip probe). */
+async function findExistingSourceRecordIdForUrl(db: Surreal, sourceMeta: SourceMeta): Promise<string | null> {
+	const existingSources = await db.query<[{ id: string }[]]>(
+		'SELECT id FROM source WHERE canonical_url_hash = $canonical_url_hash OR url = $url LIMIT 1',
+		{ canonical_url_hash: sourceMeta.canonical_url_hash, url: sourceMeta.url }
+	);
+	const head = Array.isArray(existingSources) && existingSources.length > 0 ? existingSources[0] : null;
+	if (Array.isArray(head)) return head[0]?.id?.trim() || null;
+	if (head && typeof head === 'object' && 'id' in head) {
+		const id = (head as { id?: unknown }).id;
+		return typeof id === 'string' && id.trim() ? id.trim() : null;
+	}
+	return null;
+}
+
 async function main() {
 	const args = process.argv.slice(2);
 	applyIngestEmbeddingEnvOverrides();
@@ -4654,6 +4682,9 @@ async function main() {
 		// STAGE 5: CROSS-MODEL VALIDATION (optional)
 		// ═══════════════════════════════════════════════════════════════
 		let validationResult: ValidationOutput | null = null;
+		/** True after Stage 5b body runs in this process (required for opt-in store-skip eligibility). */
+		let postValidationGraphEvaluatedForStoreSkip = false;
+		let postValidationGraphMutatedForStoreSkip = false;
 
 		if (shouldRunStage('validating', resumeFromStage)) {
 			const stageValStart = Date.now();
@@ -4821,6 +4852,7 @@ async function main() {
 		// ═══════════════════════════════════════════════════════════════
 		if (shouldRunStage('remediating', resumeFromStage)) {
 			const stageRemStart = Date.now();
+			postValidationGraphEvaluatedForStoreSkip = true;
 			const policy = parseRemediationPolicyJson(process.env.INGEST_REMEDIATION_POLICY_JSON);
 			const remediatedPositions = new Set<number>();
 			let droppedBefore = relations.length;
@@ -4833,6 +4865,7 @@ async function main() {
 					INGEST_REMEDIATION_VALIDITY_MIN
 				) as PhaseOneRelation[];
 				if (droppedBefore !== relations.length) {
+					postValidationGraphMutatedForStoreSkip = true;
 					console.log(
 						`  [REMEDIATION] Dropped ${droppedBefore - relations.length} relation edge(s) (quarantine or validity < ${INGEST_REMEDIATION_VALIDITY_MIN})`
 					);
@@ -4926,7 +4959,11 @@ async function main() {
 					});
 					const parsed = parseJsonResponse(raw);
 					const out = normalizeRemediationRepairOutput(parsed, pos);
+					const prevClaimText = claim.text;
 					claim.text = out.revised_claim_text;
+					if (prevClaimText !== out.revised_claim_text) {
+						postValidationGraphMutatedForStoreSkip = true;
+					}
 					remediatedPositions.add(pos);
 					partial.remediation_progress = { positions, next_index: i + 1 };
 					await savePartialResults(slug, partial);
@@ -4942,6 +4979,7 @@ async function main() {
 						}
 					}
 					if (pairs.length > 0) {
+						postValidationGraphMutatedForStoreSkip = true;
 						const vecs = await embedTexts(
 							pairs.map((p) => p.text),
 							{}
@@ -5014,6 +5052,7 @@ async function main() {
 					remediatedShareThreshold: INGEST_REMEDIATION_RERUN_SHARE
 				});
 				if (needsRerun) {
+					postValidationGraphMutatedForStoreSkip = true;
 					const relationsRt = startStageUsage('relations');
 					const groupingRt = startStageUsage('grouping');
 					const out = await rerunRelationsAndGroupingForRemediation({
@@ -5062,6 +5101,8 @@ async function main() {
 			});
 		}
 
+		let skippedStoreNoGraphChanges = false;
+
 		if (stopBeforeStore) {
 			console.log(
 				'\n  [PHASE] Stages 1–5 complete. Resume this source without --stop-before-store (or use admin Sync) to run Stage 6 (SurrealDB).'
@@ -5078,10 +5119,34 @@ async function main() {
 			process.exit(0);
 		}
 
+		if (
+			ingestSkipStoreWhenNoGraphChanges() &&
+			shouldValidate &&
+			postValidationGraphEvaluatedForStoreSkip &&
+			!postValidationGraphMutatedForStoreSkip &&
+			db &&
+			shouldRunStage('storing', resumeFromStage)
+		) {
+			await ensureDbConnected(db);
+			const existingSid = await findExistingSourceRecordIdForUrl(db, sourceMeta);
+			if (existingSid) {
+				skippedStoreNoGraphChanges = true;
+				console.log(
+					'\n  [STORE] Skipping SurrealDB write: INGEST_SKIP_STORE_WHEN_NO_GRAPH_CHANGES=1, `--validate` on, post-validation graph unchanged (no relation drops, no claim text edits, no relations+grouping rerun, no post-remediation re-embed), and a `source` row already exists. Note: faithfulness-only updates (e.g. from remediation revalidation) are not written to Surreal when store is skipped.'
+				);
+				partial.stage_completed = 'remediating';
+				partial.validation = validationResult ?? null;
+				partial.relations = relations;
+				partial.arguments = arguments_;
+				partial.embeddings = allEmbeddings;
+				await savePartialResults(slug, partial);
+			}
+		}
+
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 6: STORE IN SURREALDB
 		// ═══════════════════════════════════════════════════════════════
-		if (shouldRunStage('storing', resumeFromStage)) {
+		if (shouldRunStage('storing', resumeFromStage) && !skippedStoreNoGraphChanges) {
 			const stageStoreStart = Date.now();
 			if (!db) {
 				throw new Error(
@@ -5864,6 +5929,10 @@ async function main() {
 				activeIngestTiming.store_wall_ms += storeMs;
 				bumpStageMs('storing', storeMs);
 			}
+		} else if (skippedStoreNoGraphChanges) {
+			console.log(
+				'  [SKIP] Stage 6: SurrealDB store (INGEST_SKIP_STORE_WHEN_NO_GRAPH_CHANGES=1; no graph mutations after validation)\n'
+			);
 		} else {
 			console.log('  [SKIP] Stage 6: Storage (already completed)\n');
 		}
@@ -5894,16 +5963,29 @@ async function main() {
 			}
 		}
 
-		await updateIngestionLog(db, sourceMeta.url, {
-			status: 'complete',
-			stage_completed: 'storing',
-			claims_extracted: allClaims.length,
-			relations_extracted: relations.length,
-			arguments_grouped: arguments_.length,
-			validation_score: validationAvg ?? undefined,
-			cost_usd: parseFloat(estimateCostUsd()),
-			completed_at: new Date()
-		});
+		if (skippedStoreNoGraphChanges) {
+			await updateIngestionLog(db, sourceMeta.url, {
+				status: 'validating',
+				stage_completed: 'remediating',
+				claims_extracted: allClaims.length,
+				relations_extracted: relations.length,
+				arguments_grouped: arguments_.length,
+				validation_score: validationAvg ?? undefined,
+				cost_usd: parseFloat(estimateCostUsd()),
+				completed_at: new Date()
+			});
+		} else {
+			await updateIngestionLog(db, sourceMeta.url, {
+				status: 'complete',
+				stage_completed: 'storing',
+				claims_extracted: allClaims.length,
+				relations_extracted: relations.length,
+				arguments_grouped: arguments_.length,
+				validation_score: validationAvg ?? undefined,
+				cost_usd: parseFloat(estimateCostUsd()),
+				completed_at: new Date()
+			});
+		}
 
 		await closeSurrealIfOpen(db);
 		console.log('  [OK] Database connection closed');
@@ -5922,6 +6004,11 @@ async function main() {
 		console.log(
 			`║  Validation score: ${(validationAvg !== null ? `${validationAvg}/100` : 'skipped').padEnd(40)} ║`
 		);
+		if (skippedStoreNoGraphChanges) {
+			console.log(
+				`║  Surreal store:    ${'skipped (no graph changes)'.padEnd(40)} ║`
+			);
+		}
 		console.log('╠══════════════════════════════════════════════════════════════╣');
 		console.log(
 			`║  Reasoning tokens: ${`${costs.totalInputTokens.toLocaleString()} in / ${costs.totalOutputTokens.toLocaleString()} out`.padEnd(40)} ║`
@@ -5934,6 +6021,11 @@ async function main() {
 		);
 		console.log('╚══════════════════════════════════════════════════════════════╝');
 		console.log('');
+
+		if (skippedStoreNoGraphChanges && activeIngestTiming) {
+			activeIngestTiming.skipped_surreal_store_no_graph_changes = true;
+			activeIngestTiming.skipped_surreal_store_reason = 'post_validation_graph_unchanged_existing_source';
+		}
 
 		logIngestTimingSummary();
 		process.exit(0);

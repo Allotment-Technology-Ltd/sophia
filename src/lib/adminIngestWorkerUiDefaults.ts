@@ -83,8 +83,14 @@ export const ADMIN_INGEST_WORKER_UI_TOOLTIPS = {
 	validateLlm:
 		'Runs cross-model validation and optional remediation—higher quality and cost. If validation is off, remediation toggles below are ignored.',
 
+	validationTailOnly:
+		'Passes `--force-stage validating` to `scripts/ingest.ts`: skips extract / relate / group / embed only if this **same** `INGEST_ORCHESTRATION_RUN_ID` already has checkpoints through embedding (Neon staging + partial). `INGEST_FORCE_REINGEST` is stripped in this mode. On a **brand-new** durable job item the child run id is new, so the **first** start has no such checkpoints — leave this off until that URL has finished through embedding once (or use `scripts/replay-ingest.ts` / admin resume on an existing run). Remediation re-embeds only edited claims. Optional: set worker env `INGEST_SKIP_STORE_WHEN_NO_GRAPH_CHANGES=1` with `--validate` to skip Surreal Stage 6 when post-validation graph mutations are absent and a `source` row already exists (ingestion_log stays at validating/remediating until a full store).',
+
 	mergeIntoRunningJob:
 		'When starting a durable ingest job: if a job is already running, append these URLs to that job’s pending queue instead of creating a second job. Fewer concurrent schedulers compete for ADMIN_INGEST_MAX_CONCURRENT worker slots. Turn off when you want a separate job (different notes, isolation, or parallel batches).',
+
+	phase1ValidationTailPresets:
+		'Loads frozen golden URLs plus the Neon training-acceptable cohort (same window as “Cohort days”, `payload.validate=true` only), dedupes by canonical URL, fills the URL list, turns on “Run LLM validation stage” and “Validation tail only”, and clears full re-ingest. Use after each URL has completed through embedding at least once for the child run you care about (or replay an existing run); first start on a brand-new item id still has no checkpoints for `--force-stage validating`.',
 
 	ingestionAdvisorMode:
 		'Source pre-scan only (not the full ingest worker). Off: heuristic advisor without an extra model call. Shadow: runs the advisor model and shows suggestions in the UI without applying. Auto: may apply changes when the auto-apply checkboxes below are enabled—extra latency and token cost per pre-scan.',
