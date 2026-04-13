@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { parse as parseHTML } from 'node-html-parser';
 import {
+	buildSourceUrlFetchCandidates,
 	canonicalizeAndHashSourceUrl,
 	tryParseIngestSourceUrl
 } from '../src/lib/server/sourceIdentity.js';
@@ -101,53 +102,69 @@ async function fetchUrl(url: string, options?: { cacheKey?: string }): Promise<s
 		}
 	}
 
-	const tryOnce = async (fetchUrl: string): Promise<Response> => {
-		console.log(`[FETCH] Downloading from ${fetchUrl}...`);
-		return fetch(fetchUrl, {
-			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SOPHIA-Fetch/1.0)' },
-			redirect: 'follow'
-		});
-	};
-
-	const readBodyAndValidate = async (response: Response, effectiveUrl: string): Promise<string> => {
-		if (!response.ok) {
-			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-		}
-		const contentType = response.headers.get('content-type') || '';
-		if (contentType.includes('application/pdf') || effectiveUrl.toLowerCase().endsWith('.pdf')) {
-			throw new Error(
-				'PDF files cannot be parsed as HTML. Update the source URL to an HTML version.'
-			);
-		}
-		const html = await response.text();
-		if (html.startsWith('%PDF')) {
-			throw new Error(
-				'Response is a PDF file (detected by content). Update the source URL to an HTML version.'
-			);
-		}
-		console.log(`[FETCH] Downloaded ${html.length.toLocaleString()} bytes`);
-		if (cachePath) {
-			writeFetchCache(cachePath, html);
-		}
-		return html;
-	};
-
-	try {
-		let current = upgradePlatoToHttps(url);
-		let response = await tryOnce(current);
-		// Plato sometimes serves http URLs that 301 to https; if we still see HTTP-level failure, try https once.
-		if (!response.ok && isHttpPlatoUrl(current)) {
-			const httpsUrl = upgradePlatoToHttps(current);
-			if (httpsUrl !== current) {
-				console.log(`[FETCH] Retrying over HTTPS: ${httpsUrl}`);
-				response = await tryOnce(httpsUrl);
-				current = httpsUrl;
+	const baseCandidates = buildSourceUrlFetchCandidates(url);
+	const candidates: string[] = [];
+	const seen = new Set<string>();
+	for (const c of baseCandidates) {
+		for (const v of [upgradePlatoToHttps(c), c]) {
+			if (!seen.has(v)) {
+				seen.add(v);
+				candidates.push(v);
 			}
 		}
-		return await readBodyAndValidate(response, response.url || current);
-	} catch (error) {
-		throw new Error(`Failed to fetch URL: ${error instanceof Error ? error.message : String(error)}`);
 	}
+
+	const headers: Record<string, string> = {
+		'User-Agent':
+			'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+		Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+		'Accept-Language': 'en-US,en;q=0.9'
+	};
+
+	let lastErr = 'no attempts';
+	for (let i = 0; i < candidates.length; i++) {
+		let current = candidates[i]!;
+		console.log(`[FETCH] Downloading (${i + 1}/${candidates.length}) ${current}...`);
+		try {
+			let response = await fetch(current, { redirect: 'follow', headers });
+			if (!response.ok && isHttpPlatoUrl(current)) {
+				const httpsUrl = upgradePlatoToHttps(current);
+				if (httpsUrl !== current) {
+					console.log(`[FETCH] Retrying over HTTPS: ${httpsUrl}`);
+					response = await fetch(httpsUrl, { redirect: 'follow', headers });
+					current = httpsUrl;
+				}
+			}
+			if (!response.ok) {
+				lastErr = `HTTP ${response.status}: ${response.statusText}`;
+				continue;
+			}
+			const effectiveUrl = response.url || current;
+			const contentType = response.headers.get('content-type') || '';
+			if (contentType.includes('application/pdf') || effectiveUrl.toLowerCase().endsWith('.pdf')) {
+				lastErr = 'Response is PDF, not HTML';
+				continue;
+			}
+			const html = await response.text();
+			if (html.startsWith('%PDF')) {
+				lastErr = 'Body looks like PDF';
+				continue;
+			}
+			if (html.length < 500) {
+				lastErr = `Body too short (${html.length} bytes) — likely block or empty page`;
+				continue;
+			}
+			console.log(`[FETCH] Downloaded ${html.length.toLocaleString()} bytes`);
+			if (cachePath) {
+				writeFetchCache(cachePath, html);
+			}
+			return html;
+		} catch (error) {
+			lastErr = error instanceof Error ? error.message : String(error);
+		}
+	}
+
+	throw new Error(`Failed to fetch URL after ${candidates.length} attempt(s): ${lastErr}`);
 }
 
 /**

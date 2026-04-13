@@ -6,7 +6,10 @@ import { FieldValue, Timestamp } from '$lib/server/fsCompat';
 import { z } from 'zod';
 import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 import { query as surrealQuery } from '$lib/server/db';
-import { canonicalizeAndHashSourceUrl } from '$lib/server/sourceIdentity';
+import {
+	buildSourceUrlFetchCandidates,
+	canonicalizeAndHashSourceUrl
+} from '$lib/server/sourceIdentity';
 import type { AdminActor } from '$lib/server/adminAccess';
 
 const ADMIN_OPERATIONS_COLLECTION = 'admin_operations';
@@ -272,6 +275,9 @@ function normalizeTextFilePath(sourceFile: string): string {
 export function findFetchedSourceFile(sourceUrl: string): string | null {
   const targetIdentity = canonicalizeAndHashSourceUrl(sourceUrl);
   if (!targetIdentity) return null;
+  const urlStrings = new Set(
+    buildSourceUrlFetchCandidates(sourceUrl).map((u) => u.trim().toLowerCase())
+  );
   const sourcesDir = path.resolve(process.cwd(), 'data/sources');
   if (!fs.existsSync(sourcesDir)) return null;
 
@@ -285,6 +291,11 @@ export function findFetchedSourceFile(sourceUrl: string): string | null {
       };
       const metaIdentity = canonicalizeAndHashSourceUrl(meta.canonical_url || meta.url || '');
       if (metaIdentity?.canonicalUrlHash === targetIdentity.canonicalUrlHash) {
+        const txtPath = metaPath.replace(/\.meta\.json$/, '.txt');
+        return fs.existsSync(txtPath) ? txtPath : null;
+      }
+      const raw = typeof meta.url === 'string' ? meta.url.trim().toLowerCase() : '';
+      if (raw && urlStrings.has(raw)) {
         const txtPath = metaPath.replace(/\.meta\.json$/, '.txt');
         return fs.existsSync(txtPath) ? txtPath : null;
       }

@@ -3546,6 +3546,19 @@ async function closeSurrealIfOpen(db: Surreal | null): Promise<void> {
 	}
 }
 
+/** True when Neon/disk partial has work beyond a cold start (Surreal `stage_completed` is often empty mid-extract). */
+function partialHasDurableNeonOrDiskProgress(p: PartialResults): boolean {
+	const ep = p.extraction_progress;
+	if (ep && Array.isArray(ep.claims_so_far) && ep.claims_so_far.length > 0) return true;
+	if (Array.isArray(p.claims) && p.claims.length > 0) return true;
+	if (Array.isArray(p.relations) && p.relations.length > 0) return true;
+	if (Array.isArray(p.arguments) && p.arguments.length > 0) return true;
+	if (Array.isArray(p.embeddings) && p.embeddings.length > 0) return true;
+	const st = (p.stage_completed ?? '').trim();
+	if (st && st !== 'none') return true;
+	return false;
+}
+
 function normalizeResumeStage(
 	lastCompleted: string | null,
 	partial: PartialResults
@@ -3998,14 +4011,6 @@ async function main() {
 		await createIngestionLog(db, sourceMeta.url, sourceMeta.title);
 	}
 
-	if (!existingLog && skipSurrealForOrchestratedPhases) {
-		const early = await loadPartialResults(slug, partialLoadOpts);
-		if (early?.stage_completed && early.stage_completed !== 'none') {
-			resumeFromStage = early.stage_completed;
-			console.log(`[RESUME] Checkpoint (Neon/disk) — last completed stage: ${resumeFromStage}`);
-		}
-	}
-
 	// --force-stage overrides the resume point regardless of what's in the DB log.
 	// e.g. --force-stage embedding re-runs Stage 4 (embedding) and everything after.
 	if (forceStage) {
@@ -4014,13 +4019,15 @@ async function main() {
 		console.log(`[FORCE] --force-stage ${forceStage}: overriding resume point to "${resumeFromStage ?? 'none'}"`);
 	}
 
-	// Load partial results from disk if resuming
+	// Load partial results from Neon/disk whenever present — Surreal `stage_completed` is often
+	// unset mid-extract, so skipping load when `resumeFromStage` is null dropped mid-extraction checkpoints.
 	const stageBeforeValidate = STAGES_ORDER[STAGES_ORDER.indexOf('validating') - 1];
 	let partial: PartialResults;
+	const loadedPartial = await loadPartialResults(slug, partialLoadOpts);
+
 	if (resumeFromStage) {
-		const loaded = await loadPartialResults(slug, partialLoadOpts);
-		if (loaded) {
-			partial = loaded;
+		if (loadedPartial) {
+			partial = loadedPartial;
 			Object.assign(partial.source as object, sourceMeta as object);
 			const normalized = normalizeResumeStage(resumeFromStage, partial);
 			if (normalized !== resumeFromStage) {
@@ -4036,7 +4043,7 @@ async function main() {
 				await closeSurrealIfOpen(db);
 				process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
 			}
-			console.log(`[RESUME] Loaded partial results from disk (stage: ${loaded.stage_completed})`);
+			console.log(`[RESUME] Loaded partial results (stage: ${loadedPartial.stage_completed})`);
 		} else {
 			console.log(
 				'[RESUME] No checkpoint (Neon ingest_staging_* or data/ingested/*-partial.json) — restarting from scratch'
@@ -4057,6 +4064,30 @@ async function main() {
 			resumeFromStage = null;
 			partial = { source: sourceMeta, stage_completed: 'none' };
 		}
+	} else if (loadedPartial && partialHasDurableNeonOrDiskProgress(loadedPartial)) {
+		partial = loadedPartial;
+		Object.assign(partial.source as object, sourceMeta as object);
+		const st = (loadedPartial.stage_completed ?? '').trim();
+		if (st && st !== 'none') {
+			resumeFromStage = st;
+			const normalized = normalizeResumeStage(resumeFromStage, partial);
+			if (normalized !== resumeFromStage) {
+				console.log(
+					`[RESUME] Partial data incomplete for stage "${resumeFromStage}" — rolling back resume point to "${normalized ?? 'none'}"`
+				);
+				resumeFromStage = normalized;
+			}
+			if (validationOnlyIngestIntent(forceStage) && resumeFromStage !== stageBeforeValidate) {
+				console.error(
+					`[ERROR] Validation-only ingest requires Neon checkpoints through "${stageBeforeValidate}" (claims + relations + grouping + full embeddings). Current resume point: "${resumeFromStage ?? 'none'}".`
+				);
+				await closeSurrealIfOpen(db);
+				process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
+			}
+		}
+		console.log(
+			'[RESUME] Loaded Neon/disk checkpoint without Surreal stage_completed (mid-pipeline resume)'
+		);
 	} else {
 		partial = { source: sourceMeta, stage_completed: 'none' };
 	}

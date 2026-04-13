@@ -148,10 +148,13 @@
 			) {
 				const s = rawSignals as IssuePipelineSignals;
 				const incidentRaw = (s as { incidentIssueCount?: unknown }).incidentIssueCount;
+				const legacyLessResume = (s as { totalIssuesLessResume?: unknown }).totalIssuesLessResume;
 				const incidentIssueCount =
 					typeof incidentRaw === 'number' && Number.isFinite(incidentRaw)
 						? incidentRaw
-						: s.totalIssues;
+						: typeof legacyLessResume === 'number' && Number.isFinite(legacyLessResume)
+							? legacyLessResume
+							: s.totalIssues;
 				issuePipelineSignals = {
 					totalIssues: s.totalIssues,
 					incidentIssueCount,

@@ -60,3 +60,39 @@ export function canonicalizeAndHashSourceUrl(rawUrl: string): CanonicalSourceIde
 		canonicalUrlHash: hashCanonicalUrl(canonicalUrl)
 	};
 }
+
+/**
+ * URL strings to try when downloading HTML (SEP and similar sites sometimes differ on trailing `/`,
+ * and CDNs may behave differently for the raw pasted URL vs the canonical form).
+ */
+export function buildSourceUrlFetchCandidates(rawUrl: string): string[] {
+	const trimmed = rawUrl.trim();
+	const identity = canonicalizeAndHashSourceUrl(trimmed);
+	const out: string[] = [];
+	const push = (u: string | null | undefined) => {
+		const t = u?.trim();
+		if (!t) return;
+		if (!out.includes(t)) out.push(t);
+	};
+
+	push(trimmed);
+	if (identity) {
+		push(identity.canonicalUrl);
+		try {
+			const parsed = new URL(identity.canonicalUrl);
+			if (parsed.pathname.length > 1 && !parsed.pathname.endsWith('/')) {
+				const withSlash = new URL(identity.canonicalUrl);
+				withSlash.pathname = `${parsed.pathname}/`;
+				push(withSlash.toString());
+			} else if (parsed.pathname.length > 1 && parsed.pathname.endsWith('/')) {
+				const withoutSlash = new URL(identity.canonicalUrl);
+				withoutSlash.pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+				push(withoutSlash.toString());
+			}
+		} catch {
+			// ignore
+		}
+	}
+
+	return out;
+}
