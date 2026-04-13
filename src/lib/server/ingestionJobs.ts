@@ -1345,6 +1345,8 @@ export type IngestJobIssuePipelineRecentRow = {
 
 export type IngestJobIssuePipelineSignals = {
 	totalIssues: number;
+	/** Same child runs as `totalIssues`, excluding routine `[RESUME]` checkpoint rows (`resume_checkpoint`). */
+	totalIssuesLessResume: number;
 	byKind: Record<string, number>;
 	byStageHint: Record<string, number>;
 	recent: IngestJobIssuePipelineRecentRow[];
@@ -1364,13 +1366,22 @@ async function loadIngestJobIssuePipelineSignals(jobId: string): Promise<IngestJ
 	}
 	const runIds = [...runIdToUrl.keys()];
 	if (runIds.length === 0) {
-		return { totalIssues: 0, byKind: {}, byStageHint: {}, recent: [] };
+		return { totalIssues: 0, totalIssuesLessResume: 0, byKind: {}, byStageHint: {}, recent: [] };
 	}
 	const [totalRow] = await db
 		.select({ n: sql<number>`count(*)::int`.mapWith(Number) })
 		.from(ingestRunIssues)
 		.where(inArray(ingestRunIssues.runId, runIds));
 	const totalIssues = totalRow?.n ?? 0;
+	const [lessResumeRow] = await db
+		.select({
+			n: sql<number>`count(*) FILTER (WHERE ${ingestRunIssues.kind} <> 'resume_checkpoint')::int`.mapWith(
+				Number
+			)
+		})
+		.from(ingestRunIssues)
+		.where(inArray(ingestRunIssues.runId, runIds));
+	const totalIssuesLessResume = lessResumeRow?.n ?? 0;
 	const kindRows = await db
 		.select({
 			kind: ingestRunIssues.kind,
@@ -1420,7 +1431,7 @@ async function loadIngestJobIssuePipelineSignals(jobId: string): Promise<IngestJ
 		message: r.message,
 		createdAt: r.createdAt?.toISOString() ?? null
 	}));
-	return { totalIssues, byKind, byStageHint, recent };
+	return { totalIssues, totalIssuesLessResume, byKind, byStageHint, recent };
 }
 
 async function loadIngestJobChildRunSummaries(jobId: string): Promise<IngestJobChildRunSummary[]> {

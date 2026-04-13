@@ -14,6 +14,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { loadServerEnv } from '../src/lib/server/env.ts';
 import { getDrizzleDb } from '../src/lib/server/db/neon.ts';
 import { ingestRuns } from '../src/lib/server/db/schema.ts';
+import { canonicalizeSourceUrl } from '../src/lib/server/sourceIdentity.ts';
 import {
 	goldenExtractionEvalFingerprint,
 	loadGoldenExtractionEval
@@ -49,13 +50,16 @@ async function main() {
 		const db = getDrizzleDb();
 		for (const row of rows) {
 			const u = row.url.trim();
+			const canonKey = canonicalizeSourceUrl(u);
 			const [r] = await db
 				.select()
 				.from(ingestRuns)
 				.where(
 					and(
 						eq(ingestRuns.status, 'done'),
-						sql`lower(trim(${ingestRuns.sourceUrl})) = lower(${u})`
+						canonKey
+							? sql`regexp_replace(lower(trim(${ingestRuns.sourceUrl})), '/+$', '') = regexp_replace(lower(${canonKey}::text), '/+$', '')`
+							: sql`lower(trim(${ingestRuns.sourceUrl})) = lower(${u})`
 					)
 				)
 				.orderBy(desc(ingestRuns.completedAt))

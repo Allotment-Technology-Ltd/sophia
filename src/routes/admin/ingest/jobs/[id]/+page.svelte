@@ -58,6 +58,7 @@
 
 	type IssuePipelineSignals = {
 		totalIssues: number;
+		totalIssuesLessResume: number;
 		byKind: Record<string, number>;
 		byStageHint: Record<string, number>;
 		recent: IssuePipelineRecentRow[];
@@ -72,6 +73,7 @@
 
 	const emptyIssuePipelineSignals: IssuePipelineSignals = {
 		totalIssues: 0,
+		totalIssuesLessResume: 0,
 		byKind: {},
 		byStageHint: {},
 		recent: []
@@ -146,6 +148,8 @@
 				const s = rawSignals as IssuePipelineSignals;
 				issuePipelineSignals = {
 					totalIssues: s.totalIssues,
+					totalIssuesLessResume:
+						typeof s.totalIssuesLessResume === 'number' ? s.totalIssuesLessResume : s.totalIssues,
 					byKind: s.byKind && typeof s.byKind === 'object' ? s.byKind : {},
 					byStageHint: s.byStageHint && typeof s.byStageHint === 'object' ? s.byStageHint : {},
 					recent: Array.isArray(s.recent) ? s.recent : []
@@ -538,7 +542,9 @@
 					<p class="mt-3 text-sm text-sophia-dark-muted">No issues recorded for linked runs yet.</p>
 				{:else}
 					<p class="mt-3 font-mono text-xs text-sophia-dark-text">
-						Total issues: {issuePipelineSignals.totalIssues}
+						Actionable rows (excl. <span class="font-mono">resume_checkpoint</span>):
+						{issuePipelineSignals.totalIssuesLessResume} — all rows:
+						{issuePipelineSignals.totalIssues}
 					</p>
 					<div class="mt-4 grid gap-6 lg:grid-cols-2">
 						<div>

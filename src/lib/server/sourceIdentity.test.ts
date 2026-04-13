@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	buildSourceUrlFetchCandidates,
 	canonicalizeAndHashSourceUrl,
 	canonicalizeSourceUrl,
 	hashCanonicalUrl
@@ -38,5 +39,13 @@ describe('canonicalizeAndHashSourceUrl', () => {
 			canonicalUrl: 'https://example.com/a',
 			canonicalUrlHash: '2dce0a4c50441bfccfa9caf4b58c3cba6e06c420505dd829f0436de1aa44baac'
 		});
+	});
+});
+
+describe('buildSourceUrlFetchCandidates', () => {
+	it('includes trailing-slash variant for SEP-style paths', () => {
+		const c = buildSourceUrlFetchCandidates('https://plato.stanford.edu/entries/justice');
+		expect(c).toContain('https://plato.stanford.edu/entries/justice');
+		expect(c).toContain('https://plato.stanford.edu/entries/justice/');
 	});
 });

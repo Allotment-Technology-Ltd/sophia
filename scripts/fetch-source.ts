@@ -1,7 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { parse as parseHTML } from 'node-html-parser';
-import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.js';
+import {
+	buildSourceUrlFetchCandidates,
+	canonicalizeAndHashSourceUrl
+} from '../src/lib/server/sourceIdentity.js';
 
 /** SEP / IEP pages use legacy markup (often unclosed tags). Without this, `node-html-parser` can drop `#article-content` / `#main-text` and yield empty extracts. */
 const HTML_PARSE_OPTS = { parseNoneClosedTags: true as const };
@@ -76,35 +79,52 @@ async function fetchUrl(url: string, options?: { cacheKey?: string }): Promise<s
 		}
 	}
 
-	console.log(`[FETCH] Downloading from ${url}...`);
-	try {
-		const response = await fetch(url, {
-			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SOPHIA-Fetch/1.0)' }
-		});
-		if (!response.ok) {
-			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+	const candidates = buildSourceUrlFetchCandidates(url);
+	const headers: Record<string, string> = {
+		'User-Agent':
+			'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+		Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+		'Accept-Language': 'en-US,en;q=0.9'
+	};
+
+	let lastErr = 'no attempts';
+	for (let i = 0; i < candidates.length; i++) {
+		const tryUrl = candidates[i]!;
+		console.log(`[FETCH] Downloading (${i + 1}/${candidates.length}) ${tryUrl}...`);
+		try {
+			const response = await fetch(tryUrl, {
+				redirect: 'follow',
+				headers
+			});
+			if (!response.ok) {
+				lastErr = `HTTP ${response.status}: ${response.statusText}`;
+				continue;
+			}
+			const contentType = response.headers.get('content-type') || '';
+			if (contentType.includes('application/pdf') || tryUrl.toLowerCase().endsWith('.pdf')) {
+				lastErr = 'Response is PDF, not HTML';
+				continue;
+			}
+			const html = await response.text();
+			if (html.startsWith('%PDF')) {
+				lastErr = 'Body looks like PDF';
+				continue;
+			}
+			if (html.length < 500) {
+				lastErr = `Body too short (${html.length} bytes) — likely block or empty page`;
+				continue;
+			}
+			console.log(`[FETCH] Downloaded ${html.length.toLocaleString()} bytes`);
+			if (cachePath) {
+				writeFetchCache(cachePath, html);
+			}
+			return html;
+		} catch (error) {
+			lastErr = error instanceof Error ? error.message : String(error);
 		}
-		const contentType = response.headers.get('content-type') || '';
-		if (contentType.includes('application/pdf') || url.toLowerCase().endsWith('.pdf')) {
-			throw new Error(
-				'PDF files cannot be parsed as HTML. Update the source URL to an HTML version.'
-			);
-		}
-		const html = await response.text();
-		// Guard against accidentally fetching binary PDF data served without correct content-type
-		if (html.startsWith('%PDF')) {
-			throw new Error(
-				'Response is a PDF file (detected by content). Update the source URL to an HTML version.'
-			);
-		}
-		console.log(`[FETCH] Downloaded ${html.length.toLocaleString()} bytes`);
-		if (cachePath) {
-			writeFetchCache(cachePath, html);
-		}
-		return html;
-	} catch (error) {
-		throw new Error(`Failed to fetch URL: ${error instanceof Error ? error.message : String(error)}`);
 	}
+
+	throw new Error(`Failed to fetch URL after ${candidates.length} attempt(s): ${lastErr}`);
 }
 
 /**
