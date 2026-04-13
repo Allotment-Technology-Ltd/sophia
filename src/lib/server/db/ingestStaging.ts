@@ -5,21 +5,23 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, sql } from 'drizzle-orm';
 import { getDrizzleDb } from './neon';
 import {
+  ingestRuns,
   ingestStagingArguments,
   ingestStagingClaims,
   ingestStagingMeta,
   ingestStagingRelations,
   ingestStagingValidation
 } from './schema';
+import { isNeonIngestPersistenceEnabled } from '../neon/datastore';
+import { canonicalizeSourceUrl } from '../sourceIdentity';
 
 function sourceTextSnapshotFromPartial(partial: Record<string, unknown>): string | null {
   const raw = partial.source_text_snapshot;
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 }
-import { isNeonIngestPersistenceEnabled } from '../neon/datastore';
 
 function orchestrationRunId(): string | null {
   const id = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim();
@@ -193,6 +195,87 @@ export async function saveIngestPartialToNeon(opts: {
         }
       });
   });
+}
+
+/**
+ * When `--force-stage validating` runs under a **new** `INGEST_ORCHESTRATION_RUN_ID`, staging for that id
+ * may be empty; find an older staging row by slug and/or canonical `source_json.url`.
+ */
+export async function findNeonStagingRunIdForValidationTailBySlug(opts: {
+  slug: string;
+  canonicalSourceUrl?: string;
+}): Promise<string | null> {
+  if (!isNeonIngestPersistenceEnabled()) return null;
+  const slug = opts.slug.trim();
+  if (!slug) return null;
+  const canon = opts.canonicalSourceUrl ? canonicalizeSourceUrl(opts.canonicalSourceUrl) : null;
+  const db = getDrizzleDb();
+  const rows = canon
+    ? await db.execute(sql`
+        SELECT m.run_id AS "runId"
+        FROM ingest_staging_meta m
+        WHERE m.stage_completed IN ('embedding', 'validating', 'remediating', 'storing')
+          AND (m.slug = ${slug} OR (m.source_json->>'url') = ${canon})
+          AND (
+            jsonb_array_length(COALESCE(m.embeddings_json, '[]'::jsonb)) > 0
+            OR EXISTS (SELECT 1 FROM ingest_staging_claims c WHERE c.run_id = m.run_id LIMIT 1)
+          )
+        ORDER BY m.updated_at DESC
+        LIMIT 1
+      `)
+    : await db.execute(sql`
+        SELECT m.run_id AS "runId"
+        FROM ingest_staging_meta m
+        WHERE m.stage_completed IN ('embedding', 'validating', 'remediating', 'storing')
+          AND m.slug = ${slug}
+          AND (
+            jsonb_array_length(COALESCE(m.embeddings_json, '[]'::jsonb)) > 0
+            OR EXISTS (SELECT 1 FROM ingest_staging_claims c WHERE c.run_id = m.run_id LIMIT 1)
+          )
+        ORDER BY m.updated_at DESC
+        LIMIT 1
+      `);
+  const head = rows.rows[0] as { runId?: unknown } | undefined;
+  return head?.runId != null && String(head.runId).trim() ? String(head.runId).trim() : null;
+}
+
+const STAGING_TAIL_STAGE_COMPLETED = new Set([
+  'embedding',
+  'validating',
+  'remediating',
+  'storing'
+]);
+
+/** Done ingest runs for the same canonical URL that still have Neon staging (slug in meta may differ). */
+export async function findDoneIngestRunIdsWithStagingMetaForCanonicalUrl(
+  canonicalSourceUrl: string,
+  maxScan: number
+): Promise<string[]> {
+  if (!isNeonIngestPersistenceEnabled()) return [];
+  const canon = canonicalizeSourceUrl(canonicalSourceUrl);
+  if (!canon) return [];
+  const db = getDrizzleDb();
+  const cap = Math.min(200, Math.max(1, maxScan));
+  const runs = await db
+    .select({ id: ingestRuns.id, sourceUrl: ingestRuns.sourceUrl })
+    .from(ingestRuns)
+    .where(and(eq(ingestRuns.status, 'done'), isNotNull(ingestRuns.completedAt)))
+    .orderBy(desc(ingestRuns.completedAt))
+    .limit(cap);
+
+  const out: string[] = [];
+  for (const r of runs) {
+    if (canonicalizeSourceUrl(r.sourceUrl) !== canon) continue;
+    const meta = await db.query.ingestStagingMeta.findFirst({
+      where: eq(ingestStagingMeta.runId, r.id),
+      columns: { runId: true, stageCompleted: true }
+    });
+    if (!meta) continue;
+    const st = (meta.stageCompleted ?? '').trim();
+    if (!STAGING_TAIL_STAGE_COMPLETED.has(st)) continue;
+    out.push(r.id);
+  }
+  return out;
 }
 
 export async function loadIngestPartialFromNeon(
