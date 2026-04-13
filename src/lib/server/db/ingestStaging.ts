@@ -207,8 +207,9 @@ export async function saveIngestPartialToNeon(opts: {
   });
 }
 
+/** Tail checkpoints for validation-only resume. Includes `stored` — Neon saves that after Stage 6 while Surreal log may still say `storing` during the store phase. */
 const STAGING_TAIL_SQL = sql`
-  m.stage_completed IN ('embedding', 'validating', 'remediating', 'storing')
+  m.stage_completed IN ('embedding', 'validating', 'remediating', 'storing', 'stored')
   AND (
     jsonb_array_length(COALESCE(m.embeddings_json, '[]'::jsonb)) > 0
     OR EXISTS (SELECT 1 FROM ingest_staging_claims c WHERE c.run_id = m.run_id LIMIT 1)
@@ -343,7 +344,8 @@ const STAGING_TAIL_STAGE_COMPLETED = new Set([
   'embedding',
   'validating',
   'remediating',
-  'storing'
+  'storing',
+  'stored'
 ]);
 
 /** Done ingest runs for the same canonical URL that still have Neon staging (slug in meta may differ). */

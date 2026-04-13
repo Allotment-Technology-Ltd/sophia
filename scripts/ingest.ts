@@ -3393,10 +3393,10 @@ function normalizeResumeStage(
 		Array.isArray(partial.embeddings) && partial.embeddings.length > 0;
 
 	if (!hasClaims) return null;
-	if (!hasRelations && ['relating', 'grouping', 'embedding', 'validating', 'storing'].includes(lastCompleted)) {
+	if (!hasRelations && ['relating', 'grouping', 'embedding', 'validating', 'storing', 'stored'].includes(lastCompleted)) {
 		return 'extracting';
 	}
-	if (!hasArguments && ['grouping', 'embedding', 'validating', 'storing'].includes(lastCompleted)) {
+	if (!hasArguments && ['grouping', 'embedding', 'validating', 'storing', 'stored'].includes(lastCompleted)) {
 		return 'relating';
 	}
 	// Surreal stage_completed stays at 'grouping' until all claim embeddings exist (see embedding checkpoints).
@@ -3406,11 +3406,17 @@ function normalizeResumeStage(
 		Array.isArray(partial.claims) &&
 		emb.length > 0 &&
 		emb.length < partial.claims.length;
-	if (embPartial && ['embedding', 'validating', 'remediating', 'storing'].includes(lastCompleted)) {
+	if (
+		embPartial &&
+		['embedding', 'validating', 'remediating', 'storing', 'stored'].includes(lastCompleted)
+	) {
 		return 'grouping';
 	}
 
-	if (!hasEmbeddings && ['embedding', 'validating', 'remediating', 'storing'].includes(lastCompleted)) {
+	if (
+		!hasEmbeddings &&
+		['embedding', 'validating', 'remediating', 'storing', 'stored'].includes(lastCompleted)
+	) {
 		return 'grouping';
 	}
 
