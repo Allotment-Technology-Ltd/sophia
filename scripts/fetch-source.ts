@@ -77,6 +77,15 @@ function upgradePlatoToHttps(fetchUrl: string): string {
 /**
  * Fetch URL content (follow redirects; retry plato.stanford.edu on http→https if needed).
  */
+function isHttpPlatoUrl(rawUrl: string): boolean {
+	try {
+		const parsed = new URL(rawUrl);
+		return parsed.protocol === 'http:' && parsed.hostname === 'plato.stanford.edu';
+	} catch {
+		return false;
+	}
+}
+
 async function fetchUrl(url: string, options?: { cacheKey?: string }): Promise<string> {
 	const cacheKey = options?.cacheKey;
 	const cachePath =
@@ -127,7 +136,7 @@ async function fetchUrl(url: string, options?: { cacheKey?: string }): Promise<s
 		let current = upgradePlatoToHttps(url);
 		let response = await tryOnce(current);
 		// Plato sometimes serves http URLs that 301 to https; if we still see HTTP-level failure, try https once.
-		if (!response.ok && current.startsWith('http://plato.stanford.edu')) {
+		if (!response.ok && isHttpPlatoUrl(current)) {
 			const httpsUrl = upgradePlatoToHttps(current);
 			if (httpsUrl !== current) {
 				console.log(`[FETCH] Retrying over HTTPS: ${httpsUrl}`);
