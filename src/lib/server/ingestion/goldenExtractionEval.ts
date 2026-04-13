@@ -1,7 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import goldenExtractionEvalJson from './golden-extraction-eval.json';
 
 export type GoldenExtractionEvalItem = {
 	url: string;
@@ -19,11 +17,13 @@ export type GoldenExtractionEvalFile = {
 
 let cached: GoldenExtractionEvalFile | null = null;
 
+/**
+ * Golden eval URLs ship as a bundled JSON import so Vercel/serverless builds still resolve the file
+ * (runtime `readFileSync` next to `import.meta.url` often points at a chunk path without the JSON asset).
+ */
 export function loadGoldenExtractionEval(): GoldenExtractionEvalFile {
 	if (cached) return cached;
-	const dir = dirname(fileURLToPath(import.meta.url));
-	const raw = readFileSync(join(dir, 'golden-extraction-eval.json'), 'utf8');
-	cached = JSON.parse(raw) as GoldenExtractionEvalFile;
+	cached = goldenExtractionEvalJson as GoldenExtractionEvalFile;
 	return cached;
 }
 
