@@ -13,7 +13,7 @@ describe('ingestionCanonicalPipeline', () => {
 
 	it('builds validation chain with distinct ordered tiers', () => {
 		const chain = canonicalModelChainForStage('validation');
-		expect(chain[0]).toEqual({ provider: 'mistral', modelId: 'mistral-large-latest' });
+		expect(chain[0]).toEqual({ provider: 'deepseek', modelId: 'deepseek-chat' });
 		const keys = chain.map((t) => `${t.provider}/${t.modelId}`);
 		expect(new Set(keys).size).toBe(keys.length);
 	});

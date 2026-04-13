@@ -115,6 +115,7 @@ import {
 	toSurrealRecordIdStr
 } from '../src/lib/server/surrealRecordSql.js';
 import { createIngestProviderTpmGuard } from './lib/ingestProviderTpm.js';
+import { paceDeepseekChatCompletion } from './lib/ingestDeepseekRpsPace.js';
 import { paceMistralChatCompletion } from './lib/ingestMistralRpsPace.js';
 import { collectErrorMessageChain, isTpmOrRateLimitInError } from '../src/lib/ingestionErrorChain.js';
 import {
@@ -614,6 +615,7 @@ function tierFitsEstimatedContext(
 	else if (m.includes('gpt-4')) maxIn = 120_000;
 	else if (m.includes('claude')) maxIn = 190_000;
 	else if (m.includes('mistral') || m.includes('ministral')) maxIn = 120_000;
+	else if (m.includes('deepseek')) maxIn = 120_000;
 	return estIn <= maxIn;
 }
 
@@ -2346,6 +2348,9 @@ async function callStageModel(params: {
 			if (routingProvider.trim().toLowerCase() === 'mistral') {
 				await paceMistralChatCompletion(activePlan.model);
 			}
+			if (routingProvider.trim().toLowerCase() === 'deepseek') {
+				await paceDeepseekChatCompletion(activePlan.model);
+			}
 			emitIngestTelemetry({
 				event: 'model_call_start',
 				stage,
@@ -2446,6 +2451,9 @@ async function callStageModel(params: {
 					msg.includes('429') ||
 					msg.includes('529') ||
 					msg.includes('500') ||
+					msg.includes('502') ||
+					msg.includes('503') ||
+					msg.includes('504') ||
 					msg.includes('overloaded') ||
 					msg.includes('timeout') ||
 					msg.includes('prompt_too_long') ||

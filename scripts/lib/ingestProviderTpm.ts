@@ -6,6 +6,9 @@
  * Mistral: dashboards often show **50k–600k TPM per SKU** with **≤1 RPS** on several tiers; chat pacing is handled
  * separately (`ingestMistralRpsPace.ts`). For tight **50k TPM** SKUs, add e.g.
  * `INGEST_PROVIDER_TPM_BUDGET=mistral:42000` so rolling usage stays under the minute cap across stages.
+ *
+ * DeepSeek: optional `deepseek:<tokens>` here plus **`INGEST_DEEPSEEK_*` RPS pacing** (`ingestDeepseekRpsPace.ts`)
+ * reduces stacked 429s when validation + json_repair + fallbacks hit the same key.
  */
 
 type WindowEntry = { at: number; tokens: number };

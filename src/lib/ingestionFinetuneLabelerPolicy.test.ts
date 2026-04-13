@@ -22,9 +22,9 @@ describe('ingestionFinetuneLabelerPolicy', () => {
 		expect(ingestFinetuneLabelerStrictEnabled(process.env)).toBe(false);
 	});
 
-	it('defaults allowed providers to mistral and vertex', () => {
+	it('defaults allowed providers to mistral, vertex, and deepseek', () => {
 		delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;
-		expect(parseFinetuneLabelerAllowedProviders(process.env)).toEqual(['mistral', 'vertex']);
+		expect(parseFinetuneLabelerAllowedProviders(process.env)).toEqual(['mistral', 'vertex', 'deepseek']);
 	});
 
 	it('parses INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS', () => {
@@ -49,16 +49,18 @@ describe('ingestionFinetuneLabelerPolicy', () => {
 		]);
 	});
 
-	it('keeps vertex and mistral on relations when strict with defaults', () => {
+	it('keeps vertex, deepseek, and mistral on relations when strict with defaults', () => {
 		process.env.INGEST_FINETUNE_LABELER_STRICT = '1';
 		delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;
 		const tiers = [
 			{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
+			{ provider: 'deepseek', modelId: 'deepseek-chat' },
 			{ provider: 'mistral', modelId: 'mistral-medium-latest' },
 			{ provider: 'openai', modelId: 'gpt-4o-mini' }
 		];
 		expect(filterModelTiersForFinetunePolicy('relations', tiers, process.env)).toEqual([
 			{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
+			{ provider: 'deepseek', modelId: 'deepseek-chat' },
 			{ provider: 'mistral', modelId: 'mistral-medium-latest' }
 		]);
 	});

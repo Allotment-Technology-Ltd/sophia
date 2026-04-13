@@ -4,8 +4,9 @@
  *
  * Default is **strict** with an allowlist so Restormel resolve, catalog routing JSON, or
  * historical pins cannot silently reintroduce disallowed vendors (e.g. OpenAI/Anthropic) on
- * sensitive surfaces. **Mistral + Vertex** are allowed by default (canonical extraction is
- * Gemini-on-Vertex first with Mistral fallbacks; json_repair stays Mistral-primary).
+ * sensitive surfaces. **Vertex + Mistral + DeepSeek** are allowed by default (canonical extraction is
+ * Gemini-on-Vertex first; DeepSeek/Mistral provide cross-vendor fallbacks and json_repair).
+ * Operators must ensure each provider’s terms allow their intended use (e.g. fine-tuning / training).
  * Override with `INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS`. Disable locally with
  * `INGEST_FINETUNE_LABELER_STRICT=0`.
  */
@@ -30,12 +31,11 @@ export function ingestFinetuneLabelerStrictEnabled(env: NodeJS.ProcessEnv = proc
 
 /**
  * When strict mode is on, only these providers may appear in the effective model chain for
- * {@link FINETUNE_SENSITIVE_LLM_STAGES}. Default: `mistral`, `vertex` (Gemini-on-Vertex primaries
- * with Mistral fallbacks on sensitive stages per canonical pipeline).
+ * {@link FINETUNE_SENSITIVE_LLM_STAGES}. Default: `mistral`, `vertex`, `deepseek`.
  */
 export function parseFinetuneLabelerAllowedProviders(env: NodeJS.ProcessEnv = process.env): string[] {
 	const raw = env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS?.trim();
-	if (!raw) return ['mistral', 'vertex'];
+	if (!raw) return ['mistral', 'vertex', 'deepseek'];
 	return raw
 		.split(/[,|]/)
 		.map((s) => s.trim().toLowerCase())
