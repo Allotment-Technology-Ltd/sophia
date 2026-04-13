@@ -35,6 +35,17 @@
 		note: string;
 	};
 
+	type StagingSupervision = {
+		neonBackedSourceCount: number;
+		dedupedClaimRows: number;
+		dedupedPassageSlotsWithClaims: number;
+		dedupedRelationRows: number;
+		trainingAcceptableNeonBackedSourceCount: number;
+		trainingAcceptableDedupedClaimRows: number;
+		trainingAcceptableDedupedPassageSlotsWithClaims: number;
+		trainingAcceptableDedupedRelationRows: number;
+	};
+
 	type Payload = {
 		generatedAt?: string;
 		neonIngestPersistence?: boolean;
@@ -51,6 +62,8 @@
 		phase1Readiness?: Phase1Readiness | null;
 		/** Populated when Phase 1 block is missing (not “you skipped jobs” — see copy below). */
 		phase1ReadinessError?: string | null;
+		stagingSupervision?: StagingSupervision | null;
+		stagingSupervisionError?: string | null;
 		note?: string;
 		error?: string;
 	};
@@ -146,6 +159,53 @@
 				</ul>
 			{/if}
 		</section>
+
+		{#if data.neonIngestPersistence && data.stagingSupervision}
+			<section class="card staging-metrics" aria-labelledby="staging-heading">
+				<h2 id="staging-heading" class="h2">Neon staging (deduped pairs)</h2>
+				<p class="lede small">
+					Counts use the <strong>same canonical URL dedupe</strong> as “All completed sources”: the latest Neon
+					<code class="mono">ingest_runs</code> row per URL (by <code class="mono">completed_at</code>). Job-only or
+					Surreal-only completes have no staging <code class="mono">run_id</code> and are omitted here.
+					<strong>Passage slots</strong> = distinct <code class="mono">position_in_source</code> among claim rows
+					(slots with ≥1 claim, not total extracted passages).
+				</p>
+				<div class="table-wrap">
+					<table class="tbl staging-tbl" aria-describedby="staging-heading">
+						<thead>
+							<tr>
+								<th scope="col">Cohort</th>
+								<th class="num" scope="col">Neon-backed URLs</th>
+								<th class="num" scope="col">Claim rows</th>
+								<th class="num" scope="col">Passage slots (claims)</th>
+								<th class="num" scope="col">Relation rows</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<th scope="row">All latest Neon runs</th>
+								<td class="num mono">{data.stagingSupervision.neonBackedSourceCount}</td>
+								<td class="num mono">{data.stagingSupervision.dedupedClaimRows}</td>
+								<td class="num mono">{data.stagingSupervision.dedupedPassageSlotsWithClaims}</td>
+								<td class="num mono">{data.stagingSupervision.dedupedRelationRows}</td>
+							</tr>
+							<tr>
+								<th scope="row">Training-acceptable lineage only</th>
+								<td class="num mono">{data.stagingSupervision.trainingAcceptableNeonBackedSourceCount}</td>
+								<td class="num mono">{data.stagingSupervision.trainingAcceptableDedupedClaimRows}</td>
+								<td class="num mono">{data.stagingSupervision.trainingAcceptableDedupedPassageSlotsWithClaims}</td>
+								<td class="num mono">{data.stagingSupervision.trainingAcceptableDedupedRelationRows}</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+				{#if data.stagingSupervisionError}
+					<p class="warn-block" role="status">
+						Staging aggregation error (counts may be zero): {data.stagingSupervisionError}
+					</p>
+				{/if}
+			</section>
+		{/if}
 
 		{#if data.phase1Readiness}
 			<section class="card phase1" aria-labelledby="phase1-heading">
@@ -490,6 +550,13 @@
 	}
 	.back a {
 		color: var(--color-text-muted);
+	}
+	.staging-metrics .lede.small code.mono {
+		font-size: 0.82em;
+	}
+	.staging-tbl th[scope='row'] {
+		font-weight: 500;
+		text-align: left;
 	}
 	.phase1 .lede.small {
 		font-size: 0.88rem;
