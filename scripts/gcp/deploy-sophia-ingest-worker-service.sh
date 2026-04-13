@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Optional: deploy Cloud Run *service* "sophia-ingest-worker" — same image as "sophia", higher memory/CPU,
-# lower concurrency per instance so admin-driven ingest.ts children do not compete with public web traffic.
+# Optional: deploy Cloud Run *service* "sophia-ingest-worker" — same image as "sophia", same 4Gi/2 vCPU/heap as main
+# `sophia` (see deploy.yml); lower HTTP concurrency per instance so admin-driven ingest.ts children see less
+# request-level contention than on usesophia.app traffic.
 #
 # Same env/secrets as production web (see .github/workflows/deploy.yml). Invoke after a main deploy when
 # IMAGE_REF points at the desired tag/sha.
