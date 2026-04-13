@@ -1,7 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { parse as parseHTML } from 'node-html-parser';
-import { canonicalizeAndHashSourceUrl } from '../src/lib/server/sourceIdentity.js';
+import {
+	canonicalizeAndHashSourceUrl,
+	tryParseIngestSourceUrl
+} from '../src/lib/server/sourceIdentity.js';
 
 /** SEP / IEP pages use legacy markup (often unclosed tags). Without this, `node-html-parser` can drop `#article-content` / `#main-text` and yield empty extracts. */
 const HTML_PARSE_OPTS = { parseNoneClosedTags: true as const };
@@ -58,8 +61,21 @@ function createSlug(text: string): string {
 		.substring(0, 50);
 }
 
+function upgradePlatoToHttps(fetchUrl: string): string {
+	try {
+		const u = new URL(fetchUrl);
+		if (u.protocol === 'http:' && u.hostname.toLowerCase() === 'plato.stanford.edu') {
+			u.protocol = 'https:';
+			return u.toString();
+		}
+	} catch {
+		// ignore
+	}
+	return fetchUrl;
+}
+
 /**
- * Fetch URL content
+ * Fetch URL content (follow redirects; retry plato.stanford.edu on http→https if needed).
  */
 async function fetchUrl(url: string, options?: { cacheKey?: string }): Promise<string> {
 	const cacheKey = options?.cacheKey;
@@ -76,22 +92,25 @@ async function fetchUrl(url: string, options?: { cacheKey?: string }): Promise<s
 		}
 	}
 
-	console.log(`[FETCH] Downloading from ${url}...`);
-	try {
-		const response = await fetch(url, {
-			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SOPHIA-Fetch/1.0)' }
+	const tryOnce = async (fetchUrl: string): Promise<Response> => {
+		console.log(`[FETCH] Downloading from ${fetchUrl}...`);
+		return fetch(fetchUrl, {
+			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SOPHIA-Fetch/1.0)' },
+			redirect: 'follow'
 		});
+	};
+
+	const readBodyAndValidate = async (response: Response, effectiveUrl: string): Promise<string> => {
 		if (!response.ok) {
 			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 		}
 		const contentType = response.headers.get('content-type') || '';
-		if (contentType.includes('application/pdf') || url.toLowerCase().endsWith('.pdf')) {
+		if (contentType.includes('application/pdf') || effectiveUrl.toLowerCase().endsWith('.pdf')) {
 			throw new Error(
 				'PDF files cannot be parsed as HTML. Update the source URL to an HTML version.'
 			);
 		}
 		const html = await response.text();
-		// Guard against accidentally fetching binary PDF data served without correct content-type
 		if (html.startsWith('%PDF')) {
 			throw new Error(
 				'Response is a PDF file (detected by content). Update the source URL to an HTML version.'
@@ -102,6 +121,21 @@ async function fetchUrl(url: string, options?: { cacheKey?: string }): Promise<s
 			writeFetchCache(cachePath, html);
 		}
 		return html;
+	};
+
+	try {
+		let current = upgradePlatoToHttps(url);
+		let response = await tryOnce(current);
+		// Plato sometimes serves http URLs that 301 to https; if we still see HTTP-level failure, try https once.
+		if (!response.ok && current.startsWith('http://plato.stanford.edu')) {
+			const httpsUrl = upgradePlatoToHttps(current);
+			if (httpsUrl !== current) {
+				console.log(`[FETCH] Retrying over HTTPS: ${httpsUrl}`);
+				response = await tryOnce(httpsUrl);
+				current = httpsUrl;
+			}
+		}
+		return await readBodyAndValidate(response, response.url || current);
 	} catch (error) {
 		throw new Error(`Failed to fetch URL: ${error instanceof Error ? error.message : String(error)}`);
 	}
@@ -405,7 +439,11 @@ async function main() {
 	}
 
 	try {
-		const sourceIdentity = canonicalizeAndHashSourceUrl(url);
+		const parsed = tryParseIngestSourceUrl(url);
+		if (!parsed) {
+			throw new Error(`Unsupported or invalid source URL: ${url}`);
+		}
+		const sourceIdentity = canonicalizeAndHashSourceUrl(parsed.toString());
 		if (!sourceIdentity) {
 			throw new Error(`Unsupported or invalid source URL: ${url}`);
 		}

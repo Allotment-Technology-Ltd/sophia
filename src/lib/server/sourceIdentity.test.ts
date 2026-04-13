@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
 	canonicalizeAndHashSourceUrl,
 	canonicalizeSourceUrl,
-	hashCanonicalUrl
+	hashCanonicalUrl,
+	tryParseIngestSourceUrl
 } from './sourceIdentity';
 
 describe('canonicalizeSourceUrl', () => {
@@ -38,5 +39,22 @@ describe('canonicalizeAndHashSourceUrl', () => {
 			canonicalUrl: 'https://example.com/a',
 			canonicalUrlHash: '2dce0a4c50441bfccfa9caf4b58c3cba6e06c420505dd829f0436de1aa44baac'
 		});
+	});
+});
+
+describe('tryParseIngestSourceUrl', () => {
+	it('maps web.stanford.edu SEP paths to plato', () => {
+		const u = tryParseIngestSourceUrl(
+			'https://web.stanford.edu/class/cs224w/readings/Zinman_sep.htm'
+		);
+		expect(u?.hostname).toBe('web.stanford.edu');
+		const sep = tryParseIngestSourceUrl('https://web.stanford.edu/entries/consciousness/');
+		expect(sep?.hostname).toBe('plato.stanford.edu');
+	});
+
+	it('normalizes unicode hyphen lookalikes', () => {
+		const u = tryParseIngestSourceUrl('https://plato.stanford.edu/entries/foo\u2011bar/');
+		expect(u?.hostname).toBe('plato.stanford.edu');
+		expect(u?.pathname).toContain('foo-bar');
 	});
 });
