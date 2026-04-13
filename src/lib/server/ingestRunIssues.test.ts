@@ -62,6 +62,28 @@ describe('classifyIngestLogLine stage + message enrichment', () => {
 		expect(issue?.stageHint).toBe('group');
 		expect(issue?.message).toContain('HTTP 429');
 	});
+
+	it('does not record redundant [RESUME] Previous status / Last completed stage lines', () => {
+		expect(classifyIngestLogLine('[RESUME] Previous status: extracting', 0)).toBeNull();
+		expect(classifyIngestLogLine('[RESUME] Last completed stage: none', 1)).toBeNull();
+	});
+
+	it('still records actionable resume lines', () => {
+		const noCk = classifyIngestLogLine(
+			'[RESUME] No checkpoint (Neon ingest_staging_* or data/ingested/*-partial.json) — restarting from scratch',
+			0
+		);
+		expect(noCk?.kind).toBe('resume_checkpoint');
+	});
+
+	it('ignores [SKIP] validation-only no-checkpoint exits', () => {
+		expect(
+			classifyIngestLogLine(
+				'[SKIP] Validation-only: no Neon tail checkpoint for this source — exiting 0 (INGEST_VALIDATION_ONLY_NO_CHECKPOINT=skip).',
+				0
+			)
+		).toBeNull();
+	});
 });
 
 describe('classifyIngestLogLine self-heal', () => {

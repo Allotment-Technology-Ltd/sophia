@@ -234,7 +234,9 @@ export async function findNeonStagingRunIdsForValidationTailByCanonicalUrlHash(
     FROM ingest_staging_meta m
     WHERE ${STAGING_TAIL_SQL}
       AND (m.source_json->>'canonical_url_hash') = ${h}
-    ORDER BY m.updated_at DESC
+    ORDER BY
+      (SELECT COUNT(*)::int FROM ingest_staging_claims c WHERE c.run_id = m.run_id) DESC,
+      m.updated_at DESC
     LIMIT ${cap}
   `);
   const out: string[] = [];
@@ -279,7 +281,9 @@ export async function findNeonStagingRunIdsForValidationTailBySlugOrUrl(
           OR (m.source_json->>'url') = ${canon}
           OR (m.source_json->>'canonical_url') = ${canon}
         )
-      ORDER BY m.updated_at DESC
+      ORDER BY
+        (SELECT COUNT(*)::int FROM ingest_staging_claims c WHERE c.run_id = m.run_id) DESC,
+        m.updated_at DESC
       LIMIT ${cap}
     `);
     return rowsToIds(rows);
@@ -290,7 +294,9 @@ export async function findNeonStagingRunIdsForValidationTailBySlugOrUrl(
     FROM ingest_staging_meta m
     WHERE ${tailPredicate}
       AND m.slug = ${slug}
-    ORDER BY m.updated_at DESC
+    ORDER BY
+      (SELECT COUNT(*)::int FROM ingest_staging_claims c WHERE c.run_id = m.run_id) DESC,
+      m.updated_at DESC
     LIMIT ${cap}
   `);
   return rowsToIds(rows);
@@ -326,7 +332,9 @@ export async function findNeonStagingRunIdForValidationTailBySlug(opts: {
       FROM ingest_staging_meta m
       WHERE ${tailPredicate}
         AND (m.source_json->>'canonical_url_hash') = ${urlHash}
-      ORDER BY m.updated_at DESC
+      ORDER BY
+        (SELECT COUNT(*)::int FROM ingest_staging_claims c WHERE c.run_id = m.run_id) DESC,
+        m.updated_at DESC
       LIMIT 1
     `);
     const byHash = pick(rows);
