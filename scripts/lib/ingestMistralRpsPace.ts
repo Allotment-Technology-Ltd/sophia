@@ -45,17 +45,16 @@ const BUCKET_ENV_SUFFIX: Record<MistralPaceBucket, string> = {
 
 /** Default minimum ms between request **starts** (slightly under dashboard RPS). */
 const DEFAULT_INTERVAL_MS: Record<MistralPaceBucket, number> = {
-	// ~0.42 RPS → ~2380 ms; use 2650 for jitter / safety margin
-	medium: 2650,
-	// ~1 RPS large tier; use 1180 (~0.85 RPS) to leave slack for retries / clock skew
-	large: 1180,
+	// ~0.42 RPS → ~2380 ms; default slightly slower than free-tier card to cut 429s when parallel stages stack
+	medium: 3000,
+	// ~1 RPS large tier; ~0.74 RPS default start spacing
+	large: 1350,
 	// ~1.67 RPS moderation
-	moderation: 680,
-	// codestral / devstral cards: 1 RPS @ 50k TPM — treat like large tier
-	code: 1180,
-	// Unknown small / Nemo — stay conservative
-	small: 2650,
-	other: 2650
+	moderation: 720,
+	// codestral / devstral cards: treat like large tier
+	code: 1350,
+	small: 3000,
+	other: 3000
 };
 
 export function mistralPaceBucketForModel(modelId: string): MistralPaceBucket {

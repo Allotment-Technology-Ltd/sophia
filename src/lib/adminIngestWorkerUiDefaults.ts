@@ -1,19 +1,19 @@
 /**
  * Default worker / batch UI values aligned with `scripts/ingest.ts` defaults and the
- * `sophia-ingest-worker` Cloud Run profile (ADMIN_INGEST_MAX_CONCURRENT=3, stage timeouts 360s).
+ * `sophia-ingest-worker` Cloud Run profile (ADMIN_INGEST_MAX_CONCURRENT=3, stage timeouts 360s; conservative batch defaults to reduce 429 / TPM / truncation pressure).
  * Used by Admin → Ingest (single run + durable jobs) so operators start from a known-good baseline.
  */
 export const ADMIN_INGEST_WORKER_UI_DEFAULTS = {
-	extractionConcurrency: '3',
+	extractionConcurrency: '2',
 	extractionMaxTokensPerSection: '5000',
 	passageInsertConcurrency: '8',
 	claimInsertConcurrency: '8',
 	remediationMaxClaims: '16',
-	relationsBatchOverlapClaims: '4',
+	relationsBatchOverlapClaims: '3',
 	googleExtractionConcurrencyFloor: '6',
-	groupingTargetTokens: '100000',
+	groupingTargetTokens: '72000',
 	validationTargetTokens: '100000',
-	relationsTargetTokens: '12000',
+	relationsTargetTokens: '10000',
 	embedBatchSize: '250',
 	/** Matches typical worker `INGEST_MODEL_TIMEOUT_MS` / stage caps (ms). */
 	ingestModelTimeoutMs: '360000',
@@ -78,7 +78,7 @@ export const ADMIN_INGEST_WORKER_UI_TOOLTIPS = {
 		'Maps to INGEST_WATCHDOG_PHASE_BASELINE_MULT. Multiplier on phase baselines for slow sources. Raising reduces false watchdog kills on heavy books; lowering catches stuck runs sooner.',
 
 	jobConcurrency:
-		`Parallel URLs per durable job (clamped to MAX_DURABLE_INGEST_JOB_CONCURRENCY, typically 3). Counts only runs that are still in LLM phases; once a child enters Surreal Stage 6 (store), its slot frees for the next pending URL while store I/O continues. Raising ingests more sources at once but competes with ADMIN_INGEST_MAX_CONCURRENT on the worker and Surreal write load—if you see launch throttling or 429s, lower job concurrency before raising per-URL extraction parallelism.`,
+		`Parallel URLs per durable job (clamped to MAX_DURABLE_INGEST_JOB_CONCURRENCY, typically 3). Counts only runs that are still in LLM phases; once a child enters Surreal Stage 6 (store), its LLM slot frees for another pending URL while store I/O continues. When every active child is in store, the job poller still starts at most one new URL per tick so pending items do not all launch in one burst. Raising ingests more sources at once but competes with ADMIN_INGEST_MAX_CONCURRENT on the worker and Surreal write load—if you see launch throttling or 429s, lower job concurrency before raising per-URL extraction parallelism.`,
 
 	validateLlm:
 		'Runs cross-model validation and optional remediation—higher quality and cost. If validation is off, remediation toggles below are ignored.',

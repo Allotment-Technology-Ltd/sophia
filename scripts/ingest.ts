@@ -277,8 +277,9 @@ const THINKER_AUTO_LINK_MIN_DELTA = Number(process.env.THINKER_AUTO_LINK_MIN_DEL
 //   5_000 tokens input → ~50 claims → ~7_500 tokens output → fits in 32768 limit with safety margin.
 const MAX_TOKENS_PER_SECTION = Number(process.env.INGEST_EXTRACTION_MAX_TOKENS_PER_SECTION || '5000');
 const BOOK_MAX_TOKENS_PER_SECTION = Number(process.env.BOOK_MAX_TOKENS_PER_SECTION || '3000');
+/** Default lowered (2026-04) after fleet advisories: large batches hit output/truncation limits; smaller batches trade calls for stability. */
 const GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS =
-	parsePositiveInt(process.env.GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS) ?? 100_000;
+	parsePositiveInt(process.env.GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS) ?? 72_000;
 const GROUPING_ANTHROPIC_TOKEN_ESTIMATE_MULTIPLIER = Math.max(
 	1,
 	Number(process.env.GROUPING_ANTHROPIC_TOKEN_ESTIMATE_MULTIPLIER || '2.2')
@@ -291,7 +292,7 @@ const GROUPING_OUTPUT_VS_INPUT_FACTOR = Math.max(
 /** Fraction of maxOutputTokens used as ceiling for {@link estimatedGroupingStructuredOutputTokens} pre-split. */
 const GROUPING_OUTPUT_HEADROOM = Math.max(
 	0.5,
-	Math.min(0.95, Number(process.env.INGEST_GROUPING_OUTPUT_HEADROOM ?? '0.78') || 0.78)
+	Math.min(0.95, Number(process.env.INGEST_GROUPING_OUTPUT_HEADROOM ?? '0.82') || 0.82)
 );
 const VALIDATION_BATCH_TARGET_TOKENS =
 	parsePositiveInt(process.env.VALIDATION_BATCH_TARGET_TOKENS) ?? 100_000;
@@ -336,18 +337,18 @@ const INGEST_REMEDIATION_RERUN_SHARE = Math.max(
 // Chunking is enabled when RELATIONS_BATCH_TARGET_TOKENS > 0 (set to 0 to disable).
 const RELATIONS_BATCH_TARGET_TOKENS = (() => {
 	const raw = process.env.RELATIONS_BATCH_TARGET_TOKENS;
-	// Lower default reduces OpenAI TPM blowups (then expensive cross-provider fallback).
-	if (raw == null || raw.trim() === '') return 12_000;
+	// Lower default reduces TPM blowups / split storms on dense claim graphs (Neon advisory theme).
+	if (raw == null || raw.trim() === '') return 10_000;
 	const n = Number(raw);
 	if (!Number.isFinite(n) || n <= 0) return 0;
 	return Math.trunc(n);
 })();
 const RELATIONS_BATCH_OVERLAP_CLAIMS =
-	parsePositiveInt(process.env.RELATIONS_BATCH_OVERLAP_CLAIMS) ?? 4;
+	parsePositiveInt(process.env.RELATIONS_BATCH_OVERLAP_CLAIMS) ?? 3;
 /** When >1, run independent extraction batches in parallel (ordered merge). Splits mid-batch disable parallelism for remaining work. */
 const INGEST_EXTRACTION_CONCURRENCY = Math.max(
 	1,
-	parsePositiveInt(process.env.INGEST_EXTRACTION_CONCURRENCY) ?? 3
+	parsePositiveInt(process.env.INGEST_EXTRACTION_CONCURRENCY) ?? 2
 );
 const INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE =
 	(process.env.INGEST_FAIL_ON_GROUPING_POSITION_COLLAPSE || 'true').toLowerCase() !== 'false';

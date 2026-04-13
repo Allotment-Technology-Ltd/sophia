@@ -28,7 +28,10 @@ import {
 	CANONICAL_VOYAGE_EMBEDDING_MODEL_LABEL
 } from '$lib/ingestionCanonicalPipeline';
 import { MAX_DURABLE_INGEST_JOB_CONCURRENCY } from '$lib/ingestionJobConcurrency';
-import { ingestRunStillOccupiesLlmConcurrencySlot } from './ingestion/ingestCapacityAtStore';
+import {
+	computeIngestionJobTickSpawnCap,
+	ingestRunStillOccupiesLlmConcurrencySlot
+} from './ingestion/ingestCapacityAtStore';
 import { sweepStalledIngestRuns, sweepWorkerOrphanIngestRuns } from './ingestion/ingestWatchdog';
 import { sanitizeIngestionJobWorkerDefaults } from './ingestionJobWorkerDefaults';
 
@@ -693,12 +696,17 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 
 	/** Runs in Surreal store (no LLM) do not consume a job concurrency slot. */
 	let llmSlotOccupants = 0;
+	const runningCount = refreshed.filter((it) => it.status === 'running').length;
 	for (const it of refreshed) {
 		if (it.status !== 'running' || !it.childRunId) continue;
 		const child = await loadChildIngestRunState(it.childRunId);
 		if (ingestRunStillOccupiesLlmConcurrencySlot(child)) llmSlotOccupants += 1;
 	}
-	const slots = Math.max(0, job.concurrency - llmSlotOccupants);
+	const slots = computeIngestionJobTickSpawnCap({
+		jobConcurrency: job.concurrency,
+		llmSlotOccupants,
+		runningItemCount: runningCount
+	});
 	const pendingItems = await db
 		.select()
 		.from(ingestionJobItems)
