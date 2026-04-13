@@ -19,6 +19,16 @@ export const INGEST_EMBED_USD_PER_MILLION_CHARS = 0.025;
 /** Identifier logged by Neon backfill for operators (not a DB constraint). */
 export const INGEST_LLM_USD_RATE_TABLE_ID = 'vertex-gemini3-standard-2026-04-12' as const;
 
+/** DeepSeek official API (approx; refresh from https://api-docs.deepseek.com/quick_start/pricing/ ). */
+const SUPPLEMENTAL_DEEPSEEK_TEXT_USD_PER_MILLION: Record<
+	string,
+	{ inputPerMillion: number; outputPerMillion: number }
+> = {
+	'deepseek-chat': { inputPerMillion: 0.28, outputPerMillion: 0.42 },
+	'deepseek-reasoner': { inputPerMillion: 0.55, outputPerMillion: 2.19 },
+	'deepseek-coder': { inputPerMillion: 0.14, outputPerMillion: 0.28 }
+};
+
 const SUPPLEMENTAL_VERTEX_GEMINI_TEXT_USD_PER_MILLION: Record<
 	string,
 	{ inputPerMillion: number; outputPerMillion: number }
@@ -59,8 +69,11 @@ export function getIngestLlmUsdPerMillion(modelRef: string): {
 		}
 	}
 
-	const sup = SUPPLEMENTAL_VERTEX_GEMINI_TEXT_USD_PER_MILLION[id];
-	if (sup) return sup;
+	const supV = SUPPLEMENTAL_VERTEX_GEMINI_TEXT_USD_PER_MILLION[id];
+	if (supV) return supV;
+
+	const supD = SUPPLEMENTAL_DEEPSEEK_TEXT_USD_PER_MILLION[id];
+	if (supD) return supD;
 
 	if (fromKeys) {
 		return { inputPerMillion: fromKeys.inputPerMillion ?? 0, outputPerMillion: fromKeys.outputPerMillion ?? 0 };

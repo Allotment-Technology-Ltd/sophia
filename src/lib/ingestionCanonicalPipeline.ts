@@ -49,21 +49,25 @@ export const CANONICAL_VOYAGE_EMBEDDING_FINGERPRINT = 'voyage:voyage-4-lite:1024
 
 /**
  * Production profile: **Vertex Gemini** for extraction, relations, grouping, and remediation
- * (capacity + long context on GCP billing). **Validation** defaults to **Mistral Large** so the first
- * verification pass is never the same route as Vertex Flash extraction (a real second opinion); OpenAI
- * and Vertex tiers follow as fallbacks. **Mistral** is the first fallback on other heavy stages and remains
- * primary for **json_repair** (short, structured JSON fixes, gentler on free-tier burst limits). Allowlist in
- * `ingestionFinetuneLabelerPolicy` keeps sensitive labeler stages on `mistral` + `vertex` only by default
- * (`validation` is not a sensitive stage, so OpenAI may appear in its chain).
+ * (capacity + long context on GCP billing). **Validation** defaults to **DeepSeek Chat** (OpenAI-compatible
+ * API, strong instruction following) so the first verification pass is not Vertex Flash extraction and
+ * does not depend on Mistral quota. **OpenAI** and **Vertex** follow, then **Mistral** in the tail when keys exist.
+ * **`deepseek-reasoner` is intentionally omitted** from the default validation chain (slow / long outputs /
+ * higher timeout risk vs `deepseek-chat`); use pins or Restormel if you need it. **json_repair** defaults to
+ * **DeepSeek Chat** with **Mistral** and **Vertex** as fallbacks.
+ *
+ * Allowlist in `ingestionFinetuneLabelerPolicy` includes `deepseek` alongside `mistral` + `vertex` so
+ * DeepSeek can serve sensitive training-lineage stages when strict mode is on (operators remain
+ * responsible for provider ToS / fine-tuning eligibility for their keys).
  */
 export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, CanonicalModelRef> = {
 	extraction: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 	relations: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 	grouping: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
-	/** Never mirror extraction’s default Vertex Flash primary — cross-vendor first improves verification signal. */
-	validation: { provider: 'mistral', modelId: 'mistral-large-latest' },
+	/** Cross-vendor first: not Vertex extraction, not Mistral-first (quota-friendly). */
+	validation: { provider: 'deepseek', modelId: 'deepseek-chat' },
 	remediation: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
-	json_repair: { provider: 'mistral', modelId: 'mistral-medium-latest' }
+	json_repair: { provider: 'deepseek', modelId: 'deepseek-chat' }
 };
 
 /**
@@ -73,18 +77,21 @@ export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, Ca
 export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, CanonicalModelRef[]> = {
 	extraction: [
 		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
+		{ provider: 'deepseek', modelId: 'deepseek-chat' },
 		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
 		{ provider: 'mistral', modelId: 'mistral-large-latest' },
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	],
 	relations: [
 		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
+		{ provider: 'deepseek', modelId: 'deepseek-chat' },
 		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
 		{ provider: 'mistral', modelId: 'mistral-large-latest' },
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	],
 	grouping: [
 		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
+		{ provider: 'deepseek', modelId: 'deepseek-chat' },
 		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
 		{ provider: 'mistral', modelId: 'mistral-large-latest' },
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
@@ -93,16 +100,20 @@ export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, C
 		{ provider: 'openai', modelId: 'gpt-4o-mini' },
 		{ provider: 'openai', modelId: 'gpt-4o' },
 		{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
-		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' }
+		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
+		{ provider: 'mistral', modelId: 'mistral-large-latest' },
+		{ provider: 'mistral', modelId: 'mistral-medium-latest' }
 	],
 	remediation: [
 		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
+		{ provider: 'deepseek', modelId: 'deepseek-chat' },
 		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
 		{ provider: 'mistral', modelId: 'mistral-large-latest' },
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	],
 	json_repair: [
 		{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
+		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
 		{ provider: 'mistral', modelId: 'mistral-large-latest' },
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	]

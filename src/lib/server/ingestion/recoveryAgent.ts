@@ -38,6 +38,9 @@ export function isRetryableIngestModelErrorMessage(message: string): boolean {
 		msg.includes('429') ||
 		msg.includes('529') ||
 		msg.includes('500') ||
+		msg.includes('502') ||
+		msg.includes('503') ||
+		msg.includes('504') ||
 		msg.includes('overloaded') ||
 		msg.includes('timeout') ||
 		msg.includes('prompt_too_long') ||
