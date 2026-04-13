@@ -81,6 +81,7 @@ import {
 import {
 	findDoneIngestRunIdsWithStagingMetaForCanonicalUrl,
 	findNeonStagingRunIdForValidationTailBySlug,
+	findNeonStagingRunIdsForValidationTailByCanonicalUrlHash,
 	loadIngestPartialFromNeon,
 	saveIngestPartialToNeon
 } from '../src/lib/server/db/ingestStaging.js';
@@ -102,6 +103,7 @@ import {
 	resolveExcludeSourceFromModelTrainingForIngest,
 	upsertSourceTrainingGovernanceOnIngestComplete
 } from '../src/lib/server/db/sourceTrainingGovernance.js';
+import { INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING } from '../src/lib/server/ingestion/ingestProcessExitCodes.js';
 import { isNeonIngestPersistenceEnabled } from '../src/lib/server/neon/datastore.ts';
 import {
 	SOURCE_ID_STRING_ARRAY_ONE_SQL,
@@ -2704,6 +2706,8 @@ type LoadPartialResultsOpts = {
 	forceStage?: string | null;
 	/** Used with `--force-stage validating` to locate staging written under an earlier orchestration run id. */
 	canonicalSourceUrl?: string;
+	/** Matches Neon `source_json.canonical_url_hash` when slug/URL text drifted between runs. */
+	canonicalUrlHash?: string;
 };
 
 async function loadPartialResults(
@@ -2713,6 +2717,7 @@ async function loadPartialResults(
 	const runId = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim();
 	const force = opts?.forceStage ?? null;
 	const canonical = opts?.canonicalSourceUrl?.trim();
+	const urlHash = opts?.canonicalUrlHash?.trim();
 	const wantsEmbeddingCheckpoint =
 		force === 'embedding' ||
 		force === 'validating' ||
@@ -2741,40 +2746,68 @@ async function loadPartialResults(
 		const direct = await tryNeon(runId);
 		if (direct) return direct;
 
-		if (wantsEmbeddingCheckpoint && canonical) {
-			const legacy = await findNeonStagingRunIdForValidationTailBySlug({
-				slug,
-				canonicalSourceUrl: canonical
-			});
-			if (legacy && legacy !== runId) {
-				const p = await tryNeon(legacy);
-				if (p && embeddingTailLooksComplete(p)) {
-					console.log(
-						`  [RESUME] Loaded Neon staging from prior run ${legacy} (slug/url tail lookup; current orchestration run ${runId})`
-					);
-					return p;
+		if (wantsEmbeddingCheckpoint) {
+			/** Prefer stable identity over slug/URL text (avoids ingest_runs URL vs staging drift across many URLs). */
+			const resolvedUrlHash =
+				urlHash ||
+				(canonical ? canonicalizeAndHashSourceUrl(canonical)?.canonicalUrlHash : undefined);
+
+			if (resolvedUrlHash) {
+				const hashCandidates = await findNeonStagingRunIdsForValidationTailByCanonicalUrlHash(
+					resolvedUrlHash,
+					20
+				);
+				for (const rid of hashCandidates) {
+					if (rid === runId) continue;
+					const p = await tryNeon(rid);
+					if (p && embeddingTailLooksComplete(p)) {
+						console.log(
+							`  [RESUME] Loaded Neon staging from prior run ${rid} (canonical_url_hash on ingest_staging_meta; current orchestration run ${runId})`
+						);
+						return p;
+					}
 				}
 			}
-			const candidates = await findDoneIngestRunIdsWithStagingMetaForCanonicalUrl(canonical, 80);
-			for (const rid of candidates) {
-				if (rid === runId) continue;
-				const p = await tryNeon(rid);
-				if (p && embeddingTailLooksComplete(p)) {
-					console.log(
-						`  [RESUME] Loaded Neon staging from prior done run ${rid} (canonical URL scan; current orchestration run ${runId})`
-					);
-					return p;
+
+			if (canonical) {
+				const legacy = await findNeonStagingRunIdForValidationTailBySlug({
+					slug,
+					canonicalSourceUrl: canonical,
+					...(urlHash ? { canonicalUrlHash: urlHash } : {})
+				});
+				if (legacy && legacy !== runId) {
+					const p = await tryNeon(legacy);
+					if (p && embeddingTailLooksComplete(p)) {
+						console.log(
+							`  [RESUME] Loaded Neon staging from prior run ${legacy} (slug/url tail lookup; current orchestration run ${runId})`
+						);
+						return p;
+					}
 				}
-			}
-		} else if (wantsEmbeddingCheckpoint) {
-			const legacy = await findNeonStagingRunIdForValidationTailBySlug({ slug });
-			if (legacy && legacy !== runId) {
-				const p = await tryNeon(legacy);
-				if (p && embeddingTailLooksComplete(p)) {
-					console.log(
-						`  [RESUME] Loaded Neon staging from prior run ${legacy} (slug-only tail lookup; current orchestration run ${runId})`
-					);
-					return p;
+				const candidates = await findDoneIngestRunIdsWithStagingMetaForCanonicalUrl(canonical, 500);
+				for (const rid of candidates) {
+					if (rid === runId) continue;
+					const p = await tryNeon(rid);
+					if (p && embeddingTailLooksComplete(p)) {
+						console.log(
+							`  [RESUME] Loaded Neon staging from prior done run ${rid} (canonical URL scan; current orchestration run ${runId})`
+						);
+						return p;
+					}
+				}
+			} else {
+				const legacy = await findNeonStagingRunIdForValidationTailBySlug({
+					slug,
+					...(urlHash ? { canonicalUrlHash: urlHash } : {})
+				});
+				if (legacy && legacy !== runId) {
+					const p = await tryNeon(legacy);
+					if (p && embeddingTailLooksComplete(p)) {
+						console.log(
+							`  [RESUME] Loaded Neon staging from prior run ${legacy} (slug-only tail lookup; current orchestration run ${runId})`
+						);
+						return p;
+					}
 				}
 			}
 		}
@@ -3476,14 +3509,27 @@ async function loadSourceTextAndMeta(
 		let fromNeon = await loadIngestPartialFromNeon(runId, hintSlug);
 		const metaPathBesideTxt = resolvedArg.replace(/\.txt$/i, '.meta.json');
 		let canonicalHint: string | undefined;
+		let canonicalUrlHashHint: string | undefined;
 		if (fs.existsSync(metaPathBesideTxt)) {
 			try {
-				const rawMeta = JSON.parse(fs.readFileSync(metaPathBesideTxt, 'utf-8')) as { url?: unknown };
+				const rawMeta = JSON.parse(fs.readFileSync(metaPathBesideTxt, 'utf-8')) as {
+					url?: unknown;
+					canonical_url_hash?: unknown;
+				};
 				if (typeof rawMeta.url === 'string' && rawMeta.url.trim()) {
 					canonicalHint = rawMeta.url.trim();
 				}
+				if (typeof rawMeta.canonical_url_hash === 'string' && rawMeta.canonical_url_hash.trim()) {
+					canonicalUrlHashHint = rawMeta.canonical_url_hash.trim();
+				}
 			} catch {
 				// ignore malformed meta beside a missing .txt
+			}
+		}
+		if (!canonicalUrlHashHint && fromNeon?.source && typeof fromNeon.source === 'object' && !Array.isArray(fromNeon.source)) {
+			const h = (fromNeon.source as Record<string, unknown>).canonical_url_hash;
+			if (typeof h === 'string' && h.trim()) {
+				canonicalUrlHashHint = h.trim();
 			}
 		}
 		let snap = fromNeon?.source_text_snapshot;
@@ -3499,7 +3545,8 @@ async function loadSourceTextAndMeta(
 		) {
 			const legacy = await findNeonStagingRunIdForValidationTailBySlug({
 				slug: hintSlug,
-				...(canonicalHint ? { canonicalSourceUrl: canonicalHint } : {})
+				...(canonicalHint ? { canonicalSourceUrl: canonicalHint } : {}),
+				...(canonicalUrlHashHint ? { canonicalUrlHash: canonicalUrlHashHint } : {})
 			});
 			if (legacy && legacy !== runId) {
 				const alt = await loadIngestPartialFromNeon(legacy, hintSlug);
@@ -3709,7 +3756,11 @@ async function main() {
 	}
 
 	const extractionBatches = buildPassageBatches(passages, sectionTokenLimit);
-	const partialLoadOpts = { forceStage, canonicalSourceUrl: sourceMeta.url };
+	const partialLoadOpts = {
+		forceStage,
+		canonicalSourceUrl: sourceMeta.url,
+		canonicalUrlHash: sourceMeta.canonical_url_hash
+	};
 
 	// Admin orchestration + Neon: stages 1–5 use `--stop-before-store`; checkpoints live in Neon.
 	// Skip Surreal until Sync (Stage 6), so local runs do not need a live SurrealDB for pipeline tests.
@@ -3808,7 +3859,7 @@ async function main() {
 					`[ERROR] Validation-only ingest requires Neon checkpoints through "${stageBeforeValidate}" (claims + relations + grouping + full embeddings). Current resume point: "${resumeFromStage ?? 'none'}".`
 				);
 				await closeSurrealIfOpen(db);
-				process.exit(1);
+				process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
 			}
 			console.log(`[RESUME] Loaded partial results from disk (stage: ${loaded.stage_completed})`);
 		} else {
@@ -3824,7 +3875,7 @@ async function main() {
 						`None were found (orchestration run id: ${rid || 'unset'}). Refusing to re-run earlier stages silently.${validationExtra}`
 				);
 				await closeSurrealIfOpen(db);
-				process.exit(1);
+				process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
 			}
 			resumeFromStage = null;
 			partial = { source: sourceMeta, stage_completed: 'none' };
@@ -3923,7 +3974,7 @@ async function main() {
 					'[ERROR] Validation-only ingest would run Stage 1 (extraction); refusing (checkpoint/resume guard).'
 				);
 				await closeSurrealIfOpen(db);
-				process.exit(1);
+				process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
 			}
 
 			if (shouldRunStage('extracting', resumeFromStage)) {

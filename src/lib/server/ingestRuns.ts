@@ -23,6 +23,7 @@ import {
 } from '$lib/server/db/ingestRunRepository';
 import { appendIssueFromLogLine, persistIngestRunReport, type IngestIssueRecord } from '$lib/server/ingestRunIssues';
 import { buildOperatorByokProcessEnv } from '$lib/server/byok/buildOperatorIngestEnv';
+import { INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING } from '$lib/server/ingestion/ingestProcessExitCodes';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 import { query as dbQuery } from '$lib/server/db';
 import {
@@ -1778,14 +1779,21 @@ class IngestRunManager extends EventEmitter {
       }
 
       if (!forSync && s && s.ingestRetryAttempts < 1) {
-        s.ingestRetryAttempts++;
-        this.addLog(runId, 'Ingest failed; retrying once automatically…');
-        void this.execStartIngestChild(runId, payload, sourceFile, {
-          forSyncOnly: false,
-          resumeFromFailure: true,
-          ingestAutoRetry: true
-        });
-        return;
+        if (code === INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING) {
+          this.addLog(
+            runId,
+            '[ingest] not auto-retrying: ingest.ts exited because --force-stage checkpoints are missing (retry would omit --force-stage and can start a full extraction). Fix Neon staging or run without validation-only tail.'
+          );
+        } else {
+          s.ingestRetryAttempts++;
+          this.addLog(runId, 'Ingest failed; retrying once automatically…');
+          void this.execStartIngestChild(runId, payload, sourceFile, {
+            forSyncOnly: false,
+            resumeFromFailure: true,
+            ingestAutoRetry: true
+          });
+          return;
+        }
       }
 
       if (forSync) {
