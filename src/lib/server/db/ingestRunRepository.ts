@@ -218,10 +218,15 @@ export async function neonLoadIngestRun(runId: string): Promise<IngestRunState |
   logRows.reverse();
 
   if (row.status === 'running') {
+    const stagesProbe = row.stages as Record<string, { status?: string }>;
+    const storeLooksDone = stagesProbe?.store?.status === 'done';
     const orchestratorFinished = logRows.some(
       (l) => l.line.trim() === INGEST_ORCHESTRATOR_PIPELINE_DONE_LINE
     );
-    if (orchestratorFinished) {
+    const telemetryComplete = logRows.some((l) =>
+      l.line.includes('"event":"ingest_timing_complete"')
+    );
+    if (orchestratorFinished || telemetryComplete || storeLooksDone) {
       const now = new Date();
       const healed = await db
         .update(ingestRuns)

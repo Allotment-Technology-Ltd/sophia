@@ -109,6 +109,17 @@ export function sanitizeIngestionJobWorkerDefaults(raw: unknown): BO | undefined
     delete out.forceReingest;
   }
 
+  const fsckRaw = o.forceStageMissingCheckpoint ?? o.ingestForceStageMissingCheckpoint;
+  if (typeof fsckRaw === 'string') {
+    const t = fsckRaw.trim().toLowerCase();
+    if (t === 'error' || t === 'full' || t === 'resume') {
+      out.forceStageMissingCheckpoint = t as BO['forceStageMissingCheckpoint'];
+    }
+  }
+  if (out.forceStage === 'validating' && out.forceStageMissingCheckpoint === undefined) {
+    out.forceStageMissingCheckpoint = 'resume';
+  }
+
   const tBounds = (n: number | null) => n != null && n >= 10_000 && n <= 3_600_000;
   const mt = asInt(o.ingestModelTimeoutMs);
   if (tBounds(mt)) out.ingestModelTimeoutMs = mt!;
