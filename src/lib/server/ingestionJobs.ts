@@ -583,10 +583,23 @@ function mapChildRunToItemStatus(status: string): IngestionJobItemStatus {
 	return 'running';
 }
 
-async function loadChildIngestRunState(runId: string): Promise<IngestRunState | null> {
-	const mem = await ingestRunManager.getStateAsync(runId);
-	if (mem) return mem;
-	return neonLoadIngestRun(runId);
+/**
+ * Prefer Neon when the child is already **terminal** or **awaiting_sync**, so admin pollers / other
+ * Cloud Run instances are not stuck on stale in-memory `running` from a host that already exited.
+ */
+async function loadChildIngestRunStateForJobReconcile(runId: string): Promise<IngestRunState | null> {
+	const rid = runId.trim();
+	if (!rid) return null;
+	const fromNeon = await neonLoadIngestRun(rid);
+	if (
+		fromNeon &&
+		(terminalRunStatus(fromNeon.status) || (fromNeon.status as string) === 'awaiting_sync')
+	) {
+		return fromNeon;
+	}
+	const viaManager = await ingestRunManager.getStateAsync(rid);
+	if (viaManager) return viaManager;
+	return fromNeon;
 }
 
 function isStuckIngestRun(run: IngestRunState): boolean {
@@ -643,7 +656,28 @@ export async function reconcileIngestionJobView(
 
 	if (job.status !== 'running') return;
 
-	const items = await db
+	let items = await db
+		.select()
+		.from(ingestionJobItems)
+		.where(eq(ingestionJobItems.jobId, jobId));
+
+	for (const it of items) {
+		if (jobItemStatusHasActiveChildWorker(it.status) && !it.childRunId?.trim()) {
+			await db
+				.update(ingestionJobItems)
+				.set({
+					status: 'pending',
+					lastError: 'reconcile_heal: active item had no child_run_id (re-queued)',
+					updatedAt: new Date()
+				})
+				.where(eq(ingestionJobItems.id, it.id));
+			await appendIngestionJobEvent(jobId, 'item_orphan_active_heal', {
+				itemId: it.id,
+				url: it.url
+			});
+		}
+	}
+	items = await db
 		.select()
 		.from(ingestionJobItems)
 		.where(eq(ingestionJobItems.jobId, jobId));
@@ -653,8 +687,23 @@ export async function reconcileIngestionJobView(
 	// Refresh in-flight items from child runs (awaiting_sync mirror, terminal, or stuck → error)
 	for (const it of items) {
 		if (!jobItemStatusHasActiveChildWorker(it.status) || !it.childRunId) continue;
-		const run = await loadChildIngestRunState(it.childRunId);
-		if (!run) continue;
+		const run = await loadChildIngestRunStateForJobReconcile(it.childRunId);
+		if (!run) {
+			await db
+				.update(ingestionJobItems)
+				.set({
+					status: 'error',
+					lastError: 'reconcile_heal: child ingest run row missing (check Neon ingest_runs)',
+					updatedAt: new Date()
+				})
+				.where(eq(ingestionJobItems.id, it.id));
+			await appendIngestionJobEvent(jobId, 'item_child_run_missing', {
+				itemId: it.id,
+				url: it.url,
+				childRunId: it.childRunId
+			});
+			continue;
+		}
 
 		if (run.status === 'awaiting_sync') {
 			if (it.status !== 'awaiting_sync') {
@@ -835,7 +884,7 @@ async function tickIngestionJobUnlocked(
 	const runningCount = refreshed.filter((it) => jobItemStatusHasActiveChildWorker(it.status)).length;
 	for (const it of refreshed) {
 		if (!jobItemStatusHasActiveChildWorker(it.status) || !it.childRunId) continue;
-		const child = await loadChildIngestRunState(it.childRunId);
+		const child = await loadChildIngestRunStateForJobReconcile(it.childRunId);
 		if (ingestRunStillOccupiesLlmConcurrencySlot(child)) llmSlotOccupants += 1;
 	}
 	const slots = computeIngestionJobTickSpawnCap({
@@ -885,7 +934,7 @@ async function tickIngestionJobUnlocked(
 		};
 		const existingRunId = it.childRunId?.trim();
 		if (existingRunId) {
-			const prior = await loadChildIngestRunState(existingRunId);
+			const prior = await loadChildIngestRunStateForJobReconcile(existingRunId);
 			if (!prior) {
 				await db
 					.update(ingestionJobItems)

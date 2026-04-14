@@ -2334,6 +2334,27 @@ async function callStageModel(params: {
 	const effectiveChain = buildEffectiveModelChainForStage(stage, plan, planningContext, catalogRouting);
 	const noFallback = ingestModelFallbackDisabled() || isStageModelPinned(stage);
 
+	/** When pins are set, `noFallback` uses a single `plan` — but finetune policy must still block disallowed vendors (e.g. Anthropic) on sensitive stages. */
+	let planForNoFallback = plan;
+	if (
+		noFallback &&
+		isStageModelPinned(stage) &&
+		isFinetuneSensitiveLlmStage(stage) &&
+		ingestFinetuneLabelerStrictEnabled(process.env)
+	) {
+		const allowed = new Set(parseFinetuneLabelerAllowedProviders(process.env));
+		const pinProv = plan.provider.trim().toLowerCase();
+		if (!allowed.has(pinProv) && effectiveChain.length > 0) {
+			const tier = effectiveChain[0]!;
+			if (!planMatchesCanonicalTier(plan, tier)) {
+				planForNoFallback = await planIngestionStageWithExplicitModel(stage, planningContext, tier);
+				console.warn(
+					`  [INGEST_FINETUNE_POLICY] ${stage}: operator pin ${plan.provider}/${plan.model} is not in allowed providers — using ${tier.provider}/${tier.modelId} (no cross-model fallback)`
+				);
+			}
+		}
+	}
+
 	let lastError: Error | null = null;
 
 	async function runInnerRetries(activePlan: IngestionStagePlan): Promise<string | null> {
@@ -2540,7 +2561,7 @@ async function callStageModel(params: {
 	}
 
 	if (noFallback) {
-		const only = await runInnerRetries(plan);
+		const only = await runInnerRetries(planForNoFallback);
 		if (only !== null) return only;
 		const detail =
 			lastError != null ? formatModelCallErrorDetails(lastError) : 'Unknown error';

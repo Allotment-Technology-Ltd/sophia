@@ -1230,7 +1230,9 @@ class IngestRunManager extends EventEmitter {
 
   async completeRun(runId: string): Promise<void> {
     const state = this.runs.get(runId);
+    let jobIdForReconcile: string | undefined;
     if (state) {
+      jobIdForReconcile = state.payload.ingestion_job_id?.trim();
       this.releaseGlobalSlotIfHeld(runId);
       state.process = undefined;
       state.status = 'done';
@@ -1247,11 +1249,14 @@ class IngestRunManager extends EventEmitter {
         void markLinkedQueueStatus(state.payload.queue_record_id, 'ingested', { ingested: true, lastError: null });
       }
     }
+    this.scheduleLinkedIngestionJobReconcile(jobIdForReconcile);
   }
 
   async failRun(runId: string, error: string): Promise<void> {
     const state = this.runs.get(runId);
+    let jobIdForReconcile: string | undefined;
     if (state) {
+      jobIdForReconcile = state.payload.ingestion_job_id?.trim();
       this.releaseGlobalSlotIfHeld(runId);
       state.process = undefined;
       state.status = 'error';
@@ -1278,12 +1283,25 @@ class IngestRunManager extends EventEmitter {
         void markLinkedQueueStatus(state.payload.queue_record_id, 'failed', { lastError: error });
       }
     }
+    this.scheduleLinkedIngestionJobReconcile(jobIdForReconcile);
+  }
+
+  private scheduleLinkedIngestionJobReconcile(jobId: string | undefined): void {
+    const id = jobId?.trim();
+    if (!id || !isNeonIngestPersistenceEnabled()) return;
+    void import('./ingestionJobs.js')
+      .then(({ reconcileIngestionJobView }) => reconcileIngestionJobView(id))
+      .catch((e) =>
+        console.warn('[ingest-runs] reconcileIngestionJobView after child terminal:', e)
+      );
   }
 
   private finalizeCancel(runId: string): void {
     const state = this.runs.get(runId);
     if (!state) return;
     if (state.status === 'done' || state.status === 'error') return;
+
+    const jobIdForReconcile = state.payload.ingestion_job_id?.trim();
 
     this.releaseGlobalSlotIfHeld(runId);
     state.status = 'error';
@@ -1322,6 +1340,8 @@ class IngestRunManager extends EventEmitter {
         lastError: 'Ingestion cancelled by operator.'
       });
     }
+
+    this.scheduleLinkedIngestionJobReconcile(jobIdForReconcile);
   }
 
   /**

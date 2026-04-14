@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DOMAIN_VALUES, preprocessDomainForEnum } from './domainZod.js';
 
 export const GROUPING_SYSTEM = `You are a philosophical argument cartographer. You have been given claims and relations extracted from a philosophical source. Your task is to identify the named argument structures they form.
 
@@ -37,20 +38,6 @@ const ARGUMENT_ROLE_VALUES = [
 	'assumption',
 	'objection',
 	'response'
-] as const;
-
-const DOMAIN_VALUES = [
-	'ethics',
-	'epistemology',
-	'metaphysics',
-	'philosophy_of_mind',
-	'political_philosophy',
-	'logic',
-	'aesthetics',
-	'philosophy_of_science',
-	'philosophy_of_language',
-	'applied_ethics',
-	'philosophy_of_ai'
 ] as const;
 
 function normalizeLabel(value: unknown): string | unknown {
@@ -106,26 +93,6 @@ function normalizeArgumentRole(value: unknown): unknown {
 	return normalized;
 }
 
-function normalizeDomain(value: unknown): unknown {
-	const normalized = normalizeLabel(value);
-	if (typeof normalized !== 'string') return normalized;
-	const domainMap: Record<string, (typeof DOMAIN_VALUES)[number]> = {
-		ethics: 'ethics',
-		epistemology: 'epistemology',
-		metaphysics: 'metaphysics',
-		philosophy_of_mind: 'philosophy_of_mind',
-		mind: 'philosophy_of_mind',
-		political_philosophy: 'political_philosophy',
-		logic: 'logic',
-		aesthetics: 'aesthetics',
-		philosophy_of_science: 'philosophy_of_science',
-		philosophy_of_language: 'philosophy_of_language',
-		applied_ethics: 'applied_ethics',
-		philosophy_of_ai: 'philosophy_of_ai'
-	};
-	return domainMap[normalized] ?? normalized;
-}
-
 export const ArgumentClaimSchema = z.object({
 	position_in_source: z.preprocess(coercePositiveInt, z.number().int().positive()),
 	role: z.preprocess(normalizeArgumentRole, z.enum(ARGUMENT_ROLE_VALUES))
@@ -134,7 +101,7 @@ export const ArgumentClaimSchema = z.object({
 export const ArgumentSchema = z.object({
 	name: z.string().describe('Standard or descriptive name of the argument'),
 	tradition: z.string().nullable().optional().describe('Philosophical school/tradition'),
-	domain: z.preprocess(normalizeDomain, z.enum(DOMAIN_VALUES)),
+	domain: z.preprocess(preprocessDomainForEnum, z.enum(DOMAIN_VALUES)),
 	summary: z.string().describe('1-2 sentence description of what the argument establishes'),
 	claims: z.array(ArgumentClaimSchema).describe('Claims with roles in this argument')
 });

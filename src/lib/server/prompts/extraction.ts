@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CLAIM_ORIGIN_VALUES, CLAIM_SCOPE_VALUES } from '../ingestion/contracts.js';
+import { DOMAIN_VALUES, preprocessDomainForEnum } from './domainZod.js';
 
 export const EXTRACTION_SYSTEM = `You are a philosophical text analyst specialising in argument mining. Your task is to extract every atomic philosophical claim from the argumentative passages provided.
 
@@ -74,20 +75,6 @@ const CLAIM_TYPE_VALUES = [
 	'methodological'
 ] as const;
 
-const DOMAIN_VALUES = [
-	'ethics',
-	'epistemology',
-	'metaphysics',
-	'philosophy_of_mind',
-	'political_philosophy',
-	'logic',
-	'aesthetics',
-	'philosophy_of_science',
-	'philosophy_of_language',
-	'applied_ethics',
-	'philosophy_of_ai'
-] as const;
-
 function normalizeStringList(value: unknown): unknown {
 	if (Array.isArray(value)) {
 		return value
@@ -147,31 +134,11 @@ function nullishOptionalString(value: unknown): unknown {
 	return value;
 }
 
-function normalizeDomain(value: unknown): unknown {
-	const normalized = normalizeLabel(value);
-	if (typeof normalized !== 'string') return normalized;
-	const domainMap: Record<string, (typeof DOMAIN_VALUES)[number]> = {
-		ethics: 'ethics',
-		epistemology: 'epistemology',
-		metaphysics: 'metaphysics',
-		philosophy_of_mind: 'philosophy_of_mind',
-		mind: 'philosophy_of_mind',
-		political_philosophy: 'political_philosophy',
-		logic: 'logic',
-		aesthetics: 'aesthetics',
-		philosophy_of_science: 'philosophy_of_science',
-		philosophy_of_language: 'philosophy_of_language',
-		applied_ethics: 'applied_ethics',
-		philosophy_of_ai: 'philosophy_of_ai'
-	};
-	return domainMap[normalized] ?? normalized;
-}
-
 export const ExtractionClaimSchema = z.object({
 	text: z.string().describe('The claim in clear, concise language'),
 	claim_type: z.preprocess(normalizeClaimType, z.enum(CLAIM_TYPE_VALUES)),
 	claim_origin: z.preprocess(normalizeLabel, z.enum(CLAIM_ORIGIN_VALUES)).optional(),
-	domain: z.preprocess(normalizeDomain, z.enum(DOMAIN_VALUES)),
+	domain: z.preprocess(preprocessDomainForEnum, z.enum(DOMAIN_VALUES)),
 	subdomain: z.preprocess(nullishOptionalString, z.string().optional()),
 	thinker: z.preprocess(nullishOptionalString, z.string().min(1).optional()),
 	tradition: z.preprocess(nullishOptionalString, z.string().min(1).optional()),
