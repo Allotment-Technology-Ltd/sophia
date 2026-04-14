@@ -6,6 +6,7 @@ import { getDrizzleDb } from '$lib/server/db/neon';
 import { ingestionJobItems } from '$lib/server/db/schema';
 import { ingestRunManager } from '$lib/server/ingestRuns';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
+import { reconcileIngestionJobView } from '$lib/server/ingestionJobs';
 
 /**
  * POST — for each **running** job item with a `child_run_id`, call {@link ingestRunManager.respawnWorkerFromCheckpoint}
@@ -43,6 +44,8 @@ export const POST: RequestHandler = async ({ locals, params }) => {
 	}
 
 	const failures = results.filter((x) => !x.ok);
+	/** Reconcile items vs Neon so URLs already finished (respawn skipped) flip to `done`/`error` immediately. */
+	await reconcileIngestionJobView(jobId);
 	return json({
 		ok: failures.length === 0,
 		job_id: jobId,
