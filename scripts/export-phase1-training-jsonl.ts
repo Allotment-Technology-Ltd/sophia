@@ -17,8 +17,9 @@
  *   pnpm exec tsx scripts/export-phase1-training-jsonl.ts -- --no-stratified
  *
  * G1 (ToS / policy shards, mitigation §8 / §9 M9.23):
- *   --g1-allow-extraction-prefix=mistral/   (repeatable; only runs whose persisted `stage_models.extraction` starts with a prefix)
- *   --g1-shard-by-provider                (write separate JSONL per extraction provider segment, e.g. train.mistral.jsonl, train.vertex.jsonl)
+ *   --g1-policy-cleared                 (same as repeating policy prefixes: Vertex+Gemini, Mistral, DeepSeek — see POLICY_CLEARED_EXTRACTION_PREFIXES)
+ *   --g1-allow-extraction-prefix=vertex/  (repeatable; filter by persisted `stage_models.extraction` prefix)
+ *   --g1-shard-by-provider              (separate JSONL per provider segment, e.g. train.mistral.jsonl, train.vertex.jsonl)
  */
 
 import { createHash } from 'node:crypto';
@@ -51,6 +52,19 @@ export const KNOWN_FAILED_TRAINING_SOURCE_URLS = [
 	'https://plato.stanford.edu/entries/hume/'
 ] as const;
 
+/**
+ * Policy-cleared extraction `stage_models.extraction` prefixes for G1 training exports (organisation policy).
+ * **Vertex / Gemini:** Gemini on Vertex is `vertex/gemini-*`; some routes may log `google/` for Google AI–hosted models.
+ * **Mistral / DeepSeek:** `mistral/…`, `deepseek/…` per Restormel / provider catalog strings.
+ * Use **`--g1-policy-cleared`** or pass the same values via repeated **`--g1-allow-extraction-prefix=`**.
+ */
+export const POLICY_CLEARED_EXTRACTION_PREFIXES = [
+	'vertex/',
+	'google/',
+	'mistral/',
+	'deepseek/'
+] as const;
+
 type SplitName = 'train' | 'validation' | 'test' | 'golden_holdout';
 
 type JsonlLine = {
@@ -80,10 +94,16 @@ function parseArgs() {
 	const minhashDedupe = hasFlag('--minhash-dedupe');
 	const passageContext = hasFlag('--passage-context');
 	const g1ShardByProvider = hasFlag('--g1-shard-by-provider');
-	const g1AllowExtractionPrefix = argv
+	const g1PolicyCleared = hasFlag('--g1-policy-cleared');
+	const explicitG1Prefixes = argv
 		.filter((x) => x.startsWith('--g1-allow-extraction-prefix='))
 		.map((x) => x.slice('--g1-allow-extraction-prefix='.length).trim())
 		.filter(Boolean);
+	const g1AllowExtractionPrefix = [
+		...(g1PolicyCleared ? [...POLICY_CLEARED_EXTRACTION_PREFIXES] : []),
+		...explicitG1Prefixes
+	];
+	const g1AllowExtractionPrefixDeduped = [...new Set(g1AllowExtractionPrefix)];
 	return {
 		days,
 		limit,
@@ -92,7 +112,8 @@ function parseArgs() {
 		minhashDedupe,
 		passageContext,
 		g1ShardByProvider,
-		g1AllowExtractionPrefix
+		g1PolicyCleared,
+		g1AllowExtractionPrefix: g1AllowExtractionPrefixDeduped
 	} as const;
 }
 
@@ -274,6 +295,7 @@ async function main() {
 		minhashDedupe,
 		passageContext,
 		g1ShardByProvider,
+		g1PolicyCleared,
 		g1AllowExtractionPrefix
 	} = parseArgs();
 	mkdirSync(outDir, { recursive: true });
@@ -549,6 +571,8 @@ async function main() {
 			stratified_split_80_10_10_by_canonical_url: stratified,
 			golden_urls_excluded_from_train_val_test: true,
 			g1_allow_extraction_prefix: g1AllowExtractionPrefix.length > 0 ? [...g1AllowExtractionPrefix] : null,
+			g1_policy_cleared_cli: g1PolicyCleared,
+			g1_policy_cleared_preset: g1PolicyCleared ? [...POLICY_CLEARED_EXTRACTION_PREFIXES] : null,
 			g1_shard_by_extraction_provider: g1ShardByProvider,
 			g1_cohort_rows_skipped_by_extraction_prefix:
 				g1AllowExtractionPrefix.length > 0 ? g1CohortRowsSkipped : null,

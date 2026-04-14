@@ -29,4 +29,4 @@ Golden / validation job logs and **`[INGEST_TIMING]`** lines are **operator-loca
 
 ## Next step
 
-- **`g0-export`** — done (see `scripts/export-phase1-training-jsonl.ts`). **`pause-after-g0`** — [`ingestion-extraction-phase2-pause-after-g0.md`](./ingestion-extraction-phase2-pause-after-g0.md). Then **`g1-shards`** — prefix filter / per-provider shards via **`--g1-allow-extraction-prefix=`**, **`--g1-shard-by-provider`** on the same exporter.
+- **`g0-export`** — done (see `scripts/export-phase1-training-jsonl.ts`). **`pause-after-g0`** — [`ingestion-extraction-phase2-pause-after-g0.md`](./ingestion-extraction-phase2-pause-after-g0.md). **`g1-shards`** — use **`--g1-policy-cleared`** (Vertex/Gemini via `vertex/` + `google/`, Mistral, DeepSeek) or explicit **`--g1-allow-extraction-prefix=`**, plus optional **`--g1-shard-by-provider`**.
