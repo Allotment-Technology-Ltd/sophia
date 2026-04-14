@@ -10,6 +10,10 @@ import {
 } from './schema';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 
+/** Appended by `IngestRunManager` when the ingest child exits 0 (not emitted by `scripts/ingest.ts`). */
+export const INGEST_ORCHESTRATOR_PIPELINE_DONE_LINE =
+	'Ingestion pipeline finished successfully.' as const;
+
 export async function neonCreateIngestRun(state: IngestRunState): Promise<void> {
   if (!isNeonIngestPersistenceEnabled()) return;
   const db = getDrizzleDb();
@@ -200,7 +204,7 @@ export async function neonMergePayloadAndVersion(
 export async function neonLoadIngestRun(runId: string): Promise<IngestRunState | null> {
   if (!isNeonIngestPersistenceEnabled()) return null;
   const db = getDrizzleDb();
-  const row = await db.query.ingestRuns.findFirst({
+  let row = await db.query.ingestRuns.findFirst({
     where: eq(ingestRuns.id, runId)
   });
   if (!row) return null;
@@ -212,6 +216,28 @@ export async function neonLoadIngestRun(runId: string): Promise<IngestRunState |
     .orderBy(desc(ingestRunLogs.seq))
     .limit(500);
   logRows.reverse();
+
+  if (row.status === 'running') {
+    const orchestratorFinished = logRows.some(
+      (l) => l.line.trim() === INGEST_ORCHESTRATOR_PIPELINE_DONE_LINE
+    );
+    if (orchestratorFinished) {
+      const now = new Date();
+      const healed = await db
+        .update(ingestRuns)
+        .set({
+          status: 'done',
+          resumable: false,
+          completedAt: row.completedAt ?? now,
+          updatedAt: now
+        })
+        .where(and(eq(ingestRuns.id, runId), eq(ingestRuns.status, 'running')))
+        .returning();
+      if (healed.length > 0) {
+        row = healed[0]!;
+      }
+    }
+  }
 
   const issueRows = await db
     .select()
