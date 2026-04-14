@@ -320,12 +320,14 @@
 	);
 
 	const hasPendingOrRunning = $derived(
-		items.some((i) => i.status === 'pending' || i.status === 'running')
+		items.some(
+			(i) => i.status === 'pending' || i.status === 'running' || i.status === 'awaiting_sync'
+		)
 	);
 
 	function jobItemStatusRank(status: string): number {
 		const t = (status ?? '').toLowerCase();
-		if (t === 'running') return 0;
+		if (t === 'running' || t === 'awaiting_sync') return 0;
 		if (t === 'pending') return 1;
 		if (t === 'error') return 2;
 		if (t === 'cancelled') return 3;
@@ -576,11 +578,14 @@
 			}
 			if (token !== pollToken) return;
 			const j = job;
+			const awaiting =
+				typeof j?.summary?.awaiting_sync === 'number' ? j.summary.awaiting_sync : 0;
 			const terminal =
 				(j &&
 					j.status === 'done' &&
 					(typeof j.summary?.pending === 'number' ? j.summary.pending : 0) === 0 &&
-					(typeof j.summary?.running === 'number' ? j.summary.running : 0) === 0) ||
+					(typeof j.summary?.running === 'number' ? j.summary.running : 0) === 0 &&
+					awaiting === 0) ||
 				j?.status === 'cancelled';
 			const baseMs = terminal ? 30_000 : 5000;
 			const delayMs = ok ? baseMs : Math.min(60_000, baseMs * 3);
@@ -1053,7 +1058,7 @@
 		<section class="mt-6 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5" aria-labelledby="items-heading">
 			<h2 id="items-heading" class="font-serif text-lg text-sophia-dark-text">URLs</h2>
 			<p class="mt-2 text-xs text-sophia-dark-muted">
-				Sorted: running → pending → errors → done (then URL).
+				Sorted: running / awaiting sync → pending → errors → done (then URL).
 			</p>
 			<div class="mt-4 overflow-x-auto">
 				<table class="w-full min-w-[720px] border-collapse text-left text-sm">
@@ -1074,7 +1079,7 @@
 									{it.url}
 								</td>
 								<td class="py-3 pr-3">
-									{it.status}
+									{it.status === 'awaiting_sync' ? 'awaiting sync' : it.status}
 									{#if it.dlqEnqueuedAt}
 										<span
 											class="ml-1 inline-block rounded bg-amber-500/20 px-1.5 font-mono text-[10px] uppercase tracking-wide text-amber-100"
@@ -1138,7 +1143,7 @@
 												</button>
 											{/if}
 										</div>
-									{:else if it.status === 'running'}
+									{:else if it.status === 'running' || it.status === 'awaiting_sync'}
 										<button
 											type="button"
 											class="rounded border border-[var(--color-border)] px-3 py-2 text-left uppercase tracking-[0.06em] text-sophia-dark-muted hover:border-red-400/50 hover:text-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:opacity-50"

@@ -2018,6 +2018,12 @@ class IngestRunManager extends EventEmitter {
         ingestTail.push('--force-stage', forceStage);
         batchEnvOverrides.INGEST_FORCE_STAGE = forceStage;
         this.addLog(runId, `[INGEST] --force-stage ${forceStage} (skip earlier stages when checkpoints allow)`);
+        if (
+          forceStage === 'validating' &&
+          batchEnvOverrides.INGEST_FORCE_STAGE_MISSING_CHECKPOINT === undefined
+        ) {
+          batchEnvOverrides.INGEST_FORCE_STAGE_MISSING_CHECKPOINT = 'resume';
+        }
       }
     }
 
