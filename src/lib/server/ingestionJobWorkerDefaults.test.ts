@@ -53,6 +53,25 @@ describe('sanitizeIngestionJobWorkerDefaults', () => {
     });
     expect(o?.forceStage).toBe('validating');
     expect(o?.forceReingest).toBeUndefined();
+    expect(o?.forceStageMissingCheckpoint).toBe('resume');
+  });
+
+  it('defaults forceStageMissingCheckpoint to resume for validating tail', () => {
+    const o = sanitizeIngestionJobWorkerDefaults({ forceStage: 'validating' });
+    expect(o?.forceStageMissingCheckpoint).toBe('resume');
+  });
+
+  it('honors explicit forceStageMissingCheckpoint for validating', () => {
+    const full = sanitizeIngestionJobWorkerDefaults({
+      forceStage: 'validating',
+      forceStageMissingCheckpoint: 'full'
+    });
+    expect(full?.forceStageMissingCheckpoint).toBe('full');
+    const alias = sanitizeIngestionJobWorkerDefaults({
+      forceStage: 'validating',
+      ingestForceStageMissingCheckpoint: 'error'
+    });
+    expect(alias?.forceStageMissingCheckpoint).toBe('error');
   });
 
   it('accepts Google throughput toggle and extraction floor', () => {

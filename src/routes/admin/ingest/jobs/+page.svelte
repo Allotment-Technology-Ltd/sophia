@@ -90,6 +90,29 @@
 	let advanceQueuesBusy = $state(false);
 	let advanceQueuesMessage = $state('');
 
+	function jobRowSortRank(j: JobRow): number {
+		const st = (j.status ?? '').toLowerCase();
+		if (st === 'running') return 0;
+		const p = j.summary?.pending ?? 0;
+		const r = j.summary?.running ?? 0;
+		const e = j.summary?.error ?? 0;
+		if (p > 0 || r > 0) return 1;
+		if (e > 0) return 2;
+		if (st === 'cancelled') return 4;
+		if (st === 'done') return 5;
+		return 3;
+	}
+
+	const sortedJobs = $derived(
+		[...jobs].sort((a, b) => {
+			const d = jobRowSortRank(a) - jobRowSortRank(b);
+			if (d !== 0) return d;
+			const ua = a.updatedAt ?? '';
+			const ub = b.updatedAt ?? '';
+			return ub.localeCompare(ua);
+		})
+	);
+
 	type DlqRow = {
 		itemId: string;
 		jobId: string;
@@ -149,6 +172,7 @@
 		if (gFloor != null) o.googleExtractionConcurrencyFloor = gFloor;
 		if (jobValidationTailOnly) {
 			o.forceStage = 'validating';
+			o.forceStageMissingCheckpoint = 'resume';
 		}
 		if (jobForceReingest && !jobValidationTailOnly) o.forceReingest = true;
 		o.failOnGroupingPositionCollapse = jobFailOnGroupingCollapse;
@@ -266,7 +290,14 @@
 				throw new Error(typeof body?.error === 'string' ? body.error : 'Advance queues failed.');
 			}
 			jobs = Array.isArray(body?.jobs) ? (body.jobs as JobRow[]) : [];
-			advanceQueuesMessage = 'Queues advanced; list refreshed.';
+			const ticked =
+				typeof (body as { globalTickJobsProcessed?: unknown }).globalTickJobsProcessed === 'number'
+					? (body as { globalTickJobsProcessed: number }).globalTickJobsProcessed
+					: null;
+			advanceQueuesMessage =
+				ticked != null
+					? `Advance finished (${ticked} job queue pass(es)); ${jobs.length} job(s) listed.`
+					: 'Queues advanced; list refreshed.';
 			setTimeout(() => {
 				advanceQueuesMessage = '';
 			}, 4000);
@@ -1319,6 +1350,9 @@
 
 	<section class="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5" aria-labelledby="recent-heading">
 		<h2 id="recent-heading" class="font-serif text-lg text-sophia-dark-text">Recent jobs</h2>
+		<p class="mt-2 text-xs text-sophia-dark-muted">
+			Sorted: active work first (running → jobs with pending/running URLs → errors → done).
+		</p>
 		{#if advanceQueuesMessage}
 			<p class="mt-3 text-sm text-sophia-dark-sage" role="status">{advanceQueuesMessage}</p>
 		{/if}
@@ -1338,7 +1372,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each jobs as j (j.id)}
+						{#each sortedJobs as j (j.id)}
 							<tr class="border-b border-[var(--color-border)]/60">
 								<td class="py-3 pr-4 font-mono text-xs">
 									<a

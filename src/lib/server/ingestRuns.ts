@@ -163,6 +163,11 @@ export interface IngestRunPayload {
      * Incompatible with `forceReingest` (sanitizer clears re-ingest when this is set).
      */
     forceStage?: (typeof INGEST_CLI_FORCE_STAGES)[number];
+    /**
+     * `INGEST_FORCE_STAGE_MISSING_CHECKPOINT` for the worker when force-stage / validation-only gates fail.
+     * When `forceStage` is `validating`, {@link sanitizeIngestionJobWorkerDefaults} defaults this to `resume` unless set.
+     */
+    forceStageMissingCheckpoint?: 'error' | 'full' | 'resume';
   };
   model_chain: {
     extract: string;
@@ -224,7 +229,8 @@ function batchOverridesToEnv(
     ingestRemediationEnabled,
     ingestRemediationRevalidate,
     ingestRemediationForceRelationsRerun,
-    forceReingest
+    forceReingest,
+    forceStageMissingCheckpoint
   } = overrides;
 
   const asPositiveInt = (v: unknown): number | null => {
@@ -342,6 +348,14 @@ function batchOverridesToEnv(
   }
   if (forceReingest === true) {
     out.INGEST_FORCE_REINGEST = '1';
+  }
+
+  if (
+    forceStageMissingCheckpoint === 'error' ||
+    forceStageMissingCheckpoint === 'full' ||
+    forceStageMissingCheckpoint === 'resume'
+  ) {
+    out.INGEST_FORCE_STAGE_MISSING_CHECKPOINT = forceStageMissingCheckpoint;
   }
 
   return out;
@@ -683,6 +697,13 @@ function shouldPersistIngestLogLineToNeon(line: string): boolean {
 }
 
 const PIPELINE_STAGES = ['extract', 'relate', 'group', 'embed'] as const;
+
+function ingestRunChildProcessLooksAlive(proc: ChildProcess | undefined): boolean {
+  if (!proc || proc.killed) return false;
+  if (typeof proc.exitCode === 'number') return false;
+  if (proc.signalCode) return false;
+  return true;
+}
 
 /** Stages after fetch, in worker order; validate omitted when disabled in payload. */
 function orderedStagesAfterFetch(validate: boolean): string[] {
@@ -1032,6 +1053,21 @@ class IngestRunManager extends EventEmitter {
   /** Loads from Neon when the run is not in this process (e.g. after deploy or cold start). */
   async getStateAsync(runId: string): Promise<IngestRunState | undefined> {
     const mem = this.runs.get(runId);
+    if (mem && isNeonIngestPersistenceEnabled()) {
+      /** Reconcile: in-memory `running` without a live child can lag Neon after terminal persist or self-heal. */
+      if (mem.status === 'running' && !ingestRunChildProcessLooksAlive(mem.process)) {
+        const loaded = await neonLoadIngestRun(runId);
+        if (
+          loaded &&
+          (loaded.status === 'done' ||
+            loaded.status === 'error' ||
+            loaded.status === 'awaiting_sync')
+        ) {
+          this.runs.set(runId, loaded);
+          return loaded;
+        }
+      }
+    }
     if (mem) return mem;
     if (!isNeonIngestPersistenceEnabled()) return undefined;
     const loaded = await neonLoadIngestRun(runId);

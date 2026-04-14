@@ -18,11 +18,15 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 		const limit = Math.max(1, Math.min(100, Number.parseInt(url.searchParams.get('limit') ?? '40', 10) || 40));
 		/** Global tick can take minutes with many jobs and blocks this response — list UI uses tick=0 by default. */
 		const runTick = ['1', 'true', 'yes'].includes((url.searchParams.get('tick') ?? '').trim().toLowerCase());
+		let globalTickJobsProcessed: number | undefined;
 		if (runTick) {
-			await tickAllRunningIngestionJobs();
+			globalTickJobsProcessed = await tickAllRunningIngestionJobs();
 		}
 		const jobs = await listRecentIngestionJobs(limit);
-		return json({ jobs });
+		return json({
+			jobs,
+			...(runTick ? { globalTickJobsProcessed } : {})
+		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Failed to list jobs';
 		return json({ error: message }, { status: 500 });

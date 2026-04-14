@@ -222,12 +222,16 @@
 			if (!res.ok) {
 				throw new Error(typeof body?.error === 'string' ? body.error : 'Advance job queue failed.');
 			}
-			advanceJobTickMessage = 'Job tick finished; refreshing view…';
 			await fetchDetail({ tick: false });
-			advanceJobTickMessage = 'Job queue advanced.';
+			{
+				const j = job;
+				advanceJobTickMessage = j
+					? `Tick finished — pending ${j.summary?.pending ?? 0} · running ${j.summary?.running ?? 0} · done ${j.summary?.done ?? 0} · errors ${j.summary?.error ?? 0}.`
+					: 'Tick finished.';
+			}
 			setTimeout(() => {
 				advanceJobTickMessage = '';
-			}, 4000);
+			}, 6000);
 			await fetchEvents();
 		} catch (e) {
 			const aborted =
@@ -317,6 +321,44 @@
 
 	const hasPendingOrRunning = $derived(
 		items.some((i) => i.status === 'pending' || i.status === 'running')
+	);
+
+	function jobItemStatusRank(status: string): number {
+		const t = (status ?? '').toLowerCase();
+		if (t === 'running') return 0;
+		if (t === 'pending') return 1;
+		if (t === 'error') return 2;
+		if (t === 'cancelled') return 3;
+		if (t === 'done') return 4;
+		if (t === 'skipped') return 5;
+		return 9;
+	}
+
+	const sortedJobItems = $derived(
+		[...items].sort((a, b) => {
+			const d = jobItemStatusRank(a.status) - jobItemStatusRank(b.status);
+			if (d !== 0) return d;
+			return (a.url ?? '').localeCompare(b.url ?? '');
+		})
+	);
+
+	const sortedChildRunSummaries = $derived(
+		[...childRunSummaries].sort((a, b) => {
+			const d = jobItemStatusRank(a.runStatus) - jobItemStatusRank(b.runStatus);
+			if (d !== 0) return d;
+			return (a.url ?? '').localeCompare(b.url ?? '');
+		})
+	);
+
+	const checkpointHelpVisible = $derived(
+		items.some(
+			(i) =>
+				typeof i.lastError === 'string' &&
+				(/INGEST_FORCE_STAGE_MISSING_CHECKPOINT/i.test(i.lastError) ||
+					/Validation-only ingest requires/i.test(i.lastError) ||
+					/--force-stage validating requires/i.test(i.lastError) ||
+					/exited with code 3/i.test(i.lastError))
+		)
 	);
 
 	const canStopEntireJob = $derived(
@@ -646,64 +688,75 @@
 			</dl>
 
 			{#if childRunSummaries.length > 0}
-				<div class="mt-6 border-t border-[var(--color-border)] pt-5" role="region" aria-label="Child run summaries">
-					<h2 class="font-serif text-lg text-sophia-dark-text">Child runs (Neon)</h2>
-					<p class="mt-2 text-sm text-sophia-dark-muted">
-						Latest snapshot per job item that has a <span class="font-mono text-xs">child_run_id</span>. Faithfulness
-						is averaged from <span class="font-mono text-xs">ingest_staging_validation</span> when rows exist.
-					</p>
-					<div class="mt-3 overflow-x-auto rounded-lg border border-[var(--color-border)]">
-						<table class="w-full min-w-[760px] border-collapse text-left font-mono text-xs">
-							<thead>
-								<tr class="border-b border-[var(--color-border)] bg-black/15 text-sophia-dark-dim">
-									<th class="px-3 py-2 font-normal">URL</th>
-									<th class="px-3 py-2 font-normal">Run</th>
-									<th class="px-3 py-2 font-normal">Status</th>
-									<th class="px-3 py-2 font-normal">Validate</th>
-									<th class="px-3 py-2 font-normal">Extract model</th>
-									<th class="px-3 py-2 font-normal">Avg faith.</th>
-									<th class="px-3 py-2 font-normal">Issues</th>
-									<th class="px-3 py-2 font-normal">Worker</th>
-								</tr>
-							</thead>
-							<tbody>
-								{#each childRunSummaries as s (s.childRunId)}
-									<tr class="border-b border-[var(--color-border)]/60 align-top text-sophia-dark-text">
-										<td class="max-w-[220px] px-3 py-2 break-all">{s.url}</td>
-										<td class="px-3 py-2">
-											<button
-												type="button"
-												class="text-left text-sophia-dark-sage underline-offset-2 hover:underline"
-												onclick={() => openChildRun(s.childRunId)}
-											>
-												{s.childRunId}
-											</button>
-										</td>
-										<td class="px-3 py-2">{s.runStatus}</td>
-										<td class="px-3 py-2">{s.validate ? 'yes' : 'no'}</td>
-										<td class="max-w-[180px] px-3 py-2 break-all">{s.extractionModel ?? '—'}</td>
-										<td class="px-3 py-2">{s.avgFaithfulness != null ? s.avgFaithfulness : '—'}</td>
-										<td class="px-3 py-2">{s.issueCount}</td>
-										<td class="px-3 py-2">
-											{#if s.runStatus === 'running'}
+				<details
+					class="mt-6 border-t border-[var(--color-border)] pt-5 [&_summary::-webkit-details-marker]:hidden"
+					open
+				>
+					<summary
+						class="flex cursor-pointer list-none items-baseline justify-between gap-3 font-serif text-lg text-sophia-dark-text marker:content-none"
+					>
+						<span>Child runs (Neon)</span>
+						<span class="font-mono text-xs font-normal text-sophia-dark-dim">Show / hide</span>
+					</summary>
+					<div class="mt-3" role="region" aria-label="Child run summaries">
+						<p class="text-sm text-sophia-dark-muted">
+							Sorted: running → pending → errors → done. Latest snapshot per job item that has a
+							<span class="font-mono text-xs">child_run_id</span>. Faithfulness is averaged from
+							<span class="font-mono text-xs">ingest_staging_validation</span> when rows exist.
+						</p>
+						<div class="mt-3 overflow-x-auto rounded-lg border border-[var(--color-border)]">
+							<table class="w-full min-w-[760px] border-collapse text-left font-mono text-xs">
+								<thead>
+									<tr class="border-b border-[var(--color-border)] bg-black/15 text-sophia-dark-dim">
+										<th class="px-3 py-2 font-normal">URL</th>
+										<th class="px-3 py-2 font-normal">Run</th>
+										<th class="px-3 py-2 font-normal">Status</th>
+										<th class="px-3 py-2 font-normal">Validate</th>
+										<th class="px-3 py-2 font-normal">Extract model</th>
+										<th class="px-3 py-2 font-normal">Avg faith.</th>
+										<th class="px-3 py-2 font-normal">Issues</th>
+										<th class="px-3 py-2 font-normal">Worker</th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each sortedChildRunSummaries as s (s.childRunId)}
+										<tr class="border-b border-[var(--color-border)]/60 align-top text-sophia-dark-text">
+											<td class="max-w-[220px] px-3 py-2 break-all">{s.url}</td>
+											<td class="px-3 py-2">
 												<button
 													type="button"
-													class="rounded border border-[var(--color-border)] bg-black/15 px-2 py-1 font-mono text-[11px] uppercase tracking-wide text-sophia-dark-text hover:bg-black/25 disabled:opacity-50"
-													disabled={childRespawnBusyId === s.childRunId || respawnWorkersBusy}
-													onclick={() => void postRespawnSingleChildRun(s.childRunId)}
+													class="text-left text-sophia-dark-sage underline-offset-2 hover:underline"
+													onclick={() => openChildRun(s.childRunId)}
 												>
-													{childRespawnBusyId === s.childRunId ? '…' : 'Respawn'}
+													{s.childRunId}
 												</button>
-											{:else}
-												<span class="text-sophia-dark-dim">—</span>
-											{/if}
-										</td>
-									</tr>
-								{/each}
-							</tbody>
-						</table>
+											</td>
+											<td class="px-3 py-2">{s.runStatus}</td>
+											<td class="px-3 py-2">{s.validate ? 'yes' : 'no'}</td>
+											<td class="max-w-[180px] px-3 py-2 break-all">{s.extractionModel ?? '—'}</td>
+											<td class="px-3 py-2">{s.avgFaithfulness != null ? s.avgFaithfulness : '—'}</td>
+											<td class="px-3 py-2">{s.issueCount}</td>
+											<td class="px-3 py-2">
+												{#if s.runStatus === 'running'}
+													<button
+														type="button"
+														class="rounded border border-[var(--color-border)] bg-black/15 px-2 py-1 font-mono text-[11px] uppercase tracking-wide text-sophia-dark-text hover:bg-black/25 disabled:opacity-50"
+														disabled={childRespawnBusyId === s.childRunId || respawnWorkersBusy}
+														onclick={() => void postRespawnSingleChildRun(s.childRunId)}
+													>
+														{childRespawnBusyId === s.childRunId ? '…' : 'Respawn'}
+													</button>
+												{:else}
+													<span class="text-sophia-dark-dim">—</span>
+												{/if}
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
 					</div>
-				</div>
+				</details>
 			{/if}
 
 			{#if job.status === 'running' && hasPendingOrRunning}
@@ -736,31 +789,34 @@
 				</div>
 			{/if}
 
-			<div
-				class="mt-6 border-t border-[var(--color-border)] pt-5"
-				role="region"
-				aria-label="Pipeline issues from linked child runs"
+			<details
+				class="mt-6 border-t border-[var(--color-border)] pt-5 [&_summary::-webkit-details-marker]:hidden"
+				open
 			>
-				<div class="flex flex-wrap items-end justify-between gap-3">
-					<h2 class="font-serif text-lg text-sophia-dark-text">Pipeline issues (Neon)</h2>
-					<button
-						type="button"
-						class="inline-flex min-h-[40px] items-center rounded-lg border border-[var(--color-border)] bg-black/10 px-4 py-2 font-mono text-xs text-sophia-dark-text transition hover:bg-black/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sophia-dark-sage disabled:opacity-50"
-						disabled={
-							issuePipelineSignals.totalIssues === 0 &&
-							issuePipelineSignals.incidentIssueCount === 0
-						}
-						onclick={() => void copyIssuePipelineJson()}
-					>
-						Copy rollup JSON
-					</button>
-				</div>
-				<p class="mt-2 text-sm text-sophia-dark-muted">
-					Structured rows from <span class="font-mono text-xs">ingest_run_issues</span> for every
-					<span class="font-mono text-xs">child_run_id</span> still linked on this job (same scope as the child-run
-					table). Use during validation exercises to spot recurring failure modes (kind / stage) and feed pipeline
-					tuning.
-				</p>
+				<summary
+					class="flex cursor-pointer list-none items-center justify-between gap-3 font-serif text-lg text-sophia-dark-text marker:content-none"
+				>
+					<span>Pipeline issues (Neon)</span>
+					<span class="font-mono text-xs font-normal text-sophia-dark-dim">Show / hide</span>
+				</summary>
+				<div class="mt-3" role="region" aria-label="Pipeline issues from linked child runs">
+					<div class="flex flex-wrap items-end justify-between gap-3">
+						<p class="text-sm text-sophia-dark-muted">
+							Structured rows from <span class="font-mono text-xs">ingest_run_issues</span> for every
+							<span class="font-mono text-xs">child_run_id</span> still linked on this job.
+						</p>
+						<button
+							type="button"
+							class="inline-flex min-h-[40px] shrink-0 items-center rounded-lg border border-[var(--color-border)] bg-black/10 px-4 py-2 font-mono text-xs text-sophia-dark-text transition hover:bg-black/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sophia-dark-sage disabled:opacity-50"
+							disabled={
+								issuePipelineSignals.totalIssues === 0 &&
+								issuePipelineSignals.incidentIssueCount === 0
+							}
+							onclick={() => void copyIssuePipelineJson()}
+						>
+							Copy rollup JSON
+						</button>
+					</div>
 				{#if issuePipelineCopyStatus}
 					<p class="mt-2 text-xs text-sophia-dark-sage" role="status">{issuePipelineCopyStatus}</p>
 				{/if}
@@ -848,7 +904,8 @@
 						</table>
 					</div>
 				{/if}
-			</div>
+				</div>
+			</details>
 
 			<p class="mt-4 text-sm text-sophia-dark-muted">
 				Summary: total {job.summary?.total ?? '—'}, pending {job.summary?.pending ?? '—'}, running
@@ -899,6 +956,27 @@
 					{launchCapErrorCount} URL(s) failed with a concurrent worker cap. They are re-tried automatically when
 					slots free (up to {itemMaxAttempts} attempts). Raise ADMIN_INGEST_MAX_CONCURRENT if the host allows.
 				</p>
+			{/if}
+			{#if checkpointHelpVisible}
+				<div
+					class="mt-3 rounded-lg border border-[var(--color-border)] bg-black/15 px-4 py-3 text-sm text-sophia-dark-muted"
+					role="status"
+				>
+					<p class="font-medium text-sophia-dark-text">Checkpoint / validation-only errors</p>
+					<p class="mt-2 leading-relaxed">
+						<code class="rounded bg-black/25 px-1 py-0.5 font-mono text-[11px]">--force-stage validating</code> and
+						validation-only tails need Neon staging through
+						<strong class="text-sophia-dark-text">embedding</strong> for this orchestration run id. If the URL never
+						finished embedding under this id, run a
+						<strong class="text-sophia-dark-text">full</strong> ingest first with
+						<code class="rounded bg-black/25 px-1 py-0.5 font-mono text-[11px]">DATABASE_URL</code>, or set worker env
+						<code class="rounded bg-black/25 px-1 py-0.5 font-mono text-[11px]">INGEST_FORCE_STAGE_MISSING_CHECKPOINT=full</code>
+						(redo from extraction) or
+						<code class="rounded bg-black/25 px-1 py-0.5 font-mono text-[11px]">=resume</code> (best partial, relaxes
+						gates). Add these under job <strong class="text-sophia-dark-text">worker defaults</strong> / batch
+						overrides when creating the job.
+					</p>
+				</div>
 			{/if}
 			{#if dlqItemCount > 0}
 				<p class="mt-3 text-sm text-sophia-dark-muted" role="status">
@@ -974,6 +1052,9 @@
 
 		<section class="mt-6 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5" aria-labelledby="items-heading">
 			<h2 id="items-heading" class="font-serif text-lg text-sophia-dark-text">URLs</h2>
+			<p class="mt-2 text-xs text-sophia-dark-muted">
+				Sorted: running → pending → errors → done (then URL).
+			</p>
 			<div class="mt-4 overflow-x-auto">
 				<table class="w-full min-w-[720px] border-collapse text-left text-sm">
 					<thead>
@@ -987,7 +1068,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each items as it (it.id)}
+						{#each sortedJobItems as it (it.id)}
 							<tr class="border-b border-[var(--color-border)]/60 align-top">
 								<td class="max-w-[280px] py-3 pr-3 font-mono text-xs break-all">
 									{it.url}
