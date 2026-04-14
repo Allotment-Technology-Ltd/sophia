@@ -49,6 +49,7 @@ import {
 	releaseGlobalIngestSlot,
 	tryAcquireGlobalIngestSlot
 } from './ingestGlobalConcurrencyGate.js';
+import { adminIngestChildCountsTowardMaxConcurrent } from './ingestion/ingestCapacityAtStore.js';
 
 export {
   INGEST_VERTEX_GEMINI_FLASH_LITE_MODEL_ID,
@@ -901,16 +902,14 @@ class IngestRunManager extends EventEmitter {
    * Terminal runs (`done` / `error`) must not count: failed batches stay in `runs` for UI/history
    * and restarts create new run ids — the old ChildProcess can still report `exitCode === null`
    * when the child exited on a signal, which previously inflated this count and blocked restarts.
+   * Store-phase children are excluded (see {@link adminIngestChildCountsTowardMaxConcurrent}).
    */
   private activeChildProcessCount(): number {
     let n = 0;
     for (const s of this.runs.values()) {
-      if (s.status === 'done' || s.status === 'error') continue;
-      const p = s.process;
-      if (!p || p.killed) continue;
-      if (typeof p.exitCode === 'number') continue;
-      if (p.signalCode) continue;
-      n += 1;
+      if (adminIngestChildCountsTowardMaxConcurrent({ status: s.status, currentStageKey: s.currentStageKey, process: s.process ?? null })) {
+        n += 1;
+      }
     }
     return n;
   }
