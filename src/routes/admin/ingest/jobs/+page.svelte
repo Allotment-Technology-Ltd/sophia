@@ -84,6 +84,11 @@
 	let cohortDays = $state(90);
 	let presetBusy = $state(false);
 	let presetMessage = $state('');
+	/** “Trim pasted URLs” — optional strips before starting a new job (Neon-backed). */
+	let trimStripTraining = $state(true);
+	let trimStripGolden = $state(true);
+	let trimStripDlq = $state(true);
+	let trimBusy = $state(false);
 
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 	let jobWorkerFieldsHydrated = $state(false);
@@ -429,6 +434,48 @@
 			presetMessage = e instanceof Error ? e.message : 'Preset bundle failed.';
 		} finally {
 			presetBusy = false;
+		}
+	}
+
+	async function trimPastedUrlList(): Promise<void> {
+		presetMessage = '';
+		trimBusy = true;
+		try {
+			const lines = urlsInput.split('\n').map((s) => s.trim()).filter(Boolean);
+			if (lines.length === 0) {
+				presetMessage = 'Paste URLs in the textarea first.';
+				return;
+			}
+			if (neonDisabled) {
+				presetMessage = 'Neon is required for URL trimming.';
+				return;
+			}
+			const d = Math.min(730, Math.max(1, Math.trunc(Number(cohortDays)) || 90));
+			const res = await fetch('/api/admin/ingest/jobs/url-list-trim', {
+				method: 'POST',
+				headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					urls: lines,
+					days: d,
+					stripTrainingAcceptable: trimStripTraining,
+					stripGoldenValidationDone: trimStripGolden,
+					stripDlqPermanent: trimStripDlq
+				})
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				throw new Error(typeof body?.error === 'string' ? body.error : 'Trim request failed.');
+			}
+			const kept = Array.isArray(body?.kept) ? (body.kept as string[]) : [];
+			urlsInput = kept.join('\n');
+			const rc = body?.removedCounts as
+				| { trainingAcceptable?: number; goldenValidationDone?: number; dlqPermanent?: number }
+				| undefined;
+			presetMessage = `Trim: kept ${body?.keptCount ?? kept.length} of ${lines.length} unique line(s). Removed — training-ready: ${rc?.trainingAcceptable ?? 0}, golden+validated (${d}d): ${rc?.goldenValidationDone ?? 0}, permanent job failures: ${rc?.dlqPermanent ?? 0}.`;
+		} catch (e) {
+			presetMessage = e instanceof Error ? e.message : 'Trim failed.';
+		} finally {
+			trimBusy = false;
 		}
 	}
 
@@ -956,6 +1003,39 @@
 					</span>
 				</button>
 			</div>
+			<details class="mt-3 rounded-lg border border-[var(--color-border)] bg-black/10 p-4">
+				<summary class="cursor-pointer font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-muted">
+					Trim pasted URLs (before a new run)
+				</summary>
+				<p class="mt-2 text-sm leading-relaxed text-sophia-dark-muted">
+					Uses the same cohort window as <span class="font-mono">Cohort days</span>. Removes lines that already meet
+					training-acceptable criteria, golden-set URLs that already have validation telemetry in that window, and URLs
+					that appear as <span class="font-mono">permanent</span> failures on any durable job item. What remains still
+					needs work (including sources that never validated or only failed retryably).
+				</p>
+				<div class="mt-3 flex flex-col gap-2 text-sm text-sophia-dark-text">
+					<label class="flex cursor-pointer items-center gap-2">
+						<input type="checkbox" bind:checked={trimStripTraining} class="h-4 w-4 rounded border-[var(--color-border)]" />
+						<span>Remove training-acceptable URLs (latest qualifying Neon completes)</span>
+					</label>
+					<label class="flex cursor-pointer items-center gap-2">
+						<input type="checkbox" bind:checked={trimStripGolden} class="h-4 w-4 rounded border-[var(--color-border)]" />
+						<span>Remove golden-set URLs already validation-complete (same window as validation-tail omit)</span>
+					</label>
+					<label class="flex cursor-pointer items-center gap-2">
+						<input type="checkbox" bind:checked={trimStripDlq} class="h-4 w-4 rounded border-[var(--color-border)]" />
+						<span>Remove URLs with permanent job-item failures (any job)</span>
+					</label>
+				</div>
+				<button
+					type="button"
+					class="mt-4 inline-flex min-h-[44px] items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--color-sage)_40%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-sage)_12%,var(--color-surface))] px-4 py-2 font-mono text-xs font-medium uppercase tracking-[0.06em] text-sophia-dark-text transition hover:border-[var(--color-sage)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+					disabled={trimBusy || neonDisabled}
+					onclick={() => void trimPastedUrlList()}
+				>
+					{trimBusy ? 'Trimming…' : 'Apply trim to URL list'}
+				</button>
+			</details>
 			{#if presetMessage}
 				<p class="mt-2 text-sm text-sophia-dark-muted" role="status">{presetMessage}</p>
 			{/if}
