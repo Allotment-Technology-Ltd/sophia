@@ -3,6 +3,9 @@
  * durable-job URL concurrency and releases the Neon global ingest gate slot,
  * so another URL can start while the first finishes store I/O.
  *
+ * The same rule applies to {@link adminIngestChildCountsTowardMaxConcurrent} (`ADMIN_INGEST_MAX_CONCURRENT`)
+ * so store-only children do not block new LLM-backed spawns on the admin worker process.
+ *
  * Trade-off: multiple workers may hit Surreal concurrently; tune
  * INGEST_PASSAGE_INSERT_CONCURRENCY / INGEST_CLAIM_INSERT_CONCURRENCY if needed.
  *
@@ -28,6 +31,33 @@ export function ingestRunStillOccupiesLlmConcurrencySlot(
 	/** Preview runs finished LLM work but still hold a job slot until operator sync — do not stampede new LLM children. */
 	if (run.status === 'awaiting_sync') return true;
 	if ((run.currentStageKey ?? '').trim().toLowerCase() === 'store') return false;
+	return true;
+}
+
+/** Minimal child-process shape for {@link adminIngestChildCountsTowardMaxConcurrent}. */
+export type AdminIngestChildProcessRef = {
+	killed?: boolean;
+	exitCode?: number | null;
+	signalCode?: NodeJS.Signals | null;
+} | null;
+
+/**
+ * Whether an in-memory ingest child should count toward `ADMIN_INGEST_MAX_CONCURRENT`.
+ * Store-phase workers (Surreal I/O, no LLM) are excluded so slow or stuck store work does not
+ * block new fetches/LLM-backed ingests — aligned with {@link ingestRunStillOccupiesLlmConcurrencySlot}
+ * and the Neon gate release at store start.
+ */
+export function adminIngestChildCountsTowardMaxConcurrent(state: {
+	status: string;
+	currentStageKey?: string | null;
+	process?: AdminIngestChildProcessRef;
+}): boolean {
+	if (state.status === 'done' || state.status === 'error') return false;
+	const p = state.process;
+	if (!p || p.killed) return false;
+	if (typeof p.exitCode === 'number') return false;
+	if (p.signalCode) return false;
+	if ((state.currentStageKey ?? '').trim().toLowerCase() === 'store') return false;
 	return true;
 }
 

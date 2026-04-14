@@ -105,6 +105,13 @@ import {
 	upsertSourceTrainingGovernanceOnIngestComplete
 } from '../src/lib/server/db/sourceTrainingGovernance.js';
 import { INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING } from '../src/lib/server/ingestion/ingestProcessExitCodes.js';
+import {
+	INGEST_PIPELINE_STAGES_ORDER as STAGES_ORDER,
+	completedStageOrderRank,
+	ingestionLogStatusReflectingCheckpoint,
+	laterCompletedStage,
+	validationOnlyEmbeddingCheckpointMet
+} from '../src/lib/server/ingestion/ingestResumeStage.ts';
 import { isNeonIngestPersistenceEnabled } from '../src/lib/server/neon/datastore.ts';
 import {
 	SOURCE_ID_STRING_ARRAY_ONE_SQL,
@@ -272,6 +279,16 @@ const INGEST_STORE_RECORD_TEXT_HASH = (() => {
 const INGEST_STORE_ENFORCE_TEXT_HASH =
 	(process.env.INGEST_STORE_ENFORCE_TEXT_HASH ?? '').trim() === '1' ||
 	(process.env.INGEST_STORE_ENFORCE_TEXT_HASH ?? '').trim().toLowerCase() === 'true';
+/** When false, skip DEFINE FIELD IF NOT EXISTS on `source` during store (schema assumed applied; less DDL contention on Surreal Cloud). */
+function ingestStoreEnsureSurrealSourceFields(): boolean {
+	const v = (process.env.INGEST_STORE_ENSURE_SURREAL_SOURCE_FIELDS ?? '1').trim().toLowerCase();
+	return v !== '0' && v !== 'false' && v !== 'no' && v !== 'off';
+}
+/** Prefer one compound Surreal query for source cleanup (LET claim ids + deletes). Set 0 for legacy per-table round-trips. */
+function ingestStoreCleanupUseBatchedSurreal(): boolean {
+	const v = (process.env.INGEST_STORE_CLEANUP_BATCHED ?? '1').trim().toLowerCase();
+	return v !== '0' && v !== 'false' && v !== 'no' && v !== 'off';
+}
 const INGEST_EXTRACTOR_VERSION =
 	process.env.INGEST_EXTRACTOR_VERSION || 'phase1-passage-grounding-v1';
 const LOW_CONFIDENCE_REVIEW_THRESHOLD = Number(
@@ -384,16 +401,7 @@ function ingestSkipStoreWhenNoGraphChanges(): boolean {
 	return raw === '1' || raw === 'true' || raw === 'yes';
 }
 
-// ─── Stage ordering for resume logic ──────────────────────────────────────
-const STAGES_ORDER = [
-	'extracting',
-	'relating',
-	'grouping',
-	'embedding',
-	'validating',
-	'remediating',
-	'storing'
-];
+// ─── Stage ordering for resume logic (STAGES_ORDER from ingestResumeStage.ts) ──
 
 /** Validation-only tail (`--force-stage validating` / `INGEST_FORCE_STAGE=validating`) must never fall back to full extraction. */
 function validationOnlyIngestIntent(forceStage: string | null | undefined): boolean {
@@ -410,6 +418,14 @@ function exitValidationOnlyNoCheckpoint(): never {
 		process.exit(0);
 	}
 	process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
+}
+
+/** When `--force-stage` / `INGEST_FORCE_STAGE` cannot be satisfied (missing tail or validation-only gate). */
+function parseForceStageMissingCheckpointMode(): 'error' | 'full' | 'resume' {
+	const v = (process.env.INGEST_FORCE_STAGE_MISSING_CHECKPOINT ?? 'error').trim().toLowerCase();
+	if (v === 'full' || v === 'complete' || v === 'complete_pipeline') return 'full';
+	if (v === 'resume' || v === 'best_partial' || v === 'partial') return 'resume';
+	return 'error';
 }
 
 function shouldRunStage(stage: string, lastCompleted: string | null | undefined): boolean {
@@ -3805,6 +3821,67 @@ async function findExistingSourceRecordIdForUrl(db: Surreal, sourceMeta: SourceM
 	return null;
 }
 
+const STORE_RELATION_TABLES_ALL = [
+	'supports',
+	'contradicts',
+	'depends_on',
+	'responds_to',
+	'defines',
+	'qualifies',
+	'refines',
+	'exemplifies'
+] as const;
+
+/** Remove an existing `source` row and all dependent graph rows (Stage 6 idempotent re-store). */
+async function surrealStoreCleanupRemoveExistingSource(db: Surreal, existingSourceId: string): Promise<void> {
+	const t0 = Date.now();
+	if (ingestStoreCleanupUseBatchedSurreal()) {
+		const stmts: string[] = ['LET $claim_ids = (SELECT VALUE id FROM claim WHERE source = $sid);'];
+		for (const relTable of STORE_RELATION_TABLES_ALL) {
+			stmts.push(`DELETE ${relTable} WHERE in IN $claim_ids OR out IN $claim_ids;`);
+		}
+		stmts.push('DELETE part_of WHERE in IN $claim_ids;');
+		stmts.push('DELETE claim WHERE source = $sid;');
+		stmts.push('DELETE passage WHERE source = $sid;');
+		stmts.push('DELETE argument WHERE source = $sid;');
+		stmts.push('DELETE source WHERE id = $sid;');
+		console.log(`  [CLEANUP] Batched Surreal cleanup (${stmts.length} statements, one round-trip)…`);
+		try {
+			await db.query(stmts.join('\n'), { sid: existingSourceId });
+			console.log(`  [CLEANUP] Batched cleanup finished in ${Date.now() - t0}ms`);
+			return;
+		} catch (e) {
+			console.warn(
+				'  [WARN] Batched Surreal cleanup failed; falling back to per-table deletes:',
+				e instanceof Error ? e.message : String(e)
+			);
+		}
+	}
+	for (const relTable of STORE_RELATION_TABLES_ALL) {
+		const t = Date.now();
+		await db.query(
+			`DELETE ${relTable} WHERE in IN (SELECT id FROM claim WHERE source = $sid) OR out IN (SELECT id FROM claim WHERE source = $sid)`,
+			{ sid: existingSourceId }
+		);
+		console.log(`  [CLEANUP] ${relTable} edges removed in ${Date.now() - t}ms`);
+	}
+	const tPart = Date.now();
+	await db.query('DELETE part_of WHERE in IN (SELECT id FROM claim WHERE source = $sid)', { sid: existingSourceId });
+	console.log(`  [CLEANUP] part_of removed in ${Date.now() - tPart}ms`);
+	const tClaim = Date.now();
+	await db.query('DELETE claim WHERE source = $sid', { sid: existingSourceId });
+	console.log(`  [CLEANUP] claims removed in ${Date.now() - tClaim}ms`);
+	const tPass = Date.now();
+	await db.query('DELETE passage WHERE source = $sid', { sid: existingSourceId });
+	console.log(`  [CLEANUP] passages removed in ${Date.now() - tPass}ms`);
+	const tArg = Date.now();
+	await db.query('DELETE argument WHERE source = $sid', { sid: existingSourceId });
+	console.log(`  [CLEANUP] arguments removed in ${Date.now() - tArg}ms`);
+	const tSrc = Date.now();
+	await db.query('DELETE source WHERE id = $sid', { sid: existingSourceId });
+	console.log(`  [CLEANUP] source row removed in ${Date.now() - tSrc}ms (legacy path total ${Date.now() - t0}ms)`);
+}
+
 async function main() {
 	const args = process.argv.slice(2);
 	applyIngestEmbeddingEnvOverrides();
@@ -3894,6 +3971,9 @@ async function main() {
 		);
 		console.error(
 			`  INGEST_FORCE_STAGE=<stage>       Same as --force-stage when argv is not passed (valid: ${STAGES_ORDER.join(', ')})`
+		);
+		console.error(
+			'  INGEST_FORCE_STAGE_MISSING_CHECKPOINT=error|full|resume   When force-stage needs Neon/disk checkpoints that are missing (or validation-only gate fails): error=exit (default), full=clear force and run from extraction, resume=clear force and best partial without embedding-complete gate'
 		);
 		console.error(
 			'  INGEST_EXCLUDE_SOURCE_FROM_MODEL_TRAINING=1   Mark stored source as excluded from model-training exports (Neon + Surreal); Neon upsert is sticky-OR'
@@ -3996,6 +4076,10 @@ async function main() {
 	// ─── Check ingestion log for resume status ─────────────────────────────
 	let resumeFromStage: string | null = null;
 	const existingLog = await getIngestionLog(db, sourceMeta.url);
+	const surrealStageCompletedAtStart =
+		existingLog && typeof existingLog.stage_completed === 'string'
+			? existingLog.stage_completed.trim() || null
+			: null;
 
 	if (existingLog) {
 		if (existingLog.status === 'complete' && !forceStage) {
@@ -4016,29 +4100,95 @@ async function main() {
 			console.log(`[RESUME] Previous error: ${existingLog.error_message}`);
 		}
 		console.log('');
-
-		// Clear error state for retry
-		await updateIngestionLog(db, sourceMeta.url, {
-			status: 'extracting',
-			error_message: undefined
-		});
 	} else {
 		// Fresh start
 		await createIngestionLog(db, sourceMeta.url, sourceMeta.title);
 	}
 
-	// --force-stage overrides the resume point regardless of what's in the DB log.
-	// e.g. --force-stage embedding re-runs Stage 4 (embedding) and everything after.
+	// --force-stage sets a *floor* (re-run from the stage after the prior one). Surreal `stage_completed`
+	// can be *ahead* of that floor (e.g. deploy mid-store while still `remediating` + `--force-stage validating`);
+	// never rewind past the checkpoint — pick the later of (log checkpoint, force floor).
 	if (forceStage) {
 		const forceIdx = STAGES_ORDER.indexOf(forceStage);
-		resumeFromStage = forceIdx === 0 ? null : STAGES_ORDER[forceIdx - 1];
-		console.log(`[FORCE] --force-stage ${forceStage}: overriding resume point to "${resumeFromStage ?? 'none'}"`);
+		if (forceIdx === -1) {
+			// unreachable: forceStage validated earlier
+			resumeFromStage = null;
+		} else if (forceIdx === 0) {
+			resumeFromStage = null;
+			console.log(`[FORCE] --force-stage ${forceStage}: full pipeline from start`);
+		} else {
+			const floorAfter = STAGES_ORDER[forceIdx - 1];
+			const fromLog = resumeFromStage;
+			const merged = laterCompletedStage(fromLog, floorAfter);
+			resumeFromStage = merged;
+			if (fromLog && merged !== fromLog && completedStageOrderRank(fromLog) > completedStageOrderRank(floorAfter)) {
+				console.log(
+					`[FORCE] --force-stage ${forceStage}: floor after "${floorAfter}"; ingestion_log checkpoint "${fromLog}" is ahead → resume after "${merged}"`
+				);
+			} else {
+				console.log(`[FORCE] --force-stage ${forceStage}: resume after "${merged ?? 'none'}"`);
+			}
+		}
 	}
 
 	// Load partial results from Neon/disk whenever present — Surreal `stage_completed` is often
 	// unset mid-extract, so skipping load when `resumeFromStage` is null dropped mid-extraction checkpoints.
 	const stageBeforeValidate = STAGES_ORDER[STAGES_ORDER.indexOf('validating') - 1];
 	let partial: PartialResults;
+
+	async function tryRelaxForceStageMissingCheckpoint(
+		kind: 'no_partial' | 'embedding_gate',
+		gatePartial: PartialResults | null
+	): Promise<boolean> {
+		const mode = parseForceStageMissingCheckpointMode();
+		if (mode === 'error' || !forceStage) return false;
+
+		const label =
+			kind === 'no_partial'
+				? 'no Neon/disk checkpoint for this forced tail'
+				: 'checkpoint does not include full embeddings required for validation-only tail';
+		console.warn(
+			`[RESUME] INGEST_FORCE_STAGE_MISSING_CHECKPOINT=${mode}: ${label}. Clearing --force-stage / INGEST_FORCE_STAGE for this run.`
+		);
+		forceStage = null;
+
+		if (mode === 'full') {
+			resumeFromStage = null;
+			partial = { source: sourceMeta, stage_completed: 'none' };
+			console.warn(
+				kind === 'no_partial'
+					? '[RESUME] full fallback: starting pipeline from Stage 1 (extraction).'
+					: '[RESUME] full fallback: discarding incompatible partial; starting from Stage 1 (extraction).'
+			);
+			return true;
+		}
+
+		const relaxed =
+			gatePartial ??
+			(await loadPartialResults(slug, {
+				canonicalSourceUrl: sourceMeta.url,
+				canonicalUrlHash: sourceMeta.canonical_url_hash,
+				...(cu && cu !== su ? { extraUrlsForHashLookup: [cu] } : {})
+			}));
+
+		if (relaxed && partialHasDurableNeonOrDiskProgress(relaxed)) {
+			partial = relaxed;
+			Object.assign(partial.source as object, sourceMeta as object);
+			const pSt = (partial.stage_completed ?? '').trim();
+			const merged = laterCompletedStage(surrealStageCompletedAtStart, pSt && pSt !== 'none' ? pSt : null);
+			resumeFromStage = merged ? normalizeResumeStage(merged, partial) : null;
+			console.log(
+				`[RESUME] resume fallback: best partial loaded (resume after last completed: "${resumeFromStage ?? 'none'}")`
+			);
+			return true;
+		}
+
+		console.warn('[RESUME] resume fallback: no durable partial found — starting from Stage 1 (extraction).');
+		resumeFromStage = null;
+		partial = { source: sourceMeta, stage_completed: 'none' };
+		return true;
+	}
+
 	const loadedPartial = await loadPartialResults(slug, partialLoadOpts);
 
 	if (resumeFromStage) {
@@ -4052,43 +4202,60 @@ async function main() {
 				);
 				resumeFromStage = normalized;
 			}
-			if (validationOnlyIngestIntent(forceStage) && resumeFromStage !== stageBeforeValidate) {
-				console.error(
-					`[ERROR] Validation-only ingest requires Neon checkpoints through "${stageBeforeValidate}" (claims + relations + grouping + full embeddings). Current resume point: "${resumeFromStage ?? 'none'}".`
-				);
-				await closeSurrealIfOpen(db);
-				process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
+			if (validationOnlyIngestIntent(forceStage) && !validationOnlyEmbeddingCheckpointMet(resumeFromStage)) {
+				if (await tryRelaxForceStageMissingCheckpoint('embedding_gate', partial)) {
+					// force cleared; continue as standard pipeline from normalized resume
+				} else {
+					console.error(
+						`[ERROR] Validation-only ingest requires Neon checkpoints through "${stageBeforeValidate}" (claims + relations + grouping + full embeddings). Current resume point: "${resumeFromStage ?? 'none'}".`
+					);
+					console.error(
+						`[ERROR] Set INGEST_FORCE_STAGE_MISSING_CHECKPOINT=full to re-run from extraction, or =resume to load the best partial without the validation-only tail gate (or fix Neon staging).`
+					);
+					await closeSurrealIfOpen(db);
+					process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
+				}
 			}
 			console.log(`[RESUME] Loaded partial results (stage: ${loadedPartial.stage_completed})`);
 		} else {
 			console.log(
 				'[RESUME] No checkpoint (Neon ingest_staging_* or data/ingested/*-partial.json) — restarting from scratch'
 			);
-			if (validationOnlyIngestIntent(forceStage)) {
+			const strictMissing = parseForceStageMissingCheckpointMode() === 'error';
+			if (validationOnlyIngestIntent(forceStage) && strictMissing) {
 				console.warn(
-					`  [RESUME] Hint: no tail-compatible ingest_staging_meta for slug=${slug} url=${canonical ?? '(none)'}. ` +
+					`  [RESUME] Hint: no tail-compatible ingest_staging_meta for slug=${slug} url=${su || '(none)'} canonical_url=${cu || '(none)'} hash=${sourceMeta.canonical_url_hash ?? '(none)'}. ` +
 						`Sources that never finished through embedding (or only have empty staging shells) cannot validation-only resume. ` +
-						`Set INGEST_VALIDATION_ONLY_NO_CHECKPOINT=skip for exit 0 in batch jobs when skipping is OK.`
+						`Set INGEST_VALIDATION_ONLY_NO_CHECKPOINT=skip for exit 0 in batch jobs when skipping is OK, ` +
+						`or INGEST_FORCE_STAGE_MISSING_CHECKPOINT=full|resume to continue without this tail gate.`
 				);
 			}
 			if (forceStage) {
-				const rid = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim() ?? '';
-				const validationExtra = validationOnlyIngestIntent(forceStage)
-					? ' Re-run the full pipeline through embedding with DATABASE_URL so Neon staging is written, or fix slug/URL/hash metadata. Surreal "complete" alone does not supply embeddings checkpoints for a new orchestration run id.'
-					: '';
-				console.error(
-					`[ERROR] --force-stage ${forceStage} requires existing checkpoints through the prior pipeline stage ` +
-						`(expected resume point "${resumeFromStage ?? 'none'}" from Neon ingest_staging_* for this run, or a local data/ingested/*-partial.json). ` +
-						`None were found (orchestration run id: ${rid || 'unset'}). Refusing to re-run earlier stages silently.${validationExtra}`
-				);
-				await closeSurrealIfOpen(db);
-				if (validationOnlyIngestIntent(forceStage)) {
-					exitValidationOnlyNoCheckpoint();
+				if (await tryRelaxForceStageMissingCheckpoint('no_partial', null)) {
+					// force cleared; partial + resume set for full or best-partial path
+				} else {
+					const rid = process.env.INGEST_ORCHESTRATION_RUN_ID?.trim() ?? '';
+					const validationExtra = validationOnlyIngestIntent(forceStage)
+						? ' Re-run the full pipeline through embedding with DATABASE_URL so Neon staging is written, or fix slug/URL/hash metadata. Surreal "complete" alone does not supply embeddings checkpoints for a new orchestration run id.'
+						: '';
+					console.error(
+						`[ERROR] --force-stage ${forceStage} requires existing checkpoints through the prior pipeline stage ` +
+							`(expected resume point "${resumeFromStage ?? 'none'}" from Neon ingest_staging_* for this run, or a local data/ingested/*-partial.json). ` +
+							`None were found (orchestration run id: ${rid || 'unset'}). Refusing to re-run earlier stages silently.${validationExtra}`
+					);
+					console.error(
+						`[ERROR] Set INGEST_FORCE_STAGE_MISSING_CHECKPOINT=full to re-run from extraction, or =resume to load the best available partial (no embedding-complete gate).`
+					);
+					await closeSurrealIfOpen(db);
+					if (validationOnlyIngestIntent(forceStage)) {
+						exitValidationOnlyNoCheckpoint();
+					}
+					process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
 				}
-				process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
+			} else {
+				resumeFromStage = null;
+				partial = { source: sourceMeta, stage_completed: 'none' };
 			}
-			resumeFromStage = null;
-			partial = { source: sourceMeta, stage_completed: 'none' };
 		}
 	} else if (loadedPartial && partialHasDurableNeonOrDiskProgress(loadedPartial)) {
 		partial = loadedPartial;
@@ -4103,12 +4270,19 @@ async function main() {
 				);
 				resumeFromStage = normalized;
 			}
-			if (validationOnlyIngestIntent(forceStage) && resumeFromStage !== stageBeforeValidate) {
-				console.error(
-					`[ERROR] Validation-only ingest requires Neon checkpoints through "${stageBeforeValidate}" (claims + relations + grouping + full embeddings). Current resume point: "${resumeFromStage ?? 'none'}".`
-				);
-				await closeSurrealIfOpen(db);
-				process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
+			if (validationOnlyIngestIntent(forceStage) && !validationOnlyEmbeddingCheckpointMet(resumeFromStage)) {
+				if (await tryRelaxForceStageMissingCheckpoint('embedding_gate', partial)) {
+					// force cleared
+				} else {
+					console.error(
+						`[ERROR] Validation-only ingest requires Neon checkpoints through "${stageBeforeValidate}" (claims + relations + grouping + full embeddings). Current resume point: "${resumeFromStage ?? 'none'}".`
+					);
+					console.error(
+						`[ERROR] Set INGEST_FORCE_STAGE_MISSING_CHECKPOINT=full to re-run from extraction, or =resume to reload best partial without the validation-only tail gate.`
+					);
+					await closeSurrealIfOpen(db);
+					process.exit(INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING);
+				}
 			}
 		}
 		console.log(
@@ -4116,6 +4290,19 @@ async function main() {
 		);
 	} else {
 		partial = { source: sourceMeta, stage_completed: 'none' };
+	}
+
+	// After merge + partial normalization: align ingestion_log.status with the real resume point
+	// (avoids showing "extracting" while validation-only / store-only resumes).
+	if (existingLog) {
+		const resumeStatus = ingestionLogStatusReflectingCheckpoint(resumeFromStage);
+		await updateIngestionLog(db, sourceMeta.url, {
+			status: resumeStatus,
+			error_message: undefined
+		});
+		console.log(
+			`[RESUME] ingestion_log status → ${resumeStatus} (resume after last completed: "${resumeFromStage ?? 'none'}")`
+		);
 	}
 
 	const estimatedSourceTokens = estimateTokens(sourceText);
@@ -4523,6 +4710,7 @@ async function main() {
 			partial.extraction_progress = undefined; // Clear mid-stage progress — extraction is now complete
 			await savePartialResults(slug, partial);
 			await updateIngestionLog(db, sourceMeta.url, {
+				status: ingestionLogStatusReflectingCheckpoint('extracting'),
 				stage_completed: 'extracting',
 				claims_extracted: allClaims.length,
 				cost_usd: parseFloat(estimateCostUsd())
@@ -4754,6 +4942,7 @@ async function main() {
 			await savePartialResults(slug, partial);
 
 			await updateIngestionLog(db, sourceMeta.url, {
+				status: ingestionLogStatusReflectingCheckpoint('relating'),
 				stage_completed: 'relating',
 				relations_extracted: relations.length,
 				cost_usd: parseFloat(estimateCostUsd())
@@ -5043,6 +5232,7 @@ async function main() {
 			partial.stage_completed = 'grouping';
 			await savePartialResults(slug, partial);
 			await updateIngestionLog(db, sourceMeta.url, {
+				status: ingestionLogStatusReflectingCheckpoint('grouping'),
 				stage_completed: 'grouping',
 				arguments_grouped: arguments_.length,
 				cost_usd: parseFloat(estimateCostUsd())
@@ -5178,6 +5368,7 @@ async function main() {
 			partial.stage_completed = 'embedding';
 			await savePartialResults(slug, partial);
 			await updateIngestionLog(db, sourceMeta.url, {
+				status: ingestionLogStatusReflectingCheckpoint('embedding'),
 				stage_completed: 'embedding',
 				cost_usd: parseFloat(estimateCostUsd())
 			});
@@ -5360,6 +5551,7 @@ async function main() {
 				: undefined;
 
 			await updateIngestionLog(db, sourceMeta.url, {
+				status: 'validating',
 				stage_completed: 'validating',
 				validation_score: valScore,
 				cost_usd: parseFloat(estimateCostUsd())
@@ -5622,6 +5814,7 @@ async function main() {
 			partial.stage_completed = 'remediating';
 			await savePartialResults(slug, partial);
 			await updateIngestionLog(db, sourceMeta.url, {
+				status: 'validating',
 				stage_completed: 'remediating',
 				cost_usd: parseFloat(estimateCostUsd())
 			});
@@ -5700,36 +5893,30 @@ async function main() {
 			// 6a. Remove any existing source data for this URL (idempotent re-run safety)
 			console.log('  Checking for existing source data...');
 			const sourceTextSha256 = createHash('sha256').update(sourceText, 'utf8').digest('hex');
-			try {
-				await db.query(
-					'DEFINE FIELD IF NOT EXISTS ingest_source_text_sha256 ON source TYPE option<string>'
-				);
-			} catch (e) {
-				console.warn(
-					'  [WARN] Could not DEFINE FIELD ingest_source_text_sha256 on source (set INGEST_STORE_RECORD_TEXT_HASH=0 to skip):',
-					e instanceof Error ? e.message : String(e)
-				);
+			if (ingestStoreEnsureSurrealSourceFields()) {
+				try {
+					await db.query(
+						'DEFINE FIELD IF NOT EXISTS ingest_source_text_sha256 ON source TYPE option<string>'
+					);
+				} catch (e) {
+					console.warn(
+						'  [WARN] Could not DEFINE FIELD ingest_source_text_sha256 on source (set INGEST_STORE_RECORD_TEXT_HASH=0 to skip):',
+						e instanceof Error ? e.message : String(e)
+					);
+				}
+				try {
+					await db.query(
+						'DEFINE FIELD IF NOT EXISTS exclude_from_model_training ON source TYPE bool DEFAULT false'
+					);
+				} catch (e) {
+					console.warn(
+						'  [WARN] Could not DEFINE FIELD exclude_from_model_training on source:',
+						e instanceof Error ? e.message : String(e)
+					);
+				}
+			} else {
+				console.log('  [OK] Skipping DEFINE FIELD on source (INGEST_STORE_ENSURE_SURREAL_SOURCE_FIELDS=0)');
 			}
-			try {
-				await db.query(
-					'DEFINE FIELD IF NOT EXISTS exclude_from_model_training ON source TYPE bool DEFAULT false'
-				);
-			} catch (e) {
-				console.warn(
-					'  [WARN] Could not DEFINE FIELD exclude_from_model_training on source:',
-					e instanceof Error ? e.message : String(e)
-				);
-			}
-			const RELATION_TABLES_ALL = [
-				'supports',
-				'contradicts',
-				'depends_on',
-				'responds_to',
-				'defines',
-				'qualifies',
-				'refines',
-				'exemplifies'
-			];
 			const existingSources = await db.query<[{ id: string }[]]>(
 				'SELECT id FROM source WHERE canonical_url_hash = $canonical_url_hash OR url = $url LIMIT 1',
 				{ canonical_url_hash: sourceMeta.canonical_url_hash, url: sourceMeta.url }
@@ -5760,22 +5947,11 @@ async function main() {
 				}
 				if (existingSourceId) {
 					console.log(`  [CLEANUP] Removing existing source (${existingSourceId}) and its claims/arguments...`);
-				// Remove relation edges among claims of this source
-				for (const relTable of RELATION_TABLES_ALL) {
-					await db.query(
-						`DELETE ${relTable} WHERE in IN (SELECT id FROM claim WHERE source = $sid) OR out IN (SELECT id FROM claim WHERE source = $sid)`,
-						{ sid: existingSourceId }
-					);
-				}
-					await db.query('DELETE part_of WHERE in IN (SELECT id FROM claim WHERE source = $sid)', { sid: existingSourceId });
-					await db.query('DELETE claim WHERE source = $sid', { sid: existingSourceId });
-					await db.query('DELETE passage WHERE source = $sid', { sid: existingSourceId });
-					await db.query('DELETE argument WHERE source = $sid', { sid: existingSourceId });
-					await db.query('DELETE source WHERE id = $sid', { sid: existingSourceId });
+					await surrealStoreCleanupRemoveExistingSource(db, existingSourceId);
 					console.log('  [CLEANUP] Existing data removed — proceeding with fresh store');
-			} else {
-				console.log('  [OK] No existing data found — fresh store');
-			}
+				} else {
+					console.log('  [OK] No existing data found — fresh store');
+				}
 
 			// 6b. Create source record
 			console.log('  Creating source record...');

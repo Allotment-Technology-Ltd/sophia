@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+	adminIngestChildCountsTowardMaxConcurrent,
 	computeIngestionJobTickSpawnCap,
 	ingestRunStillOccupiesLlmConcurrencySlot
 } from './ingestCapacityAtStore';
@@ -40,6 +41,50 @@ describe('ingestCapacityAtStore', () => {
 
 	it('null run occupies (conservative)', () => {
 		expect(ingestRunStillOccupiesLlmConcurrencySlot(null)).toBe(true);
+	});
+});
+
+describe('adminIngestChildCountsTowardMaxConcurrent', () => {
+	const alive = { killed: false as const, exitCode: null as number | null, signalCode: null as null };
+
+	it('running store with live child does not count', () => {
+		expect(
+			adminIngestChildCountsTowardMaxConcurrent({
+				status: 'running',
+				currentStageKey: 'store',
+				process: alive
+			})
+		).toBe(false);
+	});
+
+	it('running extract with live child counts', () => {
+		expect(
+			adminIngestChildCountsTowardMaxConcurrent({
+				status: 'running',
+				currentStageKey: 'extract',
+				process: alive
+			})
+		).toBe(true);
+	});
+
+	it('terminal does not count even with process ref', () => {
+		expect(
+			adminIngestChildCountsTowardMaxConcurrent({
+				status: 'done',
+				currentStageKey: 'store',
+				process: alive
+			})
+		).toBe(false);
+	});
+
+	it('exited child does not count', () => {
+		expect(
+			adminIngestChildCountsTowardMaxConcurrent({
+				status: 'running',
+				currentStageKey: 'extract',
+				process: { ...alive, exitCode: 0 }
+			})
+		).toBe(false);
 	});
 });
 
