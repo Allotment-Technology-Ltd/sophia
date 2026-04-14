@@ -22,4 +22,12 @@ describe('preprocessDomainForEnum', () => {
 	it('falls back when the array has no valid strings', () => {
 		expect(DomainSchema.parse([])).toBe('epistemology');
 	});
+
+	it('maps unknown domains to philosophy_general', () => {
+		expect(DomainSchema.parse('philosophy_of_chemistry')).toBe('philosophy_general');
+	});
+
+	it('takes the first segment of comma-separated domains', () => {
+		expect(DomainSchema.parse('ethics, metaethics')).toBe('ethics');
+	});
 });

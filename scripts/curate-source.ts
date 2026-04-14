@@ -27,6 +27,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { DOMAIN_VALUES } from '../src/lib/server/prompts/domainZod.js';
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
@@ -45,19 +46,7 @@ const LOW_QUALITY_DOMAINS = [
 	'substack.com'
 ];
 
-const VALID_DOMAINS = [
-	'ethics',
-	'epistemology',
-	'metaphysics',
-	'philosophy_of_mind',
-	'political_philosophy',
-	'logic',
-	'aesthetics',
-	'philosophy_of_science',
-	'philosophy_of_language',
-	'applied_ethics',
-	'philosophy_of_ai'
-] as const;
+const VALID_DOMAIN_SET = new Set<string>(DOMAIN_VALUES);
 
 const VALID_SOURCE_TYPES = ['book', 'paper', 'sep_entry', 'iep_entry', 'article', 'institutional'];
 
@@ -219,8 +208,8 @@ async function curateSource(opts: {
 	// ── Check 1: Metadata completeness ────────────────────────────────────
 	if (!opts.title.trim()) blockers.push('Title is required');
 	if (opts.authors.length === 0) blockers.push('At least one author is required');
-	if (!VALID_DOMAINS.includes(opts.domain as typeof VALID_DOMAINS[number])) {
-		blockers.push(`Invalid domain "${opts.domain}". Valid: ${VALID_DOMAINS.join(', ')}`);
+	if (!VALID_DOMAIN_SET.has(opts.domain)) {
+		blockers.push(`Invalid domain "${opts.domain}". Valid: ${[...DOMAIN_VALUES].sort().join(', ')}`);
 	}
 	if (!VALID_SOURCE_TYPES.includes(opts.sourceType)) {
 		warnings.push(`Unknown source_type "${opts.sourceType}". Valid: ${VALID_SOURCE_TYPES.join(', ')}`);
