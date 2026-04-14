@@ -205,6 +205,11 @@ export async function neonMergePayloadAndVersion(
  * When the Neon row is still `running` but the persisted stage snapshot already shows a finished
  * pipeline (e.g. status flip lagged behind the last snapshot write), self-heal to `done` on read.
  */
+/** Stage is settled for “did this slice run?” — validation-tail runs skip extract→embed with `skipped`. */
+function neonStageRowSettled(st: string | undefined): boolean {
+  return st === 'done' || st === 'skipped';
+}
+
 function neonRunningRowStagesLookFullyDone(row: {
   status: string;
   stages: unknown;
@@ -216,10 +221,12 @@ function neonRunningRowStagesLookFullyDone(row: {
   const stages = row.stages as Record<string, { status?: string }>;
   const st = (k: string) => stages?.[k]?.status;
   for (const k of ['fetch', 'extract', 'relate', 'group', 'embed'] as const) {
-    if (st(k) !== 'done') return false;
+    if (!neonStageRowSettled(st(k))) return false;
   }
   if (payload?.validate === true) {
     if (st('validate') !== 'done' || st('remediation') !== 'done') return false;
+  } else if (!neonStageRowSettled(st('validate')) || !neonStageRowSettled(st('remediation'))) {
+    return false;
   }
   return st('store') === 'done';
 }
@@ -266,6 +273,28 @@ export async function neonLoadIngestRun(runId: string): Promise<IngestRunState |
         row = healed[0]!;
       }
     }
+  }
+
+  /** Success rows may predate `completeRun` clearing — strip stale “active worker” fields on read. */
+  if (
+    row.status === 'done' &&
+    (row.lastFailureStage != null || row.currentStageKey != null || row.currentAction != null)
+  ) {
+    await db
+      .update(ingestRuns)
+      .set({
+        lastFailureStage: null,
+        currentStageKey: null,
+        currentAction: null,
+        updatedAt: new Date()
+      })
+      .where(eq(ingestRuns.id, runId));
+    row = {
+      ...row,
+      lastFailureStage: null,
+      currentStageKey: null,
+      currentAction: null
+    };
   }
 
   const issueRows = await db
