@@ -421,10 +421,15 @@ function exitValidationOnlyNoCheckpoint(): never {
 }
 
 /** When `--force-stage` / `INGEST_FORCE_STAGE` cannot be satisfied (missing tail or validation-only gate). */
-function parseForceStageMissingCheckpointMode(): 'error' | 'full' | 'resume' {
-	const v = (process.env.INGEST_FORCE_STAGE_MISSING_CHECKPOINT ?? 'error').trim().toLowerCase();
-	if (v === 'full' || v === 'complete' || v === 'complete_pipeline') return 'full';
-	if (v === 'resume' || v === 'best_partial' || v === 'partial') return 'resume';
+function parseForceStageMissingCheckpointMode(forceStageHint?: string | null): 'error' | 'full' | 'resume' {
+	const raw = (process.env.INGEST_FORCE_STAGE_MISSING_CHECKPOINT ?? '').trim().toLowerCase();
+	if (raw === 'full' || raw === 'complete' || raw === 'complete_pipeline') return 'full';
+	if (raw === 'resume' || raw === 'best_partial' || raw === 'partial') return 'resume';
+	if (raw === 'error' || raw === 'strict') return 'error';
+	if (raw.length > 0) return 'error';
+	/** Unset: match `sanitizeIngestionJobWorkerDefaults` — validation tail should not hard-fail on a fresh orchestration id. */
+	const hint = (forceStageHint ?? process.env.INGEST_FORCE_STAGE ?? '').trim().toLowerCase();
+	if (hint === 'validating') return 'resume';
 	return 'error';
 }
 
@@ -3973,7 +3978,7 @@ async function main() {
 			`  INGEST_FORCE_STAGE=<stage>       Same as --force-stage when argv is not passed (valid: ${STAGES_ORDER.join(', ')})`
 		);
 		console.error(
-			'  INGEST_FORCE_STAGE_MISSING_CHECKPOINT=error|full|resume   When force-stage needs Neon/disk checkpoints that are missing (or validation-only gate fails): error=exit (default), full=clear force and run from extraction, resume=clear force and best partial without embedding-complete gate'
+			'  INGEST_FORCE_STAGE_MISSING_CHECKPOINT=error|full|resume   When force-stage needs Neon/disk checkpoints that are missing (or validation-only gate fails): error=exit (default for non-validation tails), full=clear force and run from extraction, resume=clear force and best partial without embedding-complete gate. If unset and INGEST_FORCE_STAGE / --force-stage is validating, defaults to resume (same as durable job worker sanitization).'
 		);
 		console.error(
 			'  INGEST_EXCLUDE_SOURCE_FROM_MODEL_TRAINING=1   Mark stored source as excluded from model-training exports (Neon + Surreal); Neon upsert is sticky-OR'
@@ -4140,7 +4145,7 @@ async function main() {
 		kind: 'no_partial' | 'embedding_gate',
 		gatePartial: PartialResults | null
 	): Promise<boolean> {
-		const mode = parseForceStageMissingCheckpointMode();
+		const mode = parseForceStageMissingCheckpointMode(forceStage);
 		if (mode === 'error' || !forceStage) return false;
 
 		const label =
@@ -4221,7 +4226,7 @@ async function main() {
 			console.log(
 				'[RESUME] No checkpoint (Neon ingest_staging_* or data/ingested/*-partial.json) — restarting from scratch'
 			);
-			const strictMissing = parseForceStageMissingCheckpointMode() === 'error';
+			const strictMissing = parseForceStageMissingCheckpointMode(forceStage) === 'error';
 			if (validationOnlyIngestIntent(forceStage) && strictMissing) {
 				console.warn(
 					`  [RESUME] Hint: no tail-compatible ingest_staging_meta for slug=${slug} url=${su || '(none)'} canonical_url=${cu || '(none)'} hash=${sourceMeta.canonical_url_hash ?? '(none)'}. ` +

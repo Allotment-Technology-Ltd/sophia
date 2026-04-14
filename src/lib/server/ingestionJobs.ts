@@ -360,10 +360,26 @@ export async function applyDlqAutoReplayIfEnabled(): Promise<number> {
 export type IngestionJobItemStatus =
 	| 'pending'
 	| 'running'
+	/** Child ingest run is in `awaiting_sync` (pipeline LLM work finished; Surreal sync pending). */
+	| 'awaiting_sync'
 	| 'done'
 	| 'error'
 	| 'skipped'
 	| 'cancelled';
+
+function isIngestionJobItemRowTerminal(status: string): boolean {
+	return (
+		status === 'done' ||
+		status === 'error' ||
+		status === 'cancelled' ||
+		status === 'skipped'
+	);
+}
+
+/** Item rows that still have an attached child run worth polling in {@link reconcileIngestionJobView}. */
+function jobItemStatusHasActiveChildWorker(status: string): boolean {
+	return status === 'running' || status === 'awaiting_sync';
+}
 
 function buildJobId(): string {
 	return `ingest_job_${Date.now()}_${randomBytes(4).toString('hex')}`;
@@ -563,7 +579,7 @@ function mapChildRunToItemStatus(status: string): IngestionJobItemStatus {
 	if (status === 'done') return 'done';
 	if (status === 'error') return 'error';
 	if (status === 'cancelled') return 'cancelled';
-	if (status === 'awaiting_sync') return 'running';
+	if (status === 'awaiting_sync') return 'awaiting_sync';
 	return 'running';
 }
 
@@ -609,7 +625,11 @@ export async function reconcileIngestionJobView(
 			.where(
 				and(
 					eq(ingestionJobItems.jobId, jobId),
-					or(eq(ingestionJobItems.status, 'pending'), eq(ingestionJobItems.status, 'running'))
+					or(
+						eq(ingestionJobItems.status, 'pending'),
+						eq(ingestionJobItems.status, 'running'),
+						eq(ingestionJobItems.status, 'awaiting_sync')
+					)
 				)
 			)
 			.limit(1);
@@ -628,15 +648,49 @@ export async function reconcileIngestionJobView(
 		.from(ingestionJobItems)
 		.where(eq(ingestionJobItems.jobId, jobId));
 
-	const wasAllTerminalBefore =
-		items.length > 0 &&
-		items.every((r) => r.status !== 'pending' && r.status !== 'running');
+	const wasAllTerminalBefore = items.length > 0 && items.every((r) => isIngestionJobItemRowTerminal(r.status));
 
-	// Refresh running items from child runs (terminal, or stuck → error)
+	// Refresh in-flight items from child runs (awaiting_sync mirror, terminal, or stuck → error)
 	for (const it of items) {
-		if (it.status !== 'running' || !it.childRunId) continue;
+		if (!jobItemStatusHasActiveChildWorker(it.status) || !it.childRunId) continue;
 		const run = await loadChildIngestRunState(it.childRunId);
 		if (!run) continue;
+
+		if (run.status === 'awaiting_sync') {
+			if (it.status !== 'awaiting_sync') {
+				await db
+					.update(ingestionJobItems)
+					.set({
+						status: 'awaiting_sync',
+						lastError: null,
+						updatedAt: new Date()
+					})
+					.where(eq(ingestionJobItems.id, it.id));
+				await appendIngestionJobEvent(jobId, 'item_child_awaiting_sync', {
+					itemId: it.id,
+					url: it.url,
+					childRunId: it.childRunId
+				});
+			}
+			continue;
+		}
+
+		if (run.status === 'running' && it.status === 'awaiting_sync') {
+			await db
+				.update(ingestionJobItems)
+				.set({
+					status: 'running',
+					lastError: null,
+					updatedAt: new Date()
+				})
+				.where(eq(ingestionJobItems.id, it.id));
+			await appendIngestionJobEvent(jobId, 'item_child_resumed_from_awaiting_sync', {
+				itemId: it.id,
+				url: it.url,
+				childRunId: it.childRunId
+			});
+			continue;
+		}
 
 		if (!terminalRunStatus(run.status)) {
 			if (isStuckIngestRun(run)) {
@@ -690,6 +744,7 @@ export async function reconcileIngestionJobView(
 		total: refreshed.length,
 		pending: refreshed.filter((r) => r.status === 'pending').length,
 		running: refreshed.filter((r) => r.status === 'running').length,
+		awaiting_sync: refreshed.filter((r) => r.status === 'awaiting_sync').length,
 		done: refreshed.filter((r) => r.status === 'done').length,
 		error: refreshed.filter((r) => r.status === 'error').length,
 		cancelled: refreshed.filter((r) => r.status === 'cancelled').length,
@@ -697,7 +752,10 @@ export async function reconcileIngestionJobView(
 	};
 
 	const allTerminal =
-		summary.pending === 0 && summary.running === 0 && summary.total > 0;
+		summary.pending === 0 &&
+		summary.running === 0 &&
+		summary.awaiting_sync === 0 &&
+		summary.total > 0;
 	const jobStatus = allTerminal ? 'done' : 'running';
 
 	await db
@@ -765,6 +823,7 @@ async function tickIngestionJobUnlocked(
 		total: refreshed.length,
 		pending: refreshed.filter((r) => r.status === 'pending').length,
 		running: refreshed.filter((r) => r.status === 'running').length,
+		awaiting_sync: refreshed.filter((r) => r.status === 'awaiting_sync').length,
 		done: refreshed.filter((r) => r.status === 'done').length,
 		error: refreshed.filter((r) => r.status === 'error').length,
 		cancelled: refreshed.filter((r) => r.status === 'cancelled').length,
@@ -773,9 +832,9 @@ async function tickIngestionJobUnlocked(
 
 	/** Runs in Surreal store (no LLM) do not consume a job concurrency slot. */
 	let llmSlotOccupants = 0;
-	const runningCount = refreshed.filter((it) => it.status === 'running').length;
+	const runningCount = refreshed.filter((it) => jobItemStatusHasActiveChildWorker(it.status)).length;
 	for (const it of refreshed) {
-		if (it.status !== 'running' || !it.childRunId) continue;
+		if (!jobItemStatusHasActiveChildWorker(it.status) || !it.childRunId) continue;
 		const child = await loadChildIngestRunState(it.childRunId);
 		if (ingestRunStillOccupiesLlmConcurrencySlot(child)) llmSlotOccupants += 1;
 	}
@@ -1004,7 +1063,11 @@ async function listJobIdsNeedingTick(): Promise<string[]> {
 		.where(
 			and(
 				eq(ingestionJobs.status, 'done'),
-				or(eq(ingestionJobItems.status, 'pending'), eq(ingestionJobItems.status, 'running'))
+				or(
+					eq(ingestionJobItems.status, 'pending'),
+					eq(ingestionJobItems.status, 'running'),
+					eq(ingestionJobItems.status, 'awaiting_sync')
+				)
 			)
 		);
 	const ids = new Set<string>();
@@ -1270,7 +1333,7 @@ export async function modifyIngestionJobItem(
 		return { ok: true };
 	}
 
-	if (it.status === 'running' && it.childRunId?.trim()) {
+	if (jobItemStatusHasActiveChildWorker(it.status) && it.childRunId?.trim()) {
 		const cancel = ingestRunManager.cancelRun(it.childRunId.trim());
 		if (!cancel.ok) {
 			return { ok: false, error: cancel.error };
@@ -1279,7 +1342,10 @@ export async function modifyIngestionJobItem(
 		return { ok: true };
 	}
 
-	return { ok: false, error: 'Only error or in-flight (running) items can be cancelled from this action.' };
+	return {
+		ok: false,
+		error: 'Only error or in-flight (running / awaiting sync) items can be cancelled from this action.'
+	};
 }
 
 const JOB_CANCELLED_ITEM_NOTE = 'job_cancelled_by_operator';
@@ -1316,7 +1382,7 @@ export async function cancelEntireIngestionJob(
 
 	const items = await db.select().from(ingestionJobItems).where(eq(ingestionJobItems.jobId, id));
 	const pendingItems = items.filter((i) => i.status === 'pending');
-	const runningItems = items.filter((i) => i.status === 'running');
+	const runningItems = items.filter((i) => jobItemStatusHasActiveChildWorker(i.status));
 	const hasOpen = pendingItems.length > 0 || runningItems.length > 0;
 
 	if (job.status === 'done' && !hasOpen) {
@@ -1363,6 +1429,7 @@ export async function cancelEntireIngestionJob(
 		total: refreshed.length,
 		pending: refreshed.filter((r) => r.status === 'pending').length,
 		running: refreshed.filter((r) => r.status === 'running').length,
+		awaiting_sync: refreshed.filter((r) => r.status === 'awaiting_sync').length,
 		done: refreshed.filter((r) => r.status === 'done').length,
 		error: refreshed.filter((r) => r.status === 'error').length,
 		cancelled: refreshed.filter((r) => r.status === 'cancelled').length,

@@ -201,6 +201,29 @@ export async function neonMergePayloadAndVersion(
     .where(eq(ingestRuns.id, runId));
 }
 
+/**
+ * When the Neon row is still `running` but the persisted stage snapshot already shows a finished
+ * pipeline (e.g. status flip lagged behind the last snapshot write), self-heal to `done` on read.
+ */
+function neonRunningRowStagesLookFullyDone(row: {
+  status: string;
+  stages: unknown;
+  payload: unknown;
+}): boolean {
+  if (row.status !== 'running') return false;
+  const payload = row.payload as { validate?: boolean; stop_before_store?: boolean } | null | undefined;
+  if (payload?.stop_before_store) return false;
+  const stages = row.stages as Record<string, { status?: string }>;
+  const st = (k: string) => stages?.[k]?.status;
+  for (const k of ['fetch', 'extract', 'relate', 'group', 'embed'] as const) {
+    if (st(k) !== 'done') return false;
+  }
+  if (payload?.validate === true) {
+    if (st('validate') !== 'done' || st('remediation') !== 'done') return false;
+  }
+  return st('store') === 'done';
+}
+
 export async function neonLoadIngestRun(runId: string): Promise<IngestRunState | null> {
   if (!isNeonIngestPersistenceEnabled()) return null;
   const db = getDrizzleDb();
@@ -226,7 +249,8 @@ export async function neonLoadIngestRun(runId: string): Promise<IngestRunState |
     const telemetryComplete = logRows.some((l) =>
       l.line.includes('"event":"ingest_timing_complete"')
     );
-    if (orchestratorFinished || telemetryComplete || storeLooksDone) {
+    const stagesSnapshotComplete = neonRunningRowStagesLookFullyDone(row);
+    if (orchestratorFinished || telemetryComplete || storeLooksDone || stagesSnapshotComplete) {
       const now = new Date();
       const healed = await db
         .update(ingestRuns)
