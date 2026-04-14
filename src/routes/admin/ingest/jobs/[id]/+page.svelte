@@ -102,6 +102,8 @@
 	let childRespawnBusyId = $state<string | null>(null);
 	let respawnWorkersBusy = $state(false);
 	let respawnWorkersMessage = $state('');
+	let advanceJobTickBusy = $state(false);
+	let advanceJobTickMessage = $state('');
 	/** Shown when opening the ingest monitor in a new tab is blocked by the browser. */
 	let openRunMonitorMessage = $state('');
 	/** From API — max starts per URL (INGEST_JOB_ITEM_MAX_ATTEMPTS). */
@@ -117,14 +119,20 @@
 		return { Authorization: `Bearer ${token}` };
 	}
 
-	async function fetchDetail(): Promise<void> {
+	const DETAIL_FETCH_MS = 90_000;
+
+	async function fetchDetail(opts?: { tick?: boolean }): Promise<void> {
 		const jobId = currentJobId();
 		if (!jobId) return;
 		loadError = '';
 		neonDisabled = false;
+		const tickQs = opts?.tick === true ? 'tick=1' : 'tick=0';
+		const controller = new AbortController();
+		const abortTimer = setTimeout(() => controller.abort(), DETAIL_FETCH_MS);
 		try {
-			const res = await fetch(`/api/admin/ingest/jobs/${encodeURIComponent(jobId)}`, {
-				headers: await authHeaders()
+			const res = await fetch(`/api/admin/ingest/jobs/${encodeURIComponent(jobId)}?${tickQs}`, {
+				headers: await authHeaders(),
+				signal: controller.signal
 			});
 			const body = await res.json().catch(() => ({}));
 			if (res.status === 503) {
@@ -140,7 +148,11 @@
 			if (!res.ok) {
 				throw new Error(typeof body?.error === 'string' ? body.error : 'Failed to load job.');
 			}
-			job = (body?.job as JobRow) ?? null;
+			const jobBody = (body?.job as JobRow) ?? null;
+			if (!jobBody) {
+				throw new Error('Job not found or the server returned an incomplete response.');
+			}
+			job = jobBody;
 			items = Array.isArray(body?.items) ? (body.items as ItemRow[]) : [];
 			childRunSummaries = Array.isArray(body?.childRunSummaries)
 				? (body.childRunSummaries as ChildRunSummaryRow[])
@@ -175,11 +187,60 @@
 					? body.itemMaxAttempts
 					: 2;
 		} catch (e) {
-			loadError = e instanceof Error ? e.message : 'Failed to load job.';
+			const aborted =
+				(e instanceof DOMException && e.name === 'AbortError') ||
+				(e instanceof Error && e.name === 'AbortError');
+			if (aborted) {
+				loadError =
+					'Loading this job timed out. Try again, or use “Advance this job’s queue” if the server was busy ticking this job.';
+			} else {
+				loadError = e instanceof Error ? e.message : 'Failed to load job.';
+			}
 			job = null;
 			items = [];
 			childRunSummaries = [];
 			issuePipelineSignals = { ...emptyIssuePipelineSignals };
+		} finally {
+			clearTimeout(abortTimer);
+		}
+	}
+
+	/** Runs {@link tickIngestionJob} for this job only (may be slow); then refreshes with a fast read. */
+	async function advanceThisJobQueue(): Promise<void> {
+		const jobId = currentJobId();
+		if (!jobId) return;
+		advanceJobTickMessage = '';
+		advanceJobTickBusy = true;
+		const controller = new AbortController();
+		const abortTimer = setTimeout(() => controller.abort(), 120_000);
+		try {
+			const res = await fetch(`/api/admin/ingest/jobs/${encodeURIComponent(jobId)}?tick=1`, {
+				headers: await authHeaders(),
+				signal: controller.signal
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				throw new Error(typeof body?.error === 'string' ? body.error : 'Advance job queue failed.');
+			}
+			advanceJobTickMessage = 'Job tick finished; refreshing view…';
+			await fetchDetail({ tick: false });
+			advanceJobTickMessage = 'Job queue advanced.';
+			setTimeout(() => {
+				advanceJobTickMessage = '';
+			}, 4000);
+			await fetchEvents();
+		} catch (e) {
+			const aborted =
+				(e instanceof DOMException && e.name === 'AbortError') ||
+				(e instanceof Error && e.name === 'AbortError');
+			if (aborted) {
+				advanceJobTickMessage = 'Advance timed out (server still busy). Try again in a moment.';
+			} else {
+				advanceJobTickMessage = e instanceof Error ? e.message : 'Advance failed.';
+			}
+		} finally {
+			clearTimeout(abortTimer);
+			advanceJobTickBusy = false;
 		}
 	}
 
@@ -516,6 +577,11 @@
 		</p>
 	{:else if !job}
 		<p class="mt-4 font-mono text-sm text-sophia-dark-muted">Loading job…</p>
+		<p class="mt-2 max-w-xl text-xs leading-relaxed text-sophia-dark-dim">
+			If this stays here, the request may be slow or blocked — wait, reload, or check auth. Job detail uses a fast
+			server read (<span class="font-mono">tick=0</span>); it should not hang on queue work the way the old
+			auto-tick did.
+		</p>
 	{/if}
 
 	{#if openRunMonitorMessage}
@@ -526,8 +592,30 @@
 
 	{#if job}
 		<header class="mt-6 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
-			<h1 class="font-serif text-2xl text-sophia-dark-text">Job</h1>
-			<p class="mt-2 break-all font-mono text-xs text-sophia-dark-muted">{job.id}</p>
+			<div class="flex flex-wrap items-start justify-between gap-3">
+				<div>
+					<h1 class="font-serif text-2xl text-sophia-dark-text">Job</h1>
+					<p class="mt-2 break-all font-mono text-xs text-sophia-dark-muted">{job.id}</p>
+				</div>
+				<div class="flex max-w-md flex-col items-end gap-2">
+					<button
+						type="button"
+						class="inline-flex min-h-[40px] shrink-0 items-center rounded-lg border border-[var(--color-border)] bg-black/10 px-4 py-2 font-mono text-xs text-sophia-dark-text transition hover:bg-black/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+						disabled={advanceJobTickBusy || cancelJobBusy || retryBusy || respawnWorkersBusy}
+						title="Runs the same server tick as the job poller for this job only (reconcile + launch pending). Can take a while."
+						onclick={() => void advanceThisJobQueue()}
+					>
+						{advanceJobTickBusy ? 'Advancing…' : 'Advance this job’s queue'}
+					</button>
+					<p class="text-right text-[11px] leading-snug text-sophia-dark-muted">
+						Loads use a fast read (<span class="font-mono">tick=0</span>). Use this to drain pending URLs or
+						refresh Neon state when no poller is running.
+					</p>
+				</div>
+			</div>
+			{#if advanceJobTickMessage}
+				<p class="mt-3 text-sm text-sophia-dark-sage" role="status">{advanceJobTickMessage}</p>
+			{/if}
 			<dl class="mt-4 grid gap-3 font-mono text-xs sm:grid-cols-2">
 				<div>
 					<dt class="text-sophia-dark-dim">Status</dt>

@@ -764,7 +764,9 @@
 			reached so remediation and relation fixes persist. The job list below loads without running a global queue tick (fast).
 			Use <strong class="font-medium text-sophia-dark-text">Advance all queues</strong> when you want this browser session to
 			run the same tick as <code class="rounded bg-black/20 px-1 py-0.5 font-mono text-xs">pnpm ingestion:job-poller</code> (can take a while).
-			Opening a <strong class="font-medium text-sophia-dark-text">single job</strong> still ticks that job on load. If no admin tab is open, use Cloud Run Job + Scheduler — see
+			On a <strong class="font-medium text-sophia-dark-text">job detail</strong> page, loads are fast reads; use
+			<strong class="font-medium text-sophia-dark-text">Advance this job’s queue</strong> there (or the poller) to run a
+			tick. If no admin tab is open, use Cloud Run Job + Scheduler — see
 			<span class="font-mono text-xs">docs/local/operations/ingestion-credits-and-workers.md</span>.
 		</p>
 	</header>
