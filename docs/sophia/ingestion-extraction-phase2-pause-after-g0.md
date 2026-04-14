@@ -30,6 +30,7 @@ Organisation policy for **supervision-eligible** `stage_models.extraction` prefi
 - **Do not** merge pre-relabel and post-relabel JSONL in one fine-tune directory without explicit manifest fields (**M9.23**). The export manifest lists `neon_run_ids`, `extraction_model_by_run_id`, and (when used) G1 prefix / shard policies.
 - **Full-volume refresh:** `pnpm ops:phase1-export-training-jsonl -- --days=90 --limit=5000 --out-dir=data/phase1-training-export` then `pnpm ops:check-training-export-leakage -- --export-dir=data/phase1-training-export`.
 
-## Prior gates
+## Prior / next gates
 
 - **`pause-after-validation`:** [`ingestion-extraction-phase2-signoff.md`](./ingestion-extraction-phase2-signoff.md)
+- **Next:** [`ingestion-extraction-phase2-pause-after-g1.md`](./ingestion-extraction-phase2-pause-after-g1.md) (after G1 export + manifest audit)
