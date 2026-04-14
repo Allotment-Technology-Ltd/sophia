@@ -15,6 +15,10 @@
  *   pnpm ops:phase1-export-training-jsonl
  *   pnpm exec tsx scripts/export-phase1-training-jsonl.ts -- --days=90 --out-dir=data/phase1-training-export
  *   pnpm exec tsx scripts/export-phase1-training-jsonl.ts -- --no-stratified
+ *
+ * G1 (ToS / policy shards, mitigation §8 / §9 M9.23):
+ *   --g1-allow-extraction-prefix=mistral/   (repeatable; only runs whose persisted `stage_models.extraction` starts with a prefix)
+ *   --g1-shard-by-provider                (write separate JSONL per extraction provider segment, e.g. train.mistral.jsonl, train.vertex.jsonl)
  */
 
 import { createHash } from 'node:crypto';
@@ -75,7 +79,21 @@ function parseArgs() {
 	const stratified = !hasFlag('--no-stratified') && !hasFlag('--phase1-baseline');
 	const minhashDedupe = hasFlag('--minhash-dedupe');
 	const passageContext = hasFlag('--passage-context');
-	return { days, limit, outDir, stratified, minhashDedupe, passageContext } as const;
+	const g1ShardByProvider = hasFlag('--g1-shard-by-provider');
+	const g1AllowExtractionPrefix = argv
+		.filter((x) => x.startsWith('--g1-allow-extraction-prefix='))
+		.map((x) => x.slice('--g1-allow-extraction-prefix='.length).trim())
+		.filter(Boolean);
+	return {
+		days,
+		limit,
+		outDir,
+		stratified,
+		minhashDedupe,
+		passageContext,
+		g1ShardByProvider,
+		g1AllowExtractionPrefix
+	} as const;
 }
 
 function extractionModelFromEnvelope(env: Record<string, unknown> | null): string | null {
@@ -86,6 +104,19 @@ function extractionModelFromEnvelope(env: Record<string, unknown> | null): strin
 	if (!sm || typeof sm !== 'object' || Array.isArray(sm)) return null;
 	const ex = (sm as Record<string, unknown>).extraction;
 	return typeof ex === 'string' && ex.trim() ? ex.trim() : null;
+}
+
+function extractionProviderSegment(model: string | null): string {
+	if (!model?.trim()) return 'unknown';
+	const m = model.trim();
+	const i = m.indexOf('/');
+	return i === -1 ? m : m.slice(0, i);
+}
+
+function passesG1ExtractionPrefixFilter(model: string | null, prefixes: readonly string[]): boolean {
+	if (prefixes.length === 0) return true;
+	if (!model?.trim()) return false;
+	return prefixes.some((p) => model.startsWith(p));
 }
 
 function stratifyBucketFromUrlKey(urlKey: string): 'train' | 'validation' | 'test' {
@@ -200,6 +231,31 @@ function dedupeShardLines(jsonlStrings: string[], enableNear: boolean): { lines:
 	return { lines: kept, droppedExact, droppedNear };
 }
 
+function partitionByProvider(
+	lines: JsonlLine[],
+	labelModelByRun: Record<string, string | null>
+): Map<string, JsonlLine[]> {
+	const m = new Map<string, JsonlLine[]>();
+	for (const line of lines) {
+		const p = extractionProviderSegment(labelModelByRun[line.run_id] ?? null);
+		const arr = m.get(p) ?? [];
+		arr.push(line);
+		m.set(p, arr);
+	}
+	return m;
+}
+
+function safeProvSeg(prov: string): string {
+	const s = prov.replace(/[^a-zA-Z0-9._-]+/g, '_');
+	return s || 'unknown';
+}
+
+function stringifyAndMaybeDedupe(lines: JsonlLine[], minhashDedupe: boolean) {
+	const jsonl = jsonLinesToStrings(lines);
+	if (!minhashDedupe) return { lines: jsonl, droppedExact: 0, droppedNear: 0 };
+	return dedupeShardLines(jsonl, true);
+}
+
 async function main() {
 	if (!process.env.DATABASE_URL?.trim()) {
 		console.error('DATABASE_URL is required.');
@@ -210,7 +266,16 @@ async function main() {
 		process.exit(1);
 	}
 
-	const { days, limit, outDir, stratified, minhashDedupe, passageContext } = parseArgs();
+	const {
+		days,
+		limit,
+		outDir,
+		stratified,
+		minhashDedupe,
+		passageContext,
+		g1ShardByProvider,
+		g1AllowExtractionPrefix
+	} = parseArgs();
 	mkdirSync(outDir, { recursive: true });
 
 	const golden = loadGoldenExtractionEval();
@@ -261,6 +326,7 @@ async function main() {
 	let dedupeDropped = 0;
 
 	const labelModelByRun: Record<string, string | null> = {};
+	let g1CohortRowsSkipped = 0;
 
 	for (const row of cohortRows) {
 		const ir = runById.get(row.runId);
@@ -269,6 +335,11 @@ async function main() {
 				? (ir.reportEnvelope as Record<string, unknown>)
 				: null;
 		labelModelByRun[row.runId] = extractionModelFromEnvelope(env);
+
+		if (!passesG1ExtractionPrefixFilter(labelModelByRun[row.runId], g1AllowExtractionPrefix)) {
+			g1CohortRowsSkipped++;
+			continue;
+		}
 
 		const identity = canonicalizeAndHashSourceUrl(row.url);
 		const canon = identity?.canonicalUrl ?? canonicalizeSourceUrl(row.url);
@@ -317,15 +388,31 @@ async function main() {
 		}
 	}
 
+	const cohortFpSourceRows =
+		g1AllowExtractionPrefix.length > 0
+			? cohortRows.filter((r) =>
+					passesG1ExtractionPrefixFilter(labelModelByRun[r.runId], g1AllowExtractionPrefix)
+				)
+			: cohortRows;
+
 	const cohortFp = createHash('sha256')
 		.update(
-			cohortRows
+			cohortFpSourceRows
 				.map((r) => canonicalizeSourceUrl(r.url) ?? r.url.trim().toLowerCase())
 				.sort()
 				.join('\n')
 		)
 		.digest('hex')
 		.slice(0, 16);
+
+	if (pending.length === 0) {
+		console.error(
+			g1AllowExtractionPrefix.length
+				? 'No claim lines after G1 extraction-prefix filter — widen prefixes or check cohort.'
+				: 'No exportable claim lines — nothing to write.'
+		);
+		process.exit(1);
+	}
 
 	const goldenLines = pending.filter((l) => l.split === 'golden_holdout');
 	const nonGolden = pending.filter((l) => l.split !== 'golden_holdout');
@@ -342,50 +429,129 @@ async function main() {
 		trainLines = nonGolden;
 	}
 
-	const toStr = jsonLinesToStrings;
-
-	let trainJsonl = toStr(trainLines);
-	let valJsonl = toStr(validationLines);
-	let testJsonl = toStr(testLines);
-	let goldenJsonl = toStr(goldenLines);
-
 	let minhashNearDropped = { train: 0, validation: 0, test: 0 };
 	let exactDedupeDropped = { train: 0, validation: 0, test: 0 };
 	let goldenExactDropped = 0;
 	let goldenNearDropped = 0;
 
-	if (minhashDedupe) {
-		const dTrain = dedupeShardLines(trainJsonl, true);
-		trainJsonl = dTrain.lines;
-		exactDedupeDropped.train = dTrain.droppedExact;
-		minhashNearDropped.train = dTrain.droppedNear;
+	let countTrain = 0;
+	let countVal = 0;
+	let countTest = 0;
+	let countGolden = 0;
+	const writtenJsonlFiles: string[] = [];
 
+	const writeJsonl = (name: string, lines: string[]) => {
+		writeFileSync(join(outDir, name), lines.join('\n') + (lines.length ? '\n' : ''), 'utf8');
+	};
+
+	const phase =
+		g1ShardByProvider
+			? 'g1_training_jsonl_sharded'
+			: g1AllowExtractionPrefix.length > 0
+				? 'g1_training_jsonl_filtered'
+				: stratified
+					? 'g0_training_jsonl_stratified'
+					: 'phase1_training_jsonl_baseline';
+
+	if (g1ShardByProvider) {
+		const pt = partitionByProvider(trainLines, labelModelByRun);
+		const pv = stratified ? partitionByProvider(validationLines, labelModelByRun) : new Map<string, JsonlLine[]>();
+		const pte = stratified ? partitionByProvider(testLines, labelModelByRun) : new Map<string, JsonlLine[]>();
+		const pg = partitionByProvider(goldenLines, labelModelByRun);
+
+		const provs = new Set<string>([...pt.keys(), ...pv.keys(), ...pte.keys(), ...pg.keys()]);
+		for (const prov of [...provs].sort()) {
+			const safe = safeProvSeg(prov);
+
+			const tr = stringifyAndMaybeDedupe(pt.get(prov) ?? [], minhashDedupe);
+			if (tr.lines.length > 0) {
+				writeJsonl(`train.${safe}.jsonl`, tr.lines);
+				writtenJsonlFiles.push(`train.${safe}.jsonl`);
+				countTrain += tr.lines.length;
+				exactDedupeDropped.train += tr.droppedExact;
+				minhashNearDropped.train += tr.droppedNear;
+			}
+
+			if (stratified) {
+				const va = stringifyAndMaybeDedupe(pv.get(prov) ?? [], minhashDedupe);
+				if (va.lines.length > 0) {
+					writeJsonl(`validation.${safe}.jsonl`, va.lines);
+					writtenJsonlFiles.push(`validation.${safe}.jsonl`);
+					countVal += va.lines.length;
+					exactDedupeDropped.validation += va.droppedExact;
+					minhashNearDropped.validation += va.droppedNear;
+				}
+				const te = stringifyAndMaybeDedupe(pte.get(prov) ?? [], minhashDedupe);
+				if (te.lines.length > 0) {
+					writeJsonl(`test.${safe}.jsonl`, te.lines);
+					writtenJsonlFiles.push(`test.${safe}.jsonl`);
+					countTest += te.lines.length;
+					exactDedupeDropped.test += te.droppedExact;
+					minhashNearDropped.test += te.droppedNear;
+				}
+			}
+
+			const go = stringifyAndMaybeDedupe(pg.get(prov) ?? [], minhashDedupe);
+			if (go.lines.length > 0) {
+				writeJsonl(`golden_holdout.${safe}.jsonl`, go.lines);
+				writtenJsonlFiles.push(`golden_holdout.${safe}.jsonl`);
+				countGolden += go.lines.length;
+				goldenExactDropped += go.droppedExact;
+				goldenNearDropped += go.droppedNear;
+			}
+		}
+	} else {
+		const tr = stringifyAndMaybeDedupe(trainLines, minhashDedupe);
+		const trainJsonl = tr.lines;
+		countTrain = trainJsonl.length;
+		exactDedupeDropped.train = tr.droppedExact;
+		minhashNearDropped.train = tr.droppedNear;
+
+		let valJsonl: string[] = [];
+		let testJsonl: string[] = [];
 		if (stratified) {
-			const dVal = dedupeShardLines(valJsonl, true);
-			valJsonl = dVal.lines;
-			exactDedupeDropped.validation = dVal.droppedExact;
-			minhashNearDropped.validation = dVal.droppedNear;
+			const va = stringifyAndMaybeDedupe(validationLines, minhashDedupe);
+			valJsonl = va.lines;
+			countVal = valJsonl.length;
+			exactDedupeDropped.validation = va.droppedExact;
+			minhashNearDropped.validation = va.droppedNear;
 
-			const dTest = dedupeShardLines(testJsonl, true);
-			testJsonl = dTest.lines;
-			exactDedupeDropped.test = dTest.droppedExact;
-			minhashNearDropped.test = dTest.droppedNear;
+			const te = stringifyAndMaybeDedupe(testLines, minhashDedupe);
+			testJsonl = te.lines;
+			countTest = testJsonl.length;
+			exactDedupeDropped.test = te.droppedExact;
+			minhashNearDropped.test = te.droppedNear;
 		}
 
-		const dGolden = dedupeShardLines(goldenJsonl, true);
-		goldenJsonl = dGolden.lines;
-		goldenExactDropped = dGolden.droppedExact;
-		goldenNearDropped = dGolden.droppedNear;
+		const go = stringifyAndMaybeDedupe(goldenLines, minhashDedupe);
+		const goldenJsonl = go.lines;
+		countGolden = goldenJsonl.length;
+		goldenExactDropped = go.droppedExact;
+		goldenNearDropped = go.droppedNear;
+
+		writeJsonl('train.jsonl', trainJsonl);
+		writtenJsonlFiles.push('train.jsonl');
+		if (stratified) {
+			writeJsonl('validation.jsonl', valJsonl);
+			writeJsonl('test.jsonl', testJsonl);
+			writtenJsonlFiles.push('validation.jsonl', 'test.jsonl');
+		}
+		writeJsonl('golden_holdout.jsonl', goldenJsonl);
+		writtenJsonlFiles.push('golden_holdout.jsonl');
 	}
 
-	const goldenOut = goldenJsonl;
+	const exportedRunIds = [...new Set(pending.map((l) => l.run_id))].sort();
 
 	const manifest = {
 		generatedAt: new Date().toISOString(),
-		phase: stratified ? 'g0_training_jsonl_stratified' : 'phase1_training_jsonl_baseline',
+		phase,
 		exportPolicies: {
 			stratified_split_80_10_10_by_canonical_url: stratified,
 			golden_urls_excluded_from_train_val_test: true,
+			g1_allow_extraction_prefix: g1AllowExtractionPrefix.length > 0 ? [...g1AllowExtractionPrefix] : null,
+			g1_shard_by_extraction_provider: g1ShardByProvider,
+			g1_cohort_rows_skipped_by_extraction_prefix:
+				g1AllowExtractionPrefix.length > 0 ? g1CohortRowsSkipped : null,
 			minhash_near_dedupe: minhashDedupe,
 			minhash_hamming_threshold: minhashDedupe ? SIMHASH_NEAR_THRESHOLD : null,
 			passage_context_from_ingest_staging_meta: passageContext,
@@ -399,6 +565,9 @@ async function main() {
 			limit,
 			scannedRunCount: cohortMeta.scannedRunCount,
 			trainingAcceptableUrlCount: cohortRows.length,
+			trainingAcceptableUrlsAfterG1ExtractionPrefix: g1AllowExtractionPrefix.length
+				? cohortFpSourceRows.length
+				: null,
 			cohortFingerprintSha256_16: cohortFp
 		},
 		goldenSet: {
@@ -406,34 +575,42 @@ async function main() {
 			fingerprintSha256_16: goldenFp,
 			trainValTestFilesExcludeTheseCanonicalUrls: true
 		},
-		exports: stratified
+		exports: g1ShardByProvider
 			? {
-					train_jsonl: 'train.jsonl',
-					validation_jsonl: 'validation.jsonl',
-					test_jsonl: 'test.jsonl',
-					golden_holdout_jsonl: 'golden_holdout.jsonl',
-					manifest_json: 'manifest.json'
+					jsonl_files: writtenJsonlFiles,
+					manifest_json: 'manifest.json',
+					note: 'Per extraction provider segment (string before / in stage_models.extraction), e.g. train.mistral.jsonl'
 				}
-			: {
-					train_jsonl: 'train.jsonl',
-					golden_holdout_jsonl: 'golden_holdout.jsonl',
-					manifest_json: 'manifest.json'
-				},
+			: stratified
+				? {
+						train_jsonl: 'train.jsonl',
+						validation_jsonl: 'validation.jsonl',
+						test_jsonl: 'test.jsonl',
+						golden_holdout_jsonl: 'golden_holdout.jsonl',
+						manifest_json: 'manifest.json'
+					}
+				: {
+						train_jsonl: 'train.jsonl',
+						golden_holdout_jsonl: 'golden_holdout.jsonl',
+						manifest_json: 'manifest.json'
+					},
 		counts: stratified
 			? {
-					train_lines: trainJsonl.length,
-					validation_lines: valJsonl.length,
-					test_lines: testJsonl.length,
-					golden_holdout_lines: goldenOut.length,
+					train_lines: countTrain,
+					validation_lines: countVal,
+					test_lines: countTest,
+					golden_holdout_lines: countGolden,
 					invalid_claim_rows_skipped: invalidClaims,
 					dedupe_dropped_same_hash_position: dedupeDropped,
 					normalized_input_exact_dedupe_dropped: minhashDedupe ? exactDedupeDropped : null,
-					minhash_near_dedupe_dropped: minhashDedupe ? { ...minhashNearDropped, golden_holdout: goldenNearDropped } : null,
+					minhash_near_dedupe_dropped: minhashDedupe
+						? { ...minhashNearDropped, golden_holdout: goldenNearDropped }
+						: null,
 					golden_holdout_exact_dedupe_dropped: minhashDedupe ? goldenExactDropped : null
 				}
 			: {
-					train_lines: trainJsonl.length,
-					golden_holdout_lines: goldenOut.length,
+					train_lines: countTrain,
+					golden_holdout_lines: countGolden,
 					invalid_claim_rows_skipped: invalidClaims,
 					dedupe_dropped_same_hash_position: dedupeDropped,
 					normalized_input_exact_dedupe_dropped: minhashDedupe ? exactDedupeDropped.train : null,
@@ -443,7 +620,7 @@ async function main() {
 					golden_holdout_exact_dedupe_dropped: minhashDedupe ? goldenExactDropped : null
 				},
 		provenance: {
-			neon_run_ids: runIds,
+			neon_run_ids: exportedRunIds,
 			extraction_model_by_run_id: labelModelByRun
 		},
 		known_gaps: {
@@ -452,22 +629,17 @@ async function main() {
 			near_duplicate_policy: minhashDedupe
 				? `simhash64 word-token; hamming<=${SIMHASH_NEAR_THRESHOLD} drops within shard (after exact normalized-input dedupe)`
 				: 'none (no within-shard input dedupe); pass --minhash-dedupe for exact+SimHash near-dedupe per shard',
-			stratified_split: stratified
-				? 'sha256("g0-stratify-v1" || urlKey)[0] % 10 → buckets 0–7 train, 8 val, 9 test; urlKey = canonical_url_hash || canonical_url || run_id'
-				: 'single train.jsonl for all non-golden lines (--no-stratified)'
+			stratified_split: g1ShardByProvider
+				? 'same URL stratification as G0, then split output files by extraction provider segment (--g1-shard-by-provider)'
+				: stratified
+					? 'sha256("g0-stratify-v1" || urlKey)[0] % 10 → buckets 0–7 train, 8 val, 9 test; urlKey = canonical_url_hash || canonical_url || run_id'
+					: 'single train.jsonl for all non-golden lines (--no-stratified)',
+			g1_mixing:
+				'Do not fine-tune on mixed provider shards without manifest tagging (mitigation §9 M9.23). Use --g1-allow-extraction-prefix and/or --g1-shard-by-provider.'
 		},
 		known_failed_source_urls: [...KNOWN_FAILED_TRAINING_SOURCE_URLS]
 	};
 
-	const writeJsonl = (name: string, lines: string[]) =>
-		writeFileSync(join(outDir, name), lines.join('\n') + (lines.length ? '\n' : ''), 'utf8');
-
-	writeJsonl('train.jsonl', trainJsonl);
-	if (stratified) {
-		writeJsonl('validation.jsonl', valJsonl);
-		writeJsonl('test.jsonl', testJsonl);
-	}
-	writeJsonl('golden_holdout.jsonl', goldenOut);
 	writeFileSync(join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
 
 	console.log(
