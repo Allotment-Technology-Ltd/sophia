@@ -102,6 +102,8 @@
 	let childRespawnBusyId = $state<string | null>(null);
 	let respawnWorkersBusy = $state(false);
 	let respawnWorkersMessage = $state('');
+	/** Shown when opening the ingest monitor in a new tab is blocked by the browser. */
+	let openRunMonitorMessage = $state('');
 	/** From API — max starts per URL (INGEST_JOB_ITEM_MAX_ATTEMPTS). */
 	let itemMaxAttempts = $state(2);
 
@@ -208,10 +210,18 @@
 
 	function openChildRun(runId: string | null | undefined): void {
 		if (!runId) return;
+		openRunMonitorMessage = '';
 		const params = new URLSearchParams();
 		params.set('runId', runId);
 		params.set('monitor', '1');
-		window.location.href = `/admin/ingest?${params.toString()}`;
+		const url = `/admin/ingest?${params.toString()}`;
+		if (!browser) return;
+		const win = window.open(url, '_blank', 'noopener,noreferrer');
+		if (!win || win.closed) {
+			openRunMonitorMessage =
+				'Could not open a new tab (popup blocker?). Allow popups for this site, or open the monitor manually: ' +
+				url;
+		}
 	}
 
 	async function copyIssuePipelineJson(): Promise<void> {
@@ -504,6 +514,14 @@
 		<p class="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100" role="alert">
 			{loadError}
 		</p>
+	{:else if !job}
+		<p class="mt-4 font-mono text-sm text-sophia-dark-muted">Loading job…</p>
+	{/if}
+
+	{#if openRunMonitorMessage}
+		<p class="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100" role="status">
+			{openRunMonitorMessage}
+		</p>
 	{/if}
 
 	{#if job}
@@ -610,9 +628,11 @@
 					<p class="mt-2 text-sm text-sophia-dark-muted">
 						A new app revision often leaves <span class="font-mono text-xs">ingest_runs.status=running</span> in Neon
 						with <strong>no</strong> local <code class="rounded bg-black/25 px-1 font-mono text-[11px]">tsx</code> child
-						on this instance. Use <strong>Respawn</strong> to start <span class="font-mono text-xs">scripts/ingest.ts</span>
-						again from checkpoints (same path as “resume from failure”). Per-run errors such as “process already
-						attached” mean that URL already has a worker on <em>this</em> server — skip or open the monitor for that run id.
+						on this instance. <strong class="text-sophia-dark-text">Respawn</strong> only starts that CLI worker on the
+						<strong>server</strong>; it does not reload your admin browser tab or sign you out. Use the run id links in the
+						table above to open the ingest monitor in a <strong>new tab</strong> if you want logs while staying on this job.
+						Per-run errors such as “process already attached” mean that URL already has a worker on
+						<em>this</em> server — skip or use the monitor for that run id.
 					</p>
 					{#if respawnWorkersMessage}
 						<p class="mt-3 text-sm text-sophia-dark-sage" role="status">{respawnWorkersMessage}</p>

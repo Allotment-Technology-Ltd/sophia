@@ -1192,8 +1192,37 @@ export async function modifyIngestionJobItem(
 	if (!it) return { ok: false, error: 'Item not found on this job.' };
 
 	if (action === 'requeue_to_pending') {
+		const noChild = !it.childRunId?.trim();
+		/** Already pending with no active child (e.g. double-submit after success, or race with auto-requeue). */
+		if (it.status === 'pending' && noChild) {
+			await db
+				.update(ingestionJobItems)
+				.set({
+					lastError: null,
+					blockedUntil: null,
+					launchThrottleCount: 0,
+					updatedAt: new Date()
+				})
+				.where(eq(ingestionJobItems.id, id));
+			await db
+				.update(ingestionJobs)
+				.set({ status: 'running', completedAt: null, updatedAt: new Date() })
+				.where(eq(ingestionJobs.id, jobId));
+			await appendIngestionJobEvent(jobId, 'item_requeued_manual_idempotent', {
+				itemId: id,
+				url: it.url,
+				reason: 'already_pending_no_child'
+			});
+			void tickIngestionJob(jobId);
+			return { ok: true };
+		}
 		if (it.status !== 'error') {
-			return { ok: false, error: 'Only items in error state can be moved back to pending.' };
+			return {
+				ok: false,
+				error:
+					'Queue again only applies to rows in error (or already pending without a child run after a prior re-queue). ' +
+					`This row is ${it.status}. Refresh the page — it may have already moved to pending.`
+			};
 		}
 		await db
 			.update(ingestionJobItems)

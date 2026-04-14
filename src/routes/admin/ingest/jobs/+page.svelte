@@ -87,6 +87,8 @@
 
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 	let jobWorkerFieldsHydrated = $state(false);
+	let advanceQueuesBusy = $state(false);
+	let advanceQueuesMessage = $state('');
 
 	type DlqRow = {
 		itemId: string;
@@ -224,12 +226,15 @@
 		return [...new Set(out)];
 	}
 
-	async function loadJobs(): Promise<void> {
+	async function loadJobs(opts?: { withGlobalTick?: boolean }): Promise<void> {
 		loadError = '';
 		neonDisabled = false;
 		loading = true;
 		try {
-			const res = await fetch('/api/admin/ingest/jobs?limit=50', { headers: await authHeaders() });
+			const tick = opts?.withGlobalTick === true ? '1' : '0';
+			const res = await fetch(`/api/admin/ingest/jobs?limit=50&tick=${tick}`, {
+				headers: await authHeaders()
+			});
 			const body = await res.json().catch(() => ({}));
 			if (res.status === 503) {
 				neonDisabled = true;
@@ -247,6 +252,28 @@
 			jobs = [];
 		} finally {
 			loading = false;
+		}
+	}
+
+	/** Runs {@link tickAllRunningIngestionJobs} on the server (can be slow); use poller in unattended env. */
+	async function advanceQueuesThenRefresh(): Promise<void> {
+		advanceQueuesMessage = '';
+		advanceQueuesBusy = true;
+		try {
+			const res = await fetch('/api/admin/ingest/jobs?limit=50&tick=1', { headers: await authHeaders() });
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				throw new Error(typeof body?.error === 'string' ? body.error : 'Advance queues failed.');
+			}
+			jobs = Array.isArray(body?.jobs) ? (body.jobs as JobRow[]) : [];
+			advanceQueuesMessage = 'Queues advanced; list refreshed.';
+			setTimeout(() => {
+				advanceQueuesMessage = '';
+			}, 4000);
+		} catch (e) {
+			advanceQueuesMessage = e instanceof Error ? e.message : 'Advance failed.';
+		} finally {
+			advanceQueuesBusy = false;
 		}
 	}
 
@@ -676,7 +703,7 @@
 		void loadSepPresets();
 		void loadDlq();
 		pollTimer = setInterval(() => {
-			void loadJobs();
+			void loadJobs({ withGlobalTick: false });
 			void loadDlq();
 		}, 8000);
 	});
@@ -734,9 +761,10 @@
 			<code class="rounded bg-black/20 px-1 py-0.5 font-mono text-xs">--force-stage validating</code> so
 			extract / relate / group / embed are skipped only when the <strong>same</strong> child orchestration run
 			already has checkpoints through embedding (not on a brand-new run id’s first start). Store still runs when
-			reached so remediation and relation fixes persist. While this list stays open, each refresh advances every running job (same server tick as the
-			background poller). If no admin tab is open, use Cloud Run Job + Scheduler or
-			<code class="rounded bg-black/20 px-1 py-0.5 font-mono text-xs">pnpm ingestion:job-poller</code> — see
+			reached so remediation and relation fixes persist. The job list below loads without running a global queue tick (fast).
+			Use <strong class="font-medium text-sophia-dark-text">Advance all queues</strong> when you want this browser session to
+			run the same tick as <code class="rounded bg-black/20 px-1 py-0.5 font-mono text-xs">pnpm ingestion:job-poller</code> (can take a while).
+			Opening a <strong class="font-medium text-sophia-dark-text">single job</strong> still ticks that job on load. If no admin tab is open, use Cloud Run Job + Scheduler — see
 			<span class="font-mono text-xs">docs/local/operations/ingestion-credits-and-workers.md</span>.
 		</p>
 	</header>
@@ -1167,9 +1195,19 @@
 				<button
 					type="button"
 					class="rounded-lg border border-[var(--color-border)] bg-transparent px-5 py-3 font-mono text-sm uppercase tracking-[0.08em] text-sophia-dark-muted transition hover:border-[var(--color-sage)] hover:text-sophia-dark-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)]"
-					onclick={() => void loadJobs()}
+					disabled={loading || advanceQueuesBusy}
+					onclick={() => void loadJobs({ withGlobalTick: false })}
 				>
-					Refresh list
+					{loading ? 'Refreshing…' : 'Refresh list'}
+				</button>
+				<button
+					type="button"
+					class="rounded-lg border border-[var(--color-border)] bg-transparent px-5 py-3 font-mono text-sm uppercase tracking-[0.08em] text-sophia-dark-muted transition hover:border-[var(--color-sage)] hover:text-sophia-dark-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+					disabled={neonDisabled || loading || advanceQueuesBusy}
+					title="Runs tickAllRunningIngestionJobs on the server (same as the job poller). Can take minutes with many jobs."
+					onclick={() => void advanceQueuesThenRefresh()}
+				>
+					{advanceQueuesBusy ? 'Advancing…' : 'Advance all queues'}
 				</button>
 				<a
 					href="/admin/ingest/batch"
@@ -1279,6 +1317,9 @@
 
 	<section class="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5" aria-labelledby="recent-heading">
 		<h2 id="recent-heading" class="font-serif text-lg text-sophia-dark-text">Recent jobs</h2>
+		{#if advanceQueuesMessage}
+			<p class="mt-3 text-sm text-sophia-dark-sage" role="status">{advanceQueuesMessage}</p>
+		{/if}
 		{#if loading && jobs.length === 0}
 			<p class="mt-4 font-mono text-sm text-sophia-dark-muted">Loading…</p>
 		{:else if jobs.length === 0}
