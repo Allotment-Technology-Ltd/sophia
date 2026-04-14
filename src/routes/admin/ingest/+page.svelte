@@ -2942,6 +2942,19 @@
         syncEnd != null
           ? `Job completed. SurrealDB sync finished in ${syncDurationLabel || formatDuration((syncEnd ?? 0) - (syncStart ?? 0))}. A structured issue report was saved to Firestore (ingestion_run_reports) for review.`
           : 'Job completed. Ingestion finished successfully. A structured issue report was saved to Firestore (ingestion_run_reports) for review.';
+      /** Do not leave “Store / last failure” from the last poll — server may have cleared these after `completeRun`. */
+      runCurrentStage = null;
+      runCurrentAction = null;
+      runLastFailureStage = null;
+      runProcessAlive = false;
+      stages = STAGE_TEMPLATE.map((stage) => {
+        const raw = (body?.stages as Record<string, { status?: StageStatus }> | undefined)?.[stage.key]
+          ?.status;
+        if (raw === 'skipped') {
+          return { ...stage, status: 'skipped' as StageStatus, result: undefined };
+        }
+        return { ...stage, status: 'done' as StageStatus, result: undefined };
+      });
       clearPolling();
     } else if (awaitingSync) {
       flowState = 'awaiting_sync';

@@ -1227,6 +1227,10 @@ class IngestRunManager extends EventEmitter {
       state.status = 'done';
       state.completedAt = Date.now();
       state.resumable = false;
+      /** Transient mid-run failures (e.g. truncated validation) must not linger on a successful terminal snapshot. */
+      state.lastFailureStageKey = null;
+      state.currentStageKey = null;
+      state.currentAction = null;
       this.flushNeonActivityBump(runId);
       await this.flushNeonSnapshotPersistAwait(runId);
       this.schedulePersistReport(runId);
