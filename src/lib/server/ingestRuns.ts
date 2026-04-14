@@ -1054,17 +1054,26 @@ class IngestRunManager extends EventEmitter {
   async getStateAsync(runId: string): Promise<IngestRunState | undefined> {
     const mem = this.runs.get(runId);
     if (mem && isNeonIngestPersistenceEnabled()) {
-      /** Reconcile: in-memory `running` without a live child can lag Neon after terminal persist or self-heal. */
-      if (mem.status === 'running' && !ingestRunChildProcessLooksAlive(mem.process)) {
+      /** Local terminal state is authoritative; do not overwrite with a lagging Neon read. */
+      if (mem.status === 'done' || mem.status === 'error') {
+        return mem;
+      }
+      /**
+       * Without a live child, Neon is the source of truth for durable runs. In-memory `running` or
+       * `awaiting_sync` can lag after `completeRun` on another instance, after self-heal, or when
+       * job reconcile runs on a worker that never held the in-memory `done` transition.
+       */
+      if (!ingestRunChildProcessLooksAlive(mem.process)) {
         const loaded = await neonLoadIngestRun(runId);
-        if (
-          loaded &&
-          (loaded.status === 'done' ||
-            loaded.status === 'error' ||
-            loaded.status === 'awaiting_sync')
-        ) {
-          this.runs.set(runId, loaded);
-          return loaded;
+        if (loaded) {
+          if (loaded.status === 'done' || loaded.status === 'error') {
+            this.runs.set(runId, loaded);
+            return loaded;
+          }
+          if (mem.status === 'running' && loaded.status === 'awaiting_sync') {
+            this.runs.set(runId, loaded);
+            return loaded;
+          }
         }
       }
     }
