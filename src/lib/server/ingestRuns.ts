@@ -18,6 +18,7 @@ import {
   neonCreateIngestRun,
   neonLoadIngestRun,
   neonMergePayloadAndVersion,
+  INGEST_ORCHESTRATOR_PIPELINE_DONE_LINE,
   neonPersistIngestRunSnapshot,
   neonUpdateExcludeFromBatchSuggest
 } from '$lib/server/db/ingestRunRepository';
@@ -712,6 +713,8 @@ class IngestRunManager extends EventEmitter {
   private runs: Map<string, IngestRunState> = new Map();
   private maxLogLines = 500;
   private snapshotPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Serializes `neonPersistIngestRunSnapshot` per run so a slow debounced `running` write cannot overwrite `done`. */
+  private snapshotPersistChain = new Map<string, Promise<void>>();
   /** Debounced `neonBumpRunActivity` — avoids one UPDATE per log line during noisy ingest output. */
   private activityBumpTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private queuePollTimer: ReturnType<typeof setInterval> | null = null;
@@ -850,6 +853,23 @@ class IngestRunManager extends EventEmitter {
     }
   }
 
+  private cancelNeonSnapshotDebouncedPersist(runId: string): void {
+    const prev = this.snapshotPersistTimers.get(runId);
+    if (prev) {
+      clearTimeout(prev);
+      this.snapshotPersistTimers.delete(runId);
+    }
+  }
+
+  private enqueueNeonSnapshotPersist(state: IngestRunState): Promise<void> {
+    if (!isNeonIngestPersistenceEnabled()) return Promise.resolve();
+    const id = state.id;
+    const prev = this.snapshotPersistChain.get(id) ?? Promise.resolve();
+    const next = prev.catch(() => {}).then(() => neonPersistIngestRunSnapshot(state));
+    this.snapshotPersistChain.set(id, next);
+    return next;
+  }
+
   private scheduleNeonSnapshotPersist(runId: string): void {
     if (!isNeonIngestPersistenceEnabled()) return;
     const prev = this.snapshotPersistTimers.get(runId);
@@ -857,17 +877,21 @@ class IngestRunManager extends EventEmitter {
     const t = setTimeout(() => {
       this.snapshotPersistTimers.delete(runId);
       const s = this.runs.get(runId);
-      if (s) void neonPersistIngestRunSnapshot(s);
+      if (s) void this.enqueueNeonSnapshotPersist(s);
     }, 400);
     this.snapshotPersistTimers.set(runId, t);
   }
 
   private flushNeonSnapshotPersist(runId: string): void {
-    const prev = this.snapshotPersistTimers.get(runId);
-    if (prev) clearTimeout(prev);
-    this.snapshotPersistTimers.delete(runId);
+    this.cancelNeonSnapshotDebouncedPersist(runId);
     const s = this.runs.get(runId);
-    if (s && isNeonIngestPersistenceEnabled()) void neonPersistIngestRunSnapshot(s);
+    if (s && isNeonIngestPersistenceEnabled()) void this.enqueueNeonSnapshotPersist(s);
+  }
+
+  private async flushNeonSnapshotPersistAwait(runId: string): Promise<void> {
+    this.cancelNeonSnapshotDebouncedPersist(runId);
+    const s = this.runs.get(runId);
+    if (s && isNeonIngestPersistenceEnabled()) await this.enqueueNeonSnapshotPersist(s);
   }
 
   private scheduleNeonActivityBump(runId: string): void {
@@ -1092,7 +1116,9 @@ class IngestRunManager extends EventEmitter {
         this.addLog(runId, 'SurrealDB sync completed successfully.');
         s.syncCompletedAt = Date.now();
         s.syncSimulationTimeout = undefined;
-        this.completeRun(runId);
+        void this.completeRun(runId).catch((e) =>
+          console.warn('[ingest-runs] completeRun after simulated sync failed:', e)
+        );
       }, 2200);
       state.syncSimulationTimeout = syncTimeout;
     }
@@ -1109,6 +1135,9 @@ class IngestRunManager extends EventEmitter {
   addLog(runId: string, line: string, opts?: { fromChildProcess?: boolean }): void {
     const state = this.runs.get(runId);
     if (state) {
+      if (line === INGEST_ORCHESTRATOR_PIPELINE_DONE_LINE && state.logLines.includes(line)) {
+        return;
+      }
       state.logLines.push(line);
       state.lastOutputAt = Date.now();
       appendIssueFromLogLine(state, line);
@@ -1154,7 +1183,7 @@ class IngestRunManager extends EventEmitter {
     }
   }
 
-  completeRun(runId: string): void {
+  async completeRun(runId: string): Promise<void> {
     const state = this.runs.get(runId);
     if (state) {
       this.releaseGlobalSlotIfHeld(runId);
@@ -1163,7 +1192,7 @@ class IngestRunManager extends EventEmitter {
       state.completedAt = Date.now();
       state.resumable = false;
       this.flushNeonActivityBump(runId);
-      this.flushNeonSnapshotPersist(runId);
+      await this.flushNeonSnapshotPersistAwait(runId);
       this.schedulePersistReport(runId);
       if (state.payload.queue_record_id) {
         void markLinkedQueueStatus(state.payload.queue_record_id, 'ingested', { ingested: true, lastError: null });
@@ -1171,7 +1200,7 @@ class IngestRunManager extends EventEmitter {
     }
   }
 
-  failRun(runId: string, error: string): void {
+  async failRun(runId: string, error: string): Promise<void> {
     const state = this.runs.get(runId);
     if (state) {
       this.releaseGlobalSlotIfHeld(runId);
@@ -1194,7 +1223,7 @@ class IngestRunManager extends EventEmitter {
         });
       }
       this.flushNeonActivityBump(runId);
-      this.flushNeonSnapshotPersist(runId);
+      await this.flushNeonSnapshotPersistAwait(runId);
       this.schedulePersistReport(runId);
       if (state.payload.queue_record_id) {
         void markLinkedQueueStatus(state.payload.queue_record_id, 'failed', { lastError: error });
@@ -1567,7 +1596,9 @@ class IngestRunManager extends EventEmitter {
         return;
       }
       this.updateStageStatus(runId, 'fetch', 'error');
-      this.failRun(runId, `fetch-source failed to start: ${err.message}`);
+      void this.failRun(runId, `fetch-source failed to start: ${err.message}`).catch((e) =>
+        console.warn('[ingest-runs] failRun after fetch error:', e)
+      );
     });
 
     fetchChild.on('close', (code: number | null) => {
@@ -1589,16 +1620,18 @@ class IngestRunManager extends EventEmitter {
           return;
         }
         this.updateStageStatus(runId, 'fetch', 'error');
-        this.failRun(runId, `fetch-source exited with code ${code ?? 1}`);
+        void this.failRun(runId, `fetch-source exited with code ${code ?? 1}`).catch((e) =>
+          console.warn('[ingest-runs] failRun after fetch exit:', e)
+        );
         return;
       }
       this.updateStageStatus(runId, 'fetch', 'done');
       const sourceFile = findFetchedSourceFile(payload.source_url);
       if (!sourceFile) {
-        this.failRun(
+        void this.failRun(
           runId,
           'fetch-source succeeded but no matching data/sources/*.txt was found for this URL (canonical hash mismatch?).'
-        );
+        ).catch((e) => console.warn('[ingest-runs] failRun after fetch missing file:', e));
         return;
       }
       if (s) s.sourceFilePath = sourceFile;
@@ -1613,6 +1646,156 @@ class IngestRunManager extends EventEmitter {
     options: { forSyncOnly: boolean; resumeFromFailure?: boolean; ingestAutoRetry?: boolean }
   ): void {
     void this.execStartIngestChild(runId, payload, sourceFile, options);
+  }
+
+  private async handleIngestChildProcessClosed(args: {
+    runId: string;
+    code: number | null;
+    signal: NodeJS.Signals | null | undefined;
+    payload: IngestRunPayload;
+    sourceFile: string;
+    stopBeforeStore: boolean;
+    forSync: boolean;
+  }): Promise<void> {
+    const { runId, code, signal, payload, sourceFile, stopBeforeStore, forSync } = args;
+    const s = this.runs.get(runId);
+    if (s) {
+      s.process = undefined;
+      s.processExitedAt = Date.now();
+    }
+
+    if (s?.cancelledByUser) {
+      this.finalizeCancel(runId);
+      return;
+    }
+
+    const platformShutdown =
+      signal === 'SIGTERM' ||
+      signal === 'SIGINT' ||
+      code === 143 ||
+      code === 130;
+
+    if (code === 0) {
+      if (stopBeforeStore) {
+        const order = orderedStagesAfterFetch(payload.validate === true);
+        for (const key of order) {
+          if (key === 'store') {
+            this.updateStageStatus(runId, 'store', 'idle');
+            continue;
+          }
+          if (s?.stages[key]?.status === 'skipped') continue;
+          this.updateStageStatus(runId, key, 'done');
+        }
+        if (s) s.status = 'awaiting_sync';
+        this.addLog(runId, 'Run phases complete. Press “Sync to SurrealDB” to finish.');
+        this.schedulePersistReport(runId);
+        return;
+      }
+      if (forSync) {
+        this.updateStageStatus(runId, 'store', 'done');
+        this.addLog(runId, 'SurrealDB sync completed successfully.');
+        if (s) s.syncCompletedAt = Date.now();
+        await this.completeRun(runId);
+      } else {
+        const terminalStages = [
+          ...PIPELINE_STAGES,
+          ...(payload.validate ? (['validate', 'remediation'] as const) : []),
+          'store'
+        ] as const;
+        for (const stage of terminalStages) {
+          this.updateStageStatus(runId, stage, 'done');
+        }
+        if (!payload.validate) {
+          this.updateStageStatus(runId, 'validate', 'skipped');
+          this.updateStageStatus(runId, 'remediation', 'skipped');
+        }
+        this.addLog(runId, INGEST_ORCHESTRATOR_PIPELINE_DONE_LINE);
+        await this.completeRun(runId);
+      }
+      return;
+    }
+
+    if (forSync && s && s.syncRetryAttempts < 1) {
+      s.syncRetryAttempts++;
+      this.addLog(runId, 'SurrealDB sync failed; retrying once automatically…');
+      this.updateStageStatus(runId, 'store', 'running');
+      void this.execStartIngestChild(runId, payload, sourceFile, { forSyncOnly: true });
+      return;
+    }
+
+    if (!forSync && s && s.ingestRetryAttempts < 1) {
+      if (code === INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING) {
+        this.addLog(
+          runId,
+          '[ingest] not auto-retrying: ingest.ts exited because --force-stage checkpoints are missing (retry would omit --force-stage and can start a full extraction). Fix Neon staging or run without validation-only tail.'
+        );
+      } else {
+        s.ingestRetryAttempts++;
+        this.addLog(runId, 'Ingest failed; retrying once automatically…');
+        void this.execStartIngestChild(runId, payload, sourceFile, {
+          forSyncOnly: false,
+          resumeFromFailure: true,
+          ingestAutoRetry: true
+        });
+        return;
+      }
+    }
+
+    if (forSync) {
+      this.updateStageStatus(runId, 'store', 'error');
+      const hint = s ? extractIngestWorkerFailureHint(s.logLines) : '';
+      const shutdownLine = platformShutdown
+        ? `ingest_worker_platform_shutdown: Surreal sync child ended (code=${code ?? 'null'}, signal=${signal ?? 'none'}) — often deploy or instance replacement.`
+        : '';
+      await this.failRun(
+        runId,
+        shutdownLine ||
+          (hint
+            ? `SurrealDB sync (ingest.ts) exited with code ${code ?? 1} — ${hint}`
+            : `SurrealDB sync (ingest.ts) exited with code ${code ?? 1}`)
+      );
+    } else {
+      const order = orderedStagesAfterFetch(payload.validate === true);
+      const failKey = s?.lastFailureStageKey;
+      const failIdx = failKey ? order.indexOf(failKey) : -1;
+      if (s && failIdx >= 0) {
+        for (let i = 0; i < failIdx; i++) {
+          const k = order[i]!;
+          if (s.stages[k]?.status === 'skipped') continue;
+          this.updateStageStatus(runId, k, 'done');
+        }
+        if (s.stages[failKey!]?.status !== 'skipped') {
+          this.updateStageStatus(runId, failKey!, 'error');
+        }
+        for (let i = failIdx + 1; i < order.length; i++) {
+          const k = order[i]!;
+          if (k === 'store' && ingestOptInStopBeforeStore(payload)) {
+            this.updateStageStatus(runId, 'store', 'idle');
+            continue;
+          }
+          if (s.stages[k]?.status === 'skipped') continue;
+          this.updateStageStatus(runId, k, 'idle');
+        }
+      } else {
+        const terminalStages = [
+          ...PIPELINE_STAGES,
+          ...(payload.validate ? (['validate', 'remediation'] as const) : []),
+          'store'
+        ] as const;
+        for (const stage of terminalStages) {
+          this.updateStageStatus(runId, stage, 'error');
+        }
+      }
+      const hint = s ? extractIngestWorkerFailureHint(s.logLines) : '';
+      const shutdownLine = platformShutdown
+        ? `ingest_worker_platform_shutdown: ingest.ts ended (code=${code ?? 'null'}, signal=${signal ?? 'none'}) — usually a platform deploy or instance replacement; resume from Neon/Surreal checkpoints on retry.`
+        : '';
+      await this.failRun(
+        runId,
+        shutdownLine ||
+          (hint ? `ingest.ts exited with code ${code ?? 1} — ${hint}` : `ingest.ts exited with code ${code ?? 1}`)
+      );
+    }
   }
 
   private async execStartIngestChild(
@@ -1835,148 +2018,21 @@ class IngestRunManager extends EventEmitter {
       } else {
         this.markPipelineStagesError(runId, payload);
       }
-      this.failRun(runId, `ingest.ts failed to start: ${err.message}`);
+      void this.failRun(runId, `ingest.ts failed to start: ${err.message}`).catch((e) =>
+        console.warn('[ingest-runs] failRun after ingest spawn error:', e)
+      );
     });
 
     ingestChild.on('close', (code: number | null, signal?: NodeJS.Signals | null) => {
-      const s = this.runs.get(runId);
-      if (s) {
-        s.process = undefined;
-        s.processExitedAt = Date.now();
-      }
-
-      if (s?.cancelledByUser) {
-        this.finalizeCancel(runId);
-        return;
-      }
-
-      const platformShutdown =
-        signal === 'SIGTERM' ||
-        signal === 'SIGINT' ||
-        code === 143 ||
-        code === 130;
-
-      if (code === 0) {
-        if (stopBeforeStore) {
-          const order = orderedStagesAfterFetch(payload.validate === true);
-          for (const key of order) {
-            if (key === 'store') {
-              this.updateStageStatus(runId, 'store', 'idle');
-              continue;
-            }
-            if (s?.stages[key]?.status === 'skipped') continue;
-            this.updateStageStatus(runId, key, 'done');
-          }
-          if (s) s.status = 'awaiting_sync';
-          this.addLog(runId, 'Run phases complete. Press “Sync to SurrealDB” to finish.');
-          this.schedulePersistReport(runId);
-          return;
-        }
-        if (forSync) {
-          this.updateStageStatus(runId, 'store', 'done');
-          this.addLog(runId, 'SurrealDB sync completed successfully.');
-          if (s) s.syncCompletedAt = Date.now();
-          this.completeRun(runId);
-        } else {
-          const terminalStages = [
-            ...PIPELINE_STAGES,
-            ...(payload.validate ? (['validate', 'remediation'] as const) : []),
-            'store'
-          ] as const;
-          for (const stage of terminalStages) {
-            this.updateStageStatus(runId, stage, 'done');
-          }
-          if (!payload.validate) {
-            this.updateStageStatus(runId, 'validate', 'skipped');
-            this.updateStageStatus(runId, 'remediation', 'skipped');
-          }
-          this.addLog(runId, 'Ingestion pipeline finished successfully.');
-          this.completeRun(runId);
-        }
-        return;
-      }
-
-      if (forSync && s && s.syncRetryAttempts < 1) {
-        s.syncRetryAttempts++;
-        this.addLog(runId, 'SurrealDB sync failed; retrying once automatically…');
-        this.updateStageStatus(runId, 'store', 'running');
-        void this.execStartIngestChild(runId, payload, sourceFile, { forSyncOnly: true });
-        return;
-      }
-
-      if (!forSync && s && s.ingestRetryAttempts < 1) {
-        if (code === INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING) {
-          this.addLog(
-            runId,
-            '[ingest] not auto-retrying: ingest.ts exited because --force-stage checkpoints are missing (retry would omit --force-stage and can start a full extraction). Fix Neon staging or run without validation-only tail.'
-          );
-        } else {
-          s.ingestRetryAttempts++;
-          this.addLog(runId, 'Ingest failed; retrying once automatically…');
-          void this.execStartIngestChild(runId, payload, sourceFile, {
-            forSyncOnly: false,
-            resumeFromFailure: true,
-            ingestAutoRetry: true
-          });
-          return;
-        }
-      }
-
-      if (forSync) {
-        this.updateStageStatus(runId, 'store', 'error');
-        const hint = s ? extractIngestWorkerFailureHint(s.logLines) : '';
-        const shutdownLine = platformShutdown
-          ? `ingest_worker_platform_shutdown: Surreal sync child ended (code=${code ?? 'null'}, signal=${signal ?? 'none'}) — often deploy or instance replacement.`
-          : '';
-        this.failRun(
-          runId,
-          shutdownLine ||
-            (hint
-              ? `SurrealDB sync (ingest.ts) exited with code ${code ?? 1} — ${hint}`
-              : `SurrealDB sync (ingest.ts) exited with code ${code ?? 1}`)
-        );
-      } else {
-        const order = orderedStagesAfterFetch(payload.validate === true);
-        const failKey = s?.lastFailureStageKey;
-        const failIdx = failKey ? order.indexOf(failKey) : -1;
-        if (s && failIdx >= 0) {
-          for (let i = 0; i < failIdx; i++) {
-            const k = order[i]!;
-            if (s.stages[k]?.status === 'skipped') continue;
-            this.updateStageStatus(runId, k, 'done');
-          }
-          if (s.stages[failKey!]?.status !== 'skipped') {
-            this.updateStageStatus(runId, failKey!, 'error');
-          }
-          for (let i = failIdx + 1; i < order.length; i++) {
-            const k = order[i]!;
-            if (k === 'store' && ingestOptInStopBeforeStore(payload)) {
-              this.updateStageStatus(runId, 'store', 'idle');
-              continue;
-            }
-            if (s.stages[k]?.status === 'skipped') continue;
-            this.updateStageStatus(runId, k, 'idle');
-          }
-        } else {
-          const terminalStages = [
-            ...PIPELINE_STAGES,
-            ...(payload.validate ? (['validate', 'remediation'] as const) : []),
-            'store'
-          ] as const;
-          for (const stage of terminalStages) {
-            this.updateStageStatus(runId, stage, 'error');
-          }
-        }
-        const hint = s ? extractIngestWorkerFailureHint(s.logLines) : '';
-        const shutdownLine = platformShutdown
-          ? `ingest_worker_platform_shutdown: ingest.ts ended (code=${code ?? 'null'}, signal=${signal ?? 'none'}) — usually a platform deploy or instance replacement; resume from Neon/Surreal checkpoints on retry.`
-          : '';
-        this.failRun(
-          runId,
-          shutdownLine ||
-            (hint ? `ingest.ts exited with code ${code ?? 1} — ${hint}` : `ingest.ts exited with code ${code ?? 1}`)
-        );
-      }
+      void this.handleIngestChildProcessClosed({
+        runId,
+        code,
+        signal: signal ?? null,
+        payload,
+        sourceFile,
+        stopBeforeStore,
+        forSync
+      }).catch((e) => console.warn('[ingest-runs] handleIngestChildProcessClosed:', e));
     });
   }
 
@@ -2144,7 +2200,7 @@ class IngestRunManager extends EventEmitter {
           this.schedulePersistReport(runId);
         } else {
           this.addLog(runId, 'All stages complete!');
-          this.completeRun(runId);
+          void this.completeRun(runId).catch((e) => console.warn('[ingest-runs] completeRun after simulation:', e));
         }
         clearInterval(progressInterval);
         state.simulationInterval = undefined;
