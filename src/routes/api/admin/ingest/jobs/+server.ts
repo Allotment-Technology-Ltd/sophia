@@ -16,8 +16,9 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 			return json({ error: 'Neon ingest persistence is not enabled (DATABASE_URL + config).' }, { status: 503 });
 		}
 		const limit = Math.max(1, Math.min(100, Number.parseInt(url.searchParams.get('limit') ?? '40', 10) || 40));
-		const skipTick = url.searchParams.get('tick') === '0';
-		if (!skipTick) {
+		/** Global tick can take minutes with many jobs and blocks this response — list UI uses tick=0 by default. */
+		const runTick = ['1', 'true', 'yes'].includes((url.searchParams.get('tick') ?? '').trim().toLowerCase());
+		if (runTick) {
 			await tickAllRunningIngestionJobs();
 		}
 		const jobs = await listRecentIngestionJobs(limit);

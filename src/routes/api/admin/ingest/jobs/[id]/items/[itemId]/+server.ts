@@ -27,7 +27,12 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 		const raw = (body.action ?? '').trim().toLowerCase();
 		if (raw !== 'requeue_to_pending' && raw !== 'cancel') {
 			return json(
-				{ error: 'Body.action must be "requeue_to_pending" or "cancel".' },
+				{
+					error:
+						raw === ''
+							? 'Missing JSON body or action. Send Content-Type: application/json with {"action":"requeue_to_pending"} or {"action":"cancel"}.'
+							: 'Body.action must be "requeue_to_pending" or "cancel".'
+				},
 				{ status: 400 }
 			);
 		}
