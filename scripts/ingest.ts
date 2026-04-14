@@ -161,6 +161,7 @@ import {
 	type GroupingOutput
 } from '../src/lib/server/prompts/grouping.js';
 import { normalizeGroupingPayload } from '../src/lib/server/ingestion/stages/grouping-helpers.js';
+import { coerceIngestDomainLabel } from '../src/lib/server/prompts/domainZod.js';
 
 import {
 	VALIDATION_SYSTEM,
@@ -1955,23 +1956,7 @@ function analyzeGroupingReferenceHealth(arguments_: GroupingOutput): {
 }
 
 function normalizeExtractionDomain(value: unknown): string {
-	if (typeof value !== 'string') return 'philosophy_of_mind';
-	const normalized = value.toLowerCase().trim().replace(/[\s-]+/g, '_');
-	const domainMap: Record<string, string> = {
-		ethics: 'ethics',
-		epistemology: 'epistemology',
-		metaphysics: 'metaphysics',
-		philosophy_of_mind: 'philosophy_of_mind',
-		mind: 'philosophy_of_mind',
-		political_philosophy: 'political_philosophy',
-		logic: 'logic',
-		aesthetics: 'aesthetics',
-		philosophy_of_science: 'philosophy_of_science',
-		philosophy_of_language: 'philosophy_of_language',
-		applied_ethics: 'applied_ethics',
-		philosophy_of_ai: 'philosophy_of_ai'
-	};
-	return domainMap[normalized] ?? 'philosophy_of_mind';
+	return coerceIngestDomainLabel(value);
 }
 
 function normalizeExtractionClaimType(value: unknown): string {

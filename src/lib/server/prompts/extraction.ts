@@ -10,7 +10,7 @@ FOR EACH CLAIM, PROVIDE:
 - text: The claim in clear, concise language. Paraphrase if needed for clarity, but preserve philosophical precision. Do not simply quote — ensure the claim is intelligible without the surrounding context.
 - claim_type: One of: thesis | premise | objection | response | definition | thought_experiment | empirical | methodological
 - claim_origin: One of: source_grounded | interpretive | synthetic | user_generated
-- domain: One of: ethics | epistemology | metaphysics | philosophy_of_mind | political_philosophy | logic | aesthetics | philosophy_of_science | philosophy_of_language | applied_ethics | philosophy_of_ai
+- domain: One snake_case slug from the taxonomy (examples): aesthetics, applied_ethics, comparative_philosophy, epistemology, ethics, feminist_philosophy, history_of_philosophy, logic, metaphilosophy, metaphysics, philosophy_general, philosophy_of_ai, philosophy_of_biology, philosophy_of_language, philosophy_of_law, philosophy_of_mathematics, philosophy_of_mind, philosophy_of_religion, philosophy_of_science, philosophy_of_social_science, political_philosophy. Use philosophy_general only when no closer fit applies.
 - subdomain: A short subdomain label such as normative_ethics, metaethics, consciousness, skepticism
 - thinker: The primary thinker most directly associated with the claim, if clear
 - tradition: The primary philosophical tradition most directly associated with the claim, if clear

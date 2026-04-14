@@ -5,26 +5,11 @@
  */
 
 import type { PassageRecord, ReviewState } from '../contracts.js';
+import { coerceIngestDomainLabel } from '../../prompts/domainZod.js';
 import type { PhaseOneClaim } from './types.js';
 
 export function normalizeExtractionDomain(value: unknown): string {
-	if (typeof value !== 'string') return 'philosophy_of_mind';
-	const normalized = value.toLowerCase().trim().replace(/[\s-]+/g, '_');
-	const domainMap: Record<string, string> = {
-		ethics: 'ethics',
-		epistemology: 'epistemology',
-		metaphysics: 'metaphysics',
-		philosophy_of_mind: 'philosophy_of_mind',
-		mind: 'philosophy_of_mind',
-		political_philosophy: 'political_philosophy',
-		logic: 'logic',
-		aesthetics: 'aesthetics',
-		philosophy_of_science: 'philosophy_of_science',
-		philosophy_of_language: 'philosophy_of_language',
-		applied_ethics: 'applied_ethics',
-		philosophy_of_ai: 'philosophy_of_ai'
-	};
-	return domainMap[normalized] ?? 'philosophy_of_mind';
+	return coerceIngestDomainLabel(value);
 }
 
 export function normalizeExtractionClaimType(value: unknown): string {

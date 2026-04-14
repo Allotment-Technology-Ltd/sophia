@@ -5,6 +5,10 @@ import {
 	defineClaimEmbeddingIndex,
 	requireVectorIndex
 } from './lib/surrealClaimVectorIndex.js';
+import { DOMAIN_VALUES } from '../src/lib/server/prompts/domainZod.js';
+
+/** Surreal ASSERT list for claim.domain / argument.domain (keep in sync with ingestion Zod). */
+const CLAIM_DOMAIN_ASSERT_IN = DOMAIN_VALUES.map((d) => `'${d}'`).join(', ');
 
 // Read environment variables
 const SURREAL_URL = process.env.SURREAL_URL || 'http://localhost:8000/rpc';
@@ -126,7 +130,7 @@ export async function setupSchema(existingDb?: Surreal) {
 			DEFINE FIELD IF NOT EXISTS claim_type ON claim TYPE string
 				ASSERT $value IN ['thesis', 'premise', 'objection', 'response', 'definition', 'thought_experiment', 'empirical', 'methodological'];
 				DEFINE FIELD IF NOT EXISTS domain ON claim TYPE string
-					ASSERT $value IN ['epistemology', 'metaphysics', 'ethics', 'philosophy_of_mind', 'political_philosophy', 'logic', 'aesthetics', 'philosophy_of_science', 'philosophy_of_language', 'applied_ethics', 'philosophy_of_ai'];
+					ASSERT $value IN [${CLAIM_DOMAIN_ASSERT_IN}];
 				DEFINE FIELD IF NOT EXISTS source ON claim TYPE record<source>;
 				DEFINE FIELD IF NOT EXISTS passage ON claim TYPE option<record<passage>>;
 				DEFINE FIELD IF NOT EXISTS passage_order ON claim TYPE option<int>;
@@ -199,7 +203,7 @@ export async function setupSchema(existingDb?: Surreal) {
 			DEFINE FIELD IF NOT EXISTS summary ON argument TYPE string;
 			DEFINE FIELD IF NOT EXISTS tradition ON argument TYPE option<string>;
 			DEFINE FIELD IF NOT EXISTS domain ON argument TYPE string
-				ASSERT $value IN ['epistemology', 'metaphysics', 'ethics', 'philosophy_of_mind', 'political_philosophy', 'logic', 'aesthetics', 'philosophy_of_science', 'philosophy_of_language', 'applied_ethics', 'philosophy_of_ai'];
+				ASSERT $value IN [${CLAIM_DOMAIN_ASSERT_IN}];
 			DEFINE FIELD IF NOT EXISTS source ON argument TYPE record<source>;
 		`);
 		console.log('[SETUP] ✓ Table: argument');
