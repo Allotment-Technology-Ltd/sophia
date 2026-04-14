@@ -99,6 +99,9 @@
 	let cancelJobMessage = $state('');
 	let itemActionBusyId = $state<string | null>(null);
 	let itemActionMessage = $state('');
+	let childRespawnBusyId = $state<string | null>(null);
+	let respawnWorkersBusy = $state(false);
+	let respawnWorkersMessage = $state('');
 	/** From API — max starts per URL (INGEST_JOB_ITEM_MAX_ATTEMPTS). */
 	let itemMaxAttempts = $state(2);
 
@@ -312,6 +315,67 @@
 		}
 	}
 
+	async function postRespawnRunningWorkers(): Promise<void> {
+		const jobId = currentJobId();
+		if (!jobId) return;
+		respawnWorkersBusy = true;
+		respawnWorkersMessage = '';
+		try {
+			const res = await fetch(
+				`/api/admin/ingest/jobs/${encodeURIComponent(jobId)}/respawn-workers`,
+				{
+					method: 'POST',
+					headers: await authHeaders()
+				}
+			);
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				throw new Error(typeof body?.error === 'string' ? body.error : 'Respawn request failed');
+			}
+			const touched = typeof body.touched === 'number' ? body.touched : 0;
+			const results = Array.isArray(body.results) ? body.results : [];
+			const failed = results.filter((r: { ok?: boolean }) => r && r.ok === false);
+			respawnWorkersMessage =
+				failed.length > 0
+					? `Touched ${touched} run(s); ${failed.length} failed (${failed.map((f: { error?: string }) => f.error ?? '?').join('; ')}).`
+					: touched === 0
+						? 'No running items with a child run id — nothing to respawn.'
+						: `Started worker respawn for ${touched} run(s) (checkpoint resume on this server).`;
+			await fetchDetail();
+			await fetchEvents();
+		} catch (e) {
+			respawnWorkersMessage = e instanceof Error ? e.message : 'Respawn failed';
+		} finally {
+			respawnWorkersBusy = false;
+		}
+	}
+
+	async function postRespawnSingleChildRun(childRunId: string): Promise<void> {
+		childRespawnBusyId = childRunId;
+		itemActionMessage = '';
+		try {
+			const res = await fetch(
+				`/api/admin/ingest/run/${encodeURIComponent(childRunId)}/resume`,
+				{
+					method: 'POST',
+					headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
+					body: JSON.stringify({ respawn_stale_worker: true })
+				}
+			);
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				throw new Error(typeof body?.error === 'string' ? body.error : 'Respawn failed');
+			}
+			itemActionMessage = `Respawn requested for ${childRunId}.`;
+			await fetchDetail();
+			await fetchEvents();
+		} catch (e) {
+			itemActionMessage = e instanceof Error ? e.message : 'Respawn failed';
+		} finally {
+			childRespawnBusyId = null;
+		}
+	}
+
 	async function postJobRetry(
 		mode: 'restart' | 'resume',
 		itemId?: string,
@@ -483,7 +547,7 @@
 						is averaged from <span class="font-mono text-xs">ingest_staging_validation</span> when rows exist.
 					</p>
 					<div class="mt-3 overflow-x-auto rounded-lg border border-[var(--color-border)]">
-						<table class="w-full min-w-[640px] border-collapse text-left font-mono text-xs">
+						<table class="w-full min-w-[760px] border-collapse text-left font-mono text-xs">
 							<thead>
 								<tr class="border-b border-[var(--color-border)] bg-black/15 text-sophia-dark-dim">
 									<th class="px-3 py-2 font-normal">URL</th>
@@ -493,6 +557,7 @@
 									<th class="px-3 py-2 font-normal">Extract model</th>
 									<th class="px-3 py-2 font-normal">Avg faith.</th>
 									<th class="px-3 py-2 font-normal">Issues</th>
+									<th class="px-3 py-2 font-normal">Worker</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -513,11 +578,53 @@
 										<td class="max-w-[180px] px-3 py-2 break-all">{s.extractionModel ?? '—'}</td>
 										<td class="px-3 py-2">{s.avgFaithfulness != null ? s.avgFaithfulness : '—'}</td>
 										<td class="px-3 py-2">{s.issueCount}</td>
+										<td class="px-3 py-2">
+											{#if s.runStatus === 'running'}
+												<button
+													type="button"
+													class="rounded border border-[var(--color-border)] bg-black/15 px-2 py-1 font-mono text-[11px] uppercase tracking-wide text-sophia-dark-text hover:bg-black/25 disabled:opacity-50"
+													disabled={childRespawnBusyId === s.childRunId || respawnWorkersBusy}
+													onclick={() => void postRespawnSingleChildRun(s.childRunId)}
+												>
+													{childRespawnBusyId === s.childRunId ? '…' : 'Respawn'}
+												</button>
+											{:else}
+												<span class="text-sophia-dark-dim">—</span>
+											{/if}
+										</td>
 									</tr>
 								{/each}
 							</tbody>
 						</table>
 					</div>
+				</div>
+			{/if}
+
+			{#if job.status === 'running' && hasPendingOrRunning}
+				<div
+					class="mt-6 rounded-lg border border-[var(--color-border)] bg-black/10 p-4"
+					role="region"
+					aria-label="Recover workers after deploy"
+				>
+					<h2 class="font-serif text-lg text-sophia-dark-text">Workers after deploy</h2>
+					<p class="mt-2 text-sm text-sophia-dark-muted">
+						A new app revision often leaves <span class="font-mono text-xs">ingest_runs.status=running</span> in Neon
+						with <strong>no</strong> local <code class="rounded bg-black/25 px-1 font-mono text-[11px]">tsx</code> child
+						on this instance. Use <strong>Respawn</strong> to start <span class="font-mono text-xs">scripts/ingest.ts</span>
+						again from checkpoints (same path as “resume from failure”). Per-run errors such as “process already
+						attached” mean that URL already has a worker on <em>this</em> server — skip or open the monitor for that run id.
+					</p>
+					{#if respawnWorkersMessage}
+						<p class="mt-3 text-sm text-sophia-dark-sage" role="status">{respawnWorkersMessage}</p>
+					{/if}
+					<button
+						type="button"
+						class="mt-3 inline-flex min-h-[44px] items-center rounded-lg border border-sophia-dark-sage/50 bg-sophia-dark-sage/15 px-5 py-3 font-mono text-sm font-medium text-sophia-dark-text transition hover:bg-sophia-dark-sage/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sophia-dark-sage disabled:cursor-not-allowed disabled:opacity-50"
+						disabled={respawnWorkersBusy || cancelJobBusy || retryBusy}
+						onclick={() => void postRespawnRunningWorkers()}
+					>
+						{respawnWorkersBusy ? 'Respawning…' : 'Respawn workers for all running URLs'}
+					</button>
 				</div>
 			{/if}
 

@@ -2762,6 +2762,53 @@
     }
   }
 
+  /** Re-attach `ingest.ts` when Neon still shows running but this server has no child (e.g. after deploy). */
+  async function respawnStaleWorker(): Promise<void> {
+    if (!runId || syncing) return;
+    syncing = true;
+    runError = '';
+    try {
+      const batchBuild = buildBatchOverridesFromUi();
+      batchOverridesError = batchBuild.error ?? '';
+      if (batchBuild.error) {
+        runError = batchBuild.error;
+        return;
+      }
+      const batchOverrides = batchBuild.overrides ?? {};
+      const workerTuning = buildWorkerTuningOverrides();
+      const mergedBatchOverrides = { ...batchOverrides, ...workerTuning };
+
+      const response = await fetch(`/api/admin/ingest/run/${runId}/resume`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(await authHeaders())
+        },
+        body: JSON.stringify({
+          respawn_stale_worker: true,
+          model_chain: {
+            extract: stageModelIds.ingestion_extraction,
+            relate: stageModelIds.ingestion_relations,
+            group: stageModelIds.ingestion_grouping,
+            validate: stageModelIds.ingestion_validation
+          },
+          batch_overrides: mergedBatchOverrides
+        })
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(typeof body?.error === 'string' ? body.error : 'Respawn request failed.');
+      }
+      flowState = 'running';
+      runResumable = false;
+      startPolling();
+    } catch (e) {
+      runError = e instanceof Error ? e.message : 'Respawn failed.';
+    } finally {
+      syncing = false;
+    }
+  }
+
   function stripMonitorParamsFromUrl(): void {
     const params = new URLSearchParams(window.location.search);
     params.delete('monitor');
@@ -4912,6 +4959,20 @@
                     >
                       {cancelling ? 'Cancelling…' : 'Cancel ingestion'}
                     </button>
+                  {/if}
+                  {#if flowState === 'running' && !runProcessAlive}
+                    <button
+                      type="button"
+                      onclick={() => void respawnStaleWorker()}
+                      disabled={syncing}
+                      class="mt-4 w-full rounded border border-sophia-dark-sage/50 bg-sophia-dark-sage/15 px-5 py-3 font-mono text-sm uppercase tracking-[0.12em] text-sophia-dark-sage hover:bg-sophia-dark-sage/24 disabled:opacity-50"
+                    >
+                      {syncing ? 'Respawning…' : 'Respawn worker (deploy / lost process)'}
+                    </button>
+                    <p class="mt-2 font-mono text-[0.65rem] text-sophia-dark-muted">
+                      Neon may still show this run as running while this revision has no child process. This starts
+                      ingest.ts from checkpoints on <em>this</em> instance.
+                    </p>
                   {/if}
                   {#if flowState === 'awaiting_sync'}
                     <button type="button" onclick={() => void syncToSurreal()} disabled={syncing} class="mt-4 rounded border border-sophia-dark-sage/55 bg-sophia-dark-sage/20 px-5 py-3 font-mono text-sm uppercase tracking-[0.12em] text-sophia-dark-sage hover:bg-sophia-dark-sage/28 disabled:opacity-50">

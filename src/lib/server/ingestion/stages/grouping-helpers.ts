@@ -39,20 +39,29 @@ export function normalizeGroupingRole(value: unknown): string {
 	return 'key_premise';
 }
 
-export function normalizeGroupingPayload(
-	payload: unknown,
-	normalizePositivePosition: (v: unknown) => number
-): unknown {
+/**
+ * Normalise grouping JSON before Zod parse. **Invalid or missing `position_in_source` refs are dropped**
+ * (not coerced to `1`), so malformed model output cannot collapse many claims onto position 1.
+ */
+export function normalizeGroupingPayload(payload: unknown): unknown {
 	if (!Array.isArray(payload)) return payload;
 	return payload.map((item) => {
 		if (!item || typeof item !== 'object') return item;
 		const typed = item as Record<string, unknown>;
 		const claims = Array.isArray(typed.claims)
-			? typed.claims.map((claimRef: Record<string, unknown>) => ({
-					...claimRef,
-					role: normalizeGroupingRole(claimRef?.role),
-					position_in_source: normalizePositivePosition(claimRef?.position_in_source ?? 1)
-				}))
+			? typed.claims.flatMap((claimRef: Record<string, unknown>) => {
+					if (!claimRef || typeof claimRef !== 'object') return [];
+					const raw = claimRef.position_in_source;
+					const n = Number(raw);
+					if (!Number.isFinite(n) || n < 1) return [];
+					return [
+						{
+							...claimRef,
+							role: normalizeGroupingRole(claimRef.role),
+							position_in_source: Math.trunc(n)
+						}
+					];
+				})
 			: [];
 		return { ...typed, claims };
 	});

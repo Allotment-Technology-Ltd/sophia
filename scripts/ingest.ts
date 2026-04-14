@@ -116,6 +116,7 @@ import {
 } from '../src/lib/server/surrealRecordSql.js';
 import { createIngestProviderTpmGuard } from './lib/ingestProviderTpm.js';
 import { paceDeepseekChatCompletion } from './lib/ingestDeepseekRpsPace.js';
+import { paceGroqChatCompletion } from './lib/ingestGroqRpsPace.js';
 import { paceMistralChatCompletion } from './lib/ingestMistralRpsPace.js';
 import { collectErrorMessageChain, isTpmOrRateLimitInError } from '../src/lib/ingestionErrorChain.js';
 import {
@@ -152,6 +153,7 @@ import {
 	type Argument,
 	type GroupingOutput
 } from '../src/lib/server/prompts/grouping.js';
+import { normalizeGroupingPayload } from '../src/lib/server/ingestion/stages/grouping-helpers.js';
 
 import {
 	VALIDATION_SYSTEM,
@@ -1256,26 +1258,6 @@ function normalizePositivePosition(value: unknown): number {
 	return Math.max(1, Math.trunc(numberValue));
 }
 
-function normalizeGroupingPayload(payload: unknown): unknown {
-	if (!Array.isArray(payload)) return payload;
-	return payload.map((item) => {
-		if (!item || typeof item !== 'object') return item;
-		const typed = item as Record<string, unknown>;
-		const claims = Array.isArray(typed.claims)
-			? typed.claims.map((claim) => {
-					if (!claim || typeof claim !== 'object') return claim;
-					const typedClaim = claim as Record<string, unknown>;
-					return {
-						...typedClaim,
-						position_in_source: normalizePositivePosition(typedClaim.position_in_source),
-						role: normalizeGroupingRole(typedClaim.role)
-					};
-				})
-			: typed.claims;
-		return { ...typed, claims };
-	});
-}
-
 type GroupingBatch = {
 	claims: PhaseOneClaim[];
 	relations: PhaseOneRelation[];
@@ -2350,6 +2332,9 @@ async function callStageModel(params: {
 			}
 			if (routingProvider.trim().toLowerCase() === 'deepseek') {
 				await paceDeepseekChatCompletion(activePlan.model);
+			}
+			if (routingProvider.trim().toLowerCase() === 'groq') {
+				await paceGroqChatCompletion(activePlan.model);
 			}
 			emitIngestTelemetry({
 				event: 'model_call_start',

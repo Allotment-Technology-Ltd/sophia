@@ -9,7 +9,6 @@ import {
 	buildRelationsBatches,
 	mergeRelationsDedup
 } from '../src/lib/server/ingestion/stages/relations-helpers.js';
-import { normalizePositivePosition } from '../src/lib/server/ingestion/stages/extraction-helpers.js';
 import {
 	analyzeGroupingReferenceHealth,
 	buildGroupingBatches,
@@ -277,9 +276,7 @@ export async function rerunRelationsAndGroupingForRemediation(opts: {
 		let batchArguments: GroupingOutput;
 		try {
 			const parsed = parseJsonResponse(grpRawResponse);
-			batchArguments = GroupingOutputSchema.parse(
-				normalizeGroupingPayload(parsed, normalizePositivePosition)
-			);
+			batchArguments = GroupingOutputSchema.parse(normalizeGroupingPayload(parsed));
 		} catch (parseError) {
 			const fixedResponse = await fixJsonWithModel(
 				jsonRepairPlan,
@@ -291,9 +288,7 @@ export async function rerunRelationsAndGroupingForRemediation(opts: {
 				groupingPlanningContext
 			);
 			const fixedParsed = parseJsonResponse(fixedResponse);
-			batchArguments = GroupingOutputSchema.parse(
-				normalizeGroupingPayload(fixedParsed, normalizePositivePosition)
-			);
+			batchArguments = GroupingOutputSchema.parse(normalizeGroupingPayload(fixedParsed));
 		}
 
 		const batchHealth = analyzeGroupingReferenceHealth(batchArguments);
