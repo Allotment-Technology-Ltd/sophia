@@ -36,7 +36,8 @@ const RETRYABLE_PATTERNS = [
 	/safet(y)?\s+ratelimit/i,
 	/generation\s+blocked/i,
 	/vertexai\.googleapis\.com.*unavailable/i,
-	/aiplatform\.googleapis\.com.*unavailable/i
+	/aiplatform\.googleapis\.com.*unavailable/i,
+	/ingest_worker_platform_shutdown/i
 ];
 
 const PERMANENT_PATTERNS = [

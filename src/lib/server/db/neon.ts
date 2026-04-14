@@ -1,5 +1,5 @@
 import { Pool } from '@neondatabase/serverless';
-import { drizzle } from 'drizzle-orm/neon-serverless';
+import { drizzle, type NeonDatabase } from 'drizzle-orm/neon-serverless';
 import * as schema from './schema';
 
 let pool: Pool | null = null;
@@ -29,6 +29,9 @@ export function getDrizzleDb() {
   }
   return db;
 }
+
+/** Drizzle instance (pool-backed default or a dedicated `PoolClient` from {@link getNeonPool}.connect()). */
+export type SophiaDrizzleDb = NeonDatabase<typeof schema>;
 
 export function resetNeonClientsForTests(): void {
   void pool?.end();

@@ -5,7 +5,9 @@
 import { randomBytes } from 'node:crypto';
 import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type { InferSelectModel } from 'drizzle-orm';
-import { getDrizzleDb } from './db/neon';
+import { drizzle } from 'drizzle-orm/neon-serverless';
+import { getDrizzleDb, getNeonPool, type SophiaDrizzleDb } from './db/neon';
+import * as drizzleSchema from './db/schema';
 import {
 	ingestRunIssues,
 	ingestRuns,
@@ -44,11 +46,17 @@ import { sanitizeIngestionJobWorkerDefaults } from './ingestionJobWorkerDefaults
 import { canonicalizeSourceUrl } from './sourceIdentity';
 
 const ADV_LOCK_JOB_EVENTS = 5_849_273;
+/** Session advisory lock space for `tickIngestionJob` (cross-replica; see dedicated pool client in {@link tickIngestionJob}). */
+const ADV_LOCK_JOB_TICK = 5_849_278;
 
 /**
- * Serialize `tickIngestionJob` per `jobId`. Overlapping ticks (e.g. `void tickIngestionJob` on job create +
+ * Serialize `tickIngestionJob` per `jobId` **in-process**. Overlapping ticks (e.g. `void tickIngestionJob` on job create +
  * ingestion poller) previously raced: both could pass `ADMIN_INGEST_MAX_CONCURRENT` before either row
  * flipped to `running`, launching one extra child and blocking the next URL with a misleading “3 max” error.
+ *
+ * Cross-replica: `tickIngestionJob` also takes a **Postgres session advisory lock** on a dedicated pool
+ * connection (default on; disable with `INGEST_JOB_TICK_DISTRIBUTED_LOCK=0`) so multiple pollers / app
+ * instances cannot pick the same pending URL in one wall-clock window.
  */
 const tickIngestionJobTailByJobId = new Map<string, Promise<void>>();
 
@@ -89,8 +97,7 @@ export function ingestionJobAutoRequeueClearsChildRunId(): boolean {
 }
 
 /** Convert eligible `error` rows to `pending` (back of queue via newer `updatedAt`). */
-async function applyAutoRequeueForJobErrors(jobId: string): Promise<void> {
-	const db = getDrizzleDb();
+async function applyAutoRequeueForJobErrors(jobId: string, db: SophiaDrizzleDb = getDrizzleDb()): Promise<void> {
 	const maxA = getIngestionJobItemMaxAttempts();
 	const clearRunId = ingestionJobAutoRequeueClearsChildRunId();
 	const rows = await db
@@ -129,8 +136,7 @@ function exhaustionFailureClassFromKind(kind: ReturnType<typeof classifyIngestJo
 }
 
 /** Mark `error` items that hit max attempts as DLQ (idempotent). */
-async function syncDlqForExhaustedJobItems(jobId: string): Promise<void> {
-	const db = getDrizzleDb();
+async function syncDlqForExhaustedJobItems(jobId: string, db: SophiaDrizzleDb = getDrizzleDb()): Promise<void> {
 	const maxA = getIngestionJobItemMaxAttempts();
 	const items = await db
 		.select()
@@ -586,9 +592,11 @@ function isStuckIngestRun(run: IngestRunState): boolean {
  * Refresh job item rows from child ingest run state and recompute job summary / terminal status.
  * Does **not** launch new child runs — safe for high-frequency admin GET polling.
  */
-export async function reconcileIngestionJobView(jobId: string): Promise<void> {
+export async function reconcileIngestionJobView(
+	jobId: string,
+	db: SophiaDrizzleDb = getDrizzleDb()
+): Promise<void> {
 	if (!isNeonIngestPersistenceEnabled()) return;
-	const db = getDrizzleDb();
 	let job = await db.query.ingestionJobs.findFirst({
 		where: eq(ingestionJobs.id, jobId)
 	});
@@ -670,8 +678,8 @@ export async function reconcileIngestionJobView(jobId: string): Promise<void> {
 		});
 	}
 
-	await applyAutoRequeueForJobErrors(jobId);
-	await syncDlqForExhaustedJobItems(jobId);
+	await applyAutoRequeueForJobErrors(jobId, db);
+	await syncDlqForExhaustedJobItems(jobId, db);
 
 	const refreshed = await db
 		.select()
@@ -709,15 +717,40 @@ export async function reconcileIngestionJobView(jobId: string): Promise<void> {
 
 export async function tickIngestionJob(jobId: string): Promise<void> {
 	const prev = tickIngestionJobTailByJobId.get(jobId) ?? Promise.resolve();
-	const run = prev.catch(() => {}).then(() => tickIngestionJobUnlocked(jobId));
+	const run = prev.catch(() => {}).then(async () => {
+		const lockOff = (process.env.INGEST_JOB_TICK_DISTRIBUTED_LOCK ?? '1').trim().toLowerCase();
+		if (lockOff === '0' || lockOff === 'false' || lockOff === 'off' || lockOff === 'no') {
+			await tickIngestionJobUnlocked(jobId);
+			return;
+		}
+		const pool = getNeonPool();
+		const client = await pool.connect();
+		const lockedDb = drizzle(client, { schema: drizzleSchema });
+		try {
+			await client.query('SELECT pg_advisory_lock($1, hashtext($2::text))', [ADV_LOCK_JOB_TICK, jobId]);
+			await tickIngestionJobUnlocked(jobId, lockedDb);
+		} finally {
+			try {
+				await client.query('SELECT pg_advisory_unlock($1, hashtext($2::text))', [
+					ADV_LOCK_JOB_TICK,
+					jobId
+				]);
+			} catch (e) {
+				console.warn('[ingestion-jobs] pg_advisory_unlock failed:', e);
+			}
+			client.release();
+		}
+	});
 	tickIngestionJobTailByJobId.set(jobId, run);
 	await run;
 }
 
-async function tickIngestionJobUnlocked(jobId: string): Promise<void> {
+async function tickIngestionJobUnlocked(
+	jobId: string,
+	db: SophiaDrizzleDb = getDrizzleDb()
+): Promise<void> {
 	if (!isNeonIngestPersistenceEnabled()) return;
-	await reconcileIngestionJobView(jobId);
-	const db = getDrizzleDb();
+	await reconcileIngestionJobView(jobId, db);
 	const job = await db.query.ingestionJobs.findFirst({
 		where: eq(ingestionJobs.id, jobId)
 	});
@@ -761,7 +794,7 @@ async function tickIngestionJobUnlocked(jobId: string): Promise<void> {
 				or(isNull(ingestionJobItems.blockedUntil), lte(ingestionJobItems.blockedUntil, new Date()))
 			)
 		)
-		.orderBy(asc(ingestionJobItems.updatedAt));
+		.orderBy(asc(ingestionJobItems.updatedAt), asc(ingestionJobItems.id));
 
 	for (let i = 0; i < slots && i < pendingItems.length; i++) {
 		if (i > 0) {
@@ -953,7 +986,7 @@ async function tickIngestionJobUnlocked(jobId: string): Promise<void> {
 		}
 	}
 
-	await reconcileIngestionJobView(jobId);
+	await reconcileIngestionJobView(jobId, db);
 }
 
 /** One pass equivalent to `scripts/ingestion-job-poller.ts --once` (all running jobs). */

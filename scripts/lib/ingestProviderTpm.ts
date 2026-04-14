@@ -9,6 +9,10 @@
  *
  * DeepSeek: optional `deepseek:<tokens>` here plus **`INGEST_DEEPSEEK_*` RPS pacing** (`ingestDeepseekRpsPace.ts`)
  * reduces stacked 429s when validation + json_repair + fallbacks hit the same key.
+ *
+ * Groq (free / low tier): e.g. `INGEST_PROVIDER_TPM_BUDGET=groq:5000` with **`INGEST_GROQ_*`** RPS pacing
+ * (`ingestGroqRpsPace.ts`) — many models are ~6k–12k TPM on the public rate-limit table; keep concurrent
+ * ingest runs in mind when sizing this budget.
  */
 
 type WindowEntry = { at: number; tokens: number };

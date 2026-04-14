@@ -29,13 +29,27 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     | Partial<NonNullable<IngestRunPayload['batch_overrides']>>
     | undefined;
 
-  const result = await ingestRunManager.resumeFromFailure(runId, {
+  const respawnStale =
+    body.respawn_stale_worker === true ||
+    body.respawnStaleWorker === true ||
+    body.stale_worker_respawn === true;
+
+  const opts = {
     ...(model_chain && typeof model_chain === 'object' ? { model_chain } : {}),
     ...(batch_overrides && typeof batch_overrides === 'object' ? { batch_overrides } : {})
-  });
+  };
+
+  const result = respawnStale
+    ? await ingestRunManager.respawnWorkerFromCheckpoint(runId, opts)
+    : await ingestRunManager.resumeFromFailure(runId, opts);
   if (!result.ok) {
     return json({ error: result.error }, { status: 400 });
   }
 
-  return json({ ok: true, run_id: runId, resumed: true });
+  return json({
+    ok: true,
+    run_id: runId,
+    resumed: true,
+    ...(respawnStale ? { respawn_stale_worker: true as const } : {})
+  });
 };

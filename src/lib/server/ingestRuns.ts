@@ -23,6 +23,7 @@ import {
 } from '$lib/server/db/ingestRunRepository';
 import { appendIssueFromLogLine, persistIngestRunReport, type IngestIssueRecord } from '$lib/server/ingestRunIssues';
 import { buildOperatorByokProcessEnv } from '$lib/server/byok/buildOperatorIngestEnv';
+import { hydrateIngestPayloadWithJobRowDefaults } from '$lib/server/ingestion/hydrateIngestPayloadJobDefaults';
 import { INGEST_EXIT_FORCE_STAGE_CHECKPOINT_MISSING } from '$lib/server/ingestion/ingestProcessExitCodes';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 import { query as dbQuery } from '$lib/server/db';
@@ -1376,6 +1377,114 @@ class IngestRunManager extends EventEmitter {
     return { ok: true };
   }
 
+  /**
+   * Re-attach a **`tsx scripts/ingest.ts`** worker when Neon still shows **`running`** but this process
+   * has **no child** (typical after a **deploy / revision replace** or cold instance: `neonLoadIngestRun`
+   * never restores a `ChildProcess`). Uses the same checkpoint resume path as {@link resumeFromFailure}.
+   *
+   * If the run is **`error`**, delegates to {@link resumeFromFailure} so one admin action can recover
+   * both “stale running” and “failed” states.
+   */
+  async respawnWorkerFromCheckpoint(
+    runId: string,
+    options?: {
+      model_chain?: Partial<IngestRunPayload['model_chain']>;
+      batch_overrides?: Partial<NonNullable<IngestRunPayload['batch_overrides']>>;
+    }
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    let state = this.runs.get(runId);
+    if (!state && isNeonIngestPersistenceEnabled()) {
+      const loaded = await neonLoadIngestRun(runId);
+      if (loaded) {
+        this.runs.set(runId, loaded);
+        state = loaded;
+      }
+    }
+    if (!state) return { ok: false, error: 'Run not found.' };
+
+    if (state.status === 'error') {
+      return this.resumeFromFailure(runId, options);
+    }
+
+    if (state.status !== 'running') {
+      return {
+        ok: false,
+        error: `Run is ${state.status}; stale-worker respawn only applies when Neon status is running but this server has no child process (e.g. after deploy). Failed runs: omit respawn_stale_worker. Preview awaiting_sync: use Sync to SurrealDB on the ingest monitor.`
+      };
+    }
+
+    if (state.process) {
+      return {
+        ok: false,
+        error: 'A worker process is already attached to this run on this server. Cancel the run first if you need to replace it.'
+      };
+    }
+
+    if (!state.sourceFilePath) {
+      if (!isNeonIngestPersistenceEnabled()) {
+        return { ok: false, error: 'No source file checkpoint was found for this run.' };
+      }
+      try {
+        const { txtPath, restored } = await neonRestoreSourceTextToDataSources(state.id);
+        if (!restored) {
+          return { ok: false, error: 'No source file checkpoint was found for this run.' };
+        }
+        state.sourceFilePath = txtPath;
+        this.flushNeonSnapshotPersist(runId);
+      } catch (e) {
+        return {
+          ok: false,
+          error: `Could not restore source from Neon: ${e instanceof Error ? e.message : String(e)}`
+        };
+      }
+    }
+
+    if (options?.model_chain || options?.batch_overrides) {
+      let payload: IngestRunPayload = { ...state.payload };
+      if (options.model_chain) {
+        const mc = options.model_chain;
+        payload = {
+          ...payload,
+          model_chain: {
+            extract: mc.extract ?? payload.model_chain.extract,
+            relate: mc.relate ?? payload.model_chain.relate,
+            group: mc.group ?? payload.model_chain.group,
+            validate: mc.validate ?? payload.model_chain.validate
+          }
+        };
+      }
+      if (options.batch_overrides) {
+        payload = {
+          ...payload,
+          batch_overrides: { ...(payload.batch_overrides ?? {}), ...options.batch_overrides }
+        };
+      }
+      const nextVersion = (state.payloadVersion ?? 1) + 1;
+      state.payload = payload;
+      state.payloadVersion = nextVersion;
+      void neonMergePayloadAndVersion(runId, payload, nextVersion);
+    }
+
+    state.error = undefined;
+    state.completedAt = undefined;
+    state.cancelledByUser = false;
+    state.currentAction = 'Respawning worker from checkpoint…';
+    state.resumable = false;
+    this.flushNeonSnapshotPersist(runId);
+    this.addLog(
+      runId,
+      '[RESPAWN] Starting ingest.ts on this server after deploy or stall; continuing from Neon/Surreal checkpoints (same path as resume-from-failure).'
+    );
+    if (state.payload.queue_record_id) {
+      void markLinkedQueueStatus(state.payload.queue_record_id, 'ingesting');
+    }
+    void this.execStartIngestChild(runId, state.payload, state.sourceFilePath, {
+      forSyncOnly: false,
+      resumeFromFailure: true
+    });
+    return { ok: true };
+  }
+
   private spawnIngestionProcess(runId: string, payload: IngestRunPayload, actorEmail: string): void {
     const state = this.runs.get(runId);
     if (state && state.status === 'queued') {
@@ -1513,6 +1622,18 @@ class IngestRunManager extends EventEmitter {
     sourceFile: string,
     options: { forSyncOnly: boolean; resumeFromFailure?: boolean; ingestAutoRetry?: boolean }
   ): Promise<void> {
+    const runStateForPayload = this.runs.get(runId);
+    if (runStateForPayload) {
+      const hydrated = await hydrateIngestPayloadWithJobRowDefaults(runStateForPayload.payload);
+      if (hydrated !== runStateForPayload.payload) {
+        runStateForPayload.payload = hydrated;
+        this.flushNeonSnapshotPersist(runId);
+      }
+      payload = runStateForPayload.payload;
+    } else {
+      payload = await hydrateIngestPayloadWithJobRowDefaults(payload);
+    }
+
     let operatorByokEnv: Record<string, string> = {};
     try {
       operatorByokEnv = await buildOperatorByokProcessEnv();
@@ -1667,8 +1788,10 @@ class IngestRunManager extends EventEmitter {
     if (payload.validate) ingestTail.push('--validate');
     if (stopBeforeStore) ingestTail.push('--stop-before-store');
     const forceStage = payload.batch_overrides?.forceStage;
+    /** `--force-stage validating` must stay on auto-retry or the worker falls back to full extraction. */
+    const preserveForceStageOnAutoRetry = forceStage === 'validating';
     if (forceStage && (INGEST_CLI_FORCE_STAGES as readonly string[]).includes(forceStage)) {
-      if (options.resumeFromFailure && options.ingestAutoRetry) {
+      if (options.resumeFromFailure && options.ingestAutoRetry && !preserveForceStageOnAutoRetry) {
         this.addLog(
           runId,
           `[INGEST] ingest auto-retry: omitting --force-stage ${forceStage} so ingest.ts resumes from Neon/Surreal partials instead of re-forcing stage order (avoids full re-extract after a mid-pipeline crash).`
@@ -1716,7 +1839,7 @@ class IngestRunManager extends EventEmitter {
       this.failRun(runId, `ingest.ts failed to start: ${err.message}`);
     });
 
-    ingestChild.on('close', (code: number | null) => {
+    ingestChild.on('close', (code: number | null, signal?: NodeJS.Signals | null) => {
       const s = this.runs.get(runId);
       if (s) {
         s.process = undefined;
@@ -1727,6 +1850,12 @@ class IngestRunManager extends EventEmitter {
         this.finalizeCancel(runId);
         return;
       }
+
+      const platformShutdown =
+        signal === 'SIGTERM' ||
+        signal === 'SIGINT' ||
+        code === 143 ||
+        code === 130;
 
       if (code === 0) {
         if (stopBeforeStore) {
@@ -1797,11 +1926,15 @@ class IngestRunManager extends EventEmitter {
       if (forSync) {
         this.updateStageStatus(runId, 'store', 'error');
         const hint = s ? extractIngestWorkerFailureHint(s.logLines) : '';
+        const shutdownLine = platformShutdown
+          ? `ingest_worker_platform_shutdown: Surreal sync child ended (code=${code ?? 'null'}, signal=${signal ?? 'none'}) — often deploy or instance replacement.`
+          : '';
         this.failRun(
           runId,
-          hint
-            ? `SurrealDB sync (ingest.ts) exited with code ${code ?? 1} — ${hint}`
-            : `SurrealDB sync (ingest.ts) exited with code ${code ?? 1}`
+          shutdownLine ||
+            (hint
+              ? `SurrealDB sync (ingest.ts) exited with code ${code ?? 1} — ${hint}`
+              : `SurrealDB sync (ingest.ts) exited with code ${code ?? 1}`)
         );
       } else {
         const order = orderedStagesAfterFetch(payload.validate === true);
@@ -1836,11 +1969,13 @@ class IngestRunManager extends EventEmitter {
           }
         }
         const hint = s ? extractIngestWorkerFailureHint(s.logLines) : '';
+        const shutdownLine = platformShutdown
+          ? `ingest_worker_platform_shutdown: ingest.ts ended (code=${code ?? 'null'}, signal=${signal ?? 'none'}) — usually a platform deploy or instance replacement; resume from Neon/Surreal checkpoints on retry.`
+          : '';
         this.failRun(
           runId,
-          hint
-            ? `ingest.ts exited with code ${code ?? 1} — ${hint}`
-            : `ingest.ts exited with code ${code ?? 1}`
+          shutdownLine ||
+            (hint ? `ingest.ts exited with code ${code ?? 1} — ${hint}` : `ingest.ts exited with code ${code ?? 1}`)
         );
       }
     });

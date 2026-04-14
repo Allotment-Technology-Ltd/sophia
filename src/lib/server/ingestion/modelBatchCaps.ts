@@ -37,6 +37,8 @@ function maxBatchTargetForModel(stage: IngestReasoningStage, modelLower: string)
   }
 
   if (stage === 'grouping') {
+    if (m.includes('llama-3.3') || m.includes('llama3.3')) return 24_000;
+    if (m.includes('llama-3.1') || m.includes('llama3.1') || m.includes('llama-3')) return 28_000;
     if (m.includes('gpt-3.5')) return 12_000;
     if (m.includes('gpt-4o-mini')) return 90_000;
     if (m.includes('gpt-4-turbo') || m.includes('gpt-4o')) return 100_000;

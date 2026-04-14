@@ -48,13 +48,13 @@ export const CANONICAL_VOYAGE_EMBEDDING_MODEL_LABEL = 'voyage__voyage-4-lite';
 export const CANONICAL_VOYAGE_EMBEDDING_FINGERPRINT = 'voyage:voyage-4-lite:1024d';
 
 /**
- * Production profile: **Vertex Gemini** for extraction, relations, grouping, and remediation
- * (capacity + long context on GCP billing). **Validation** defaults to **DeepSeek Chat** (OpenAI-compatible
- * API, strong instruction following) so the first verification pass is not Vertex Flash extraction and
- * does not depend on Mistral quota. **OpenAI** and **Vertex** follow, then **Mistral** in the tail when keys exist.
- * **`deepseek-reasoner` is intentionally omitted** from the default validation chain (slow / long outputs /
- * higher timeout risk vs `deepseek-chat`); use pins or Restormel if you need it. **json_repair** defaults to
- * **DeepSeek Chat** with **Mistral** and **Vertex** as fallbacks.
+ * Production profile: **Vertex Gemini** for extraction, relations, grouping, remediation, **validation**,
+ * and **json_repair** primaries (long structured JSON + high `maxOutputTokens` without the frequent
+ * `finish_reason: length` truncation seen on `deepseek-chat` for large validation payloads). **DeepSeek**
+ * and **OpenAI** remain in fallback chains when keys exist. **`deepseek-reasoner` is intentionally omitted**
+ * from default validation (slow / long outputs). Optional **Groq** tiers suit json_repair / light repair
+ * when `GROQ_API_KEY` is set; use `INGEST_GROQ_*` pacing and `INGEST_PROVIDER_TPM_BUDGET=groq:…` on free tiers
+ * (see Groq rate-limit docs).
  *
  * Allowlist in `ingestionFinetuneLabelerPolicy` includes `deepseek` alongside `mistral` + `vertex` so
  * DeepSeek can serve sensitive training-lineage stages when strict mode is on (operators remain
@@ -64,10 +64,9 @@ export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, Ca
 	extraction: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 	relations: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 	grouping: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
-	/** Cross-vendor first: not Vertex extraction, not Mistral-first (quota-friendly). */
-	validation: { provider: 'deepseek', modelId: 'deepseek-chat' },
+	validation: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 	remediation: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
-	json_repair: { provider: 'deepseek', modelId: 'deepseek-chat' }
+	json_repair: { provider: 'vertex', modelId: 'gemini-3-flash-preview' }
 };
 
 /**
@@ -99,7 +98,7 @@ export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, C
 	validation: [
 		{ provider: 'openai', modelId: 'gpt-4o-mini' },
 		{ provider: 'openai', modelId: 'gpt-4o' },
-		{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
+		{ provider: 'deepseek', modelId: 'deepseek-chat' },
 		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
 		{ provider: 'mistral', modelId: 'mistral-large-latest' },
 		{ provider: 'mistral', modelId: 'mistral-medium-latest' }
@@ -112,8 +111,10 @@ export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, C
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	],
 	json_repair: [
-		{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
+		{ provider: 'groq', modelId: 'llama-3.1-8b-instant' },
 		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
+		{ provider: 'deepseek', modelId: 'deepseek-chat' },
+		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
 		{ provider: 'mistral', modelId: 'mistral-large-latest' },
 		{ provider: 'mistral', modelId: 'mistral-small-latest' }
 	]
