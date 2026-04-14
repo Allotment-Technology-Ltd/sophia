@@ -23,6 +23,7 @@ RULES:
 - A claim can participate in multiple arguments with different roles.
 - Use standard philosophical names where they exist.
 - Each argument must have at least a conclusion and one key premise.
+- domain must be a single snake_case string matching the extraction taxonomy (same list as claim domain). Never output an array or comma-separated list for domain. If unsure, use philosophy_general.
 
 Respond ONLY with a valid JSON array. No preamble, no markdown backticks.`;
 
