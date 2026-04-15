@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Optional: deploy Cloud Run *service* "sophia-ingest-worker" — same image as "sophia", same 4Gi/2 vCPU/heap as main
+# Optional: deploy Cloud Run *service* "sophia-ingest-worker" — same image as "sophia", same 2Gi/1 vCPU/heap as main
 # `sophia` (see deploy.yml); lower HTTP concurrency per instance so admin-driven ingest.ts children see less
 # request-level contention than on usesophia.app traffic.
 #
@@ -30,8 +30,8 @@ RESTORMEL_VERIFY_ROUTE_ID="${RESTORMEL_VERIFY_ROUTE_ID:-}"
 ALLOWED_EMAILS="${ALLOWED_EMAILS:-adam.boon1984@gmail.com,adam.boon1984@googlemail.com,admin@usesophia.app}"
 OWNER_EMAILS="${OWNER_EMAILS:-adam.boon1984@gmail.com,adam.boon1984@googlemail.com,admin@usesophia.app}"
 
-# Heap cap for 4Gi container (~75%): clearer OOM than SIGKILL from the platform.
-NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=3072}"
+# Heap cap for 2Gi container (~75%): clearer OOM than SIGKILL from the platform.
+NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=1536}"
 
 SECRETS="ANTHROPIC_API_KEY=anthropic-api-key:latest,SURREAL_URL=surreal-db-url:latest,SURREAL_USER=surreal-db-user:latest,SURREAL_PASS=surreal-db-pass:latest,SURREAL_NAMESPACE=surreal-db-namespace:latest,SURREAL_DATABASE=surreal-db-database:latest,VOYAGE_API_KEY=voyage-api-key:latest,GOOGLE_AI_API_KEY=google-ai-api-key:latest,DATABASE_URL=neon-database-url:latest,ADMIN_UIDS=admin-uids:latest,OWNER_UIDS=owner-uids:latest,PADDLE_API_KEY_PRODUCTION=PADDLE_API_KEY_PRODUCTION:latest,PADDLE_WEBHOOK_SECRET_PRODUCTION=PADDLE_WEBHOOK_SECRET_PRODUCTION:latest,PADDLE_PRICE_PRO_GBP_PRODUCTION=PADDLE_PRICE_PRO_GBP_PRODUCTION:latest,PADDLE_PRICE_PRO_USD_PRODUCTION=PADDLE_PRICE_PRO_USD_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_GBP_PRODUCTION=PADDLE_PRICE_PREMIUM_GBP_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_USD_PRODUCTION=PADDLE_PRICE_PREMIUM_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION:latest,PUBLIC_PADDLE_CLIENT_TOKEN_PRODUCTION=PADDLE_CLIENT_TOKEN:latest,INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM=INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM:latest"
 
@@ -44,13 +44,11 @@ gcloud run deploy "${SERVICE_NAME}" \
 	--project="${PROJECT_ID}" \
 	--region="${REGION}" \
 	--allow-unauthenticated \
-	--memory=4Gi \
-	--cpu=2 \
+	--memory=2Gi \
+	--cpu=1 \
 	--min-instances=0 \
-	--max-instances=4 \
+	--max-instances=2 \
 	--concurrency=2 \
-	--vpc-connector=sophia-connector \
-	--vpc-egress=private-ranges-only \
 	--service-account="${JOB_SA}" \
 	--set-secrets="${SECRETS}" \
 	--set-env-vars="${ENV_BLOCK}"
