@@ -53,8 +53,6 @@ gcloud run jobs deploy "${JOB_NAME}" \
 	--parallelism=1 \
 	--max-retries=2 \
 	--task-timeout=45m \
-	--vpc-connector=sophia-connector \
-	--vpc-egress=private-ranges-only \
 	--service-account="${JOB_SA}" \
 	--command=pnpm \
 	--args=exec,tsx,scripts/ingestion-job-poller.ts,--once \
