@@ -5,7 +5,7 @@
  * CI uses committed fixtures; operators may append G1-cleared rows from Neon manifests.
  */
 
-import { ExtractionClaimSchema } from '../prompts/extraction.ts';
+import { ExtractionClaimSchema } from '../prompts/extraction';
 
 export type ExtractionEvalJsonlRow = {
 	source_url?: string;

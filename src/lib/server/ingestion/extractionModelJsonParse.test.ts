@@ -24,7 +24,7 @@ describe('parseExtractionJsonFromModelResponse', () => {
 		// Model often omits backslashes — invalid JSON with interior quotes in `text`:
 		const broken =
 			'[{"text":"I call a perception ' + dq + 'clear' + dq + ' when present","claim_type":"premise"}]';
-		const out = parseExtractionJsonFromModelResponse(broken) as { text: string }[];
+		const out = parseExtractionJsonFromModelResponse(broken) as { text: string; claim_type: string }[];
 		expect(out[0]!.text).toBe('I call a perception "clear" when present');
 		expect(out[0]!.claim_type).toBe('premise');
 		const validEscaped =
