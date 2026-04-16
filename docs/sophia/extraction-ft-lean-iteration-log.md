@@ -42,7 +42,7 @@ Copy the **Iteration template** block below into a new `## YYYY-MM-DD — Iterat
 pnpm ops:phase2-step-a-together-packaging -- --export-dir data/phase1-training-export
 
 # Fireworks: dry-run then live (set FIREWORKS_API_KEY; FIREWORKS_ACCOUNT_ID or EXTRACTION_MODEL for account inference).
-# First SFT from uploaded merged extraction weights — only if `firectl model get sophia-extract-m7b-ft` → Tunable: true:
+# First SFT from uploaded merged extraction weights (`firectl model get sophia-extract-m7b-ft` → Tunable: true verified 2026-04-16):
 pnpm ops:fireworks-submit-sft -- --dry-run \
   --training-file data/phase1-training-export/train.together.jsonl \
   --validation-file data/phase1-training-export/validation.together.jsonl \

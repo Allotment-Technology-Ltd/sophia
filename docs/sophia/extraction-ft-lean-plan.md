@@ -51,9 +51,11 @@ The merged extraction model already on Fireworks (uploaded via `firectl model cr
 
 **`accounts/adam-boon1984-17nryg/models/sophia-extract-m7b-ft`**
 
-1. **Before the first on-platform SFT**, run:  
+**Verified (2026-04-16):** `firectl model get sophia-extract-m7b-ft` reported **`Tunable: true`**, **`Supports Lora: true`**, **`State: READY`**, **`Kind: HF_BASE_MODEL`** — use this full id as **`--base-model`** for the first (and any base-model) Fireworks SFT from your merged upload. Re-check with `firectl model get` if Fireworks ever rejects a job or the model is recreated.
+
+1. **Before a new SFT on a new or changed upload**, run:  
    `firectl model get sophia-extract-m7b-ft`  
-   If **`Tunable: true`**, use that full string as **`--base-model`** so the next LoRA is trained **from your current deployed weights** (not a fresh catalog Mistral).
+   Confirm **`Tunable: true`**, then use that full string as **`--base-model`** so the LoRA trains **from your current weights**.
 2. If **`Tunable: false`** but **`Supports Lora: true`**, that usually means inference-only LoRA attach — pick a Fireworks **catalog** model that is **`Tunable: true`** for `--base-model`, or ask Fireworks support whether your account can enable SFT from that custom upload.
 3. **Second and later iterations** on Fireworks (continuing from a **prior Fireworks SFT job output**): use **`--warm-start-from accounts/<account>/models/<PRIOR_OUTPUT_MODEL>`** (mutually exclusive with `--base-model` in the API). The script supports both flags.
 
