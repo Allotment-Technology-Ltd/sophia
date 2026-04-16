@@ -41,6 +41,10 @@ import {
 import { buildIngestMetricsAdvisory } from '../src/lib/server/ingestion/ingestRunMetricsAdvisor.js';
 import { shouldOmitGenerateTextTemperature } from '../src/lib/server/ingestion/ingestGenerateTextTemperature.ts';
 import {
+	parseExtractionJsonFromModelResponse,
+	parseJsonFromModelResponse
+} from '../src/lib/server/ingestion/extractionModelJsonParse.ts';
+import {
 	assertSepPresetDiscipline,
 	buildSepPresetFingerprint,
 	parsePresetDisciplineMode
@@ -1306,21 +1310,9 @@ function splitIntoSections(text: string, maxTokensPerSection = MAX_TOKENS_PER_SE
 	return final;
 }
 
-/**
- * Parse JSON from model response, stripping markdown code fences if present
- */
+/** Parse JSON from model response (fences stripped). Extraction batches use {@link parseExtractionJsonFromModelResponse}. */
 function parseJsonResponse(text: string): unknown {
-	// Strip markdown code fences if present
-	let cleaned = text.trim();
-	if (cleaned.startsWith('```json')) {
-		cleaned = cleaned.slice(7);
-	} else if (cleaned.startsWith('```')) {
-		cleaned = cleaned.slice(3);
-	}
-	if (cleaned.endsWith('```')) {
-		cleaned = cleaned.slice(0, -3);
-	}
-	return JSON.parse(cleaned.trim());
+	return parseJsonFromModelResponse(text);
 }
 
 function ingestModelJsonFailureHints(raw: string, errMsg: string): string[] {
@@ -4649,7 +4641,7 @@ async function main() {
 						logStageCost('Extraction', extractionTracker, extractionPlan);
 
 						try {
-							const parsed = parseJsonResponse(rawResponse);
+							const parsed = parseExtractionJsonFromModelResponse(rawResponse);
 							const validated = ExtractionOutputSchema.parse(
 								normalizeExtractionPayload(parsed, domainOverride)
 							);
@@ -4718,7 +4710,7 @@ async function main() {
 								throw fixError;
 							}
 
-							const fixedParsed = parseJsonResponse(fixedResponse);
+							const fixedParsed = parseExtractionJsonFromModelResponse(fixedResponse);
 							const fixedValidated = ExtractionOutputSchema.parse(
 								normalizeExtractionPayload(fixedParsed, domainOverride)
 							);
@@ -4800,7 +4792,7 @@ async function main() {
 									logStageCost('Extraction', extractionTracker, extractionPlan);
 									let validated: ExtractionOutput;
 									try {
-										const parsed = parseJsonResponse(rawResponse);
+										const parsed = parseExtractionJsonFromModelResponse(rawResponse);
 										validated = ExtractionOutputSchema.parse(
 											normalizeExtractionPayload(parsed, domainOverride)
 										);
@@ -4833,7 +4825,7 @@ async function main() {
 											'Array of { text, claim_type, domain, passage_id, section_context, position_in_source, confidence }',
 											basePlanningContext
 										);
-										const fixedParsed = parseJsonResponse(fixedResponse);
+										const fixedParsed = parseExtractionJsonFromModelResponse(fixedResponse);
 										validated = ExtractionOutputSchema.parse(
 											normalizeExtractionPayload(fixedParsed, domainOverride)
 										);
