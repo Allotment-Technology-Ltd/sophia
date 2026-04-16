@@ -121,10 +121,17 @@ function togetherOpenAiCompatibleFetch(
 }
 
 function isGoogleAiOpenAiCompatibleHost(baseOrUrl: string): boolean {
-	return (
-		baseOrUrl.includes('generativelanguage.googleapis.com') ||
-		baseOrUrl.includes('googleapis.com/v1beta/openai')
-	);
+	try {
+		const parsed = new URL(baseOrUrl);
+		const host = parsed.hostname.toLowerCase();
+		const path = parsed.pathname;
+		return (
+			host === 'generativelanguage.googleapis.com' &&
+			(path === '/' || path.startsWith('/v1beta/openai'))
+		);
+	} catch {
+		return false;
+	}
 }
 
 /**
