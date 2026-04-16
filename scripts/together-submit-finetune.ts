@@ -1,6 +1,9 @@
 /**
  * Upload a Together chat JSONL file and start a LoRA fine-tune job (Together REST API).
  *
+ * **Legacy path:** Prefer **Fireworks SFT** for new lean iterations (`pnpm ops:fireworks-submit-sft`,
+ * `docs/sophia/extraction-ft-lean-plan.md`) so you skip Together → tarball → merge/upload for routine work.
+ *
  * Env: **`TOGETHER_API_KEY`** (required)
  *
  * Defaults (Together-supported LoRA base as of API check 2026-04):

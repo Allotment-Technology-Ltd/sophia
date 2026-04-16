@@ -2,7 +2,9 @@
 
 **Purpose:** One row per FT experiment. **Do not edit past rows** — append new dated sections. Pair every training run with **the same two-slice eval** and a combined report (see [extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md)).
 
-**Prerequisites:** [../local/operations/ingestion-fine-tune-data-mitigation-plan.md](../local/operations/ingestion-fine-tune-data-mitigation-plan.md) (G0/G1), [../local/operations/together-lora-phase2-runbook.md](../local/operations/together-lora-phase2-runbook.md) (Step A/B), [../local/operations/phase2-step-d-artifacts-runbook.md](../local/operations/phase2-step-d-artifacts-runbook.md) (merge/lineage after ship).
+**Canonical plan (steps + todos):** [extraction-ft-lean-plan.md](./extraction-ft-lean-plan.md).
+
+**Prerequisites:** [../local/operations/ingestion-fine-tune-data-mitigation-plan.md](../local/operations/ingestion-fine-tune-data-mitigation-plan.md) (G0/G1), [extraction-fireworks-deploy.md](./extraction-fireworks-deploy.md) (deploy + **SFT addendum**), [../local/operations/phase2-step-d-artifacts-runbook.md](../local/operations/phase2-step-d-artifacts-runbook.md) (merge/lineage when shipping **uploaded** weights). **Legacy Together-only packaging:** [../local/operations/together-lora-phase2-runbook.md](../local/operations/together-lora-phase2-runbook.md).
 
 **Vendor eval archive:** [../local/operations/extraction-vendor-ft-spike-eval-record.md](../local/operations/extraction-vendor-ft-spike-eval-record.md).
 
@@ -26,19 +28,39 @@ Copy the **Iteration template** block below into a new `## YYYY-MM-DD — Iterat
 
 | Field | Value |
 |-------|--------|
-| Training delta | e.g. “+220 rows batch-shaped JSON in `train.jsonl`” or “n_checkpoints 2 → 3” |
-| `train.together.jsonl` path / hash | |
-| Together job id (or vendor FT id) | |
-| Base model | |
+| Training delta | e.g. “+220 rows batch-shaped JSON in `train.jsonl`” or “epochs 1 → 2 on Fireworks” |
+| Packaged chat JSONL | `train.together.jsonl` / `validation.together.jsonl` paths + line counts or hashes |
+| **Fireworks SFT** (preferred) | Job id / output model id; **or** `fireworks-sft-job-submitted.json` path |
+| **Together** (legacy) | Together job id if you used `pnpm ops:together-submit-finetune` |
+| Base model id (vendor) | e.g. Fireworks `accounts/fireworks/models/…` **Tunable** base |
 | Row cap / notes | |
 
-**Commands (typical):**
+**Commands (preferred — Fireworks SFT):**
 
 ```bash
-# Step A (after export change)
+# Step A (after export change) — output is generic chat JSONL
 pnpm ops:phase2-step-a-together-packaging -- --export-dir data/phase1-training-export
 
-# Step B — dry-run then live
+# Fireworks: dry-run then live (set FIREWORKS_API_KEY; FIREWORKS_ACCOUNT_ID or EXTRACTION_MODEL for account inference)
+pnpm ops:fireworks-submit-sft -- --dry-run \
+  --training-file data/phase1-training-export/train.together.jsonl \
+  --validation-file data/phase1-training-export/validation.together.jsonl \
+  --base-model accounts/fireworks/models/<TUNABLE_BASE_MODEL_ID> \
+  --output-model <your-output-slug>
+
+pnpm ops:fireworks-submit-sft -- \
+  --training-file data/phase1-training-export/train.together.jsonl \
+  --validation-file data/phase1-training-export/validation.together.jsonl \
+  --base-model accounts/fireworks/models/<TUNABLE_BASE_MODEL_ID> \
+  --output-model <your-output-slug> \
+  --write-report data/phase1-training-export/fireworks-sft-job-submitted.json
+```
+
+Then **`firectl deployment create <output-model-slug>`** (or Fireworks UI) when the job completes — see [extraction-fireworks-deploy.md](./extraction-fireworks-deploy.md).
+
+**Commands (legacy — Together LoRA):**
+
+```bash
 pnpm ops:together-submit-finetune -- --dry-run
 pnpm ops:together-submit-finetune -- \
   --training-file data/phase1-training-export/train.together.jsonl \
@@ -96,12 +118,13 @@ EXTRACTION_EVAL_LOG_FIRST_FAILURE=1 pnpm ops:eval-extraction-holdout-openai-comp
 ### Build checklist
 
 - [ ] Curate or synthesise batch-shaped rows; merge into export `train.jsonl` (or a **branch export dir**) per G1.
-- [ ] Re-run `pnpm ops:phase2-step-a-together-packaging` for the export dir in use.
-- [ ] `pnpm ops:together-submit-finetune -- --dry-run` then live submit; record job id above.
+- [ ] `pnpm ops:phase2-step-a-together-packaging` for the export dir in use.
+- [ ] **Fireworks:** `pnpm ops:fireworks-submit-sft -- --dry-run` then live; record job + `output-model` in template table; deploy when ready.
+- [ ] **Legacy:** `pnpm ops:together-submit-finetune` only if you explicitly choose Together.
 
 ### Measure checklist
 
-- [ ] Point `EXTRACTION_*` at the new checkpoint/deployment.
+- [ ] Point `EXTRACTION_*` at the new **Fireworks deployment** (or other OpenAI-compatible endpoint).
 - [ ] `pnpm ops:eval-extraction-compare` → save `eval-compare-cycle-1-*.json`.
 - [ ] Fill metrics table; compare to [extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md) or previous iteration row.
 
@@ -118,7 +141,7 @@ EXTRACTION_EVAL_LOG_FIRST_FAILURE=1 pnpm ops:eval-extraction-holdout-openai-comp
 ### Build checklist
 
 - [ ] Author `data/phase1-training-export/eval_passage_id_grounding.jsonl` (or path TBD) with same row shape as holdout eval; extend `eval-extraction-holdout-openai-compatible` **or** document `pnpm ops:eval-extraction-holdout-openai-compatible -- --jsonl …` against that file.
-- [ ] Add matching supervision rows to training pack; Step A → Step B.
+- [ ] Add matching supervision rows to training pack; Step A → **Fireworks SFT** (or legacy Together).
 
 ### Measure checklist
 
@@ -142,7 +165,7 @@ EXTRACTION_EVAL_LOG_FIRST_FAILURE=1 pnpm ops:eval-extraction-holdout-openai-comp
 
 ### Build / measure / learn
 
-- [ ] Curate exemplar JSONL → merge → Step A → Step B.
+- [ ] Curate exemplar JSONL → merge → Step A → **Fireworks SFT** (or legacy Together).
 - [ ] Offline: `pnpm ops:eval-extraction-compare` vs previous winner.
 - [ ] Online: SEP smoke ingest only if offline gates pass; compare telemetry counts.
 

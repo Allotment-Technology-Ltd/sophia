@@ -2,6 +2,8 @@
 
 **Purpose:** Canonical **two-slice eval** for every Lean FT cycle (hypothesis → build → measure → learn). Re-run after each deployment or model change; append results to [extraction-ft-lean-iteration-log.md](./extraction-ft-lean-iteration-log.md).
 
+**Full plan (Fireworks SFT primary, checklists):** [extraction-ft-lean-plan.md](./extraction-ft-lean-plan.md).
+
 **Operator vs agent:** [extraction-ft-lean-pause-points.md](./extraction-ft-lean-pause-points.md) lists **PAUSE 0–3** (endpoint, cycles 1–3) so you know when your action is required before the next automated step.
 
 **Not legal advice.** G0/G1: [../local/operations/ingestion-fine-tune-data-mitigation-plan.md](../local/operations/ingestion-fine-tune-data-mitigation-plan.md).

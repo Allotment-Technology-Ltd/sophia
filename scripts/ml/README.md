@@ -2,11 +2,12 @@
 
 These scripts run **outside** the main `pnpm` TypeScript pipeline (Python + GPU RAM). Use a clean venv or Colab.
 
-## Merge path: Together merged tarball vs local Peft merge
+## Training + merge paths (which artifact do you have?)
 
 | Path | When to use | You need |
 |------|----------------|----------|
-| **Together merged tarball** (default for job `ft-d95bacfb-6f78`) | Together UI / checkpoints delivered a **full merged** archive (`config.json`, sharded `*.safetensors`, tokenizers). You will upload that tree to Fireworks (or another host) **without** running `merge_peft_lora.py`. | Extracted HF directory; see artifact table in [`docs/sophia/extraction-fireworks-deploy.md`](../../docs/sophia/extraction-fireworks-deploy.md). |
+| **Fireworks SFT (preferred lean loop)** | You train **on Fireworks** from chat JSONL (`pnpm ops:phase2-step-a-together-packaging` → `train.together.jsonl`). Output is a Fireworks **fine-tuned model id**; deploy with `firectl deployment create` — see [`docs/sophia/extraction-fireworks-deploy.md`](../../docs/sophia/extraction-fireworks-deploy.md) SFT addendum and `pnpm ops:fireworks-submit-sft`. | **No** Together tarball; **no** local `merge_peft_lora.py` unless you export weights for another host. |
+| **Together merged tarball** (legacy job `ft-d95bacfb-6f78`) | Together UI / checkpoints delivered a **full merged** archive (`config.json`, sharded `*.safetensors`, tokenizers). You upload that tree to Fireworks (or another host) **without** running `merge_peft_lora.py`. | Extracted HF directory; see artifact table in [`docs/sophia/extraction-fireworks-deploy.md`](../../docs/sophia/extraction-fireworks-deploy.md). |
 | **Local `merge_peft_lora.py`** | You only have a **PEFT adapter** tarball, need a **reproducible** merge from adapter + pinned base, or you want to avoid trusting vendor merge bytes. | Same HF **base model id** as the fine-tune (`mistralai/Mistral-7B-Instruct-v0.2` for the completed spike); adapter dir unpacked from Together. |
 
 **Naming / reproducibility:** keep directories and sidecars traceable — include Together **`job_id`**, archive **date**, and export **`cohortFingerprintSha256_16`** / **`goldenFingerprintSha256_16`** from [`data/phase1-training-export/manifest.json`](../../data/phase1-training-export/manifest.json). The repo sidecar [`data/phase1-training-export/artifact-ft-d95bacfb-6f78.json`](../../data/phase1-training-export/artifact-ft-d95bacfb-6f78.json) records hashes and lineage for the shipped job.

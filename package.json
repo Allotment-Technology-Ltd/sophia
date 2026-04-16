@@ -63,6 +63,7 @@
     "ops:phase2-step-a-together-packaging": "tsx --env-file=.env scripts/phase2-step-a-together-packaging.ts",
     "ops:phase2-write-artifact-manifest": "python3 scripts/ml/write_phase2_artifact_manifest.py",
     "ops:together-submit-finetune": "tsx scripts/together-submit-finetune.ts",
+    "ops:fireworks-submit-sft": "tsx --env-file=.env scripts/fireworks-submit-sft.ts",
     "ops:eval-extraction-holdout-openai-compatible": "tsx --env-file=.env scripts/eval-extraction-holdout-openai-compatible.ts",
     "ops:eval-extraction-compare": "tsx --env-file=.env scripts/eval-extraction-compare.ts",
     "ops:sample-extraction-remit-eval-jsonl": "tsx scripts/sample-extraction-remit-eval-jsonl.ts",

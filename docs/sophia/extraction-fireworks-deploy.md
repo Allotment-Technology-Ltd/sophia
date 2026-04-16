@@ -8,6 +8,29 @@ Official references:
 - [Upload custom models](https://docs.fireworks.ai/models/uploading-custom-models) (merged HF dirs **or** LoRA addon)
 - [On-demand deployments](https://docs.fireworks.ai/guides/ondemand-deployments) (GPU billing, scale-to-zero)
 
+---
+
+## Addendum (2026-04) — **Fine-tune on Fireworks (SFT)** as the primary lean loop
+
+**Goal:** Train extraction LoRA **on Fireworks** using the **same** chat JSONL produced by `pnpm ops:phase2-step-a-together-packaging` (`train.together.jsonl`, `validation.together.jsonl`). Then **`firectl deployment create`** on the **output model id** from the completed job. This avoids **Together** fine-tune → download merged/LoRA tarball → `firectl model create` for routine iterations.
+
+**Official workflow:** [Supervised Fine Tuning — Text](https://docs.fireworks.ai/fine-tuning/fine-tuning-models) (dataset JSONL `messages`, `firectl dataset create`, `firectl sftj create`, deploy).
+
+### Operator checklist
+
+1. **Confirm base model is Tunable** — `firectl model get -a fireworks <MODEL-ID>` → `Tunable: true`. If only `Supports Lora: true`, you must train elsewhere and **upload** (earlier sections of this doc).
+2. **Package data** — `pnpm ops:phase2-step-a-together-packaging -- --export-dir data/phase1-training-export` (G1-cleared export only).
+3. **Submit SFT** — either:
+   - **Script (repo):** `pnpm ops:fireworks-submit-sft -- --dry-run …` then live run with `--training-file …/train.together.jsonl` [`--validation-file …/validation.together.jsonl`] `--base-model …` `--output-model <slug>` and optional `--write-report …/fireworks-sft-job-submitted.json`. Requires **`FIREWORKS_API_KEY`** and **`FIREWORKS_ACCOUNT_ID`** (or infer from `EXTRACTION_MODEL=accounts/<id>/deployments/...`).
+   - **CLI:** `firectl dataset create <DATASET_ID> /path/to/train.jsonl` and `firectl sftj create --base-model … --dataset … --output-model …` per Fireworks docs.
+4. **Wait for job** — UI or `firectl sftj get <job-or-id per vendor>`.
+5. **Deploy** — `firectl deployment create <FINE_TUNED_MODEL_ID>` (see [Deploying fine-tuned models](https://docs.fireworks.ai/fine-tuning/deploying-loras)); set `EXTRACTION_MODEL` to the deployment **Name**.
+6. **Eval** — `pnpm ops:eval-extraction-compare` (see [extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md)).
+
+**Lean plan + todos:** [extraction-ft-lean-plan.md](./extraction-ft-lean-plan.md). **Legacy Together path:** [`docs/local/operations/together-lora-phase2-runbook.md`](../local/operations/together-lora-phase2-runbook.md) (clone locally if missing).
+
+---
+
 ## 1. Choose an artifact shape
 
 | Path | When to use |
@@ -374,4 +397,4 @@ Comment out or remove **`EXTRACTION_MODEL`**, **`EXTRACTION_BASE_URL`**, and ext
 
 ### Lean iterative FT (hypothesis → build → measure → learn)
 
-For a frozen **two-slice** eval baseline, iteration log template, and `pnpm ops:eval-extraction-compare` (golden + remit in one JSON), see [extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md) and [extraction-ft-lean-iteration-log.md](./extraction-ft-lean-iteration-log.md).
+Full plan (Fireworks SFT primary, todos): [extraction-ft-lean-plan.md](./extraction-ft-lean-plan.md). Baseline eval commands: [extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md). Append-only log: [extraction-ft-lean-iteration-log.md](./extraction-ft-lean-iteration-log.md). Combined eval: `pnpm ops:eval-extraction-compare`.

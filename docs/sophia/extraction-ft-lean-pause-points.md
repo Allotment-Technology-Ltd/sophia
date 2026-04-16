@@ -1,6 +1,6 @@
 # Lean extraction FT — operator pause points
 
-**Purpose:** Separate what an **automated agent** can do from steps that **require you** (keys, spend, legal gates, infrastructure). Use this alongside [extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md) and [extraction-ft-lean-iteration-log.md](./extraction-ft-lean-iteration-log.md).
+**Purpose:** Separate what an **automated agent** can do from steps that **require you** (keys, spend, legal gates, infrastructure). Use this alongside [extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md), [extraction-ft-lean-iteration-log.md](./extraction-ft-lean-iteration-log.md), and the **canonical plan** [extraction-ft-lean-plan.md](./extraction-ft-lean-plan.md).
 
 ---
 
@@ -22,9 +22,10 @@
 |--------|--------|
 | **You** | **G1:** Decide that added/changed rows in `train.jsonl` (or a branch export dir) are allowed under [../local/operations/ingestion-fine-tune-data-mitigation-plan.md](../local/operations/ingestion-fine-tune-data-mitigation-plan.md). |
 | **You** | Curate or synthesise **200–500** batch-shaped rows (multi-passage user, assistant = valid `[{...}]` only). Merge into the export; keep a one-line note of path + row count in the iteration log. |
-| **You** | Approve **Together spend**: `pnpm ops:together-submit-finetune -- --dry-run`, then live submit; paste **job id** into the iteration log. |
+| **You** | **Fireworks SFT (preferred):** Pick a **Tunable** `--base-model` and an `--output-model` slug; approve **Fireworks training spend**; run `pnpm ops:fireworks-submit-sft -- --dry-run` then live (see [extraction-fireworks-deploy.md](./extraction-fireworks-deploy.md) addendum). Optionally set **`FIREWORKS_ACCOUNT_ID`** if `EXTRACTION_MODEL` is unset. |
+| **You** | **Legacy Together:** only if explicitly chosen — approve Together spend; `pnpm ops:together-submit-finetune`. |
 | **Agent** | Re-run Step A packaging if training files changed (`pnpm ops:phase2-step-a-together-packaging`). |
-| **You** | After weights exist, point `EXTRACTION_*` at the new checkpoint or vendor deployment. |
+| **You** | When the SFT job completes: **create deployment** (`firectl deployment create …` or UI); paste deployment **Name** into the iteration log; point `EXTRACTION_*` at it for eval. |
 | **Agent / you** | Run `pnpm ops:eval-extraction-compare` with fixed `--limit 200`; append metrics + decision to the iteration log. |
 
 **Unblock:** Iteration row filled + `eval-compare-cycle-1-*.json` path recorded.
@@ -36,7 +37,7 @@
 | Owner | Action |
 |--------|--------|
 | **You** | Author or approve the **~50-row** eval JSONL and any rubric/script for ID match (see iteration log checklist). |
-| **You** | Same G1 + training delta approval as PAUSE 1. |
+| **You** | Same G1 + training delta approval as PAUSE 1; **Fireworks SFT** or legacy Together per your choice. |
 | **You** | Optional ingest smoke: choose frozen SEP `.txt`, run ingest with `EXTRACTION_*` on the candidate; skim logs for `passage_id` warnings. |
 
 **Unblock:** Custom eval command documented in log + offline compare run.
@@ -48,7 +49,7 @@
 | Owner | Action |
 |--------|--------|
 | **You** | **G1 / counsel:** explicit OK to mine and train on redacted production failure traces. |
-| **You** | Strip PII; cap exemplars (e.g. ≤100); merge and train with same approval pattern as PAUSE 1. |
+| **You** | Strip PII; cap exemplars (e.g. ≤100); merge and train (**Fireworks SFT** preferred) with same approval pattern as PAUSE 1. |
 | **You** | Ingest smoke only if **offline** `eval-extraction-compare` passes gates vs previous winner. |
 
 **Unblock:** Written clearance reference + iteration metrics.
@@ -58,7 +59,7 @@
 ## What “running the lean cycles” means in practice
 
 1. **Measure (automated once endpoint is up)** — golden + remit JSON reports; no training required.
-2. **Build (human-gated)** — data + job submission + money.
+2. **Build (human-gated)** — data + **Fireworks** SFT job (or legacy Together) + **you** deploy the tuned model.
 3. **Learn (shared)** — paste summary into [extraction-ft-lean-iteration-log.md](./extraction-ft-lean-iteration-log.md); optional commit of `eval-*.json` if policy allows.
 
 If you want an agent to **re-run eval** after you wake Fireworks, send: “PAUSE 0 cleared — rerun `eval-extraction-compare` limit 200, out path …”.
