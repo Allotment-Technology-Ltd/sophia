@@ -44,6 +44,13 @@ pnpm ops:phase2-step-a-together-packaging -- --export-dir data/phase1-training-e
 # Fireworks: dry-run then live (set FIREWORKS_API_KEY; FIREWORKS_ACCOUNT_ID or EXTRACTION_MODEL for account inference).
 # First SFT from uploaded merged extraction weights (`firectl model get sophia-extract-m7b-ft` → Tunable: true verified 2026-04-16).
 # Use a real slug (lowercase, digits, hyphens) — do NOT wrap in <angle brackets>; zsh treats < as redirection.
+# **zsh:** each `\` must be the *last* character on the line (no spaces after it). If you see `parse error near '}'`,
+# retype the line breaks or use the **one-line** command below (same flags, no backslashes).
+# One-line dry-run:
+# pnpm ops:fireworks-submit-sft -- --dry-run --training-file data/phase1-training-export/train.together.jsonl --validation-file data/phase1-training-export/validation.together.jsonl --base-model accounts/adam-boon1984-17nryg/models/sophia-extract-m7b-ft --output-model sophia-extract-sft-iter1
+# One-line live (drops --dry-run; saves report):
+# pnpm ops:fireworks-submit-sft -- --training-file data/phase1-training-export/train.together.jsonl --validation-file data/phase1-training-export/validation.together.jsonl --base-model accounts/adam-boon1984-17nryg/models/sophia-extract-m7b-ft --output-model sophia-extract-sft-iter1 --write-report data/phase1-training-export/fireworks-sft-job-submitted.json
+
 pnpm ops:fireworks-submit-sft -- --dry-run \
   --training-file data/phase1-training-export/train.together.jsonl \
   --validation-file data/phase1-training-export/validation.together.jsonl \
