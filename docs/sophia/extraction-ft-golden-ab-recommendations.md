@@ -86,6 +86,8 @@ This path is **`https://generativelanguage.googleapis.com/v1beta/openai`** — t
 
 Your screenshot is the **Vertex AI Studio** key UI for project **SOPHIA** (`sophia-488807`), key restricted to **Gemini API**, bound to **`vertex-express@…`**. That is the **right class of secret** for the **first two rows** in the table. Option B is **row four** — try it; if it fails, the gap is **OpenAI-compat base URL vs publisher**, not “wrong project.”
 
+**Official Vertex inference reference:** Google’s guide [Generate content with the Gemini API in Vertex AI (model reference / inference)](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference) documents **`generateContent`** / **`streamGenerateContent`**, **Express mode** REST (`v1` / `v1beta1`) vs **`projects.locations…`** publisher and endpoint resources — i.e. the same family of HTTP surfaces as the Studio **`curl`** example (`aiplatform.googleapis.com/v1/publishers/google/models/...`). Use it when reconciling **API key + `?key=`** publisher calls with our **OpenAI-compat** eval path above.
+
 Align with prod flash id (see `INGEST_VERTEX_GEMINI_FLASH_MODEL_ID` in `src/lib/server/ingestPinNormalization.ts`):
 
 ```bash
@@ -130,6 +132,7 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
 | A/B protocol (prompt freeze, golden-first commands) | [`extraction-offline-regression-pack.md`](./extraction-offline-regression-pack.md) §0 |
 | Step F audit log | [`docs/local/operations/phase2-step-f-local-verification-log.md`](../local/operations/phase2-step-f-local-verification-log.md) |
 | Combined eval driver | [`scripts/eval-extraction-compare.ts`](../../scripts/eval-extraction-compare.ts) |
+| Vertex Gemini inference (REST, Express, `generateContent` / `streamGenerateContent`) | [Model reference — inference](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference) |
 
 ---
 
@@ -141,3 +144,4 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
 | 2026-04-16 | §4: OpenAI vs **Gemini (Google AI OpenAI-compatible)** baseline commands; `loadServerEnv` override note; wrong-filename incident called out. Code: **`GOOGLE_AI_API_KEY`** fallback for `generativelanguage.googleapis.com` extraction override in `vertex.ts`. |
 | 2026-04-16 | §4 Option B: **`gemini-3-flash-preview`** + Studio vs **Vertex-only** key caveat (prod model id, different auth surface). |
 | 2026-04-16 | §4: **Vertex AI Studio `AQ…` API keys** — table mapping `GOOGLE_AI_API_KEY` to `vertex.ts` / `gemini.ts` / embeddings / holdout eval; publisher `aiplatform…?key=` vs `generativelanguage…/openai`. |
+| 2026-04-16 | Link [Vertex inference model reference](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference) (Express vs regional REST, `generateContent` / `streamGenerateContent`). |
