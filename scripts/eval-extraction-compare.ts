@@ -3,7 +3,10 @@
  * and write one JSON file for easy diff between FT iterations.
  *
  * Usage:
- *   pnpm ops:eval-extraction-compare -- --export-dir data/phase1-training-export --limit 200 --out data/phase1-training-export/eval-compare.json
+ *   pnpm ops:eval-extraction-compare
+ *     (defaults: --export-dir data/phase1-training-export --limit 200 --out <export-dir>/eval-compare.json)
+ *
+ *   pnpm ops:eval-extraction-compare -- --export-dir data/phase1-training-export --limit 200 --out data/phase1-training-export/eval-compare-baseline.json
  *
  * Requires the same env as scripts/eval-extraction-holdout-openai-compatible.ts (EXTRACTION_*).
  */
@@ -30,10 +33,8 @@ function parseArgs(argv: string[]): {
 		else if (a === '--skip-remit-sample') skipRemitSample = true;
 	}
 	if (!out) {
-		console.error(
-			'Usage: --out <eval-compare.json> [--export-dir dir] [--limit 200] [--skip-remit-sample]'
-		);
-		process.exit(2);
+		out = join(exportDir, 'eval-compare.json');
+		console.error(`[eval-compare] default --out ${out} (pass --out to override)`);
 	}
 	return { exportDir, limit, out, skipRemitSample };
 }

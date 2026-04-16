@@ -38,6 +38,9 @@ Optional: `EXTRACTION_EVAL_FOLD_SYSTEM` must match training packaging (default f
 **One-shot (both slices + combined sidecar JSON):**
 
 ```bash
+# Same as below if you omit flags: writes data/phase1-training-export/eval-compare.json
+pnpm ops:eval-extraction-compare
+
 pnpm ops:eval-extraction-compare -- \
   --export-dir data/phase1-training-export \
   --limit 200 \
