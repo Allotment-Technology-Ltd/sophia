@@ -91,6 +91,17 @@ data/thinker-graph/philosophers.json
 # Local migration artifacts
 data/migration/
 
+# Phase 1 / Phase 2 training exports — large adapter weights and archives (local only)
+data/phase1-training-export/**/*.tar.zst
+data/phase1-training-export/**/*.tar.gz
+data/phase1-training-export/ft-*-adapter/
+data/phase1-training-export/adapters/
+# Merged full HF weights (multi-GB; repackage for Fireworks / vLLM locally only)
+data/phase1-training-export/merged-bfl6-hf/
+# Large Together chat repacks (regenerate via ops scripts from `*.jsonl`)
+data/phase1-training-export/*.together.jsonl
+data/phase1-training-export/*.together.token-stats.json
+
 # Private migration docs/scripts (not for public repo)
 docs/GCP-ORG-MIGRATION.md
 docs/MIGRATION-IMPLEMENTATION-SUMMARY.md

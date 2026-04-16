@@ -1,0 +1,16 @@
+{
+  "generatedAt": "2026-04-15T21:20:12.128Z",
+  "jsonl": "data/phase1-training-export/golden_holdout.jsonl",
+  "limit": 30,
+  "rowsEvaluated": 30,
+  "schemaPassRate": 1,
+  "latencyMs": {
+    "p50": 2174,
+    "p95": 5944
+  },
+  "subsetMatchRate": 0.03333333333333333,
+  "subsetEligibleRows": 30,
+  "modelId": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+  "inferenceHost": "api.together.xyz",
+  "systemFoldedIntoUser": true
+}

@@ -4,6 +4,10 @@
 # One-time migration script to consolidate all Sophia GCP resources into
 # europe-west2 (London) and eliminate region drift.
 #
+# NOTE (2026): Current production deploy (deploy.yml) omits VPC connector when Surreal is
+# internet-reachable (e.g. SurrealDB Cloud). This file still references VPC + internal DB for
+# anyone replaying the old migration; see docs/local/operations/gcp-surreal-url-verification.md.
+#
 # Current state (before running this):
 #   - Cloud Run (app):   us-central1   ← live — usesophia.app points here
 #   - Database (GCE VM): europe-west2-b ← already correct

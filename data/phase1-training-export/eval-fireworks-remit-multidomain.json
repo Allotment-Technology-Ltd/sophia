@@ -1,0 +1,298 @@
+{
+  "generatedAt": "2026-04-16T09:25:16.517Z",
+  "jsonl": "data/phase1-training-export/eval_remit_multidomain.jsonl",
+  "limit": 200,
+  "rowsEvaluated": 200,
+  "schemaOkRows": 199,
+  "schemaFailRows": 1,
+  "schemaPassRate": 0.995,
+  "latencyMs": {
+    "p50": 1982,
+    "p95": 2457
+  },
+  "subsetTextMatchRate": 1,
+  "subsetMatchRate": 0.005025125628140704,
+  "subsetEligibleRows": 199,
+  "subsetEligibleRowsWhereInputEqualsGoldText": 199,
+  "singleSentenceGoldEvalAllEligibleRows": true,
+  "modelId": "accounts/adam-boon1984-17nryg/deployments/keo1sj4o",
+  "inferenceHost": "api.fireworks.ai",
+  "systemFoldedIntoUser": true,
+  "temperatureOmittedForOpenAiSdk": true,
+  "mismatchDiagnostics": {
+    "note": "Buckets apply only to subset-eligible rows (parsable gold label + ≥1 model claim). `gold_text_wrong_position`: some claim has exact gold `text` but no claim has gold `position_in_source` — very common when **gold positions are document-level** while each eval row is a **single-sentence `input`**, so the model invents a local index (1, 2, …) that cannot match the label. `gold_position_wrong_text`: some claim matches gold position but not gold text (often paraphrase; see EXTRACTION_SYSTEM). `split_across_claims`: exact text on one claim and gold position on another.",
+    "subsetEligibleRows": 199,
+    "goldLabelTextEqualsInputRate": 1,
+    "mismatchBucketCounts": {
+      "hit": 1,
+      "split_across_claims": 0,
+      "gold_text_wrong_position": 198,
+      "gold_position_wrong_text": 0,
+      "neither_literal": 0
+    },
+    "meanClaimCountOnMismatch": 1,
+    "medianClaimCountOnMismatch": 1,
+    "mismatchSamples": [
+      {
+        "evalRow": 1,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Character is a behavior pattern formed as a result of past persistent actions, and moral virtues or vices arise through habituation.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 44,
+            "text": "Character is a behavior pattern formed as a result of past persistent actions, and moral virtues or vices arise through habituation."
+          }
+        ]
+      },
+      {
+        "evalRow": 2,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "A group that constitutes a public authority is entitled to overthrow and, if necessary, execute a tyrant to liberate the people and the homeland.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 87,
+            "text": "A group that constitutes a public authority is entitled to overthrow and, if necessary, execute a tyrant to liberate the people and the home…"
+          }
+        ]
+      },
+      {
+        "evalRow": 3,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Supreme legislative powers are held either by the whole people or by a public persona who represents them.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 77,
+            "text": "Supreme legislative powers are held either by the whole people or by a public persona who represents them."
+          }
+        ]
+      },
+      {
+        "evalRow": 4,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Perceptual experiences may provide justification because they have a phenomenology of presenting their content as true.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 45,
+            "text": "Perceptual experiences may provide justification because they have a phenomenology of presenting their content as true."
+          }
+        ]
+      },
+      {
+        "evalRow": 5,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Socioeconomic values are necessary inputs for the practice of conservation biology.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 23,
+            "text": "Socioeconomic values are necessary inputs for the practice of conservation biology."
+          }
+        ]
+      },
+      {
+        "evalRow": 6,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "The introduction of pagan Greek metaphysics into monotheistic Islamic culture generated both harmony and antagonism between *falsafa* (philosophical theology) and *kalām* (revealed theology).",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 4,
+            "text": "The introduction of pagan Greek metaphysics into monotheistic Islamic culture generated both harmony and antagonism between *falsafa* (philo…"
+          }
+        ]
+      },
+      {
+        "evalRow": 7,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Moral motivation in African thought involves both external social sanctions and internal feelings of guilt and shame tied to conscience.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 62,
+            "text": "Moral motivation in African thought involves both external social sanctions and internal feelings of guilt and shame tied to conscience."
+          }
+        ]
+      },
+      {
+        "evalRow": 8,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "The term 'law' as used by scientific modelers does not necessarily denote a true universal law of nature.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 103,
+            "text": "The term 'law' as used by scientific modelers does not necessarily denote a true universal law of nature."
+          }
+        ]
+      },
+      {
+        "evalRow": 9,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Arabic translators of the *Metaphysics* sought to balance fidelity to the Greek original with philosophical clarity, particularly in repeatedly translated sections like book Lambda (XII).",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 31,
+            "text": "Arabic translators of the *Metaphysics* sought to balance fidelity to the Greek original with philosophical clarity, particularly in repeate…"
+          }
+        ]
+      },
+      {
+        "evalRow": 10,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "New evidence always increases the weight of an argument, even if it decreases the argument’s probability.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 115,
+            "text": "New evidence always increases the weight of an argument, even if it decreases the argument’s probability."
+          }
+        ]
+      },
+      {
+        "evalRow": 11,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Conservationists should work with corporations rather than merely opposing them.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 104,
+            "text": "Conservationists should work with corporations rather than merely opposing them."
+          }
+        ]
+      },
+      {
+        "evalRow": 12,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "A statement φ is Ω-satisfiable if there exists an ordinal α and a complete Boolean algebra B such that the model V^B_α satisfies φ.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 106,
+            "text": "A statement φ is Ω-satisfiable if there exists an ordinal α and a complete Boolean algebra B such that the model V^B_α satisfies φ."
+          }
+        ]
+      },
+      {
+        "evalRow": 13,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Rulers who defy moral restrictions on their authority are tyrants.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 81,
+            "text": "Rulers who defy moral restrictions on their authority are tyrants."
+          }
+        ]
+      },
+      {
+        "evalRow": 14,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "The Definability Constraint requires that Π2-truths in the universe of sets are definable in H(κ) across the multiverse.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 74,
+            "text": "The Definability Constraint requires that Π2-truths in the universe of sets are definable in H(κ) across the multiverse."
+          }
+        ]
+      },
+      {
+        "evalRow": 15,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Trivers explains the behavior of large fish waiting for cleaner fish before fleeing predators as reciprocal altruism based on the expectation of future cleaning benefits.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 33,
+            "text": "Trivers explains the behavior of large fish waiting for cleaner fish before fleeing predators as reciprocal altruism based on the expectatio…"
+          }
+        ]
+      },
+      {
+        "evalRow": 16,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "The term 'African' in 'African ethics' refers to the salient features or ideas of African moral life and thought as reflected in African moral language, social structure, and life.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 1,
+            "text": "The term 'African' in 'African ethics' refers to the salient features or ideas of African moral life and thought as reflected in African mor…"
+          }
+        ]
+      },
+      {
+        "evalRow": 17,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Belief in the external world is justified because it provides a better explanation of sensory experiences than the brain-in-a-vat hypothesis.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 85,
+            "text": "Belief in the external world is justified because it provides a better explanation of sensory experiences than the brain-in-a-vat hypothesis…"
+          }
+        ]
+      },
+      {
+        "evalRow": 18,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "The Akan phrase 'aka ne ho' ('it has remained with him', 'it has become part of him', 'it has become his habit') describes how an acquired virtue becomes a stable part of a person's character.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 53,
+            "text": "The Akan phrase 'aka ne ho' ('it has remained with him', 'it has become part of him', 'it has become his habit') describes how an acquired v…"
+          }
+        ]
+      },
+      {
+        "evalRow": 19,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Avicenna’s recasting of the content of Aristotle’s *Metaphysics* reorders its fourteen books (excluding perhaps book Κ) to integrate themes from other Aristotelian writings, the Greek and Arabic Perip…",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 5,
+            "text": "Avicenna’s recasting of the content of Aristotle’s *Metaphysics* reorders its fourteen books (excluding perhaps book Κ) to integrate themes …"
+          }
+        ]
+      },
+      {
+        "evalRow": 20,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Mental properties and physical realizers may be causally relevant to different properties of the same effect.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 85,
+            "text": "Mental properties and physical realizers may be causally relevant to different properties of the same effect."
+          }
+        ]
+      }
+    ]
+  }
+}

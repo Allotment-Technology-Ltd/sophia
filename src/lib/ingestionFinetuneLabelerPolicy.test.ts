@@ -10,6 +10,7 @@ describe('ingestionFinetuneLabelerPolicy', () => {
 	afterEach(() => {
 		delete process.env.INGEST_FINETUNE_LABELER_STRICT;
 		delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;
+		delete process.env.EXTRACTION_BASE_URL;
 	});
 
 	it('defaults strict to on', () => {
@@ -85,5 +86,29 @@ describe('ingestionFinetuneLabelerPolicy', () => {
 		process.env.INGEST_FINETUNE_LABELER_STRICT = '0';
 		const tiers = [{ provider: 'openai', modelId: 'gpt-4o-mini' }];
 		expect(filterModelTiersForFinetunePolicy('extraction', tiers, process.env)).toEqual(tiers);
+	});
+
+	it('allows openai on extraction when EXTRACTION_BASE_URL is set (fine-tuned OpenAI-compatible primary)', () => {
+		process.env.INGEST_FINETUNE_LABELER_STRICT = '1';
+		delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;
+		process.env.EXTRACTION_BASE_URL = 'https://api.fireworks.ai/inference/v1';
+		const tiers = [
+			{ provider: 'openai', modelId: 'accounts/foo/models/bar' },
+			{ provider: 'mistral', modelId: 'mistral-large-latest' }
+		];
+		expect(filterModelTiersForFinetunePolicy('extraction', tiers, process.env)).toEqual(tiers);
+	});
+
+	it('does not implicitly allow openai on relations when EXTRACTION_BASE_URL is set', () => {
+		process.env.INGEST_FINETUNE_LABELER_STRICT = '1';
+		delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;
+		process.env.EXTRACTION_BASE_URL = 'https://api.fireworks.ai/inference/v1';
+		const tiers = [
+			{ provider: 'openai', modelId: 'gpt-4o-mini' },
+			{ provider: 'vertex', modelId: 'gemini-3-flash-preview' }
+		];
+		expect(filterModelTiersForFinetunePolicy('relations', tiers, process.env)).toEqual([
+			{ provider: 'vertex', modelId: 'gemini-3-flash-preview' }
+		]);
 	});
 });
