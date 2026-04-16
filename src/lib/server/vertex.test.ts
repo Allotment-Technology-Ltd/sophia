@@ -261,6 +261,23 @@ describe('resolveReasoningModelRoute', () => {
     );
   });
 
+  it('buildExtractionOpenAiCompatibleRoute uses GOOGLE_AI_API_KEY for Google OpenAI-compatible base URL', async () => {
+    process.env.GOOGLE_AI_API_KEY = 'AIza-gemini-openai-compat';
+    delete process.env.OPENAI_API_KEY;
+    process.env.EXTRACTION_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai';
+    process.env.EXTRACTION_MODEL = 'gemini-2.0-flash';
+
+    const { buildExtractionOpenAiCompatibleRoute } = await import('./vertex');
+    const route = buildExtractionOpenAiCompatibleRoute();
+    expect(route).not.toBeNull();
+    expect(mockCreateOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        apiKey: 'AIza-gemini-openai-compat'
+      })
+    );
+  });
+
   it('falls back to anthropic default when Restormel returns an unknown anthropic model id', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
     mockResolveProviderDecision.mockResolvedValue({

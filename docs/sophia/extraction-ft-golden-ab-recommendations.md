@@ -48,11 +48,15 @@ From [`eval-compare-2026-04-16-fireworks-hz8ot3bv-limit200.json`](../../data/pha
 
 ---
 
-## 4. Catalog baseline pairing (OpenAI `gpt-4o-mini`) — **required to finish “vs initial bar”**
+## 4. Non–FT baseline pairing — **required to finish “vs initial bar”**
 
-You asked to set ingest gates aside but still **pair against a non–FT baseline**. That pairing is **not** in `data/phase1-training-export/` yet.
+You asked to set ingest gates aside but still **pair against a non–FT baseline**. Use a **different** output filename per baseline so you do not overwrite FT-tagged reports.
 
-**Command** (overrides `EXTRACTION_*` for this process only; uses `OPENAI_API_KEY` from your env file):
+**Env gotcha:** `.env.local` is loaded with **`override: true`** in `loadServerEnv()`. If **`EXTRACTION_BASE_URL` / `EXTRACTION_MODEL`** are set there, they **win** over shell-prefixed values for the eval process. For a clean baseline run, **comment out** those lines in `.env.local` (as you did) or pass the same routing only via `.env.local` for that session.
+
+### Option A — OpenAI (`gpt-4o-mini` or other)
+
+Requires **`OPENAI_API_KEY`** (or **`EXTRACTION_API_KEY`**) in the env file you pass to `tsx`.
 
 ```bash
 cd /Users/adamboon/projects/sophia
@@ -65,9 +69,24 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
   --out data/phase1-training-export/eval-golden-baseline-gpt4o-mini-200.json
 ```
 
-**When the file exists:** append its headline metrics to the table in **§2** (or a new row in [`extraction-vendor-ft-spike-eval-record.md`](../local/operations/extraction-vendor-ft-spike-eval-record.md)) and re-state the recommendation. **If** `subsetTextMatchRate` and `schemaPassRate` are **non-inferior** to FT on the same 200 rows, the **economic** decision shifts to **cost/latency** and **ingest** behaviour (out of scope here). **If** baseline **beats** FT on schema or text match, **pause** further FT spend until you diagnose (data, prompt fold, temperature, deployment).
+### Option B — Google AI Studio, OpenAI-compatible (only **`GOOGLE_AI_API_KEY`**)
 
-A long-running local job was started toward [`eval-golden-baseline-gpt4o-mini-200.json`](../../data/phase1-training-export/eval-golden-baseline-gpt4o-mini-200.json); if it never appears, re-run the command above and watch for rate limits or key scope.
+Uses the same key as catalog Gemini. **`readExtractionOpenAiCompatibleOverride`** now resolves **`GOOGLE_AI_API_KEY`** (or **`GEMINI_API_KEY`** / **`GOOGLE_GENAI_API_KEY`** after merges) when `EXTRACTION_BASE_URL` points at **`generativelanguage.googleapis.com`** … **`/openai`**. Pick a current model id from [Google AI models](https://ai.google.dev/gemini-api/docs/models/gemini) (example below).
+
+```bash
+cd /Users/adamboon/projects/sophia
+EXTRACTION_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai \
+EXTRACTION_MODEL=gemini-2.0-flash \
+pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compatible.ts -- \
+  --jsonl data/phase1-training-export/golden_holdout.jsonl \
+  --limit 200 \
+  --mismatch-diagnostics \
+  --out data/phase1-training-export/eval-golden-baseline-gemini-2-flash-200.json
+```
+
+**Verify the report:** open the JSON and confirm **`modelId`** / host match the baseline you intended (an earlier run saved as `eval-golden-baseline-gpt4o-mini-200.json` accidentally recorded **Fireworks** `hz8ot3bv` because `.env.local` still had **`EXTRACTION_*`** set).
+
+**When the file exists:** append its headline metrics to the table in **§2** and re-state the recommendation. **If** `subsetTextMatchRate` and `schemaPassRate` are **non-inferior** to FT on the same 200 rows, the **economic** decision shifts to **cost/latency** and **ingest** behaviour (out of scope here). **If** baseline **beats** FT on schema or text match, **pause** further FT spend until you diagnose (data, prompt fold, temperature, deployment).
 
 ---
 
@@ -104,3 +123,4 @@ A long-running local job was started toward [`eval-golden-baseline-gpt4o-mini-20
 | Date | Change |
 |------|--------|
 | 2026-04-16 | Initial report: golden-200 evidence table (three FT deployments), eval-compare summary, catalog baseline command, recommendations, follow-up tests. |
+| 2026-04-16 | §4: OpenAI vs **Gemini (Google AI OpenAI-compatible)** baseline commands; `loadServerEnv` override note; wrong-filename incident called out. Code: **`GOOGLE_AI_API_KEY`** fallback for `generativelanguage.googleapis.com` extraction override in `vertex.ts`. |

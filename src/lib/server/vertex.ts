@@ -138,7 +138,9 @@ function getOpenAIForExtractionOverride(baseURL: string, apiKey: string) {
  * API key: **`EXTRACTION_API_KEY`** if set; otherwise **host-specific** keys so operator BYOK
  * (`OPENAI_API_KEY` merged into ingest workers) does not override Fireworks: on **`api.fireworks.ai`**
  * use **`FIREWORKS_API_KEY`** then `OPENAI_API_KEY`; on **Together** use **`TOGETHER_API_KEY`** then
- * `OPENAI_API_KEY`; elsewhere `OPENAI_API_KEY`, then Together, then Fireworks.
+ * `OPENAI_API_KEY`; on **Google AI Studio OpenAI-compatible** hosts (`generativelanguage.googleapis.com` … `/openai`)
+ * use **`GOOGLE_AI_API_KEY`** (or **`GEMINI_API_KEY`** / **`GOOGLE_GENAI_API_KEY`** after `loadServerEnv()` merges);
+ * elsewhere `OPENAI_API_KEY`, then Together, then Fireworks.
  * Does not affect `resolveExtractionModelRoute` callers outside ingestion planning (e.g. verification extraction).
  */
 export function readExtractionOpenAiCompatibleOverride():
@@ -154,6 +156,8 @@ export function readExtractionOpenAiCompatibleOverride():
   const fireworksKey = process.env.FIREWORKS_API_KEY?.trim();
 
   /** Prefer vendor keys for that host before generic `OPENAI_API_KEY` (BYOK merges OpenAI for catalog routes). */
+  const googleAiKey = process.env.GOOGLE_AI_API_KEY?.trim();
+  const geminiAlt = process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_GENAI_API_KEY?.trim();
   let apiKey: string | undefined;
   if (explicit) {
     apiKey = explicit;
@@ -161,13 +165,19 @@ export function readExtractionOpenAiCompatibleOverride():
     apiKey = fireworksKey || openaiKey;
   } else if (baseURL.includes('together.xyz')) {
     apiKey = togetherKey || openaiKey;
+  } else if (
+    baseURL.includes('generativelanguage.googleapis.com') ||
+    baseURL.includes('googleapis.com/v1beta/openai')
+  ) {
+    /** Google AI Studio OpenAI-compatible chat (`…/v1beta/openai`) uses the same API key as catalog Gemini. */
+    apiKey = googleAiKey || geminiAlt || openaiKey || togetherKey || fireworksKey;
   } else {
     apiKey = openaiKey || togetherKey || fireworksKey;
   }
 
   if (!apiKey) {
     throw new Error(
-      'EXTRACTION_BASE_URL and EXTRACTION_MODEL require EXTRACTION_API_KEY, or OPENAI_API_KEY, or (on Fireworks) FIREWORKS_API_KEY, or (on Together) TOGETHER_API_KEY'
+      'EXTRACTION_BASE_URL and EXTRACTION_MODEL require EXTRACTION_API_KEY, or OPENAI_API_KEY, or (on Fireworks) FIREWORKS_API_KEY, or (on Together) TOGETHER_API_KEY, or (on generativelanguage.googleapis.com OpenAI-compatible URLs) GOOGLE_AI_API_KEY / GEMINI_API_KEY'
     );
   }
   return { baseURL, apiKey, modelId };
