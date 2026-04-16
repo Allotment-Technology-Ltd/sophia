@@ -371,6 +371,14 @@ export function readExtractionOpenAiCompatibleOverride():
   return { baseURL, apiKey: apiKeyOneLine, modelId };
 }
 
+function isGenerativeLanguageHost(baseURL: string): boolean {
+  try {
+    return new URL(baseURL).hostname.toLowerCase() === 'generativelanguage.googleapis.com';
+  } catch {
+    return false;
+  }
+}
+
 export function buildExtractionOpenAiCompatibleRoute(): ReasoningModelRoute | null {
   const o = readExtractionOpenAiCompatibleOverride();
   if (!o) return null;
@@ -383,7 +391,7 @@ export function buildExtractionOpenAiCompatibleRoute(): ReasoningModelRoute | nu
    *
    * Other OpenAI-compat bases (e.g. some `…googleapis.com/v1beta/openai` hosts) keep the OpenAI client path.
    */
-  if (o.baseURL.includes('generativelanguage.googleapis.com')) {
+  if (isGenerativeLanguageHost(o.baseURL)) {
     return {
       model: getGoogleForApiKey(o.apiKey)(o.modelId as any),
       provider: 'vertex',
