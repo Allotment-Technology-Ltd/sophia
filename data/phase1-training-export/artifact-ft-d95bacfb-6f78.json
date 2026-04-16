@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-04-16T10:09:37Z",
+  "note": "Step D lineage sidecar: links Together job, on-disk weight archives, export manifest fingerprints, and historical Fireworks eval deployments. Re-run `pnpm ops:phase2-write-artifact-manifest --export-dir <export-dir>` from repo root to refresh hashes after re-download or extract (pass flags directly; avoid `pnpm … -- --export-dir` which forwards a bare `--` to Python).",
+  "job_id": "ft-d95bacfb-6f78",
+  "base_model": "mistralai/Mistral-7B-Instruct-v0.2",
+  "together_output_model_name": "adamboon1984_dc91/Mistral-7B-Instruct-v0.2-07dcbef6",
+  "merge_method": "together_merged_tarball",
+  "merge_method_detail": "Full merged weights from Together checkpoint tarball (no local Peft merge). For adapter-only re-merge use scripts/ml/merge_peft_lora.py with the same base id.",
+  "training_data_lineage": {
+    "manifest_relative_path": "data/phase1-training-export/manifest.json",
+    "manifest_generatedAt": "2026-04-15T20:24:46.884Z",
+    "cohortFingerprintSha256_16": "6ab6bd1d739097a0",
+    "goldenFingerprintSha256_16": "98abe3de579ef460",
+    "step_a_packaging_relative_path": "data/phase1-training-export/step-a-together-packaging-report.json",
+    "together_job_record_relative_path": "data/phase1-training-export/together-finetune-job-submitted.json",
+    "step_a_packaging_present": true
+  },
+  "artifacts": {
+    "merged_weights_tarball": {
+      "relative_path": "data/phase1-training-export/merged-bfl6-adapter/ft-d95bacfb-6f78-2026-04-15-21-03-23.tar.zst",
+      "sha256": "d7f6beb414f7cc7c9a76824e60ba49a12042ea55c53e82dacc55c1c84b46ef65"
+    },
+    "lora_adapter_tarball": {
+      "relative_path": "data/phase1-training-export/ft-d95bacfb-6f78-adapter/ft-d95bacfb-6f78_adapter-2026-04-15-21-03-23.tar.zst",
+      "sha256": "960980ec8a0ec20ff0b1c5aa5021eb71c73eb1e042de67933e3c422dc21319f8"
+    },
+    "extracted_hf_directory": {
+      "relative_path": "data/phase1-training-export/merged-bfl6-hf",
+      "model_safetensors_index_sha256": "6d32424091caba25230b09cbae985a5f9252ecce3a722b03b88df17ad05be459",
+      "model_safetensors_index_relative_path": "data/phase1-training-export/merged-bfl6-hf/model.safetensors.index.json"
+    }
+  },
+  "quantization": {
+    "serving_path": "fireworks_managed_bf16_import",
+    "notes": "No separate AWQ/GPTQ artifact for Fireworks pilot; avoid ad-hoc bitsandbytes 8-bit checkpoint dumps. See docs/sophia/extraction-vllm-awq.md for optional self-host quant."
+  },
+  "fireworks": {
+    "note": "Deployment ids below are historical (2026-04-16 vendor FT eval). Teardown may have removed them; see docs/sophia/extraction-fireworks-deploy.md § retention / teardown.",
+    "historical_eval_deployments": [
+      {
+        "eval_label": "golden_holdout_200",
+        "deployment_id": "accounts/adam-boon1984-17nryg/deployments/ytv2kq38",
+        "eval_output_relative_path": "data/phase1-training-export/eval-fireworks-extraction.json"
+      },
+      {
+        "eval_label": "remit_multidomain_200",
+        "deployment_id": "accounts/adam-boon1984-17nryg/deployments/keo1sj4o",
+        "eval_output_relative_path": "data/phase1-training-export/eval-fireworks-remit-multidomain.json"
+      }
+    ]
+  }
+}

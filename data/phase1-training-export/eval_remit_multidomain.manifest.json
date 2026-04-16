@@ -1,0 +1,41 @@
+{
+  "generatedAt": "2026-04-16T00:25:40.250Z",
+  "script": "scripts/sample-extraction-remit-eval-jsonl.ts",
+  "exportDir": "data/phase1-training-export",
+  "inputs": [
+    "validation.jsonl",
+    "test.jsonl"
+  ],
+  "outJsonl": "eval_remit_multidomain.jsonl",
+  "totalRequested": 200,
+  "totalWritten": 200,
+  "seed": 42,
+  "minPerDomain": 5,
+  "maxPerSourceUrl": 25,
+  "excludeUrlSubstrings": [],
+  "distinctDomains": 9,
+  "distinctSourceUrls": 10,
+  "domainCounts": {
+    "ethics": 28,
+    "political_philosophy": 20,
+    "epistemology": 28,
+    "philosophy_of_science": 27,
+    "metaphysics": 28,
+    "applied_ethics": 7,
+    "logic": 27,
+    "philosophy_of_mind": 27,
+    "philosophy_of_language": 8
+  },
+  "sourceUrlCounts": {
+    "https://plato.stanford.edu/entries/african-ethics": 22,
+    "https://plato.stanford.edu/entries/aquinas-moral-political": 25,
+    "https://plato.stanford.edu/entries/epistemology": 25,
+    "https://plato.stanford.edu/entries/conservation-biology": 22,
+    "https://plato.stanford.edu/entries/arabic-islamic-metaphysics": 19,
+    "https://plato.stanford.edu/entries/evidence-legal": 17,
+    "https://plato.stanford.edu/entries/continuum-hypothesis": 25,
+    "https://plato.stanford.edu/entries/altruism-biological": 14,
+    "https://plato.stanford.edu/entries/mental-causation": 25,
+    "https://plato.stanford.edu/entries/ecological-genetics": 6
+  }
+}

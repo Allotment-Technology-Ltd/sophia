@@ -1,0 +1,298 @@
+{
+  "generatedAt": "2026-04-16T10:23:11.576Z",
+  "jsonl": "data/phase1-training-export/golden_holdout.jsonl",
+  "limit": 200,
+  "rowsEvaluated": 200,
+  "schemaOkRows": 199,
+  "schemaFailRows": 1,
+  "schemaPassRate": 0.995,
+  "latencyMs": {
+    "p50": 1843,
+    "p95": 2062
+  },
+  "subsetTextMatchRate": 1,
+  "subsetMatchRate": 0.010050251256281407,
+  "subsetEligibleRows": 199,
+  "subsetEligibleRowsWhereInputEqualsGoldText": 199,
+  "singleSentenceGoldEvalAllEligibleRows": true,
+  "modelId": "accounts/adam-boon1984-17nryg/deployments/keo1sj4o",
+  "inferenceHost": "api.fireworks.ai",
+  "systemFoldedIntoUser": true,
+  "temperatureOmittedForOpenAiSdk": true,
+  "mismatchDiagnostics": {
+    "note": "Buckets apply only to subset-eligible rows (parsable gold label + ≥1 model claim). `gold_text_wrong_position`: some claim has exact gold `text` but no claim has gold `position_in_source` — very common when **gold positions are document-level** while each eval row is a **single-sentence `input`**, so the model invents a local index (1, 2, …) that cannot match the label. `gold_position_wrong_text`: some claim matches gold position but not gold text (often paraphrase; see EXTRACTION_SYSTEM). `split_across_claims`: exact text on one claim and gold position on another.",
+    "subsetEligibleRows": 199,
+    "goldLabelTextEqualsInputRate": 1,
+    "mismatchBucketCounts": {
+      "hit": 2,
+      "split_across_claims": 0,
+      "gold_text_wrong_position": 197,
+      "gold_position_wrong_text": 0,
+      "neither_literal": 0
+    },
+    "meanClaimCountOnMismatch": 1,
+    "medianClaimCountOnMismatch": 1,
+    "mismatchSamples": [
+      {
+        "evalRow": 1,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "The Christian faith benefits from a profound engagement with philosophy and science.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 6,
+            "text": "The Christian faith benefits from a profound engagement with philosophy and science."
+          }
+        ]
+      },
+      {
+        "evalRow": 2,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "The Summa theologiae represents Aquinas’s most considered thought on a given topic.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 36,
+            "text": "The Summa theologiae represents Aquinas’s most considered thought on a given topic."
+          }
+        ]
+      },
+      {
+        "evalRow": 3,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "A careful study of Aquinas’s work requires comparing multiple treatments of the same issue across different texts.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 1,
+            "text": "A careful study of Aquinas’s work requires comparing multiple treatments of the same issue across different texts."
+          }
+        ]
+      },
+      {
+        "evalRow": 4,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "The scholastic disputed-question format is a method that lends itself to argumentative rigor.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 3,
+            "text": "The scholastic disputed-question format is a method that lends itself to argumentative rigor."
+          }
+        ]
+      },
+      {
+        "evalRow": 5,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Philosophy is important for a proper understanding of theology.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 3,
+            "text": "Philosophy is important for a proper understanding of theology."
+          }
+        ]
+      },
+      {
+        "evalRow": 6,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "If a philosophical claim is contrary to the Christian faith, it is an abuse of philosophy resulting from a failure of reason.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 4,
+            "text": "If a philosophical claim is contrary to the Christian faith, it is an abuse of philosophy resulting from a failure of reason."
+          }
+        ]
+      },
+      {
+        "evalRow": 7,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Natural reason can demonstratively prove the existence of God.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 11,
+            "text": "Natural reason can demonstratively prove the existence of God."
+          }
+        ]
+      },
+      {
+        "evalRow": 8,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Anselm’s ontological argument lacks force as a proof for God's existence.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 40,
+            "text": "Anselm’s ontological argument lacks force as a proof for God's existence."
+          }
+        ]
+      },
+      {
+        "evalRow": 9,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "An infinite series of simultaneous causes is impossible.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 35,
+            "text": "An infinite series of simultaneous causes is impossible."
+          }
+        ]
+      },
+      {
+        "evalRow": 11,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Natural reason is incapable of establishing the triune nature of God.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 2,
+            "text": "Natural reason is incapable of establishing the triune nature of God."
+          }
+        ]
+      },
+      {
+        "evalRow": 12,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Divine revelation is necessary for human salvation.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 28,
+            "text": "Divine revelation is necessary for human salvation."
+          }
+        ]
+      },
+      {
+        "evalRow": 13,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "It is not possible for human beings to know what God is, but only what God is not.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 71,
+            "text": "It is not possible for human beings to know what God is, but only what God is not."
+          }
+        ]
+      },
+      {
+        "evalRow": 14,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Predicates applied to both God and creatures are used analogically rather than univocally or equivocally.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 23,
+            "text": "Predicates applied to both God and creatures are used analogically rather than univocally or equivocally."
+          }
+        ]
+      },
+      {
+        "evalRow": 15,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Creatures possess goodness only by participation in the goodness of God.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 40,
+            "text": "Creatures possess goodness only by participation in the goodness of God."
+          }
+        ]
+      },
+      {
+        "evalRow": 16,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Creation in the strict sense is the act of bringing a thing into existence from nothing (ex nihilo).",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 17,
+            "text": "Creation in the strict sense is the act of bringing a thing into existence from nothing (ex nihilo)."
+          }
+        ]
+      },
+      {
+        "evalRow": 17,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Only God has the power to create something ex nihilo.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 11,
+            "text": "Only God has the power to create something ex nihilo."
+          }
+        ]
+      },
+      {
+        "evalRow": 18,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "No demonstrative argument can prove whether the world is eternal or had a beginning in time.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 100,
+            "text": "No demonstrative argument can prove whether the world is eternal or had a beginning in time."
+          }
+        ]
+      },
+      {
+        "evalRow": 19,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Defending the faith through dubious attempts at philosophical demonstration discredits the faith.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 14,
+            "text": "Defending the faith through dubious attempts at philosophical demonstration discredits the faith."
+          }
+        ]
+      },
+      {
+        "evalRow": 20,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "Space cannot exist without the existence of bodies.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 68,
+            "text": "Space cannot exist without the existence of bodies."
+          }
+        ]
+      },
+      {
+        "evalRow": 21,
+        "bucket": "gold_text_wrong_position",
+        "goldText": "The concept of void space is incoherent.",
+        "inputEqualsGoldText": true,
+        "claimCount": 1,
+        "claimsPreview": [
+          {
+            "position_in_source": 27,
+            "text": "The concept of void space is incoherent."
+          }
+        ]
+      }
+    ]
+  }
+}

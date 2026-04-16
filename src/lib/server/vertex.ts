@@ -25,6 +25,8 @@ let anthropicInstance: ReturnType<typeof createAnthropic> | null = null;
 const anthropicByApiKey = new Map<string, ReturnType<typeof createAnthropic>>();
 const googleByApiKey = new Map<string, ReturnType<typeof createGoogleGenerativeAI>>();
 const openAICompatibleByCacheKey = new Map<string, ReturnType<typeof createOpenAI>>();
+/** Ingestion-only OpenAI-compatible extraction (`EXTRACTION_BASE_URL`); isolated from catalog `openai` keys. */
+const extractionOpenAiOverrideByCacheKey = new Map<string, ReturnType<typeof createOpenAI>>();
 const mistralByApiKey = new Map<string, ReturnType<typeof createMistral>>();
 
 function getAnthropicForApiKey(apiKey?: string) {
@@ -80,6 +82,109 @@ function getMistralForApiKey(apiKey?: string) {
   });
   mistralByApiKey.set(cacheKey, instance);
   return instance;
+}
+
+/**
+ * Together’s chat API accepts `max_completion_tokens`, but some OpenAI-compatible stacks
+ * behave better with `max_tokens` only. The AI SDK may send `max_completion_tokens` for
+ * non-OpenAI model ids; normalize the JSON body for Together hosts.
+ */
+function togetherOpenAiCompatibleFetch(
+	baseURL: string,
+	inner: typeof fetch = globalThis.fetch.bind(globalThis)
+): typeof fetch {
+	if (!baseURL.includes('together.xyz')) return inner;
+	return async (input, init) => {
+		const url = typeof input === 'string' ? input : input instanceof URL ? input.href : String(input);
+		if (!url.includes('together.xyz') || !url.includes('/chat/completions')) {
+			return inner(input as RequestInfo | URL, init as RequestInit | undefined);
+		}
+		if (!init?.body || typeof init.body !== 'string') {
+			return inner(input as RequestInfo | URL, init as RequestInit | undefined);
+		}
+		try {
+			const j = JSON.parse(init.body) as Record<string, unknown>;
+			const mc = j.max_completion_tokens;
+			if (mc != null) {
+				if (j.max_tokens == null) j.max_tokens = mc;
+				delete j.max_completion_tokens;
+			}
+			return inner(input as RequestInfo | URL, {
+				...init,
+				body: JSON.stringify(j)
+			});
+		} catch {
+			return inner(input as RequestInfo | URL, init as RequestInit | undefined);
+		}
+	};
+}
+
+function getOpenAIForExtractionOverride(baseURL: string, apiKey: string) {
+	const cacheKey = `${baseURL}::${apiKey}`;
+	const existing = extractionOpenAiOverrideByCacheKey.get(cacheKey);
+	if (existing) return existing;
+	const instance = createOpenAI({
+		baseURL,
+		apiKey,
+		fetch: togetherOpenAiCompatibleFetch(baseURL)
+	});
+	extractionOpenAiOverrideByCacheKey.set(cacheKey, instance);
+	return instance;
+}
+
+/**
+ * When **`EXTRACTION_BASE_URL`** and **`EXTRACTION_MODEL`** are set, ingestion `planIngestionStage('extraction')`
+ * uses this OpenAI-compatible chat route (Fireworks, vLLM, Together-hosted chat, etc.).
+ * API key: **`EXTRACTION_API_KEY`** or fallback **`OPENAI_API_KEY`**, or vendor fallbacks
+ * (**`TOGETHER_API_KEY`** on Together hosts, **`FIREWORKS_API_KEY`** on `api.fireworks.ai`).
+ * Does not affect `resolveExtractionModelRoute` callers outside ingestion planning (e.g. verification extraction).
+ */
+export function readExtractionOpenAiCompatibleOverride():
+  | { baseURL: string; apiKey: string; modelId: string }
+  | null {
+  loadServerEnv();
+  const baseURL = process.env.EXTRACTION_BASE_URL?.trim();
+  const modelId = process.env.EXTRACTION_MODEL?.trim();
+  if (!baseURL || !modelId) return null;
+  const togetherKey = process.env.TOGETHER_API_KEY?.trim();
+  const fireworksKey = process.env.FIREWORKS_API_KEY?.trim();
+  const apiKey =
+    process.env.EXTRACTION_API_KEY?.trim() ||
+    process.env.OPENAI_API_KEY?.trim() ||
+    (togetherKey && baseURL.includes('together.xyz') ? togetherKey : undefined) ||
+    (fireworksKey && baseURL.includes('fireworks.ai') ? fireworksKey : undefined);
+  if (!apiKey) {
+    throw new Error(
+      'EXTRACTION_BASE_URL and EXTRACTION_MODEL require EXTRACTION_API_KEY or OPENAI_API_KEY (or TOGETHER_API_KEY on Together, FIREWORKS_API_KEY on Fireworks)'
+    );
+  }
+  return { baseURL, apiKey, modelId };
+}
+
+export function buildExtractionOpenAiCompatibleRoute(): ReasoningModelRoute | null {
+  const o = readExtractionOpenAiCompatibleOverride();
+  if (!o) return null;
+  const client = getOpenAIForExtractionOverride(o.baseURL, o.apiKey);
+  const model = client.chat(o.modelId as any);
+  return {
+    model,
+    provider: 'openai',
+    modelId: o.modelId,
+    supportsGrounding: false,
+    credentialSource: 'byok',
+    routingSource: 'requested',
+    resolvedExplanation:
+      'OpenAI-compatible ingestion extraction (EXTRACTION_BASE_URL + EXTRACTION_MODEL); Restormel resolve skipped for this stage plan.',
+    resolvedRouteId: null,
+    resolvedFailureKind: undefined,
+    resolvedStepId: null,
+    resolvedOrderIndex: null,
+    resolvedSwitchReasonCode: null,
+    resolvedEstimatedCostUsd: null,
+    resolvedMatchedCriteria: null,
+    resolvedFallbackCandidates: null,
+    resolvedStepChain: null
+  };
 }
 
 function getOpenAICompatibleForProvider(

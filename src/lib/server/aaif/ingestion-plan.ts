@@ -7,6 +7,7 @@ import {
 } from '../../ingestionCanonicalPipeline.js';
 import { EMBEDDING_MODEL, getEmbeddingProvider } from '../embeddings.js';
 import {
+  buildExtractionOpenAiCompatibleRoute,
   resolveExtractionModelRoute,
   resolveReasoningModelRoute,
   type ReasoningModelRoute
@@ -385,6 +386,35 @@ export async function planIngestionStage(
   }
 
   const routeIdForResolve = stageRouteBindingFromEnv(stage).routeId?.trim() || undefined;
+
+  if (stage === 'extraction') {
+    const extractionOverride = buildExtractionOpenAiCompatibleRoute();
+    if (extractionOverride) {
+      const usage = estimateStageUsage(stage, context);
+      return {
+        stage,
+        request,
+        routeId: routeIdForResolve,
+        provider: extractionOverride.provider,
+        model: extractionOverride.modelId,
+        estimatedCostUsd: estimateReasoningCostUsd(
+          extractionOverride,
+          usage.inputTokens,
+          usage.outputTokens
+        ),
+        routingSource: extractionOverride.routingSource ?? 'requested',
+        selectedStepId: extractionOverride.resolvedStepId ?? null,
+        selectedOrderIndex: extractionOverride.resolvedOrderIndex ?? null,
+        switchReasonCode: extractionOverride.resolvedSwitchReasonCode ?? null,
+        matchedCriteria: extractionOverride.resolvedMatchedCriteria ?? null,
+        fallbackCandidates: extractionOverride.resolvedFallbackCandidates ?? null,
+        routingReason:
+          extractionOverride.resolvedExplanation ??
+          'OpenAI-compatible extraction endpoint (EXTRACTION_BASE_URL).',
+        route: extractionOverride
+      };
+    }
+  }
 
   const pin = readPinnedModel(stage, context.preferredProvider ?? 'auto');
   const requestedProvider = (pin.provider ?? context.preferredProvider ?? 'auto') as ModelProvider;

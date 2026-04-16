@@ -52,6 +52,12 @@ describe('resolveReasoningModelRoute', () => {
     delete process.env.GOOGLE_VERTEX_PROJECT;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.MISTRAL_API_KEY;
+    delete process.env.EXTRACTION_BASE_URL;
+    delete process.env.EXTRACTION_MODEL;
+    delete process.env.EXTRACTION_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.TOGETHER_API_KEY;
+    delete process.env.FIREWORKS_API_KEY;
   });
 
   it('uses the degraded default when Restormel selects a provider Sophia cannot execute locally', async () => {
@@ -194,6 +200,47 @@ describe('resolveReasoningModelRoute', () => {
     expect(route.provider).toBe('anthropic');
     expect(route.modelId).toBe('claude-sonnet-4-20250514');
     expect(route.model).toBe('anthropic:claude-sonnet-4-20250514');
+  });
+
+  it('buildExtractionOpenAiCompatibleRoute returns null without EXTRACTION_BASE_URL', async () => {
+    const { buildExtractionOpenAiCompatibleRoute } = await import('./vertex');
+    expect(buildExtractionOpenAiCompatibleRoute()).toBeNull();
+  });
+
+  it('buildExtractionOpenAiCompatibleRoute uses createOpenAI when EXTRACTION_* configured', async () => {
+    process.env.GOOGLE_AI_API_KEY = 'AIza-default-test';
+    process.env.EXTRACTION_BASE_URL = 'https://example.invalid/v1';
+    process.env.EXTRACTION_MODEL = 'accounts/demo/models/extract-ft';
+    process.env.OPENAI_API_KEY = 'sk-test-openai';
+
+    const { buildExtractionOpenAiCompatibleRoute } = await import('./vertex');
+    const route = buildExtractionOpenAiCompatibleRoute();
+    expect(route).not.toBeNull();
+    expect(route?.provider).toBe('openai');
+    expect(route?.modelId).toBe('accounts/demo/models/extract-ft');
+    expect(mockCreateOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseURL: 'https://example.invalid/v1',
+        apiKey: 'sk-test-openai'
+      })
+    );
+  });
+
+  it('buildExtractionOpenAiCompatibleRoute falls back to FIREWORKS_API_KEY for Fireworks base URL', async () => {
+    process.env.GOOGLE_AI_API_KEY = 'AIza-default-test';
+    process.env.EXTRACTION_BASE_URL = 'https://api.fireworks.ai/inference/v1';
+    process.env.EXTRACTION_MODEL = 'accounts/demo/deployments/extract-1';
+    process.env.FIREWORKS_API_KEY = 'fw-test-key';
+
+    const { buildExtractionOpenAiCompatibleRoute } = await import('./vertex');
+    const route = buildExtractionOpenAiCompatibleRoute();
+    expect(route).not.toBeNull();
+    expect(mockCreateOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseURL: 'https://api.fireworks.ai/inference/v1',
+        apiKey: 'fw-test-key'
+      })
+    );
   });
 
   it('falls back to anthropic default when Restormel returns an unknown anthropic model id', async () => {

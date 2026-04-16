@@ -1,0 +1,36 @@
+{
+  "submittedAt": "2026-04-15T20:52:26Z",
+  "completedAt": "2026-04-15T22:04:00Z",
+  "note": "Together UI: status completed. Re-submit after BILLING_LIMIT on ft-012ea824-de73. Prior: ft-c63b3915-0259 (template), ft-012ea824-de73 (billing).",
+  "job_id": "ft-d95bacfb-6f78",
+  "status": "completed",
+  "runtime_s": 744,
+  "cost_usd": 13.794,
+  "output_model_name": "adamboon1984_dc91/Mistral-7B-Instruct-v0.2-07dcbef6",
+  "output_display_name": "Fine-tuned Mistral (7B) Instruct v0.2 04-15-26 (ft-d95bacfb-6f78, final)",
+  "training_file_id": "file-7d39389b-e2c4-45d3-9b14-5ec5dcb6c22e",
+  "validation_file_id": "file-d32758c0-a5a4-4008-8fc4-74d81cab6cdd",
+  "model": "mistralai/Mistral-7B-Instruct-v0.2",
+  "hyperparameters": {
+    "n_epochs": 3,
+    "n_checkpoints": 1,
+    "n_evals": 1,
+    "batch_size": 8,
+    "learning_rate": 0.0002,
+    "training_method": { "method": "sft", "train_on_inputs": "auto" }
+  },
+  "training_inputs": {
+    "train": "data/phase1-training-export/train.together.jsonl",
+    "validation": "data/phase1-training-export/validation.together.jsonl"
+  },
+  "messages_format": "user-assistant-folded-system",
+  "next_steps": [
+    "Download adapter or merged checkpoint from Together Checkpoints tab.",
+    "Step C — holdout eval: `pnpm exec tsx --env-file=.env scripts/eval-extraction-holdout-openai-compatible.ts -- --jsonl data/phase1-training-export/golden_holdout.jsonl --limit 200 --out data/phase1-training-export/eval-<model-slug>.json` with `EXTRACTION_BASE_URL` + `EXTRACTION_MODEL` pointing at a **reachable** OpenAI-compatible chat endpoint.",
+    "Fireworks (merge → upload → on-demand deploy): see repo `docs/sophia/extraction-fireworks-deploy.md` and `scripts/fireworks-extraction-deploy.sh` / `scripts/fireworks-extraction-eval-env.sh`.",
+    "On Together, `mistralai/Mistral-7B-Instruct-v0.2` and org-scoped fine-tunes (e.g. output_model_name above) are **not** on serverless inference for many accounts — start a **dedicated endpoint** in Together UI, or serve merged weights (Fireworks / vLLM) and point EXTRACTION_* there.",
+    "Harness smoke (not the LoRA): 2026-04-15 ran 30 rows on `meta-llama/Llama-3.3-70B-Instruct-Turbo` @ api.together.xyz → `eval-step-c-harness-llama33-70b-serverless.json` (schema pass 1.0; subset match ~3.3% — baseline only).",
+    "Step D onward: merge/quantize if needed — scripts/ml/README.md; production ingest uses folded system by default in eval; align ingest EXTRACTION_* with training if the host rejects `system` messages."
+  ],
+  "manifest_lineage": "See manifest.json and step-a-together-packaging-report.json in this directory."
+}

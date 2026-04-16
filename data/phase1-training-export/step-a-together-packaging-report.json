@@ -1,0 +1,109 @@
+{
+  "generatedAt": "2026-04-15T20:44:06.364Z",
+  "exportDir": "data/phase1-training-export",
+  "manifestGeneratedAt": "2026-04-15T20:24:46.884Z",
+  "cohortFingerprintSha256_16": "6ab6bd1d739097a0",
+  "goldenFingerprintSha256_16": "98abe3de579ef460",
+  "manifestPath": "data/phase1-training-export/manifest.json",
+  "splits": [
+    {
+      "split": "train",
+      "output": "data/phase1-training-export/train.together.jsonl",
+      "statsJson": "data/phase1-training-export/train.together.token-stats.json",
+      "converterSummary": {
+        "generatedAt": "2026-04-15T20:44:05.741Z",
+        "input": "data/phase1-training-export/train.jsonl",
+        "output": "data/phase1-training-export/train.together.jsonl",
+        "linesIn": 6242,
+        "linesOut": 6242,
+        "skippedInvalid": 0,
+        "maxRoughTokensPerExample": 1498,
+        "tokenHistogram": {
+          "count": 6242,
+          "min": 1340,
+          "max": 1498,
+          "mean": 1407.8248958667093,
+          "p50": 1407,
+          "p90": 1438,
+          "p95": 1448,
+          "p99": 1467,
+          "fracRoughGt2048": 0,
+          "fracRoughGt4096": 0,
+          "fracRoughGt8192": 0,
+          "fracRoughGt16384": 0
+        },
+        "note": "Rough tokens = ceil(chars/4) over system+user+assistant training text; use your real tokenizer for Together limits.",
+        "mode": "claim",
+        "includePassageContext": false,
+        "includeSystemRole": false,
+        "messagesFormat": "user-assistant-folded-system"
+      }
+    },
+    {
+      "split": "validation",
+      "output": "data/phase1-training-export/validation.together.jsonl",
+      "statsJson": "data/phase1-training-export/validation.together.token-stats.json",
+      "converterSummary": {
+        "generatedAt": "2026-04-15T20:44:06.055Z",
+        "input": "data/phase1-training-export/validation.jsonl",
+        "output": "data/phase1-training-export/validation.together.jsonl",
+        "linesIn": 866,
+        "linesOut": 866,
+        "skippedInvalid": 0,
+        "maxRoughTokensPerExample": 1542,
+        "tokenHistogram": {
+          "count": 866,
+          "min": 1348,
+          "max": 1542,
+          "mean": 1405.7575057736722,
+          "p50": 1403,
+          "p90": 1438,
+          "p95": 1449,
+          "p99": 1473,
+          "fracRoughGt2048": 0,
+          "fracRoughGt4096": 0,
+          "fracRoughGt8192": 0,
+          "fracRoughGt16384": 0
+        },
+        "note": "Rough tokens = ceil(chars/4) over system+user+assistant training text; use your real tokenizer for Together limits.",
+        "mode": "claim",
+        "includePassageContext": false,
+        "includeSystemRole": false,
+        "messagesFormat": "user-assistant-folded-system"
+      }
+    },
+    {
+      "split": "test",
+      "output": "data/phase1-training-export/test.together.jsonl",
+      "statsJson": "data/phase1-training-export/test.together.token-stats.json",
+      "converterSummary": {
+        "generatedAt": "2026-04-15T20:44:06.355Z",
+        "input": "data/phase1-training-export/test.jsonl",
+        "output": "data/phase1-training-export/test.together.jsonl",
+        "linesIn": 646,
+        "linesOut": 646,
+        "skippedInvalid": 0,
+        "maxRoughTokensPerExample": 1588,
+        "tokenHistogram": {
+          "count": 646,
+          "min": 1363,
+          "max": 1588,
+          "mean": 1425.9922600619195,
+          "p50": 1423,
+          "p90": 1464,
+          "p95": 1488,
+          "p99": 1521,
+          "fracRoughGt2048": 0,
+          "fracRoughGt4096": 0,
+          "fracRoughGt8192": 0,
+          "fracRoughGt16384": 0
+        },
+        "note": "Rough tokens = ceil(chars/4) over system+user+assistant training text; use your real tokenizer for Together limits.",
+        "mode": "claim",
+        "includePassageContext": false,
+        "includeSystemRole": false,
+        "messagesFormat": "user-assistant-folded-system"
+      }
+    }
+  ]
+}

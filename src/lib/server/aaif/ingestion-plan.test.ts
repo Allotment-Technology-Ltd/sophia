@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockResolveExtractionModelRoute, mockResolveReasoningModelRoute } = vi.hoisted(() => ({
+const {
+  mockResolveExtractionModelRoute,
+  mockResolveReasoningModelRoute,
+  mockBuildExtractionOpenAiCompatibleRoute
+} = vi.hoisted(() => ({
   mockResolveExtractionModelRoute: vi.fn(),
-  mockResolveReasoningModelRoute: vi.fn()
+  mockResolveReasoningModelRoute: vi.fn(),
+  mockBuildExtractionOpenAiCompatibleRoute: vi.fn()
 }));
 
 vi.mock('$lib/server/embeddings', () => ({
@@ -12,17 +17,45 @@ vi.mock('$lib/server/embeddings', () => ({
 
 vi.mock('$lib/server/vertex', () => ({
   resolveExtractionModelRoute: mockResolveExtractionModelRoute,
-  resolveReasoningModelRoute: mockResolveReasoningModelRoute
+  resolveReasoningModelRoute: mockResolveReasoningModelRoute,
+  buildExtractionOpenAiCompatibleRoute: mockBuildExtractionOpenAiCompatibleRoute
 }));
 
 describe('planIngestionStage', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    mockBuildExtractionOpenAiCompatibleRoute.mockReturnValue(null);
     delete process.env.RESTORMEL_INGEST_ROUTE_ID;
     delete process.env.RESTORMEL_INGEST_VALIDATION_ROUTE_ID;
     delete process.env.RESTORMEL_ANALYSE_ROUTE_ID;
     delete process.env.RESTORMEL_VERIFY_ROUTE_ID;
+  });
+
+  it('uses EXTRACTION_* OpenAI-compatible route when buildExtractionOpenAiCompatibleRoute returns a route', async () => {
+    mockBuildExtractionOpenAiCompatibleRoute.mockReturnValue({
+      model: Symbol('ft-model'),
+      provider: 'openai',
+      modelId: 'accounts/demo/models/extract-ft',
+      credentialSource: 'byok',
+      supportsGrounding: false,
+      routingSource: 'requested',
+      resolvedExplanation: 'OpenAI-compatible ingestion extraction (test).'
+    });
+
+    const { planIngestionStage } = await import('./ingestion-plan');
+    const plan = await planIngestionStage('extraction', {
+      sourceTitle: 'Test',
+      sourceType: 'sep_entry',
+      estimatedTokens: 2_000,
+      preferredProvider: 'auto'
+    });
+
+    expect(mockResolveExtractionModelRoute).not.toHaveBeenCalled();
+    expect(plan.provider).toBe('openai');
+    expect(plan.model).toBe('accounts/demo/models/extract-ft');
+    expect(plan.routingSource).toBe('requested');
+    expect(plan.routingReason).toContain('OpenAI-compatible');
   });
 
   it('builds a Restormel-backed extraction plan', async () => {

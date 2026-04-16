@@ -1,0 +1,22 @@
+{
+  "generatedAt": "2026-04-16T10:15:37.737Z",
+  "jsonl": "data/phase1-training-export/golden_holdout.jsonl",
+  "limit": 5,
+  "rowsEvaluated": 5,
+  "schemaOkRows": 5,
+  "schemaFailRows": 0,
+  "schemaPassRate": 1,
+  "latencyMs": {
+    "p50": 2035,
+    "p95": 2135
+  },
+  "subsetTextMatchRate": 1,
+  "subsetMatchRate": 0,
+  "subsetEligibleRows": 5,
+  "subsetEligibleRowsWhereInputEqualsGoldText": 5,
+  "singleSentenceGoldEvalAllEligibleRows": true,
+  "modelId": "accounts/adam-boon1984-17nryg/deployments/keo1sj4o",
+  "inferenceHost": "api.fireworks.ai",
+  "systemFoldedIntoUser": true,
+  "temperatureOmittedForOpenAiSdk": true
+}
