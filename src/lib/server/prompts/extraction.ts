@@ -145,7 +145,9 @@ export const ExtractionClaimSchema = z.object({
 	era: z.preprocess(nullishOptionalString, z.string().min(1).optional()),
 	claim_scope: z.preprocess(normalizeLabel, z.enum(CLAIM_SCOPE_VALUES)).optional(),
 	concept_tags: z.preprocess(normalizeStringList, z.array(z.string()).max(8)).optional(),
-	passage_id: z.string().optional().describe('Passage id where the claim appears'),
+	passage_id: z
+		.preprocess(nullishOptionalString, z.string().optional())
+		.describe('Passage id where the claim appears (omit or null if unknown — attachPassageMetadata grounds)'),
 	section_context: z.string().nullable().optional().describe('The section or heading'),
 	position_in_source: z.preprocess(coercePositiveInt, z.number().int().positive()).describe('Sequential position in source'),
 	confidence: z.coerce.number().min(0).max(1).describe('Confidence score 0.0-1.0')
