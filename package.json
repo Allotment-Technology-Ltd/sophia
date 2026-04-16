@@ -64,6 +64,7 @@
     "ops:phase2-write-artifact-manifest": "python3 scripts/ml/write_phase2_artifact_manifest.py",
     "ops:together-submit-finetune": "tsx scripts/together-submit-finetune.ts",
     "ops:eval-extraction-holdout-openai-compatible": "tsx --env-file=.env scripts/eval-extraction-holdout-openai-compatible.ts",
+    "ops:eval-extraction-compare": "tsx --env-file=.env scripts/eval-extraction-compare.ts",
     "ops:sample-extraction-remit-eval-jsonl": "tsx scripts/sample-extraction-remit-eval-jsonl.ts",
     "ops:audit-ingest-extraction-models-neon": "tsx scripts/audit-ingest-extraction-models-neon.ts",
     "ops:audit-ingest-cost-by-phase-neon": "tsx --env-file=.env scripts/audit-ingest-cost-by-phase-neon.ts",

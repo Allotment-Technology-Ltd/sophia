@@ -371,3 +371,7 @@ Use the **same** deployment id as in `EXTRACTION_MODEL` (pass the full `accounts
 ### Step F — Optional local cleanup
 
 Comment out or remove **`EXTRACTION_MODEL`**, **`EXTRACTION_BASE_URL`**, and extraction-only keys from **`.env.local`** when finished so local runs do not keep calling Fireworks.
+
+### Lean iterative FT (hypothesis → build → measure → learn)
+
+For a frozen **two-slice** eval baseline, iteration log template, and `pnpm ops:eval-extraction-compare` (golden + remit in one JSON), see [extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md) and [extraction-ft-lean-iteration-log.md](./extraction-ft-lean-iteration-log.md).

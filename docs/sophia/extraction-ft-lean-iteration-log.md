@@ -1,0 +1,153 @@
+# Extraction fine-tuning — iteration log (Lean: hypothesize → build → measure → learn)
+
+**Purpose:** One row per FT experiment. **Do not edit past rows** — append new dated sections. Pair every training run with **the same two-slice eval** and a combined report (see [extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md)).
+
+**Prerequisites:** [../local/operations/ingestion-fine-tune-data-mitigation-plan.md](../local/operations/ingestion-fine-tune-data-mitigation-plan.md) (G0/G1), [../local/operations/together-lora-phase2-runbook.md](../local/operations/together-lora-phase2-runbook.md) (Step A/B), [../local/operations/phase2-step-d-artifacts-runbook.md](../local/operations/phase2-step-d-artifacts-runbook.md) (merge/lineage after ship).
+
+**Vendor eval archive:** [../local/operations/extraction-vendor-ft-spike-eval-record.md](../local/operations/extraction-vendor-ft-spike-eval-record.md).
+
+---
+
+## How to append a new iteration
+
+Copy the **Iteration template** block below into a new `## YYYY-MM-DD — Iteration N` section, fill every field, attach `eval-compare-*.json` path, then commit the doc + JSON (or store JSON under `data/phase1-training-export/` and reference path only).
+
+---
+
+## Iteration template (copy below this line)
+
+### Hypothesis (one paragraph)
+
+> State the **single** falsifiable claim (which metric moves, on which slice, and why).
+
+### Build (minimal diff — one primary lever)
+
+| Field | Value |
+|-------|--------|
+| Training delta | e.g. “+220 rows batch-shaped JSON in `train.jsonl`” or “n_checkpoints 2 → 3” |
+| `train.together.jsonl` path / hash | |
+| Together job id (or vendor FT id) | |
+| Base model | |
+| Row cap / notes | |
+
+**Commands (typical):**
+
+```bash
+# Step A (after export change)
+pnpm ops:phase2-step-a-together-packaging -- --export-dir data/phase1-training-export
+
+# Step B — dry-run then live
+pnpm ops:together-submit-finetune -- --dry-run
+pnpm ops:together-submit-finetune -- \
+  --training-file data/phase1-training-export/train.together.jsonl \
+  --validation-file data/phase1-training-export/validation.together.jsonl
+```
+
+### Measure (same machine-readable reports every time)
+
+**Fingerprints** (from `manifest.json` at eval time — must match baseline if comparing to prior iterations):
+
+| `cohortFingerprintSha256_16` | `goldenFingerprintSha256_16` |
+|------------------------------|--------------------------------|
+| | |
+
+**Combined eval (preferred):**
+
+```bash
+pnpm ops:eval-extraction-compare -- \
+  --export-dir data/phase1-training-export \
+  --limit 200 \
+  --out data/phase1-training-export/eval-compare-ITER-ID.json
+```
+
+**Schema smoke (5 rows) if `schemaPassRate` regresses:**
+
+```bash
+EXTRACTION_EVAL_LOG_FIRST_FAILURE=1 pnpm ops:eval-extraction-holdout-openai-compatible -- \
+  --jsonl data/phase1-training-export/golden_holdout.jsonl \
+  --limit 5 \
+  --out data/phase1-training-export/eval-golden-smoke-5.json
+```
+
+| Slice | `schemaPassRate` | `subsetTextMatchRate` | `subsetMatchRate` (optional) | Latency p50 / p95 (ms) | Report path |
+|-------|------------------|----------------------|--------------------------------|-------------------------|-------------|
+| Golden holdout (200) | | | | | |
+| Remit multidomain (200) | | | | | |
+
+`EXTRACTION_MODEL` / endpoint used for eval:
+
+### Learn (decision)
+
+| Decision | One line rationale |
+|----------|--------------------|
+| **Ship / iterate / stop** | |
+| **Next hypothesis** (if iterate) | |
+
+**Abort reminders:** If `schemaPassRate` is flat vs prior after a checkpoint, **stop** burning epochs — fix format supervision. If golden improves but remit drops, add breadth / regularisation next.
+
+---
+
+## Cycle 1 — Format / batch-shaped JSON (planned hypothesis)
+
+> **Hypothesis:** Adding 200–500 supervised rows where the user turn matches **multi-passage** `EXTRACTION_USER` (token band aligned with `INGEST_EXTRACTION_*` batch caps) and the assistant is **only** a valid `[{...}]` array increases **`schemaPassRate`** on `golden_holdout.jsonl` (limit 200) without dropping **`subsetTextMatchRate`** on the remit slice by more than an agreed epsilon (record epsilon here: _____).
+
+### Build checklist
+
+- [ ] Curate or synthesise batch-shaped rows; merge into export `train.jsonl` (or a **branch export dir**) per G1.
+- [ ] Re-run `pnpm ops:phase2-step-a-together-packaging` for the export dir in use.
+- [ ] `pnpm ops:together-submit-finetune -- --dry-run` then live submit; record job id above.
+
+### Measure checklist
+
+- [ ] Point `EXTRACTION_*` at the new checkpoint/deployment.
+- [ ] `pnpm ops:eval-extraction-compare` → save `eval-compare-cycle-1-*.json`.
+- [ ] Fill metrics table; compare to [extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md) or previous iteration row.
+
+### Learn checklist
+
+- [ ] Record ship / iterate / stop and next hypothesis.
+
+---
+
+## Cycle 2 — `passage_id` grounding (planned hypothesis)
+
+> **Hypothesis:** A small hand-built eval JSONL (~50 rows) where gold **`passage_id`** is unambiguous in the user block improves **in-batch ID match rate** on that slice (define counting script or manual rubric); optional second measure: fewer **`passage_id` did not resolve** warnings on a fixed SEP ingest smoke (1–2 batches).
+
+### Build checklist
+
+- [ ] Author `data/phase1-training-export/eval_passage_id_grounding.jsonl` (or path TBD) with same row shape as holdout eval; extend `eval-extraction-holdout-openai-compatible` **or** document `pnpm ops:eval-extraction-holdout-openai-compatible -- --jsonl …` against that file.
+- [ ] Add matching supervision rows to training pack; Step A → Step B.
+
+### Measure checklist
+
+- [ ] Run holdout + remit compare **plus** new slice (document exact command in iteration row when added).
+- [ ] Optional: ingest smoke on frozen `data/sources/*.txt` with orchestration env; capture `[WARN] passage_id` lines.
+
+### Learn checklist
+
+- [ ] Record decision and whether ingest smoke matched offline trend.
+
+---
+
+## Cycle 3 — Prod failure exemplars (planned hypothesis; G1-dependent)
+
+> **Hypothesis:** After cycles 1–2, adding ≤100 **G1-cleared**, redacted rows mined from production **`[JSON_FAIL]`** / repair traces (assistant = corrected JSON array) reduces **`ingest_model_json_parse_failed`** rate on a fixed SEP smoke ingest without offline metric regression.
+
+### Preconditions
+
+- [ ] Counsel / ToS clearance for using mined text in training (see mitigation plan §G1).
+- [ ] Strip PII / operator identifiers from exemplars.
+
+### Build / measure / learn
+
+- [ ] Curate exemplar JSONL → merge → Step A → Step B.
+- [ ] Offline: `pnpm ops:eval-extraction-compare` vs previous winner.
+- [ ] Online: SEP smoke ingest only if offline gates pass; compare telemetry counts.
+
+---
+
+## Iteration 0 (baseline pointer only)
+
+Metrics and commands are frozen in **[extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md)**. Historical vendor spike numbers remain in **[../local/operations/extraction-vendor-ft-spike-eval-record.md](../local/operations/extraction-vendor-ft-spike-eval-record.md)**.
+
+When you run the first post-baseline `eval-extraction-compare`, paste the **`summary`** block from `eval-compare-*.json` into a new dated section above as **Iteration 1 — measured**.
