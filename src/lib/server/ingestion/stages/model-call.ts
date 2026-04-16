@@ -18,6 +18,9 @@ import type {
 	IngestTimingPayload
 } from './types.js';
 
+/** When `INGEST_STAGE_JSON_REPAIR_MAX_OUTPUT_TOKENS` is unset on the shared `StageBudget`. */
+const DEFAULT_JSON_REPAIR_MAX_OUTPUT_TOKENS = 8192;
+
 const OPENAI_COMPAT_CHAT_PROVIDERS_FOLD_SYSTEM = new Set([
 	'mistral',
 	'groq',
@@ -333,6 +336,7 @@ Respond ONLY with the corrected JSON array. No explanation, no markdown backtick
 		timing,
 		systemPrompt:
 			'You are a JSON repair assistant. Fix the malformed JSON to be valid. Respond with only the corrected JSON.',
-		userMessage: fixPrompt
+		userMessage: fixPrompt,
+		maxTokens: repairBudget.maxOutputTokens ?? DEFAULT_JSON_REPAIR_MAX_OUTPUT_TOKENS
 	});
 }

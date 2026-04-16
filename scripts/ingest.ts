@@ -233,6 +233,17 @@ const DB_CONNECT_RETRY_BASE_MS = Number(process.env.DB_CONNECT_RETRY_BASE_MS || 
 const INGEST_MODEL_TIMEOUT_MS = Number(process.env.INGEST_MODEL_TIMEOUT_MS || '360000');
 const VALIDATION_MODEL_TIMEOUT_MS = Number(process.env.VALIDATION_MODEL_TIMEOUT_MS || '300000');
 
+/** Fallback when `INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS` is unset (assert-only cap still uses env). */
+const DEFAULT_INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS = 32768;
+/**
+ * Fallback when `INGEST_STAGE_JSON_REPAIR_MAX_OUTPUT_TOKENS` is unset — tight cap so repair does not
+ * request 32k completions by default (see `maxOutputTokensForJsonRepair`).
+ */
+const DEFAULT_INGEST_STAGE_JSON_REPAIR_MAX_OUTPUT_TOKENS = 8192;
+
+const INGEST_MODEL_JSON_LOG_HEAD_CHARS = 400;
+const INGEST_MODEL_JSON_LOG_TAIL_CHARS = 160;
+
 const INGESTED_DIR = './data/ingested';
 const INGEST_PREFILTER_ENABLED = process.env.INGEST_PREFILTER_ENABLED !== 'false';
 const INGEST_VALIDATION_SAMPLE_RATE = Math.max(0, Math.min(1,
@@ -522,6 +533,10 @@ interface IngestTimingPayload {
 	retry_backoff_ms_total: number;
 	batch_splits: number;
 	json_repair_invocations: number;
+	/** Extraction stage: JSON.parse or Zod failed on raw model output before `json_repair`. */
+	extraction_json_first_pass_failures: number;
+	/** Sum of claim counts accepted after extraction-time JSON repair (per batch). */
+	extraction_claims_recovered_via_json_repair: number;
 	/** Recovery agent consults (INGEST_RECOVERY_AGENT=1). */
 	recovery_agent_invocations: number;
 	/** Extra backoff ms from recovery agent-sponsored sleeps. */
@@ -735,6 +750,8 @@ function createEmptyTiming(): IngestTimingPayload {
 		retry_backoff_ms_total: 0,
 		batch_splits: 0,
 		json_repair_invocations: 0,
+		extraction_json_first_pass_failures: 0,
+		extraction_claims_recovered_via_json_repair: 0,
 		recovery_agent_invocations: 0,
 		recovery_agent_backoff_ms_total: 0,
 		embed_wall_ms: 0,
@@ -800,6 +817,9 @@ function logIngestTimingHumanBlock(t: IngestTimingPayload, totalWallMs: number):
 		row('Stage 6 · storing', sm.storing ?? t.store_wall_ms ?? 0),
 		`    ${'Total (this run)'.padEnd(26)} ${formatDuration(totalWallMs)}`,
 		`    ${'LLM tokens (in / out)'.padEnd(26)} ${t.total_input_tokens.toLocaleString()} / ${t.total_output_tokens.toLocaleString()}`,
+		t.extraction_json_first_pass_failures > 0 || t.extraction_claims_recovered_via_json_repair > 0
+			? `    ${'Extraction JSON repair'.padEnd(26)} failures=${t.extraction_json_first_pass_failures} claims_recovered=${t.extraction_claims_recovered_via_json_repair}`
+			: '',
 		t.vertex_embed_chars > 0
 			? `    ${'Vertex embed chars'.padEnd(26)} ${t.vertex_embed_chars.toLocaleString()}`
 			: ''
@@ -1085,6 +1105,14 @@ function makeStageBudget(stage: StageKey): StageBudget {
 	};
 }
 
+function maxOutputTokensForExtraction(budget: StageBudget): number {
+	return budget.maxOutputTokens ?? DEFAULT_INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS;
+}
+
+function maxOutputTokensForJsonRepair(budget: StageBudget): number {
+	return budget.maxOutputTokens ?? DEFAULT_INGEST_STAGE_JSON_REPAIR_MAX_OUTPUT_TOKENS;
+}
+
 function currentInputTokens(): number {
 	return costs.totalInputTokens;
 }
@@ -1259,6 +1287,43 @@ function parseJsonResponse(text: string): unknown {
 		cleaned = cleaned.slice(0, -3);
 	}
 	return JSON.parse(cleaned.trim());
+}
+
+function ingestModelJsonFailureHints(raw: string, errMsg: string): string[] {
+	const hints: string[] = [];
+	const head = raw.slice(0, 160);
+	if (/```(?:json)?/i.test(head)) hints.push('markdown_fence_prefix');
+	const low = errMsg.toLowerCase();
+	if (low.includes('truncat') || low.includes('max_tokens')) hints.push('truncation_or_cap');
+	if (/unexpected end|unterminated|eof/i.test(errMsg)) hints.push('parse_incomplete');
+	if (/required|expected|invalid_type|too_(small|big)|zod/i.test(low)) hints.push('schema_validation');
+	const tr = raw.trim();
+	if (
+		tr.length > 0 &&
+		!tr.endsWith(']') &&
+		!tr.endsWith('}') &&
+		!tr.endsWith('"') &&
+		!tr.endsWith("'")
+	) {
+		hints.push('suffix_not_closed');
+	}
+	return hints;
+}
+
+function logIngestModelJsonParseFailure(opts: { scope: string; rawResponse: string; error: unknown }): void {
+	const msg = opts.error instanceof Error ? opts.error.message : String(opts.error);
+	const hints = ingestModelJsonFailureHints(opts.rawResponse, msg);
+	const raw = opts.rawResponse;
+	const head = raw.slice(0, INGEST_MODEL_JSON_LOG_HEAD_CHARS);
+	const tail =
+		raw.length > INGEST_MODEL_JSON_LOG_HEAD_CHARS + INGEST_MODEL_JSON_LOG_TAIL_CHARS
+			? raw.slice(-INGEST_MODEL_JSON_LOG_TAIL_CHARS)
+			: undefined;
+	console.warn(`  [JSON_FAIL] ${opts.scope}: ${msg}`);
+	console.warn(
+		`  [JSON_FAIL] ${opts.scope} · chars=${raw.length} hints=[${hints.join(', ') || '—'}] head=${JSON.stringify(head)}` +
+			(tail ? ` tail=${JSON.stringify(tail)}` : '')
+	);
 }
 
 function normalizeGroupingRole(value: unknown): string {
@@ -2665,6 +2730,7 @@ Respond ONLY with the corrected JSON array. No explanation, no markdown backtick
 			'You are a JSON repair assistant. Fix the malformed JSON to be valid. Respond with only the corrected JSON.',
 		userMessage: fixPrompt,
 		label: 'Fixing malformed JSON',
+		maxTokens: maxOutputTokensForJsonRepair(repairBudget),
 		planningContext
 	});
 }
@@ -2722,6 +2788,11 @@ async function parseValidationResponseWithRepair(
 		const parsed = parseJsonResponse(responseText);
 		return normalizeValidationOutput(parsed);
 	} catch (parseError) {
+		logIngestModelJsonParseFailure({
+			scope: `validation ${batchLabel}`,
+			rawResponse: responseText,
+			error: parseError
+		});
 		console.warn(`  [WARN] JSON parse/validation failed for ${batchLabel}. Attempting fix...`);
 		const fixedResponse = await fixJsonWithModel(
 			ctx.jsonRepairPlan,
@@ -4501,6 +4572,7 @@ async function main() {
 								systemPrompt: EXTRACTION_SYSTEM,
 								userMessage: userMsg,
 								label: `Extracting batch ${batchLabel} (${queuePos}/${queueTotal})`,
+								maxTokens: maxOutputTokensForExtraction(extractionBudget),
 								planningContext: basePlanningContext
 							});
 						} catch (apiError) {
@@ -4543,6 +4615,22 @@ async function main() {
 							};
 							await savePartialResults(slug, partial);
 						} catch (parseError) {
+							if (activeIngestTiming) activeIngestTiming.extraction_json_first_pass_failures += 1;
+							emitIngestTelemetry({
+								event: 'ingest_model_json_parse_failed',
+								stage: 'extraction',
+								batch_label: batchLabel,
+								response_chars: rawResponse.length,
+								hints: ingestModelJsonFailureHints(
+									rawResponse,
+									parseError instanceof Error ? parseError.message : String(parseError)
+								)
+							});
+							logIngestModelJsonParseFailure({
+								scope: `extraction batch ${batchLabel}`,
+								rawResponse,
+								error: parseError
+							});
 							console.warn(
 								`  [WARN] JSON parse/validation failed for batch ${batchLabel}. Attempting fix...`
 							);
@@ -4585,6 +4673,9 @@ async function main() {
 								sourceMeta
 							);
 							allClaims.push(...fixedClaims);
+							if (activeIngestTiming) {
+								activeIngestTiming.extraction_claims_recovered_via_json_repair += fixedValidated.length;
+							}
 							console.log(
 								`  [OK] Fixed and extracted ${fixedValidated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
 							);
@@ -4647,6 +4738,7 @@ async function main() {
 										systemPrompt: EXTRACTION_SYSTEM,
 										userMessage: userMsg,
 										label: `Extracting batch ${batchOrd} (${queuePos}/${queueTotal})`,
+										maxTokens: maxOutputTokensForExtraction(extractionBudget),
 										planningContext: basePlanningContext
 									});
 									logStageCost('Extraction', extractionTracker, extractionPlan);
@@ -4657,6 +4749,22 @@ async function main() {
 											normalizeExtractionPayload(parsed, domainOverride)
 										);
 									} catch (parseError) {
+										if (activeIngestTiming) activeIngestTiming.extraction_json_first_pass_failures += 1;
+										emitIngestTelemetry({
+											event: 'ingest_model_json_parse_failed',
+											stage: 'extraction',
+											batch_label: batchOrd,
+											response_chars: rawResponse.length,
+											hints: ingestModelJsonFailureHints(
+												rawResponse,
+												parseError instanceof Error ? parseError.message : String(parseError)
+											)
+										});
+										logIngestModelJsonParseFailure({
+											scope: `extraction batch ${batchOrd}`,
+											rawResponse,
+											error: parseError
+										});
 										console.warn(
 											`  [WARN] JSON parse/validation failed for batch ${batchOrd}. Attempting fix...`
 										);
@@ -4673,6 +4781,10 @@ async function main() {
 										validated = ExtractionOutputSchema.parse(
 											normalizeExtractionPayload(fixedParsed, domainOverride)
 										);
+										if (activeIngestTiming) {
+											activeIngestTiming.extraction_claims_recovered_via_json_repair +=
+												validated.length;
+										}
 									}
 									const order = b[0]?.order_in_source ?? qi;
 									return {
@@ -4913,6 +5025,11 @@ async function main() {
 						batchRelations = attachRelationMetadata(RelationsOutputSchema.parse(parsed), allClaims);
 						console.log(`  [OK] Identified ${batchRelations.length} relations in batch ${batchIndex + 1}`);
 					} catch (parseError) {
+						logIngestModelJsonParseFailure({
+							scope: `relations batch ${batchIndex + 1}`,
+							rawResponse: relRawResponse,
+							error: parseError
+						});
 						console.warn('  [WARN] JSON parse/validation failed. Attempting fix...');
 						const fixedResponse = await fixJsonWithModel(
 							jsonRepairPlan,
@@ -5146,6 +5263,11 @@ async function main() {
 							`  [OK] Identified ${batchArguments.length} arguments in batch ${batchIndex + 1}`
 						);
 					} catch (parseError) {
+						logIngestModelJsonParseFailure({
+							scope: `grouping batch ${batchIndex + 1}`,
+							rawResponse: grpRawResponse,
+							error: parseError
+						});
 						console.warn(
 							`  [WARN] JSON parse/validation failed for grouping batch ${batchIndex + 1}. Attempting fix...`
 						);
