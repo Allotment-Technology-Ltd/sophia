@@ -9,6 +9,9 @@
  *   (account id is inferred from the latter).
  * - G1-cleared export; see `docs/sophia/extraction-ft-lean-plan.md`.
  *
+ * **`--output-model`:** Pass a **short slug** (e.g. `sophia-extract-sft-iter1`) or a full
+ * **`accounts/.../models/...`** id; the script sends the full form required by the SFT API.
+ *
  * **Starting weights (exactly one):**
  * - **`--base-model`** — Fireworks **Tunable** model id. For Sophia’s uploaded merged extraction
  *   weights (Together → HF → `firectl model create`), use **`accounts/adam-boon1984-17nryg/models/sophia-extract-m7b-ft`**
@@ -209,6 +212,14 @@ function datasetResourceName(accountId: string, datasetShortId: string): string 
 	return `accounts/${accountId}/datasets/${datasetShortId}`;
 }
 
+/** SFT job `outputModel` must be `accounts/<id>/models/<model-id>`; bare slugs are expanded. */
+function outputModelResourceName(accountId: string, outputModel: string): string {
+	const t = outputModel.trim();
+	if (t.startsWith('accounts/')) return t;
+	const short = t.replace(/^models\//, '');
+	return `accounts/${accountId}/models/${short}`;
+}
+
 async function main(): Promise<void> {
 	loadServerEnv();
 	const opts = parseArgs(process.argv.slice(2));
@@ -232,7 +243,7 @@ async function main(): Promise<void> {
 	if (!accountId) {
 		console.error(
 			'Missing account id: set FIREWORKS_ACCOUNT_ID or EXTRACTION_MODEL=accounts/<id>/deployments/... ' +
-				'(required so dataset fields use accounts/<id>/datasets/<dataset-id> format).'
+				'(required to build accounts/.../datasets/... and accounts/.../models/... resource names).'
 		);
 		process.exit(2);
 	}
@@ -263,9 +274,12 @@ async function main(): Promise<void> {
 	const valDatasetResource =
 		valDatasetId != null ? datasetResourceName(accountId, valDatasetId) : null;
 
+	const outputModelRaw = opts.outputModel.trim();
+	const outputModelResource = outputModelResourceName(accountId, outputModelRaw);
+
 	const jobPayload: Record<string, unknown> = {
 		dataset: trainDatasetResource,
-		outputModel: opts.outputModel.trim(),
+		outputModel: outputModelResource,
 		epochs: opts.epochs
 	};
 	if (warm) {
@@ -290,6 +304,8 @@ async function main(): Promise<void> {
 					valDatasetId,
 					trainDatasetResource,
 					valDatasetResource,
+					outputModelResource,
+					outputModelCli: outputModelRaw,
 					trainingFile: opts.trainingFile || null,
 					validationFile: opts.validationFile,
 					trainExamples,
@@ -320,6 +336,8 @@ async function main(): Promise<void> {
 		accountId,
 		trainDatasetId,
 		valDatasetId,
+		outputModelCli: outputModelRaw,
+		outputModelResource,
 		trainingFile: opts.trainingFile,
 		validationFile: opts.validationFile,
 		trainExamples,
