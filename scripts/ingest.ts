@@ -1296,7 +1296,15 @@ function ingestModelJsonFailureHints(raw: string, errMsg: string): string[] {
 	const low = errMsg.toLowerCase();
 	if (low.includes('truncat') || low.includes('max_tokens')) hints.push('truncation_or_cap');
 	if (/unexpected end|unterminated|eof/i.test(errMsg)) hints.push('parse_incomplete');
-	if (/required|expected|invalid_type|too_(small|big)|zod/i.test(low)) hints.push('schema_validation');
+	if (/non-whitespace character after json|unexpected token/i.test(low)) {
+		hints.push('concat_or_trailing_json');
+	}
+	// Avoid matching the substring "expected" inside "Unexpected …" (JSON.parse trailing garbage).
+	if (
+		/required|invalid_type|too_(small|big)|unrecognized_keys|zoderror|\bexpected\b/i.test(errMsg)
+	) {
+		hints.push('schema_validation');
+	}
 	const tr = raw.trim();
 	if (
 		tr.length > 0 &&
