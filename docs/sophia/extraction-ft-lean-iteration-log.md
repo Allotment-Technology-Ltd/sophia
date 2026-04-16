@@ -32,7 +32,7 @@ Copy the **Iteration template** block below into a new `## YYYY-MM-DD — Iterat
 | Packaged chat JSONL | `train.together.jsonl` / `validation.together.jsonl` paths + line counts or hashes |
 | **Fireworks SFT** (preferred) | Job id / output model id; **or** `fireworks-sft-job-submitted.json` path |
 | **Together** (legacy) | Together job id if you used `pnpm ops:together-submit-finetune` |
-| Base model id (vendor) | e.g. Fireworks `accounts/fireworks/models/…` **Tunable** base |
+| Base / warm-start | **First SFT:** `accounts/adam-boon1984-17nryg/models/sophia-extract-m7b-ft` if Tunable; else catalog base. **Next:** `--warm-start-from` prior SFT output model id |
 | Row cap / notes | |
 
 **Commands (preferred — Fireworks SFT):**
@@ -41,19 +41,25 @@ Copy the **Iteration template** block below into a new `## YYYY-MM-DD — Iterat
 # Step A (after export change) — output is generic chat JSONL
 pnpm ops:phase2-step-a-together-packaging -- --export-dir data/phase1-training-export
 
-# Fireworks: dry-run then live (set FIREWORKS_API_KEY; FIREWORKS_ACCOUNT_ID or EXTRACTION_MODEL for account inference)
+# Fireworks: dry-run then live (set FIREWORKS_API_KEY; FIREWORKS_ACCOUNT_ID or EXTRACTION_MODEL for account inference).
+# First SFT from uploaded merged extraction weights — only if `firectl model get sophia-extract-m7b-ft` → Tunable: true:
 pnpm ops:fireworks-submit-sft -- --dry-run \
   --training-file data/phase1-training-export/train.together.jsonl \
   --validation-file data/phase1-training-export/validation.together.jsonl \
-  --base-model accounts/fireworks/models/<TUNABLE_BASE_MODEL_ID> \
+  --base-model accounts/adam-boon1984-17nryg/models/sophia-extract-m7b-ft \
   --output-model <your-output-slug>
 
 pnpm ops:fireworks-submit-sft -- \
   --training-file data/phase1-training-export/train.together.jsonl \
   --validation-file data/phase1-training-export/validation.together.jsonl \
-  --base-model accounts/fireworks/models/<TUNABLE_BASE_MODEL_ID> \
+  --base-model accounts/adam-boon1984-17nryg/models/sophia-extract-m7b-ft \
   --output-model <your-output-slug> \
   --write-report data/phase1-training-export/fireworks-sft-job-submitted.json
+
+# Later iteration: continue from prior Fireworks SFT output (do not pass --base-model):
+# pnpm ops:fireworks-submit-sft -- ... \
+#   --warm-start-from accounts/adam-boon1984-17nryg/models/<PRIOR_SFT_OUTPUT_MODEL> \
+#   --output-model <next-slug>
 ```
 
 Then **`firectl deployment create <output-model-slug>`** (or Fireworks UI) when the job completes — see [extraction-fireworks-deploy.md](./extraction-fireworks-deploy.md).

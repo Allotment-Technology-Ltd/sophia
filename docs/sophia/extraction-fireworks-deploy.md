@@ -18,11 +18,11 @@ Official references:
 
 ### Operator checklist
 
-1. **Confirm base model is Tunable** — `firectl model get -a fireworks <MODEL-ID>` → `Tunable: true`. If only `Supports Lora: true`, you must train elsewhere and **upload** (earlier sections of this doc).
+1. **Confirm starting model is Tunable (Sophia default)** — For the merged extraction upload **`sophia-extract-m7b-ft`**, run **`firectl model get sophia-extract-m7b-ft`**. If **`Tunable: true`**, use **`--base-model accounts/adam-boon1984-17nryg/models/sophia-extract-m7b-ft`** so SFT continues from **your** weights. If not tunable, use a Fireworks **catalog** id with `Tunable: true`, or train off-platform and upload (earlier sections of this doc). For **iteration 2+** after a Fireworks SFT job, use **`--warm-start-from accounts/<account>/models/<prior_sft_output>`** (see [extraction-ft-lean-plan.md](./extraction-ft-lean-plan.md)).
 2. **Package data** — `pnpm ops:phase2-step-a-together-packaging -- --export-dir data/phase1-training-export` (G1-cleared export only).
 3. **Submit SFT** — either:
-   - **Script (repo):** `pnpm ops:fireworks-submit-sft -- --dry-run …` then live run with `--training-file …/train.together.jsonl` [`--validation-file …/validation.together.jsonl`] `--base-model …` `--output-model <slug>` and optional `--write-report …/fireworks-sft-job-submitted.json`. Requires **`FIREWORKS_API_KEY`** and **`FIREWORKS_ACCOUNT_ID`** (or infer from `EXTRACTION_MODEL=accounts/<id>/deployments/...`).
-   - **CLI:** `firectl dataset create <DATASET_ID> /path/to/train.jsonl` and `firectl sftj create --base-model … --dataset … --output-model …` per Fireworks docs.
+   - **Script (repo):** `pnpm ops:fireworks-submit-sft -- --dry-run …` then live run with `--training-file …/train.together.jsonl` [`--validation-file …/validation.together.jsonl`] and **either** `--base-model accounts/adam-boon1984-17nryg/models/sophia-extract-m7b-ft` **or** `--warm-start-from accounts/.../models/<prior_output>` — plus `--output-model <slug>` and optional `--write-report …/fireworks-sft-job-submitted.json`. Requires **`FIREWORKS_API_KEY`** and **`FIREWORKS_ACCOUNT_ID`** (or infer from `EXTRACTION_MODEL=accounts/<id>/deployments/...`).
+   - **CLI:** `firectl dataset create <DATASET_ID> /path/to/train.jsonl` and `firectl sftj create --base-model … --dataset … --output-model …` (or `--warm-start-from …`) per Fireworks docs.
 4. **Wait for job** — UI or `firectl sftj get <job-or-id per vendor>`.
 5. **Deploy** — `firectl deployment create <FINE_TUNED_MODEL_ID>` (see [Deploying fine-tuned models](https://docs.fireworks.ai/fine-tuning/deploying-loras)); set `EXTRACTION_MODEL` to the deployment **Name**.
 6. **Eval** — `pnpm ops:eval-extraction-compare` (see [extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md)).

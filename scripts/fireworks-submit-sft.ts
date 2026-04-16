@@ -9,9 +9,11 @@
  *   (account id is inferred from the latter).
  * - G1-cleared export; see `docs/sophia/extraction-ft-lean-plan.md`.
  *
- * **Base model:** pass `--base-model` with a Fireworks **Tunable** catalog id (check with
- * `firectl model get -a fireworks <MODEL-ID>` → `Tunable: true`). Do **not** guess Mistral ids;
- * vendor catalog changes.
+ * **Starting weights (exactly one):**
+ * - **`--base-model`** — Fireworks **Tunable** model id. For Sophia’s uploaded merged extraction
+ *   weights (Together → HF → `firectl model create`), use **`accounts/adam-boon1984-17nryg/models/sophia-extract-m7b-ft`**
+ *   **only if** `firectl model get sophia-extract-m7b-ft` shows **`Tunable: true`** (vendor policy).
+ * - **`--warm-start-from`** — Continue from a **prior Fireworks SFT output** (PEFT on platform); mutually exclusive with `--base-model` per Fireworks API.
  *
  * **API reference (confirm before production):**
  * - https://docs.fireworks.ai/api-reference/create-dataset
@@ -23,14 +25,14 @@
  * Usage:
  *   pnpm exec tsx --env-file=.env scripts/fireworks-submit-sft.ts -- --dry-run \
  *     --training-file data/phase1-training-export/train.together.jsonl \
- *     --base-model accounts/fireworks/models/<TUNABLE_BASE> \
+ *     --base-model accounts/adam-boon1984-17nryg/models/sophia-extract-m7b-ft \
  *     --output-model sophia-extract-sft-iter1
  *
  *   pnpm exec tsx --env-file=.env scripts/fireworks-submit-sft.ts -- \
  *     --training-file data/phase1-training-export/train.together.jsonl \
  *     --validation-file data/phase1-training-export/validation.together.jsonl \
- *     --base-model accounts/fireworks/models/<TUNABLE_BASE> \
- *     --output-model sophia-extract-sft-iter1 \
+ *     --warm-start-from accounts/adam-boon1984-17nryg/models/<PRIOR_SFT_OUTPUT> \
+ *     --output-model sophia-extract-sft-iter2 \
  *     --write-report data/phase1-training-export/fireworks-sft-job-submitted.json
  */
 
@@ -67,6 +69,7 @@ function parseArgs(argv: string[]): {
 	validationFile: string | null;
 	accountId: string | null;
 	baseModel: string;
+	warmStartFrom: string;
 	outputModel: string;
 	trainDatasetId: string | null;
 	valDatasetId: string | null;
@@ -79,6 +82,7 @@ function parseArgs(argv: string[]): {
 	let validationFile: string | null = null;
 	let accountId: string | null = null;
 	let baseModel = '';
+	let warmStartFrom = '';
 	let outputModel = '';
 	let trainDatasetId: string | null = null;
 	let valDatasetId: string | null = null;
@@ -92,6 +96,7 @@ function parseArgs(argv: string[]): {
 		else if (a === '--validation-file' && argv[i + 1]) validationFile = argv[++i]!;
 		else if (a === '--account-id' && argv[i + 1]) accountId = argv[++i]!;
 		else if (a === '--base-model' && argv[i + 1]) baseModel = argv[++i]!;
+		else if (a === '--warm-start-from' && argv[i + 1]) warmStartFrom = argv[++i]!;
 		else if (a === '--output-model' && argv[i + 1]) outputModel = argv[++i]!;
 		else if (a === '--train-dataset-id' && argv[i + 1]) trainDatasetId = argv[++i]!;
 		else if (a === '--val-dataset-id' && argv[i + 1]) valDatasetId = argv[++i]!;
@@ -104,6 +109,7 @@ function parseArgs(argv: string[]): {
 		validationFile,
 		accountId,
 		baseModel,
+		warmStartFrom,
 		outputModel,
 		trainDatasetId,
 		valDatasetId,
@@ -207,9 +213,9 @@ async function main(): Promise<void> {
 	if (!opts.trainingFile && !opts.dryRun) {
 		console.error(
 			'Usage: --training-file <train.together.jsonl> [--validation-file val.jsonl] \\\n' +
-				'  --base-model <accounts/.../models/...> --output-model <slug> \\\n' +
-				'  [--account-id …] [--train-dataset-id …] [--val-dataset-id …] [--epochs 1] [--lora-rank 8] \\\n' +
-				'  [--write-report path.json] [--dry-run]'
+				'  (--base-model <accounts/.../models/...> | --warm-start-from <accounts/.../models/...>) \\\n' +
+				'  --output-model <slug> [--account-id …] [--train-dataset-id …] [--val-dataset-id …] \\\n' +
+				'  [--epochs 1] [--lora-rank 8] [--write-report path.json] [--dry-run]'
 		);
 		process.exit(2);
 	}
@@ -224,8 +230,14 @@ async function main(): Promise<void> {
 		);
 		process.exit(2);
 	}
-	if (!opts.baseModel || !opts.outputModel) {
-		console.error('Required: --base-model and --output-model');
+	if (!opts.outputModel.trim()) {
+		console.error('Required: --output-model');
+		process.exit(2);
+	}
+	const base = opts.baseModel.trim();
+	const warm = opts.warmStartFrom.trim();
+	if ((base && warm) || (!base && !warm)) {
+		console.error('Provide exactly one of --base-model or --warm-start-from (Fireworks API).');
 		process.exit(2);
 	}
 
@@ -243,10 +255,14 @@ async function main(): Promise<void> {
 
 	const jobPayload: Record<string, unknown> = {
 		dataset: trainDatasetId,
-		baseModel: opts.baseModel,
-		outputModel: opts.outputModel,
+		outputModel: opts.outputModel.trim(),
 		epochs: opts.epochs
 	};
+	if (warm) {
+		jobPayload.warmStartFrom = warm;
+	} else {
+		jobPayload.baseModel = base;
+	}
 	if (opts.validationFile && valDatasetId) {
 		jobPayload.evaluationDataset = valDatasetId;
 	}

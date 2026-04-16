@@ -40,12 +40,24 @@ Training **messages** must match production: same folded system + user shape as 
 | Step | Owner | Action |
 |------|--------|--------|
 | **A** | Agent / you | After JSONL changes: `pnpm ops:phase2-step-a-together-packaging -- --export-dir data/phase1-training-export` (still named “together” — output is **generic chat JSONL**). |
-| **B** | You | Pick a Fireworks **Tunable** `--base-model` (`firectl model get -a fireworks <ID>` → `Tunable: true`). |
+| **B** | You | Confirm starting weights (see **Sophia default SFT weights** below) and run `firectl model get …` → **`Tunable: true`** where required. |
 | **C** | You + agent | `pnpm ops:fireworks-submit-sft -- --dry-run …` then live submit with **`FIREWORKS_API_KEY`** and account id (`FIREWORKS_ACCOUNT_ID` or infer from `EXTRACTION_MODEL`). Optional: `--write-report data/phase1-training-export/fireworks-sft-job-submitted.json`. |
 | **D** | You | Wait for job completion in Fireworks UI or `firectl sftj get …`; then **`firectl deployment create <output-model-slug>`** (see [extraction-fireworks-deploy.md](./extraction-fireworks-deploy.md)). |
 | **E** | Agent / you | Set `EXTRACTION_MODEL` to the new **deployment** id; run `pnpm ops:eval-extraction-compare`. |
 
-**Warm start:** For a second iteration on top of a prior Fireworks LoRA, Fireworks supports `warmStartFrom` / `firectl sftj create --warm-start-from …` (see vendor docs). Extend `scripts/fireworks-submit-sft.ts` when you need it.
+### Sophia default SFT weights (this deployment)
+
+The merged extraction model already on Fireworks (uploaded via `firectl model create sophia-extract-m7b-ft …`) is:
+
+**`accounts/adam-boon1984-17nryg/models/sophia-extract-m7b-ft`**
+
+1. **Before the first on-platform SFT**, run:  
+   `firectl model get sophia-extract-m7b-ft`  
+   If **`Tunable: true`**, use that full string as **`--base-model`** so the next LoRA is trained **from your current deployed weights** (not a fresh catalog Mistral).
+2. If **`Tunable: false`** but **`Supports Lora: true`**, that usually means inference-only LoRA attach — pick a Fireworks **catalog** model that is **`Tunable: true`** for `--base-model`, or ask Fireworks support whether your account can enable SFT from that custom upload.
+3. **Second and later iterations** on Fireworks (continuing from a **prior Fireworks SFT job output**): use **`--warm-start-from accounts/<account>/models/<PRIOR_OUTPUT_MODEL>`** (mutually exclusive with `--base-model` in the API). The script supports both flags.
+
+**Deployments vs models:** inference uses `accounts/.../deployments/...`; SFT reads **`accounts/.../models/...`**. Each successful SFT produces a **new** model id — create a **new** deployment for eval, then retire or keep the old deployment for rollback.
 
 **Legacy path:** Together LoRA + merged tarball + `firectl model create` — [together-lora-phase2-runbook.md](../local/operations/together-lora-phase2-runbook.md).
 
@@ -93,7 +105,7 @@ Use this as Cursor / operator todos (copy into a session or issue).
 ### Optional engineering (separate PRs)
 
 - [ ] Telemetry: `extraction_inner_array_recoveries` (or similar) for format salvage vs parse.
-- [ ] Extend `fireworks-submit-sft.ts` with `--warm-start-from`, region, W&B flags as needed.
+- [ ] Extend `fireworks-submit-sft.ts` with region, W&B, or other SFT job fields as needed.
 
 ---
 
