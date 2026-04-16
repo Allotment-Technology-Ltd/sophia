@@ -73,7 +73,18 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
 
 This path is **`https://generativelanguage.googleapis.com/v1beta/openai`** — the same family of **API-key** access as “Google AI Studio” / Generative Language, **not** the Vertex AI regional REST URL your Cloud Run job may use with **GCP workload identity**. Sophia’s prod **`vertex:gemini-3-flash-preview`** route still names the **same model id**; here you pass that id into the OpenAI-compatible chat surface.
 
-**Will my key work?** If **`GOOGLE_AI_API_KEY`** is an **AI Studio–style** key (`AIza…`, Generative Language API enabled), it should work here. If the only credential you have is **pure Vertex** (service account / no Studio key), this base URL **may 401 or 403** — you would need a Studio key for this eval, or a separate code path that calls Vertex native APIs (not implemented for `eval-extraction-holdout-openai-compatible.ts`).
+**Will my key work?** Keys created in **Vertex AI Studio → Settings → API keys** often look like **`AQ…`** (not `AIza…`). They are **Gemini API** keys and match the console **`curl`** pattern: **`https://aiplatform.googleapis.com/v1/publishers/google/models/…?key=…`** — the **publisher** REST surface. **Option B** below uses a **different** host: **`generativelanguage.googleapis.com/v1beta/openai`** with the **OpenAI** SDK (`createOpenAI`). Google may accept the same key on both; if you get **401/403**, treat it as a **host/auth mismatch** (key is valid for **publisher** / AI SDK **Google** provider, but not for that OpenAI-compat URL) and use **OAuth + Vertex OpenAI base URL** per [Vertex OpenAI compatibility](https://cloud.google.com/vertex-ai/generative-ai/docs/start/openai) (not wired into `eval-extraction-holdout-openai-compatible.ts` yet).
+
+### How Sophia uses **`GOOGLE_AI_API_KEY`** today (vs your screenshot)
+
+| Surface | Code | What the key authenticates |
+|--------|------|-----------------------------|
+| **Catalog `vertex` routes** (e.g. prod relations / validation / pinned **`gemini-3-flash-preview`**) | `createGoogleGenerativeAI({ apiKey })` in [`src/lib/server/vertex.ts`](../../src/lib/server/vertex.ts) | Google **Generative AI** / Gemini **API key** flow used by the AI SDK’s Google provider (same env var name as in `.env.local`). |
+| **Validation helper** | `@google/generative-ai` `GoogleGenerativeAI(apiKey)` in [`src/lib/server/gemini.ts`](../../src/lib/server/gemini.ts) | Same **`GOOGLE_AI_API_KEY`**. |
+| **Embeddings (`vertex`)** | [`src/lib/server/embeddings.ts`](../../src/lib/server/embeddings.ts) | **OAuth Bearer** to **`{region}-aiplatform.googleapis.com/.../predict`** — **not** this API key; uses ADC / project + location. |
+| **Holdout eval Option B** | `createOpenAI` + **`EXTRACTION_*`** in [`scripts/eval-extraction-holdout-openai-compatible.ts`](../../scripts/eval-extraction-holdout-openai-compatible.ts) via [`buildExtractionOpenAiCompatibleRoute`](../../src/lib/server/vertex.ts) | **OpenAI-compatible** Gemini HTTP; **`readExtractionOpenAiCompatibleOverride`** supplies the key (including **`GOOGLE_AI_API_KEY`** for `generativelanguage.googleapis.com` hosts). |
+
+Your screenshot is the **Vertex AI Studio** key UI for project **SOPHIA** (`sophia-488807`), key restricted to **Gemini API**, bound to **`vertex-express@…`**. That is the **right class of secret** for the **first two rows** in the table. Option B is **row four** — try it; if it fails, the gap is **OpenAI-compat base URL vs publisher**, not “wrong project.”
 
 Align with prod flash id (see `INGEST_VERTEX_GEMINI_FLASH_MODEL_ID` in `src/lib/server/ingestPinNormalization.ts`):
 
@@ -129,3 +140,4 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
 | 2026-04-16 | Initial report: golden-200 evidence table (three FT deployments), eval-compare summary, catalog baseline command, recommendations, follow-up tests. |
 | 2026-04-16 | §4: OpenAI vs **Gemini (Google AI OpenAI-compatible)** baseline commands; `loadServerEnv` override note; wrong-filename incident called out. Code: **`GOOGLE_AI_API_KEY`** fallback for `generativelanguage.googleapis.com` extraction override in `vertex.ts`. |
 | 2026-04-16 | §4 Option B: **`gemini-3-flash-preview`** + Studio vs **Vertex-only** key caveat (prod model id, different auth surface). |
+| 2026-04-16 | §4: **Vertex AI Studio `AQ…` API keys** — table mapping `GOOGLE_AI_API_KEY` to `vertex.ts` / `gemini.ts` / embeddings / holdout eval; publisher `aiplatform…?key=` vs `generativelanguage…/openai`. |
