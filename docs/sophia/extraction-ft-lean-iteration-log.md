@@ -168,6 +168,55 @@ EXTRACTION_EVAL_LOG_FIRST_FAILURE=1 pnpm ops:eval-extraction-holdout-openai-comp
 
 ---
 
+## 2026-04-16 — Iteration 1 (measured)
+
+**Report:** [`data/phase1-training-export/eval-compare-2026-04-16-fireworks-hz8ot3bv-limit200.json`](../../data/phase1-training-export/eval-compare-2026-04-16-fireworks-hz8ot3bv-limit200.json) (`generatedAt` in file: **2026-04-16T13:06:41.859Z**).
+
+**Build context (operator):** Fireworks SFT job submitted same day (`outputModel` `sophia-extract-sft-iter1`, job name pattern `…/supervisedFineTuningJobs/sug7y6zc` in `fireworks-sft-job-submitted.json`). **Verify** `EXTRACTION_MODEL` for this eval matches the deployment you intend (here: **`accounts/adam-boon1984-17nryg/deployments/hz8ot3bv`**).
+
+### Fingerprints (manifest at eval time)
+
+| `cohortFingerprintSha256_16` | `goldenFingerprintSha256_16` |
+|------------------------------|--------------------------------|
+| `6ab6bd1d739097a0` | `98abe3de579ef460` |
+
+### `summary` (from combined JSON)
+
+```json
+{
+  "golden": {
+    "schemaPassRate": 0.995,
+    "subsetTextMatchRate": 1,
+    "subsetMatchRate": 0.005025125628140704,
+    "latencyMs": { "p50": 1847, "p95": 2088 },
+    "modelId": "accounts/adam-boon1984-17nryg/deployments/hz8ot3bv"
+  },
+  "remit": {
+    "schemaPassRate": 0.985,
+    "subsetTextMatchRate": 1,
+    "subsetMatchRate": 0.005076142131979695,
+    "latencyMs": { "p50": 1946, "p95": 2377 },
+    "modelId": "accounts/adam-boon1984-17nryg/deployments/hz8ot3bv"
+  }
+}
+```
+
+### Slice detail (from full reports)
+
+| Slice | Rows | `schemaPassRate` | `subsetTextMatchRate` | `subsetMatchRate` | Notes |
+|-------|------|-------------------|----------------------|-------------------|--------|
+| Golden holdout | 200 | **0.995** (1 schema fail) | **1.0** (199 eligible) | ~0.005 | `gold_text_wrong_position` dominates strict match (document-level gold position vs single-sentence row — **expected**; do not read as extraction failure). |
+| Remit multidomain | 200 | **0.985** (3 schema fails) | **1.0** (197 eligible) | ~0.005 | Same mismatch story; **watch** remit schema vs golden if tuning for format. |
+
+### Learn (provisional)
+
+| Decision | Rationale |
+|----------|-----------|
+| **Iterate / confirm** | Golden **schema** aligns with prior vendor spike (~0.995). Remit **slightly lower** schema (0.985 vs 0.995) — worth `EXTRACTION_EVAL_LOG_FIRST_FAILURE=1` on a **5-row remit smoke** to inspect the 3 failures if they persist after SFT completes. |
+| **Next** | Re-run **`pnpm ops:eval-extraction-compare -- --out …/eval-compare-<label>-200.json`** after SFT finishes and **`EXTRACTION_MODEL`** points at the **new** tuned deployment; diff `summary` vs this file. Optional: SEP ingest smoke if offline gates hold. |
+
+---
+
 ## Cycle 3 — Prod failure exemplars (planned hypothesis; G1-dependent)
 
 > **Hypothesis:** After cycles 1–2, adding ≤100 **G1-cleared**, redacted rows mined from production **`[JSON_FAIL]`** / repair traces (assistant = corrected JSON array) reduces **`ingest_model_json_parse_failed`** rate on a fixed SEP smoke ingest without offline metric regression.
@@ -189,4 +238,4 @@ EXTRACTION_EVAL_LOG_FIRST_FAILURE=1 pnpm ops:eval-extraction-holdout-openai-comp
 
 Metrics and commands are frozen in **[extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md)**. Historical vendor spike numbers remain in **[../local/operations/extraction-vendor-ft-spike-eval-record.md](../local/operations/extraction-vendor-ft-spike-eval-record.md)**.
 
-When you run the first post-baseline `eval-extraction-compare`, paste the **`summary`** block from `eval-compare-*.json` into a new dated section above as **Iteration 1 — measured**.
+First post-baseline combined eval is recorded in **Iteration 1 (2026-04-16)** above; use **`--out data/phase1-training-export/eval-compare-<date>-<deployment>-limit200.json`** for subsequent runs so reports are not overwritten by the default `eval-compare.json`.

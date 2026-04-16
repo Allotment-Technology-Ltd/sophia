@@ -1,0 +1,637 @@
+{
+  "generatedAt": "2026-04-16T13:06:41.859Z",
+  "kind": "extraction_eval_compare",
+  "exportDir": "data/phase1-training-export",
+  "limit": 200,
+  "manifestFingerprints": {
+    "cohortFingerprintSha256_16": "6ab6bd1d739097a0",
+    "goldenFingerprintSha256_16": "98abe3de579ef460",
+    "manifestGeneratedAt": "2026-04-15T20:24:46.884Z"
+  },
+  "goldenHoldout": {
+    "jsonl": "data/phase1-training-export/golden_holdout.jsonl",
+    "reportPath": "data/phase1-training-export/.eval-compare-golden-200.tmp.json",
+    "report": {
+      "generatedAt": "2026-04-16T13:00:05.850Z",
+      "jsonl": "data/phase1-training-export/golden_holdout.jsonl",
+      "limit": 200,
+      "rowsEvaluated": 200,
+      "schemaOkRows": 199,
+      "schemaFailRows": 1,
+      "schemaPassRate": 0.995,
+      "latencyMs": {
+        "p50": 1847,
+        "p95": 2088
+      },
+      "subsetTextMatchRate": 1,
+      "subsetMatchRate": 0.005025125628140704,
+      "subsetEligibleRows": 199,
+      "subsetEligibleRowsWhereInputEqualsGoldText": 199,
+      "singleSentenceGoldEvalAllEligibleRows": true,
+      "modelId": "accounts/adam-boon1984-17nryg/deployments/hz8ot3bv",
+      "inferenceHost": "api.fireworks.ai",
+      "systemFoldedIntoUser": true,
+      "temperatureOmittedForOpenAiSdk": true,
+      "mismatchDiagnostics": {
+        "note": "Buckets apply only to subset-eligible rows (parsable gold label + ≥1 model claim). `gold_text_wrong_position`: some claim has exact gold `text` but no claim has gold `position_in_source` — very common when **gold positions are document-level** while each eval row is a **single-sentence `input`**, so the model invents a local index (1, 2, …) that cannot match the label. `gold_position_wrong_text`: some claim matches gold position but not gold text (often paraphrase; see EXTRACTION_SYSTEM). `split_across_claims`: exact text on one claim and gold position on another.",
+        "subsetEligibleRows": 199,
+        "goldLabelTextEqualsInputRate": 1,
+        "mismatchBucketCounts": {
+          "hit": 1,
+          "split_across_claims": 0,
+          "gold_text_wrong_position": 198,
+          "gold_position_wrong_text": 0,
+          "neither_literal": 0
+        },
+        "meanClaimCountOnMismatch": 1,
+        "medianClaimCountOnMismatch": 1,
+        "mismatchSamples": [
+          {
+            "evalRow": 1,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "The Christian faith benefits from a profound engagement with philosophy and science.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 4,
+                "text": "The Christian faith benefits from a profound engagement with philosophy and science."
+              }
+            ]
+          },
+          {
+            "evalRow": 2,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "The Summa theologiae represents Aquinas’s most considered thought on a given topic.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 1,
+                "text": "The Summa theologiae represents Aquinas’s most considered thought on a given topic."
+              }
+            ]
+          },
+          {
+            "evalRow": 3,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "A careful study of Aquinas’s work requires comparing multiple treatments of the same issue across different texts.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 66,
+                "text": "A careful study of Aquinas’s work requires comparing multiple treatments of the same issue across different texts."
+              }
+            ]
+          },
+          {
+            "evalRow": 4,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "The scholastic disputed-question format is a method that lends itself to argumentative rigor.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 20,
+                "text": "The scholastic disputed-question format is a method that lends itself to argumentative rigor."
+              }
+            ]
+          },
+          {
+            "evalRow": 5,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Philosophy is important for a proper understanding of theology.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 8,
+                "text": "Philosophy is important for a proper understanding of theology."
+              }
+            ]
+          },
+          {
+            "evalRow": 6,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "If a philosophical claim is contrary to the Christian faith, it is an abuse of philosophy resulting from a failure of reason.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 9,
+                "text": "If a philosophical claim is contrary to the Christian faith, it is an abuse of philosophy resulting from a failure of reason."
+              }
+            ]
+          },
+          {
+            "evalRow": 7,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Natural reason can demonstratively prove the existence of God.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 17,
+                "text": "Natural reason can demonstratively prove the existence of God."
+              }
+            ]
+          },
+          {
+            "evalRow": 8,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Anselm’s ontological argument lacks force as a proof for God's existence.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 43,
+                "text": "Anselm’s ontological argument lacks force as a proof for God's existence."
+              }
+            ]
+          },
+          {
+            "evalRow": 9,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "An infinite series of simultaneous causes is impossible.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 70,
+                "text": "An infinite series of simultaneous causes is impossible."
+              }
+            ]
+          },
+          {
+            "evalRow": 10,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "The first cause of the world is entirely simple and non-composite.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 31,
+                "text": "The first cause of the world is entirely simple and non-composite."
+              }
+            ]
+          },
+          {
+            "evalRow": 11,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Natural reason is incapable of establishing the triune nature of God.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 37,
+                "text": "Natural reason is incapable of establishing the triune nature of God."
+              }
+            ]
+          },
+          {
+            "evalRow": 12,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Divine revelation is necessary for human salvation.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 57,
+                "text": "Divine revelation is necessary for human salvation."
+              }
+            ]
+          },
+          {
+            "evalRow": 13,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "It is not possible for human beings to know what God is, but only what God is not.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 63,
+                "text": "It is not possible for human beings to know what God is, but only what God is not."
+              }
+            ]
+          },
+          {
+            "evalRow": 14,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Predicates applied to both God and creatures are used analogically rather than univocally or equivocally.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 39,
+                "text": "Predicates applied to both God and creatures are used analogically rather than univocally or equivocally."
+              }
+            ]
+          },
+          {
+            "evalRow": 15,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Creatures possess goodness only by participation in the goodness of God.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 64,
+                "text": "Creatures possess goodness only by participation in the goodness of God."
+              }
+            ]
+          },
+          {
+            "evalRow": 16,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Creation in the strict sense is the act of bringing a thing into existence from nothing (ex nihilo).",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 14,
+                "text": "Creation in the strict sense is the act of bringing a thing into existence from nothing (ex nihilo)."
+              }
+            ]
+          },
+          {
+            "evalRow": 17,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Only God has the power to create something ex nihilo.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 67,
+                "text": "Only God has the power to create something ex nihilo."
+              }
+            ]
+          },
+          {
+            "evalRow": 18,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "No demonstrative argument can prove whether the world is eternal or had a beginning in time.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 32,
+                "text": "No demonstrative argument can prove whether the world is eternal or had a beginning in time."
+              }
+            ]
+          },
+          {
+            "evalRow": 19,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Defending the faith through dubious attempts at philosophical demonstration discredits the faith.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 62,
+                "text": "Defending the faith through dubious attempts at philosophical demonstration discredits the faith."
+              }
+            ]
+          },
+          {
+            "evalRow": 20,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Space cannot exist without the existence of bodies.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 38,
+                "text": "Space cannot exist without the existence of bodies."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "remitMultidomain": {
+    "jsonl": "data/phase1-training-export/eval_remit_multidomain.jsonl",
+    "reportPath": "data/phase1-training-export/.eval-compare-remit-200.tmp.json",
+    "report": {
+      "generatedAt": "2026-04-16T13:06:41.820Z",
+      "jsonl": "data/phase1-training-export/eval_remit_multidomain.jsonl",
+      "limit": 200,
+      "rowsEvaluated": 200,
+      "schemaOkRows": 197,
+      "schemaFailRows": 3,
+      "schemaPassRate": 0.985,
+      "latencyMs": {
+        "p50": 1946,
+        "p95": 2377
+      },
+      "subsetTextMatchRate": 1,
+      "subsetMatchRate": 0.005076142131979695,
+      "subsetEligibleRows": 197,
+      "subsetEligibleRowsWhereInputEqualsGoldText": 197,
+      "singleSentenceGoldEvalAllEligibleRows": true,
+      "modelId": "accounts/adam-boon1984-17nryg/deployments/hz8ot3bv",
+      "inferenceHost": "api.fireworks.ai",
+      "systemFoldedIntoUser": true,
+      "temperatureOmittedForOpenAiSdk": true,
+      "mismatchDiagnostics": {
+        "note": "Buckets apply only to subset-eligible rows (parsable gold label + ≥1 model claim). `gold_text_wrong_position`: some claim has exact gold `text` but no claim has gold `position_in_source` — very common when **gold positions are document-level** while each eval row is a **single-sentence `input`**, so the model invents a local index (1, 2, …) that cannot match the label. `gold_position_wrong_text`: some claim matches gold position but not gold text (often paraphrase; see EXTRACTION_SYSTEM). `split_across_claims`: exact text on one claim and gold position on another.",
+        "subsetEligibleRows": 197,
+        "goldLabelTextEqualsInputRate": 1,
+        "mismatchBucketCounts": {
+          "hit": 1,
+          "split_across_claims": 0,
+          "gold_text_wrong_position": 196,
+          "gold_position_wrong_text": 0,
+          "neither_literal": 0
+        },
+        "meanClaimCountOnMismatch": 1,
+        "medianClaimCountOnMismatch": 1,
+        "mismatchSamples": [
+          {
+            "evalRow": 1,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Character is a behavior pattern formed as a result of past persistent actions, and moral virtues or vices arise through habituation.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 41,
+                "text": "Character is a behavior pattern formed as a result of past persistent actions, and moral virtues or vices arise through habituation."
+              }
+            ]
+          },
+          {
+            "evalRow": 2,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "A group that constitutes a public authority is entitled to overthrow and, if necessary, execute a tyrant to liberate the people and the homeland.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 103,
+                "text": "A group that constitutes a public authority is entitled to overthrow and, if necessary, execute a tyrant to liberate the people and the home…"
+              }
+            ]
+          },
+          {
+            "evalRow": 3,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Supreme legislative powers are held either by the whole people or by a public persona who represents them.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 89,
+                "text": "Supreme legislative powers are held either by the whole people or by a public persona who represents them."
+              }
+            ]
+          },
+          {
+            "evalRow": 4,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Perceptual experiences may provide justification because they have a phenomenology of presenting their content as true.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 48,
+                "text": "Perceptual experiences may provide justification because they have a phenomenology of presenting their content as true."
+              }
+            ]
+          },
+          {
+            "evalRow": 5,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Socioeconomic values are necessary inputs for the practice of conservation biology.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 53,
+                "text": "Socioeconomic values are necessary inputs for the practice of conservation biology."
+              }
+            ]
+          },
+          {
+            "evalRow": 6,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "The introduction of pagan Greek metaphysics into monotheistic Islamic culture generated both harmony and antagonism between *falsafa* (philosophical theology) and *kalām* (revealed theology).",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 1,
+                "text": "The introduction of pagan Greek metaphysics into monotheistic Islamic culture generated both harmony and antagonism between *falsafa* (philo…"
+              }
+            ]
+          },
+          {
+            "evalRow": 7,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Moral motivation in African thought involves both external social sanctions and internal feelings of guilt and shame tied to conscience.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 85,
+                "text": "Moral motivation in African thought involves both external social sanctions and internal feelings of guilt and shame tied to conscience."
+              }
+            ]
+          },
+          {
+            "evalRow": 8,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "The term 'law' as used by scientific modelers does not necessarily denote a true universal law of nature.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 43,
+                "text": "The term 'law' as used by scientific modelers does not necessarily denote a true universal law of nature."
+              }
+            ]
+          },
+          {
+            "evalRow": 9,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Arabic translators of the *Metaphysics* sought to balance fidelity to the Greek original with philosophical clarity, particularly in repeatedly translated sections like book Lambda (XII).",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 18,
+                "text": "Arabic translators of the *Metaphysics* sought to balance fidelity to the Greek original with philosophical clarity, particularly in repeate…"
+              }
+            ]
+          },
+          {
+            "evalRow": 10,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "New evidence always increases the weight of an argument, even if it decreases the argument’s probability.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 85,
+                "text": "New evidence always increases the weight of an argument, even if it decreases the argument’s probability."
+              }
+            ]
+          },
+          {
+            "evalRow": 11,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Conservationists should work with corporations rather than merely opposing them.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 32,
+                "text": "Conservationists should work with corporations rather than merely opposing them."
+              }
+            ]
+          },
+          {
+            "evalRow": 12,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "A statement φ is Ω-satisfiable if there exists an ordinal α and a complete Boolean algebra B such that the model V^B_α satisfies φ.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 45,
+                "text": "A statement φ is Ω-satisfiable if there exists an ordinal α and a complete Boolean algebra B such that the model V^B_α satisfies φ."
+              }
+            ]
+          },
+          {
+            "evalRow": 13,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Rulers who defy moral restrictions on their authority are tyrants.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 77,
+                "text": "Rulers who defy moral restrictions on their authority are tyrants."
+              }
+            ]
+          },
+          {
+            "evalRow": 14,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "The Definability Constraint requires that Π2-truths in the universe of sets are definable in H(κ) across the multiverse.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 80,
+                "text": "The Definability Constraint requires that Π2-truths in the universe of sets are definable in H(κ) across the multiverse."
+              }
+            ]
+          },
+          {
+            "evalRow": 15,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Trivers explains the behavior of large fish waiting for cleaner fish before fleeing predators as reciprocal altruism based on the expectation of future cleaning benefits.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 78,
+                "text": "Trivers explains the behavior of large fish waiting for cleaner fish before fleeing predators as reciprocal altruism based on the expectatio…"
+              }
+            ]
+          },
+          {
+            "evalRow": 16,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "The term 'African' in 'African ethics' refers to the salient features or ideas of African moral life and thought as reflected in African moral language, social structure, and life.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 2,
+                "text": "The term 'African' in 'African ethics' refers to the salient features or ideas of African moral life and thought as reflected in African mor…"
+              }
+            ]
+          },
+          {
+            "evalRow": 17,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Belief in the external world is justified because it provides a better explanation of sensory experiences than the brain-in-a-vat hypothesis.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 48,
+                "text": "Belief in the external world is justified because it provides a better explanation of sensory experiences than the brain-in-a-vat hypothesis…"
+              }
+            ]
+          },
+          {
+            "evalRow": 18,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "The Akan phrase 'aka ne ho' ('it has remained with him', 'it has become part of him', 'it has become his habit') describes how an acquired virtue becomes a stable part of a person's character.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 50,
+                "text": "The Akan phrase 'aka ne ho' ('it has remained with him', 'it has become part of him', 'it has become his habit') describes how an acquired v…"
+              }
+            ]
+          },
+          {
+            "evalRow": 19,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Avicenna’s recasting of the content of Aristotle’s *Metaphysics* reorders its fourteen books (excluding perhaps book Κ) to integrate themes from other Aristotelian writings, the Greek and Arabic Perip…",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 3,
+                "text": "Avicenna’s recasting of the content of Aristotle’s *Metaphysics* reorders its fourteen books (excluding perhaps book Κ) to integrate themes …"
+              }
+            ]
+          },
+          {
+            "evalRow": 20,
+            "bucket": "gold_text_wrong_position",
+            "goldText": "Mental properties and physical realizers may be causally relevant to different properties of the same effect.",
+            "inputEqualsGoldText": true,
+            "claimCount": 1,
+            "claimsPreview": [
+              {
+                "position_in_source": 157,
+                "text": "Mental properties and physical realizers may be causally relevant to different properties of the same effect."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "summary": {
+    "golden": {
+      "schemaPassRate": 0.995,
+      "subsetTextMatchRate": 1,
+      "subsetMatchRate": 0.005025125628140704,
+      "latencyMs": {
+        "p50": 1847,
+        "p95": 2088
+      },
+      "modelId": "accounts/adam-boon1984-17nryg/deployments/hz8ot3bv"
+    },
+    "remit": {
+      "schemaPassRate": 0.985,
+      "subsetTextMatchRate": 1,
+      "subsetMatchRate": 0.005076142131979695,
+      "latencyMs": {
+        "p50": 1946,
+        "p95": 2377
+      },
+      "modelId": "accounts/adam-boon1984-17nryg/deployments/hz8ot3bv"
+    }
+  }
+}
