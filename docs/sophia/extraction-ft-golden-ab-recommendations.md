@@ -69,19 +69,23 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
   --out data/phase1-training-export/eval-golden-baseline-gpt4o-mini-200.json
 ```
 
-### Option B — Google AI Studio, OpenAI-compatible (only **`GOOGLE_AI_API_KEY`**)
+### Option B — Google **Generative Language API**, OpenAI-compatible ( **`GOOGLE_AI_API_KEY`** )
 
-Uses the same key as catalog Gemini. **`readExtractionOpenAiCompatibleOverride`** now resolves **`GOOGLE_AI_API_KEY`** (or **`GEMINI_API_KEY`** / **`GOOGLE_GENAI_API_KEY`** after merges) when `EXTRACTION_BASE_URL` points at **`generativelanguage.googleapis.com`** … **`/openai`**. Pick a current model id from [Google AI models](https://ai.google.dev/gemini-api/docs/models/gemini) (example below).
+This path is **`https://generativelanguage.googleapis.com/v1beta/openai`** — the same family of **API-key** access as “Google AI Studio” / Generative Language, **not** the Vertex AI regional REST URL your Cloud Run job may use with **GCP workload identity**. Sophia’s prod **`vertex:gemini-3-flash-preview`** route still names the **same model id**; here you pass that id into the OpenAI-compatible chat surface.
+
+**Will my key work?** If **`GOOGLE_AI_API_KEY`** is an **AI Studio–style** key (`AIza…`, Generative Language API enabled), it should work here. If the only credential you have is **pure Vertex** (service account / no Studio key), this base URL **may 401 or 403** — you would need a Studio key for this eval, or a separate code path that calls Vertex native APIs (not implemented for `eval-extraction-holdout-openai-compatible.ts`).
+
+Align with prod flash id (see `INGEST_VERTEX_GEMINI_FLASH_MODEL_ID` in `src/lib/server/ingestPinNormalization.ts`):
 
 ```bash
 cd /Users/adamboon/projects/sophia
 EXTRACTION_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai \
-EXTRACTION_MODEL=gemini-2.0-flash \
+EXTRACTION_MODEL=gemini-3-flash-preview \
 pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compatible.ts -- \
   --jsonl data/phase1-training-export/golden_holdout.jsonl \
   --limit 200 \
   --mismatch-diagnostics \
-  --out data/phase1-training-export/eval-golden-baseline-gemini-2-flash-200.json
+  --out data/phase1-training-export/eval-golden-baseline-gemini-3-flash-preview-200.json
 ```
 
 **Verify the report:** open the JSON and confirm **`modelId`** / host match the baseline you intended (an earlier run saved as `eval-golden-baseline-gpt4o-mini-200.json` accidentally recorded **Fireworks** `hz8ot3bv` because `.env.local` still had **`EXTRACTION_*`** set).
@@ -124,3 +128,4 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
 |------|--------|
 | 2026-04-16 | Initial report: golden-200 evidence table (three FT deployments), eval-compare summary, catalog baseline command, recommendations, follow-up tests. |
 | 2026-04-16 | §4: OpenAI vs **Gemini (Google AI OpenAI-compatible)** baseline commands; `loadServerEnv` override note; wrong-filename incident called out. Code: **`GOOGLE_AI_API_KEY`** fallback for `generativelanguage.googleapis.com` extraction override in `vertex.ts`. |
+| 2026-04-16 | §4 Option B: **`gemini-3-flash-preview`** + Studio vs **Vertex-only** key caveat (prod model id, different auth surface). |
