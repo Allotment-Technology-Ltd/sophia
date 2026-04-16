@@ -1,6 +1,7 @@
 /**
- * Run the two canonical extraction eval slices (golden holdout + remit multidomain)
- * and write one JSON file for easy diff between FT iterations.
+ * Run the canonical extraction eval slices (golden holdout + remit multidomain) and,
+ * when present, **batch format stress** (`fixtures/eval_batch_format_stress.jsonl` under `--export-dir`).
+ * Writes one JSON file for easy diff between FT iterations.
  *
  * Usage:
  *   pnpm ops:eval-extraction-compare
@@ -101,8 +102,10 @@ async function main(): Promise<void> {
 	const { exportDir, limit, out, skipRemitSample } = parseArgs(process.argv.slice(2));
 	const goldenJsonl = join(exportDir, 'golden_holdout.jsonl');
 	const remitJsonl = join(exportDir, 'eval_remit_multidomain.jsonl');
+	const batchStressJsonl = join(exportDir, 'fixtures', 'eval_batch_format_stress.jsonl');
 	const goldenReportPath = join(exportDir, `.eval-compare-golden-${limit}.tmp.json`);
 	const remitReportPath = join(exportDir, `.eval-compare-remit-${limit}.tmp.json`);
+	const batchStressReportPath = join(exportDir, `.eval-compare-batch-stress-${limit}.tmp.json`);
 
 	if (!existsSync(goldenJsonl)) {
 		console.error(`Missing ${goldenJsonl}`);
@@ -142,11 +145,22 @@ async function main(): Promise<void> {
 	console.log(`[eval-compare] Remit multidomain → ${remitReportPath}`);
 	runEval(remitJsonl, limit, remitReportPath, true);
 
+	let batchStress: Record<string, unknown> | null = null;
+	let batchStressJsonlUsed: string | null = null;
+	if (existsSync(batchStressJsonl)) {
+		batchStressJsonlUsed = batchStressJsonl;
+		console.log(`[eval-compare] Batch format stress → ${batchStressReportPath}`);
+		runEval(batchStressJsonl, limit, batchStressReportPath, true);
+		batchStress = readReport(batchStressReportPath);
+	} else {
+		console.error(`[eval-compare] Skip batch stress (missing ${batchStressJsonl})`);
+	}
+
 	const golden = readReport(goldenReportPath);
 	const remit = readReport(remitReportPath);
 	const fingerprints = readManifestFingerprints(exportDir);
 
-	const combined = {
+	const combined: Record<string, unknown> = {
 		generatedAt: new Date().toISOString(),
 		kind: 'extraction_eval_compare',
 		exportDir,
@@ -172,6 +186,21 @@ async function main(): Promise<void> {
 		}
 	};
 
+	if (batchStress && batchStressJsonlUsed) {
+		combined.batchFormatStress = {
+			jsonl: batchStressJsonlUsed,
+			reportPath: batchStressReportPath,
+			report: batchStress
+		};
+		(combined.summary as Record<string, unknown>).batchStress = {
+			schemaPassRate: batchStress.schemaPassRate,
+			subsetTextMatchRate: batchStress.subsetTextMatchRate,
+			subsetMatchRate: batchStress.subsetMatchRate,
+			latencyMs: batchStress.latencyMs,
+			modelId: batchStress.modelId
+		};
+	}
+
 	mkdirSync(dirname(out), { recursive: true });
 	writeFileSync(out, `${JSON.stringify(combined, null, 2)}\n`, 'utf8');
 	try {
@@ -183,6 +212,13 @@ async function main(): Promise<void> {
 		unlinkSync(remitReportPath);
 	} catch {
 		/* ignore */
+	}
+	if (batchStressJsonlUsed) {
+		try {
+			unlinkSync(batchStressReportPath);
+		} catch {
+			/* ignore */
+		}
 	}
 	console.log(`[eval-compare] Wrote ${out}`);
 }

@@ -99,6 +99,17 @@ describe('ingestionFinetuneLabelerPolicy', () => {
 		expect(filterModelTiersForFinetunePolicy('extraction', tiers, process.env)).toEqual(tiers);
 	});
 
+	it('allows openai on json_repair when EXTRACTION_BASE_URL is set (repair via same FT endpoint)', () => {
+		process.env.INGEST_FINETUNE_LABELER_STRICT = '1';
+		delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;
+		process.env.EXTRACTION_BASE_URL = 'https://api.fireworks.ai/inference/v1';
+		const tiers = [
+			{ provider: 'openai', modelId: 'accounts/foo/models/bar' },
+			{ provider: 'vertex', modelId: 'gemini-3-flash-preview' }
+		];
+		expect(filterModelTiersForFinetunePolicy('json_repair', tiers, process.env)).toEqual(tiers);
+	});
+
 	it('does not implicitly allow openai on relations when EXTRACTION_BASE_URL is set', () => {
 		process.env.INGEST_FINETUNE_LABELER_STRICT = '1';
 		delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;

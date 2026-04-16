@@ -257,6 +257,8 @@ After a pilot, **rotate** the Fireworks API key if it was shared or pasted into 
 
 On-demand deployments may use a **Jinja** chat template that rejects a separate OpenAI **`system`** message (HTTP **400**: roles must alternate `user`/`assistant`). Sophia folds **`EXTRACTION_SYSTEM`** into the **`user`** message when **`EXTRACTION_BASE_URL`** points at **`api.fireworks.ai`** (same idea as Together SFT + **`together.xyz`**). If you add another OpenAI-compatible host with the same constraint, extend the fold rule in `scripts/ingest.ts` / `model-call.ts` or set a dedicated **`EXTRACTION_API_KEY`** and match the eval script’s folding behaviour.
 
+**JSON repair:** With **`EXTRACTION_BASE_URL`** + **`EXTRACTION_MODEL`** set, the **`json_repair`** stage is planned to the **same** OpenAI-compatible deployment as extraction by default (useful to verify the tuned model can fix its own bad JSON). Set **`INGEST_JSON_REPAIR_USE_EXTRACTION_ENDPOINT=0`** to fall back to the catalog / Gemini repair path. **`INGEST_PIN_PROVIDER_JSON_REPAIR`** / **`INGEST_PIN_MODEL_JSON_REPAIR`** still force the pinned repair route.
+
 ### Lineage sidecar (weights ↔ manifest ↔ eval)
 
 Machine-readable hashes and historical deployment ids for job **`ft-d95bacfb-6f78`** live in [`data/phase1-training-export/artifact-ft-d95bacfb-6f78.json`](../../data/phase1-training-export/artifact-ft-d95bacfb-6f78.json). Refresh after re-download or re-extract:

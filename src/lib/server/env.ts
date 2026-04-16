@@ -21,6 +21,23 @@ function restoreIngestPinEnv(snapshot: Record<string, string>): void {
   }
 }
 
+/**
+ * Catalog `vertex` routes use `GOOGLE_AI_API_KEY` (@restormel/contracts `REASONING_PROVIDER_PLATFORM_API_KEY_ENV`).
+ * Merge common alternates so local `.env.local` typos / Google AI Studio naming still work.
+ */
+function mergeGoogleAiApiKeyAliases(): void {
+  if (process.env.GOOGLE_AI_API_KEY?.trim()) return;
+  const e = process.env as Record<string, string | undefined>;
+  const from =
+    e.GEMINI_API_KEY?.trim() ||
+    e.GOOGLE_GENAI_API_KEY?.trim() ||
+    e.google_AI_API_KEY?.trim() ||
+    e.Google_AI_API_KEY?.trim();
+  if (from) {
+    process.env.GOOGLE_AI_API_KEY = from;
+  }
+}
+
 export function loadServerEnv(): void {
   if (loaded) return;
 
@@ -40,6 +57,8 @@ export function loadServerEnv(): void {
   }
 
   restoreIngestPinEnv(pinSnapshot);
+
+  mergeGoogleAiApiKeyAliases();
 
   if (
     Object.keys(pinSnapshot).length > 0 &&

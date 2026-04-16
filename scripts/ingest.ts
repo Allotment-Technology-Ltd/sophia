@@ -166,6 +166,7 @@ import {
 	type GroupingOutput
 } from '../src/lib/server/prompts/grouping.js';
 import { normalizeGroupingPayload } from '../src/lib/server/ingestion/stages/grouping-helpers.js';
+import { normalizeExtractionPayload } from '../src/lib/server/ingestion/stages/extraction-helpers.js';
 import { coerceIngestDomainLabel } from '../src/lib/server/prompts/domainZod.js';
 
 import {
@@ -234,8 +235,10 @@ const GOOGLE_VERTEX_PROJECT = process.env.GOOGLE_VERTEX_PROJECT || process.env.G
 const GOOGLE_VERTEX_LOCATION = process.env.GOOGLE_VERTEX_LOCATION || process.env.GCP_LOCATION || 'us-central1';
 const DB_CONNECT_MAX_RETRIES = Number(process.env.DB_CONNECT_MAX_RETRIES || '4');
 const DB_CONNECT_RETRY_BASE_MS = Number(process.env.DB_CONNECT_RETRY_BASE_MS || '750');
-/** Default 6m: SEP + Mistral large often exceeds 3m; Cloud Run can still override via INGEST_MODEL_TIMEOUT_MS. */
+/** Default 6m for most LLM stages; extraction uses a shorter per-call default in `makeStageBudget` (see there). */
 const INGEST_MODEL_TIMEOUT_MS = Number(process.env.INGEST_MODEL_TIMEOUT_MS || '360000');
+/** When `INGEST_STAGE_EXTRACTION_TIMEOUT_MS` is unset: fail fast on stalled serverless extraction (split widens batches on timeout). */
+const INGEST_EXTRACTION_TIMEOUT_FALLBACK_MS = Number(process.env.INGEST_EXTRACTION_TIMEOUT_FALLBACK_MS || '180000');
 const VALIDATION_MODEL_TIMEOUT_MS = Number(process.env.VALIDATION_MODEL_TIMEOUT_MS || '300000');
 
 /** Fallback when `INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS` is unset (assert-only cap still uses env). */
@@ -1100,7 +1103,11 @@ function shouldFoldSystemPromptIntoUserForProvider(provider: string | undefined)
 function makeStageBudget(stage: StageKey): StageBudget {
 	const upper = stage.toUpperCase();
 	const timeoutFallback =
-		stage === 'validation' || stage === 'remediation' ? VALIDATION_MODEL_TIMEOUT_MS : INGEST_MODEL_TIMEOUT_MS;
+		stage === 'validation' || stage === 'remediation'
+			? VALIDATION_MODEL_TIMEOUT_MS
+			: stage === 'extraction'
+				? INGEST_EXTRACTION_TIMEOUT_FALLBACK_MS
+				: INGEST_MODEL_TIMEOUT_MS;
 	return {
 		maxInputTokens: parsePositiveInt(process.env[`INGEST_STAGE_${upper}_MAX_INPUT_TOKENS`]),
 		maxOutputTokens: parsePositiveInt(process.env[`INGEST_STAGE_${upper}_MAX_OUTPUT_TOKENS`]),
@@ -2090,26 +2097,6 @@ function normalizeExtractionClaimType(value: unknown): string {
 	return typeMap[normalized] ?? 'premise';
 }
 
-function normalizeExtractionPayload(payload: unknown, forcedDomain?: string): unknown {
-	if (!Array.isArray(payload)) return payload;
-	const domainOverride = forcedDomain ? normalizeExtractionDomain(forcedDomain) : null;
-	return payload.map((item, index) => {
-		if (!item || typeof item !== 'object') return item;
-		const typed = item as Record<string, unknown>;
-		const confidenceRaw = Number(typed.confidence ?? 0.8);
-		const confidence = Number.isFinite(confidenceRaw)
-			? Math.max(0, Math.min(1, confidenceRaw))
-			: 0.8;
-		return {
-			...typed,
-			claim_type: normalizeExtractionClaimType(typed.claim_type),
-			domain: domainOverride ?? normalizeExtractionDomain(typed.domain),
-			position_in_source: normalizePositivePosition(typed.position_in_source ?? index + 1),
-			confidence
-		};
-		});
-}
-
 function reviewStateForConfidence(confidence: number): ReviewState {
 	return confidence < LOW_CONFIDENCE_REVIEW_THRESHOLD ? 'needs_review' : 'candidate';
 }
@@ -2504,15 +2491,28 @@ async function callStageModel(params: {
 			const textGenParams = omitTemperature
 				? textGenBase
 				: { ...textGenBase, temperature: 0.1 as const };
-			const result = await runWithIngestTelemetryHeartbeat({
-				stage,
-				work: () =>
-					withTimeout(
-						generateText(textGenParams),
-						budget.timeoutMs,
-						`${stage} ${activePlan.provider}:${activePlan.model}`
-					)
-			});
+			// Abort in-flight HTTP when the stage budget elapses. Plain `Promise.race` does not cancel
+			// `generateText`, so a stalled provider could sit until TCP idle — abortSignal tears down the fetch.
+			const abortController = new AbortController();
+			const abortTimer = setTimeout(() => {
+				abortController.abort();
+			}, budget.timeoutMs);
+			let result: Awaited<ReturnType<typeof generateText>>;
+			try {
+				result = await runWithIngestTelemetryHeartbeat({
+					stage,
+					work: () => generateText({ ...textGenParams, abortSignal: abortController.signal })
+				});
+			} catch (e) {
+				if (abortController.signal.aborted) {
+					throw new Error(
+						`${stage} ${activePlan.provider}:${activePlan.model} timed out after ${budget.timeoutMs}ms (aborted)`
+					);
+				}
+				throw e;
+			} finally {
+				clearTimeout(abortTimer);
+			}
 			if (activeIngestTiming) {
 				const wall = Date.now() - callStarted;
 				activeIngestTiming.model_calls[stage] = (activeIngestTiming.model_calls[stage] ?? 0) + 1;
@@ -2583,6 +2583,8 @@ async function callStageModel(params: {
 					msg.includes('504') ||
 					msg.includes('overloaded') ||
 					msg.includes('timeout') ||
+					msg.includes('aborted') ||
+					lastError.name === 'AbortError' ||
 					msg.includes('prompt_too_long') ||
 					msg.includes('context_length') ||
 					/resource exhausted/i.test(msg) ||
@@ -4014,6 +4016,28 @@ async function surrealStoreCleanupRemoveExistingSource(db: Surreal, existingSour
 	console.log(`  [CLEANUP] source row removed in ${Date.now() - tSrc}ms (legacy path total ${Date.now() - t0}ms)`);
 }
 
+/** Cold re-run Stage 1: drop disk/Neon-synced extraction resume + any accumulated claims for this slug. */
+function ingestFreshExtractionEnabled(): boolean {
+	const v = (process.env.INGEST_FRESH_EXTRACTION ?? '').trim().toLowerCase();
+	return v === '1' || v === 'true' || v === 'yes';
+}
+
+/** Strip Stage 1+ checkpoint fields so a new extraction run cannot inherit stale claims or mid-stage queues from Neon/disk. */
+function applyIngestFreshExtractionPartialReset(partial: PartialResults): void {
+	partial.claims = [];
+	partial.extraction_progress = undefined;
+	partial.relations = undefined;
+	partial.relations_progress = undefined;
+	partial.arguments = undefined;
+	partial.grouping_progress = undefined;
+	partial.embeddings = undefined;
+	partial.embedding_progress = undefined;
+	partial.validation = undefined;
+	partial.validation_progress = undefined;
+	partial.remediation_progress = undefined;
+	partial.stage_completed = 'none';
+}
+
 async function main() {
 	const args = process.argv.slice(2);
 	applyIngestEmbeddingEnvOverrides();
@@ -4037,6 +4061,8 @@ async function main() {
 	const stopAfterEmbedding = args.includes('--stop-after-embedding');
 	// Admin UI: exit after Stage 5 so the operator explicitly resumes for Stage 6 (SurrealDB store).
 	const stopBeforeStore = args.includes('--stop-before-store');
+	/** Exit after Stage 1 (claim extraction) checkpoints; skip relations onward. Local / FT debugging. */
+	const stopAfterExtraction = args.includes('--stop-after-extraction');
 	// Domain override: when set, all claims from this source are tagged with this domain,
 	// overriding whatever domain Claude assigns during extraction.
 	const domainOverrideIdx = args.findIndex((a) => a === '--domain');
@@ -4081,9 +4107,15 @@ async function main() {
 		console.error('  --force-stage <stage>   Re-run from this stage onwards, ignoring saved progress');
 		console.error(`                          Valid stages: ${STAGES_ORDER.join(', ')}`);
 		console.error('  --stop-before-store     Exit after validation; re-run the same source to execute Stage 6 (store)');
+		console.error(
+			'  --stop-after-extraction Exit after Stage 1 (claims checkpointed); skip relations/embedding/validation. If Stage 1 was already done this run, flag is ignored with a warning. With INGEST_ORCHESTRATION_RUN_ID + DATABASE_URL, Surreal is skipped like --stop-before-store.'
+		);
 		console.error('\nEnv (optional):');
 		console.error('  INGEST_VALIDATION_MODE=off|cli|full|sampled   Default cli; off ignores --validate; full/sampled forces validation');
 		console.error('  INGEST_EMBED_BATCH_SIZE / INGEST_EMBED_BATCH_DELAY_MS   Aliases for VERTEX_EMBED_* (embedding throughput)');
+		console.error(
+			'  INGEST_STAGE_EXTRACTION_TIMEOUT_MS / INGEST_EXTRACTION_TIMEOUT_FALLBACK_MS   Per extraction HTTP call (default 180s if unset); INGEST_MODEL_TIMEOUT_MS applies to other LLM stages (default 360s)'
+		);
 		console.error(
 			'  INGEST_GROUPING_ADAPTIVE=1 (default)   Mid–Stage 3: shrink batch targets + preempt headroom after truncation / JSON repair / collapse; INGEST_GROUPING_ADAPT_* knobs tune shrink ratio, floors, regroup cap, slow-call timeout growth'
 		);
@@ -4100,6 +4132,9 @@ async function main() {
 		console.error('  INGEST_CIRCUIT_FAILURE_THRESHOLD   Soft circuit: after N failures on same stage+model in one run, skip tier (0=disabled)');
 		console.error(
 			'  INGEST_FORCE_REINGEST=1          Durable-job / operator re-ingest: treat as --force-stage extracting (skip early exit when ingestion_log is complete)'
+		);
+		console.error(
+			'  INGEST_FRESH_EXTRACTION=1        With --force-stage extracting: after Neon/disk merge, reset resume floor + clear partial Stage 1–5 checkpoints (avoids partial.stage_completed undoing force-stage)'
 		);
 		console.error(
 			`  INGEST_FORCE_STAGE=<stage>       Same as --force-stage when argv is not passed (valid: ${STAGES_ORDER.join(', ')})`
@@ -4192,7 +4227,7 @@ async function main() {
 	const skipSurrealForOrchestratedPhases =
 		Boolean(
 			process.env.INGEST_ORCHESTRATION_RUN_ID?.trim() && process.env.DATABASE_URL?.trim()
-		) && stopBeforeStore;
+		) && (stopBeforeStore || stopAfterExtraction);
 
 	// ─── Connect to SurrealDB (ingestion_log + Stage 6) ───
 	let db: Surreal | null = null;
@@ -4204,13 +4239,13 @@ async function main() {
 		} catch (error) {
 			console.error(`[ERROR] Failed to connect to SurrealDB: ${error instanceof Error ? error.message : String(error)}`);
 			console.error(
-				'The pipeline needs SurrealDB for ingestion_log and Stage 6. For admin runs that stop before store, use DATABASE_URL + INGEST_ORCHESTRATION_RUN_ID (Neon checkpoints), or start Surreal (e.g. docker compose up -d surrealdb).'
+				'The pipeline needs SurrealDB for ingestion_log and Stage 6. For runs that stop before store or after extraction only, use DATABASE_URL + INGEST_ORCHESTRATION_RUN_ID (Neon checkpoints), or start Surreal (e.g. docker compose up -d surrealdb).'
 			);
 			process.exit(1);
 		}
 	} else {
 		console.log(
-			'  [INFO] Neon orchestration + --stop-before-store: skipping SurrealDB for stages 1–5 (checkpoints in Neon). Stage 6 still requires Surreal when you Sync.'
+			'  [INFO] Neon orchestration + --stop-before-store/--stop-after-extraction: skipping SurrealDB for covered stages (checkpoints in Neon / disk). Stage 6 still requires Surreal when you Sync.'
 		);
 	}
 
@@ -4433,6 +4468,18 @@ async function main() {
 		partial = { source: sourceMeta, stage_completed: 'none' };
 	}
 
+	// Neon/disk merge can set `resumeFromStage` from `partial.stage_completed`, undoing `--force-stage extracting`
+	// (e.g. extract-only finished Stage 1 → partial says "extracting" while log status advanced). Fresh extraction must
+	// reset the resume floor before `shouldRunStage` / ingestion_log alignment.
+	if (ingestFreshExtractionEnabled() && forceStage === 'extracting') {
+		resumeFromStage = null;
+		applyIngestFreshExtractionPartialReset(partial);
+		console.log(
+			'  [FRESH] INGEST_FRESH_EXTRACTION=1 — reset resume floor + cleared partial Stage 1–5 checkpoints for cold Stage 1'
+		);
+		await savePartialResults(slug, partial);
+	}
+
 	// After merge + partial normalization: align ingestion_log.status with the real resume point
 	// (avoids showing "extracting" while validation-only / store-only resumes).
 	if (existingLog) {
@@ -4528,6 +4575,8 @@ async function main() {
 		// STAGE 1: CLAIM EXTRACTION
 		// ═══════════════════════════════════════════════════════════════
 			let allClaims: PhaseOneClaim[] = [];
+			/** True when this process finished Stage 1 work (not when Stage 1 was skipped as already complete). */
+			let extractionFinishedThisProcess = false;
 			const extractionTracker = startStageUsage('extraction');
 			const repairTracker = startStageUsage('json_repair');
 
@@ -4625,6 +4674,12 @@ async function main() {
 							});
 						} catch (apiError) {
 							const apiMsg = apiError instanceof Error ? apiError.message : String(apiError);
+							const m = apiMsg.toLowerCase();
+							const wallClockFail =
+								m.includes('timed out') ||
+								m.includes('(aborted)') ||
+								m.includes('aborterror') ||
+								(m.includes('timeout') && m.includes('extraction'));
 							if (apiMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
 								if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
 								const mid = Math.ceil(batch.length / 2);
@@ -4632,6 +4687,17 @@ async function main() {
 								const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
 								console.warn(
 									`  [SPLIT] Batch ${batchLabel} truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
+								);
+								batchLabel--;
+								return 'split';
+							}
+							if (wallClockFail && batch.length > 1) {
+								if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
+								const mid = Math.ceil(batch.length / 2);
+								batchQueue.splice(i + 1, 0, batch.slice(0, mid), batch.slice(mid));
+								const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
+								console.warn(
+									`  [SPLIT] Batch ${batchLabel} stalled (timeout/abort) — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
 								);
 								batchLabel--;
 								return 'split';
@@ -4898,6 +4964,7 @@ async function main() {
 				cost_usd: parseFloat(estimateCostUsd())
 			});
 				bumpStageMs('extracting', Date.now() - stageExtractStart);
+				extractionFinishedThisProcess = true;
 			} else {
 				console.log('  [SKIP] Stage 1: Extraction (already completed)\n');
 				if (!Array.isArray(partial.claims) || partial.claims.length === 0) {
@@ -4908,6 +4975,26 @@ async function main() {
 			}
 
 			assertClaimIntegrity(allClaims);
+
+			if (stopAfterExtraction) {
+				if (!extractionFinishedThisProcess) {
+					console.warn(
+						'  [WARN] --stop-after-extraction: Stage 1 was not executed in this process (already complete). Continuing with Stage 2+. Re-run with --force-stage extracting to re-extract, or omit this flag.'
+					);
+				} else {
+					console.log(
+						'\n  [LOCAL] --stop-after-extraction: Stage 1 complete; checkpoints saved. Exiting before Stage 2 (relations).'
+					);
+					console.log(
+						`  [LOCAL] claims=${allClaims.length}. Continue: same command without this flag, or --force-stage relating after relations labels exist in partial.`
+					);
+					await savePartialResults(slug, partial);
+					await closeSurrealIfOpen(db);
+					logIngestTimingSummary();
+					process.exit(0);
+				}
+			}
+
 			const planPostExStart = Date.now();
 			[relationPlan, groupingPlan, validationPlan, remediationPlan, embeddingPlan] = await Promise.all([
 				planIngestionStage('relations', {

@@ -11,8 +11,9 @@
  * `INGEST_FINETUNE_LABELER_STRICT=0`.
  *
  * When **`EXTRACTION_BASE_URL`** is set (ingestion-only OpenAI-compatible extraction), the
- * **`openai`** provider is **implicitly allowed** for the extraction stage so the fallback chain
- * can still include catalog tiers after the fine-tuned primary.
+ * **`openai`** provider is **implicitly allowed** for **extraction** and **json_repair** so the
+ * OpenAI-compatible primary (and any `openai`-labeled catalog tiers on those stages) are not
+ * stripped by strict allowlists.
  */
 import type { IngestionLlmStageKey } from './ingestionCanonicalPipeline.js';
 
@@ -58,7 +59,7 @@ export function filterModelTiersForFinetunePolicy(
 	if (!ingestFinetuneLabelerStrictEnabled(env)) return tiers;
 	if (!isFinetuneSensitiveLlmStage(stage)) return tiers;
 	const allowed = new Set(parseFinetuneLabelerAllowedProviders(env));
-	if (stage === 'extraction' && env.EXTRACTION_BASE_URL?.trim()) {
+	if ((stage === 'extraction' || stage === 'json_repair') && env.EXTRACTION_BASE_URL?.trim()) {
 		allowed.add('openai');
 	}
 	return tiers.filter((t) => allowed.has(t.provider.trim().toLowerCase()));

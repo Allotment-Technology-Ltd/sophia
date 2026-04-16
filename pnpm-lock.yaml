@@ -105,6 +105,9 @@ importers:
       jose:
         specifier: ^6.2.2
         version: 6.2.2
+      jsonrepair:
+        specifier: 3.12.0
+        version: 3.12.0
       marked:
         specifier: ^17.0.3
         version: 17.0.3
@@ -3389,6 +3392,10 @@ packages:
 
   json-schema@0.4.0:
     resolution: {integrity: sha512-es94M3nTIfsEPisRafak+HDLfHXnKBhV3vU5eqPcS3flIWqcxJWgXHXiey3YrpaNsanY5ei1VoYEbOzijuq9BA==}
+
+  jsonrepair@3.12.0:
+    resolution: {integrity: sha512-SWfjz8SuQ0wZjwsxtSJ3Zy8vvLg6aO/kxcp9TWNPGwJKgTZVfhNEQBMk/vPOpYCDFWRxD6QWuI6IHR1t615f0w==}
+    hasBin: true
 
   jsonwebtoken@9.0.3:
     resolution: {integrity: sha512-MT/xP0CrubFRNLNKvxJ2BYfy53Zkm++5bX9dtuPbqAeQpTVe0MQTFhao8+Cp//EmJp244xt6Drw/GVEGCUj40g==}
@@ -7855,6 +7862,8 @@ snapshots:
   json-schema-traverse@1.0.0: {}
 
   json-schema@0.4.0: {}
+
+  jsonrepair@3.12.0: {}
 
   jsonwebtoken@9.0.3:
     dependencies:

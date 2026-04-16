@@ -39,12 +39,39 @@ export function normalizePositivePosition(value: unknown): number {
 	return Math.trunc(parsed);
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Fine-tuned / repair models often emit one claim as a bare `{...}` instead of `[{...}]`.
+ * If it looks like one extraction row (`text` is a string), wrap as a one-element array.
+ */
+export function coerceExtractionPayloadToClaimArray(payload: unknown): unknown {
+	if (Array.isArray(payload)) return payload;
+	if (!isPlainRecord(payload)) return payload;
+	if (typeof payload.text !== 'string') return payload;
+	return [payload];
+}
+
+/** One extraction row: plain object with required `text` string (other fields validated by Zod). */
+export function isExtractionClaimRow(item: unknown): item is Record<string, unknown> {
+	if (!isPlainRecord(item)) return false;
+	return typeof item.text === 'string';
+}
+
 export function normalizeExtractionPayload(payload: unknown, forcedDomain?: string): unknown {
-	if (!Array.isArray(payload)) return payload;
+	const payloadArray = coerceExtractionPayloadToClaimArray(payload);
+	if (!Array.isArray(payloadArray)) return payloadArray;
+	const claimRows = payloadArray.filter(isExtractionClaimRow);
+	if (claimRows.length < payloadArray.length && payloadArray.length > 0) {
+		const dropped = payloadArray.length - claimRows.length;
+		console.warn(
+			`  [WARN] Dropped ${dropped} malformed extraction array entr${dropped === 1 ? 'y' : 'ies'} (expected claim objects with string \`text\`, not bare strings or nulls).`
+		);
+	}
 	const domainOverride = forcedDomain ? normalizeExtractionDomain(forcedDomain) : null;
-	return payload.map((item, index) => {
-		if (!item || typeof item !== 'object') return item;
-		const typed = item as Record<string, unknown>;
+	return claimRows.map((typed, index) => {
 		const confidenceRaw = Number(typed.confidence ?? 0.8);
 		const confidence = Number.isFinite(confidenceRaw)
 			? Math.max(0, Math.min(1, confidenceRaw))

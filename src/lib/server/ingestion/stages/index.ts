@@ -18,6 +18,8 @@ export {
 } from './model-call.js';
 
 export {
+	coerceExtractionPayloadToClaimArray,
+	isExtractionClaimRow,
 	normalizeExtractionDomain,
 	normalizeExtractionClaimType,
 	normalizeExtractionPayload,

@@ -148,16 +148,25 @@ const PIN_ENV_SUFFIX: Record<Exclude<IngestionStage, 'embedding'>, string> = {
   json_repair: 'JSON_REPAIR'
 };
 
+/** Env-only pins (no canonical defaults). Used when catalog defaults must not block an `EXTRACTION_*` mirror route. */
+function readEnvPinnedModel(
+  stage: Exclude<IngestionStage, 'embedding'>
+): { provider?: ModelProvider; modelId?: string } {
+  const suffix = PIN_ENV_SUFFIX[stage];
+  const modelId = process.env[`INGEST_PIN_MODEL_${suffix}`]?.trim();
+  const provider = process.env[`INGEST_PIN_PROVIDER_${suffix}`]?.trim().toLowerCase() as ModelProvider | undefined;
+  if (modelId && provider) return { provider, modelId };
+  return {};
+}
+
 /** Admin-spawned workers set `INGEST_PIN_PROVIDER_*` + `INGEST_PIN_MODEL_*` (see `modelChainLabelsToEnv`). */
 function readPinnedModel(
   stage: IngestionStage,
   preferred: IngestProviderPreference
 ): { provider?: ModelProvider; modelId?: string } {
   if (stage === 'embedding') return {};
-  const suffix = PIN_ENV_SUFFIX[stage];
-  const modelId = process.env[`INGEST_PIN_MODEL_${suffix}`]?.trim();
-  const provider = process.env[`INGEST_PIN_PROVIDER_${suffix}`]?.trim().toLowerCase() as ModelProvider | undefined;
-  if (modelId && provider) return { provider, modelId };
+  const envOnly = readEnvPinnedModel(stage as Exclude<IngestionStage, 'embedding'>);
+  if (envOnly.provider && envOnly.modelId) return envOnly;
 
   const disableCanonical = ['1', 'true', 'yes'].includes(
     (process.env.INGEST_DISABLE_CANONICAL_DEFAULTS ?? '').trim().toLowerCase()
@@ -412,6 +421,41 @@ export async function planIngestionStage(
           extractionOverride.resolvedExplanation ??
           'OpenAI-compatible extraction endpoint (EXTRACTION_BASE_URL).',
         route: extractionOverride
+      };
+    }
+  }
+
+  /** When `EXTRACTION_BASE_URL` + `EXTRACTION_MODEL` are set, reuse that OpenAI-compatible route for JSON repair (same FT deployment as extraction). Opt out: `INGEST_JSON_REPAIR_USE_EXTRACTION_ENDPOINT=0` or pin `INGEST_PIN_*_JSON_REPAIR`. */
+  if (stage === 'json_repair') {
+    const useExtractionRepair = !['0', 'false', 'no'].includes(
+      (process.env.INGEST_JSON_REPAIR_USE_EXTRACTION_ENDPOINT ?? '1').trim().toLowerCase()
+    );
+    const repairEnvPin = readEnvPinnedModel('json_repair');
+    const repairExplicitlyPinned = Boolean(repairEnvPin.provider && repairEnvPin.modelId);
+    const extractionRepairRoute = buildExtractionOpenAiCompatibleRoute();
+    if (useExtractionRepair && extractionRepairRoute && !repairExplicitlyPinned) {
+      const usage = estimateStageUsage(stage, context);
+      return {
+        stage,
+        request,
+        routeId: routeIdForResolve,
+        provider: extractionRepairRoute.provider,
+        model: extractionRepairRoute.modelId,
+        estimatedCostUsd: estimateReasoningCostUsd(
+          extractionRepairRoute,
+          usage.inputTokens,
+          usage.outputTokens
+        ),
+        routingSource: extractionRepairRoute.routingSource ?? 'requested',
+        selectedStepId: extractionRepairRoute.resolvedStepId ?? null,
+        selectedOrderIndex: extractionRepairRoute.resolvedOrderIndex ?? null,
+        switchReasonCode: extractionRepairRoute.resolvedSwitchReasonCode ?? null,
+        matchedCriteria: extractionRepairRoute.resolvedMatchedCriteria ?? null,
+        fallbackCandidates: extractionRepairRoute.resolvedFallbackCandidates ?? null,
+        routingReason: extractionRepairRoute.resolvedExplanation
+          ? `JSON repair: ${extractionRepairRoute.resolvedExplanation}`
+          : 'JSON repair uses the same OpenAI-compatible endpoint as extraction (EXTRACTION_BASE_URL + EXTRACTION_MODEL). Set INGEST_JSON_REPAIR_USE_EXTRACTION_ENDPOINT=0 to use catalog/Restormel json_repair instead.',
+        route: extractionRepairRoute
       };
     }
   }
