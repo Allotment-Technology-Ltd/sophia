@@ -2,6 +2,73 @@
 
 This ties together **prod-shaped failures**, **batch-shaped stress**, and **ingest log smoke** so you can iterate extraction models without shipping every candidate.
 
+## 0. A/B protocol: baseline vs fine-tuned extraction (**before** prompt changes)
+
+Changing `EXTRACTION_SYSTEM` / user templates / normalizers mid-flight confounds whether the **custom FT endpoint** is worth keeping. Use this gate first.
+
+### What must stay identical between arms
+
+- **Same git commit** for the whole A/B window (no prompt edits, no ingest/extraction code edits between Arm A and Arm B runs).
+- **Same batching knobs** for both arms (e.g. `INGEST_EXTRACTION_BATCH_TOKEN_FRACTION`, `INGEST_EXTRACTION_MAX_TOKENS_PER_BATCH`, `INGEST_EXTRACTION_DISABLE_SEP_DEFAULT_SMALL_BATCH`, `INGEST_STAGE_EXTRACTION_TIMEOUT_MS`). Record them in the run note.
+- **Same eval inputs:** same `data/phase1-training-export/manifest.json` fingerprints (`goldenFingerprintSha256_16`, `cohortFingerprintSha256_16`), same `golden_holdout.jsonl` on disk, same `--limit` (use **723** for the full holdout), same `EXTRACTION_EVAL_*` / fold flags if you tune them.
+
+### Golden set = `golden_holdout.jsonl` (how A/B maps to “already ingested”)
+
+Export **`data/phase1-training-export/golden_holdout.jsonl`** is the **frozen golden set** (see `manifest.json` → `goldenSet`). Each line already contains the **Stage 1 extraction payload** (`input`) and the **gold claim** (`label`) taken from **prior completed ingests**. So the fair comparison to “we already have baseline metrics” is:
+
+1. **Keep** your saved **Arm A** report from when baseline routing ran (or re-run Arm A now with **frozen** prompts/code to regenerate it).
+2. Run the **same script, same JSONL, same `--limit`** with **only** `EXTRACTION_*` (and keys) switched to the **custom model** → **Arm B** report.
+3. **Diff the two JSON reports** — not a second full ingest of every row unless you explicitly want **pipeline** telemetry (see below).
+
+Primary metrics (see `scripts/eval-extraction-holdout-openai-compatible.ts` header): **`schemaPassRate`**, **`subsetTextMatchRate`** (recommended for this JSONL), latency percentiles, optional **`--mismatch-diagnostics`** buckets.
+
+**Optional — full article re-ingest on golden URLs:** If you need **ingest-style** counters (batch splits, `json_repair`, parse failures, claims-per-batch), dedupe **`source_url`** from `golden_holdout.jsonl`, then for each URL run **fetch + `scripts/ingest.ts` … `--force-stage extracting --stop-after-extraction`** once per arm and run `scripts/extraction-ingest-log-metrics.ts` on the logs. That is **much more expensive** and measures **live segmentation + batching**, which can differ from the **sentence-level** rows in the JSONL; use it as a **secondary** signal alongside the holdout scorer, not a replacement.
+
+### What may differ (only this)
+
+- **`eval-extraction-holdout-openai-compatible.ts` (golden / JSONL):** this script **always** requires **`EXTRACTION_BASE_URL` + `EXTRACTION_MODEL`** (+ key). **Arm A** = those vars pointed at your **baseline** OpenAI-compatible deployment (e.g. hosted base model). **Arm B** = same vars pointed at the **fine-tuned** deployment. Swap **only** URL/model/key between runs; everything else identical.
+- **`scripts/ingest.ts` (full pipeline):** **Arm A** can be **catalog** routing by **unsetting** `EXTRACTION_*` and using pins / defaults, or the same explicit baseline deployment as above — pick one and document it. **Arm B** = set `EXTRACTION_*` to the FT endpoint.
+
+**JSON repair mirror:** `INGEST_JSON_REPAIR_USE_EXTRACTION_ENDPOINT` (default mirrors extraction) changes repair behaviour. For an A/B that isolates **extraction quality**, pick one policy and use it for **both** arms (e.g. `=0` so repair always uses the catalog chain, or `=1` for both so the FT always repairs its own JSON). Record the choice; do not mix policies across arms.
+
+### Commands (golden-first)
+
+**A — Golden holdout only** (pair of reports; swap only extraction routing between runs):
+
+```bash
+pnpm exec tsx --env-file=.env scripts/eval-extraction-holdout-openai-compatible.ts -- \
+  --jsonl data/phase1-training-export/golden_holdout.jsonl \
+  --limit 723 \
+  --mismatch-diagnostics \
+  --out data/phase1-training-export/eval-golden-arm-a-baseline.json
+# Arm B: set EXTRACTION_BASE_URL + EXTRACTION_MODEL (+ key); same command →
+pnpm exec tsx --env-file=.env scripts/eval-extraction-holdout-openai-compatible.ts -- \
+  --jsonl data/phase1-training-export/golden_holdout.jsonl \
+  --limit 723 \
+  --mismatch-diagnostics \
+  --out data/phase1-training-export/eval-golden-arm-b-ft.json
+```
+
+**B — Broader offline suite** (golden + remit sample + batch stress when fixtures exist — same env discipline):
+
+```bash
+pnpm ops:eval-extraction-compare -- --out data/phase1-training-export/eval-compare-arm-a-baseline.json
+pnpm ops:eval-extraction-compare -- --out data/phase1-training-export/eval-compare-arm-b-ft.json
+```
+
+**C — Full-article Stage 1 smoke** (e.g. Descartes — §3a): same flags twice, save logs → `extraction-ingest-log-metrics.ts` (supplemental; not a substitute for golden JSONL diff).
+
+### What to write down (decision log)
+
+- Git SHA, manifest **golden** fingerprint, `EXTRACTION_MODEL` (Arm B), baseline route description (Arm A), repair mirror flag, batching env snapshot.
+- From **golden** eval JSON: `schemaPassRate`, `subsetTextMatchRate`, mismatch buckets, latency; diff Arm A vs Arm B files.
+- From **`eval-extraction-compare`** (if run): per-slice summaries in each combined JSON.
+- From **full-article** logs (if run): `json_fail_lines`, `extraction_repair_ok_lines`, `batch_split_lines`, `ingest_model_json_parse_failed_mentions`, `passage_id` warnings (grep).
+
+Only after this A/B should you change prompts and re-run the **same** pair so the delta attributes to the prompt, not the model endpoint.
+
+**Synthesis (evidence + recommendations, ingest gates excluded):** [`extraction-ft-golden-ab-recommendations.md`](./extraction-ft-golden-ab-recommendations.md).
+
 ## 1. Frozen “prod regression” JSONL (Step A row shape)
 
 - **Committed synthetic pack (CI + local):** `data/phase1-training-export/fixtures/eval_prod_regression_pack.jsonl`  
