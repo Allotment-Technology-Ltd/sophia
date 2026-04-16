@@ -21,5 +21,8 @@ ENV NODE_ENV=production
 ENV INGEST_ORPHAN_LAST_OUTPUT_MS=120000
 # Spread durable-job child launches to avoid synchronized 429s when multiple URLs exit LLM phases together.
 ENV INGEST_JOB_LAUNCH_JITTER_MS=2000
+# Align with app-spawned ingest children: temperature stage filter + smaller extraction batches.
+ENV INGEST_OMIT_LLM_TEMPERATURE_STAGES=extraction,json_repair
+ENV INGEST_EXTRACTION_BATCH_TOKEN_FRACTION=0.58
 
 CMD ["pnpm", "exec", "tsx", "scripts/ingestion-job-poller.ts", "--interval", "5"]

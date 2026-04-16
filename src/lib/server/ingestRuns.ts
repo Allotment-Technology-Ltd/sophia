@@ -191,6 +191,21 @@ export interface IngestRunPayload {
   ingestion_job_id?: string;
 }
 
+/** Defaults merged into ingest.ts child env when the host has not set these variables (durable runs). */
+const DEFAULT_INGEST_OMIT_LLM_TEMPERATURE_STAGES = 'extraction,json_repair';
+const DEFAULT_INGEST_EXTRACTION_BATCH_TOKEN_FRACTION = '0.58';
+
+function ingestChildPipelineDefaultsIfUnset(): Record<string, string> {
+	const out: Record<string, string> = {};
+	if (!(process.env.INGEST_OMIT_LLM_TEMPERATURE_STAGES ?? '').trim()) {
+		out.INGEST_OMIT_LLM_TEMPERATURE_STAGES = DEFAULT_INGEST_OMIT_LLM_TEMPERATURE_STAGES;
+	}
+	if (!(process.env.INGEST_EXTRACTION_BATCH_TOKEN_FRACTION ?? '').trim()) {
+		out.INGEST_EXTRACTION_BATCH_TOKEN_FRACTION = DEFAULT_INGEST_EXTRACTION_BATCH_TOKEN_FRACTION;
+	}
+	return out;
+}
+
 function batchOverridesToEnv(
   overrides: IngestRunPayload['batch_overrides'] | undefined
 ): Record<string, string> {
@@ -1899,6 +1914,7 @@ class IngestRunManager extends EventEmitter {
     const embeddingEnvOverrides = embeddingPreferenceToEnv(payload.embedding_model);
     const operatorModelPins = Object.keys(pinEnvFlat).length > 0;
     const batchEnvOverrides: Record<string, string> = {
+      ...ingestChildPipelineDefaultsIfUnset(),
       ...batchOverridesToEnv(payload.batch_overrides),
       ...embeddingEnvOverrides,
       ...pinEnvFlat,
