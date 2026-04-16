@@ -1,3 +1,4 @@
+import * as https from 'node:https';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createMistral } from '@ai-sdk/mistral';
@@ -119,33 +120,187 @@ function togetherOpenAiCompatibleFetch(
 	};
 }
 
+function isGoogleAiOpenAiCompatibleHost(baseOrUrl: string): boolean {
+	try {
+		const parsed = new URL(baseOrUrl);
+		const host = parsed.hostname.toLowerCase();
+		const path = parsed.pathname;
+		return (
+			host === 'generativelanguage.googleapis.com' &&
+			(path === '/' || path.startsWith('/v1beta/openai'))
+		);
+	} catch {
+		return false;
+	}
+}
+
 /**
- * Generative Language **OpenAI-compatible** (`…/v1beta/openai`) rejects **400** *Multiple authentication
- * credentials* if the client sends more than one mechanism (e.g. `Authorization: Bearer` from the OpenAI
- * SDK **and** `x-goog-api-key`, or Bearer plus a second header injected elsewhere). Normalize to **only**
- * `x-goog-api-key` for API-key auth on this host.
+ * Operators sometimes put `?key=` on **`EXTRACTION_BASE_URL`** (copy-paste from REST docs). Any env
+ * layer (root `.env`, `.env.local`, CI, or a pasted shell export) can supply that shape. Together with
+ * **`Authorization: Bearer`** from `createOpenAI({ apiKey })`, Google returns **400** *Multiple
+ * authentication credentials* — so we strip `key` from the base URL and from outbound request URLs.
  */
-function generativeLanguageOpenAiCompatibleFetch(
-	apiKey: string,
-	inner: typeof fetch = globalThis.fetch.bind(globalThis)
-): typeof fetch {
+function sanitizeGoogleOpenAiCompatibleBaseUrl(baseURL: string): string {
+	if (!isGoogleAiOpenAiCompatibleHost(baseURL)) return baseURL;
+	try {
+		const u = new URL(baseURL);
+		u.searchParams.delete('key');
+		return u.toString().replace(/\?$/, '');
+	} catch {
+		return baseURL;
+	}
+}
+
+function resolveFetchHref(input: RequestInfo | URL): string {
+	if (typeof input === 'string') return input;
+	if (input instanceof URL) return input.href;
+	if (input instanceof Request) return input.url;
+	return String(input);
+}
+
+/** Same query stripping as {@link sanitizeGoogleOpenAiCompatibleBaseUrl}, for outbound request URLs. */
+function stripGoogleOpenAiCompatKeyQueryFromHref(href: string): string {
+	if (!isGoogleAiOpenAiCompatibleHost(href)) return href;
+	try {
+		const u = new URL(href);
+		if (!u.searchParams.has('key')) return href;
+		u.searchParams.delete('key');
+		return u.toString().replace(/\?$/, '');
+	} catch {
+		return href;
+	}
+}
+
+function withGenerativeLanguageUrlWithoutKeyQuery(
+	input: RequestInfo | URL,
+	cleanedHref: string
+): RequestInfo | URL {
+	if (typeof input === 'string') return cleanedHref;
+	if (input instanceof URL) return new URL(cleanedHref);
+	if (input instanceof Request) return new Request(cleanedHref, input);
+	return cleanedHref;
+}
+
+/** Headers Google’s OpenAI-compat gateway tolerates without counting a second “credential”. */
+const GOOGLE_OPENAI_COMPAT_OUTBOUND_HEADER_ALLOWLIST = new Set([
+	'accept',
+	'authorization',
+	'content-type',
+	'user-agent'
+]);
+
+function allowlistHeadersForGoogleGenerativeLanguageOpenAi(raw: Headers): Headers {
+	const out = new Headers();
+	raw.forEach((value, key) => {
+		if (GOOGLE_OPENAI_COMPAT_OUTBOUND_HEADER_ALLOWLIST.has(key.toLowerCase())) {
+			out.set(key, value);
+		}
+	});
+	return out;
+}
+
+/**
+ * `postToApi` always passes a string body for JSON chat calls; avoid streaming / FormData here.
+ */
+function stringifyGoogleOpenAiCompatRequestBody(body: BodyInit | null | undefined): string | undefined {
+	if (body === null || body === undefined) return undefined;
+	if (typeof body === 'string') return body;
+	if (typeof Buffer !== 'undefined' && Buffer.isBuffer(body)) return body.toString('utf8');
+	if (body instanceof Uint8Array) return Buffer.from(body).toString('utf8');
+	return undefined;
+}
+
+/**
+ * Use **`node:https`** instead of `globalThis.fetch` so a patched global fetch (proxies, agents, or
+ * tooling) cannot inject a second Google credential (`x-goog-api-key`, `?key=`, etc.) after we allowlist.
+ */
+async function googleGenerativeLanguageOpenAiHttpsFetch(
+	input: RequestInfo | URL,
+	init?: RequestInit
+): Promise<Response> {
+	const href = resolveFetchHref(input as RequestInfo | URL);
+	const u = new URL(href);
+	if (u.protocol !== 'https:') {
+		throw new Error(`generativelanguage OpenAI-compat fetch expects https URL, got ${u.protocol}`);
+	}
+	const method = init?.method ?? 'POST';
+	const body = stringifyGoogleOpenAiCompatRequestBody(init?.body ?? undefined);
+	const headerRecord: Record<string, string> = {};
+	new Headers(init?.headers ?? undefined).forEach((value, key) => {
+		headerRecord[key] = value;
+	});
+
+	return await new Promise<Response>((resolve, reject) => {
+		const req = https.request(
+			{
+				hostname: u.hostname,
+				port: u.port || 443,
+				path: u.pathname + u.search,
+				method,
+				headers: headerRecord,
+				...(init?.signal ? { signal: init.signal } : {})
+			},
+			(res) => {
+				const chunks: Buffer[] = [];
+				res.on('data', (chunk: Buffer) => chunks.push(chunk));
+				res.on('end', () => {
+					const buf = Buffer.concat(chunks);
+					const outHeaders = new Headers();
+					for (const [k, v] of Object.entries(res.headers)) {
+						if (v === undefined) continue;
+						if (Array.isArray(v)) {
+							for (const item of v) outHeaders.append(k, item);
+						} else {
+							outHeaders.set(k, v);
+						}
+					}
+					resolve(
+						new Response(buf.length > 0 ? new Uint8Array(buf) : null, {
+							status: res.statusCode ?? 0,
+							statusText: res.statusMessage ?? '',
+							headers: outHeaders
+						})
+					);
+				});
+			}
+		);
+		req.on('error', reject);
+		if (body !== undefined) req.write(body);
+		req.end();
+	});
+}
+
+/**
+ * Generative Language **OpenAI-compatible** (`…/v1beta/openai`):
+ * - Requires **`Authorization: Bearer <api_key>`** (what `createOpenAI({ apiKey })` sends). Stripping it
+ *   yields **400** *Missing or invalid Authorization header*.
+ * - Rejects **400** *Multiple authentication credentials* if **another** mechanism is also present —
+ *   e.g. **`x-goog-api-key`**, **`?key=`** on the URL, **`OpenAI-Organization` / `OpenAI-Project`**, or any
+ *   other header a proxy or SDK layer adds alongside Bearer. We strip URL `key`, **allowlist** headers,
+ *   then send via **`node:https`** so a patched `globalThis.fetch` cannot re-inject credentials.
+ */
+function generativeLanguageOpenAiCompatibleFetch(_apiKey: string): typeof fetch {
 	return async (input, init) => {
-		const headers = new Headers(
+		const rawHeaders = new Headers(
 			init?.headers !== undefined ? (init.headers as HeadersInit) : undefined
 		);
-		headers.delete('Authorization');
-		headers.delete('authorization');
-		headers.delete('x-goog-api-key');
-		headers.set('x-goog-api-key', apiKey);
-		return inner(input as RequestInfo | URL, { ...init, headers } as RequestInit);
+		const headers = allowlistHeadersForGoogleGenerativeLanguageOpenAi(rawHeaders);
+
+		const href = resolveFetchHref(input as RequestInfo | URL);
+		const cleanedHref = stripGoogleOpenAiCompatKeyQueryFromHref(href);
+		const nextInput =
+			cleanedHref === href ? (input as RequestInfo | URL) : withGenerativeLanguageUrlWithoutKeyQuery(input as RequestInfo | URL, cleanedHref);
+
+		return googleGenerativeLanguageOpenAiHttpsFetch(nextInput as RequestInfo | URL, {
+			...init,
+			headers,
+			method: init?.method ?? 'POST'
+		} as RequestInit);
 	};
 }
 
 function extractionOverrideFetchForBaseUrl(baseURL: string, apiKey: string): typeof fetch {
-	if (
-		baseURL.includes('generativelanguage.googleapis.com') ||
-		baseURL.includes('googleapis.com/v1beta/openai')
-	) {
+	if (isGoogleAiOpenAiCompatibleHost(baseURL)) {
 		return generativeLanguageOpenAiCompatibleFetch(apiKey);
 	}
 	return togetherOpenAiCompatibleFetch(baseURL);
@@ -179,9 +334,10 @@ export function readExtractionOpenAiCompatibleOverride():
   | { baseURL: string; apiKey: string; modelId: string }
   | null {
   loadServerEnv();
-  const baseURL = process.env.EXTRACTION_BASE_URL?.trim();
+  const baseURLRaw = process.env.EXTRACTION_BASE_URL?.trim();
   const modelId = process.env.EXTRACTION_MODEL?.trim();
-  if (!baseURL || !modelId) return null;
+  if (!baseURLRaw || !modelId) return null;
+  const baseURL = sanitizeGoogleOpenAiCompatibleBaseUrl(baseURLRaw);
   const explicit = process.env.EXTRACTION_API_KEY?.trim();
   const openaiKey = process.env.OPENAI_API_KEY?.trim();
   const togetherKey = process.env.TOGETHER_API_KEY?.trim();
@@ -197,10 +353,7 @@ export function readExtractionOpenAiCompatibleOverride():
     apiKey = fireworksKey || openaiKey;
   } else if (baseURL.includes('together.xyz')) {
     apiKey = togetherKey || openaiKey;
-  } else if (
-    baseURL.includes('generativelanguage.googleapis.com') ||
-    baseURL.includes('googleapis.com/v1beta/openai')
-  ) {
+  } else if (isGoogleAiOpenAiCompatibleHost(baseURL)) {
     /** Google AI Studio OpenAI-compatible chat (`…/v1beta/openai`) uses the same API key as catalog Gemini. */
     apiKey = googleAiKey || geminiAlt || openaiKey || togetherKey || fireworksKey;
   } else {
@@ -212,12 +365,61 @@ export function readExtractionOpenAiCompatibleOverride():
       'EXTRACTION_BASE_URL and EXTRACTION_MODEL require EXTRACTION_API_KEY, or OPENAI_API_KEY, or (on Fireworks) FIREWORKS_API_KEY, or (on Together) TOGETHER_API_KEY, or (on generativelanguage.googleapis.com OpenAI-compatible URLs) GOOGLE_AI_API_KEY / GEMINI_API_KEY'
     );
   }
-  return { baseURL, apiKey, modelId };
+  /** First line; strip accidental `Bearer `; first whitespace-/comma-delimited token only (avoids pasted doubles). */
+  let t = apiKey.trim();
+  while (t.toLowerCase().startsWith('bearer ')) t = t.slice(7).trim();
+  const line = (t.split(/\r?\n/)[0] ?? '').trim();
+  const apiKeyOneLine = line.split(/[\s,;]+/).find((x) => x.length > 0) ?? '';
+  if (!apiKeyOneLine) {
+    throw new Error(
+      'EXTRACTION_BASE_URL and EXTRACTION_MODEL require a non-empty API key after normalizing EXTRACTION_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY'
+    );
+  }
+  return { baseURL, apiKey: apiKeyOneLine, modelId };
+}
+
+function isGenerativeLanguageHost(baseURL: string): boolean {
+  try {
+    return new URL(baseURL).hostname.toLowerCase() === 'generativelanguage.googleapis.com';
+  } catch {
+    return false;
+  }
 }
 
 export function buildExtractionOpenAiCompatibleRoute(): ReasoningModelRoute | null {
   const o = readExtractionOpenAiCompatibleOverride();
   if (!o) return null;
+
+  /**
+   * **Google AI Studio** (`generativelanguage.googleapis.com`): use native `@ai-sdk/google` (same as catalog
+   * Gemini). The OpenAI-compatible HTTP surface (`…/v1beta/openai`) expects **Bearer**-only auth; in practice
+   * some environments still hit **400** *Multiple authentication credentials* on that shim. The native
+   * Generative Language API uses **`x-goog-api-key`** only and avoids that failure mode.
+   *
+   * Other OpenAI-compat bases (e.g. some `…googleapis.com/v1beta/openai` hosts) keep the OpenAI client path.
+   */
+  if (isGenerativeLanguageHost(o.baseURL)) {
+    return {
+      model: getGoogleForApiKey(o.apiKey)(o.modelId as any),
+      provider: 'vertex',
+      modelId: o.modelId,
+      supportsGrounding: false,
+      credentialSource: 'byok',
+      routingSource: 'requested',
+      resolvedExplanation:
+        'Native Gemini API (@ai-sdk/google) for generativelanguage.googleapis.com; EXTRACTION_BASE_URL may point at …/v1beta/openai but routing uses the standard Generative Language API for reliable auth.',
+      resolvedRouteId: null,
+      resolvedFailureKind: undefined,
+      resolvedStepId: null,
+      resolvedOrderIndex: null,
+      resolvedSwitchReasonCode: null,
+      resolvedEstimatedCostUsd: null,
+      resolvedMatchedCriteria: null,
+      resolvedFallbackCandidates: null,
+      resolvedStepChain: null
+    };
+  }
+
   const client = getOpenAIForExtractionOverride(o.baseURL, o.apiKey);
   const model = client.chat(o.modelId as any);
   return {

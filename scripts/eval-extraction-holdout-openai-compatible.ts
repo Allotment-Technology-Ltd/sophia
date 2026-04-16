@@ -32,6 +32,10 @@
  *
  * **Debug 0% schema pass:** `EXTRACTION_EVAL_LOG_FIRST_FAILURE=1` logs the first row’s raw model output preview (stderr).
  *
+ * **Progress (stderr):** By default this script prints **only** the final JSON report to stdout — nothing in between.
+ * It logs **`[eval] start …`** after routing and **`[eval] row k/N inference…`** every 10 rows (row 1 always).
+ * Set **`EXTRACTION_EVAL_PROGRESS=1`** to log every row. First calls can take **minutes** (`maxOutputTokens` 8192 + long prompts).
+ *
  * **Why subset match is low:** `--mismatch-diagnostics` (or `EXTRACTION_EVAL_MISMATCH_DIAGNOSTICS=1`) adds bucket counts
  * for gold-eligible rows that fail the strict `text` + `position_in_source` check — e.g. `gold_text_wrong_position`
  * (verbatim gold sentence but **wrong `position_in_source`**, often because labels use **document-level** indices while eval passes **one sentence** per call) vs `gold_position_wrong_text` (right index, paraphrased `text`; system prompt encourages paraphrase).
@@ -293,6 +297,16 @@ async function main() {
 		warmupCli &&
 		!['0', 'false', 'no'].includes(warmupEnv || (warmupDefaultOn ? '1' : '0'));
 
+	const progressEveryRow = ['1', 'true', 'yes'].includes(
+		(process.env.EXTRACTION_EVAL_PROGRESS ?? '').trim().toLowerCase()
+	);
+	const progressInterval = progressEveryRow ? 1 : 10;
+
+	console.error(
+		`[eval] start model=${route.modelId} provider=${route.provider} limit=${limit} jsonl=${jsonl} warmup=${doWarmup}\n` +
+			`[eval] (stdout is silent until the final JSON report; stderr shows progress every ${progressInterval} row(s); first inference can take minutes)`
+	);
+
 	if (doWarmup) {
 		console.error('[eval:warmup] one cheap completion to wake scale-from-zero / verify routing…');
 		await withTransientRetries('warmup', () =>
@@ -360,6 +374,10 @@ async function main() {
 		const t0 = Date.now();
 		const retryOpts =
 			generationMaxRetries !== undefined ? { maxRetries: generationMaxRetries } : {};
+		const rowOrdinal = rows + 1;
+		if (rowOrdinal === 1 || rowOrdinal % progressInterval === 0) {
+			console.error(`[eval] row ${rowOrdinal}/${limit} inference…`);
+		}
 		const result = await withTransientRetries(`row-${rows + 1}`, () =>
 			generateText(
 				foldSystem

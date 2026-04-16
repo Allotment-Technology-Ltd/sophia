@@ -192,6 +192,7 @@ import {
 	buildPassageBatches,
 	renderPassageBatch,
 	segmentArgumentativePassages,
+	splitPassageRecordForExtractionRetry,
 	filterBoilerplatePassages
 } from '../src/lib/server/ingestion/passageSegmentation.js';
 import {
@@ -242,7 +243,7 @@ const INGEST_EXTRACTION_TIMEOUT_FALLBACK_MS = Number(process.env.INGEST_EXTRACTI
 const VALIDATION_MODEL_TIMEOUT_MS = Number(process.env.VALIDATION_MODEL_TIMEOUT_MS || '300000');
 
 /** Fallback when `INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS` is unset (assert-only cap still uses env). */
-const DEFAULT_INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS = 32768;
+const DEFAULT_INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS = 8192;
 /**
  * Fallback when `INGEST_STAGE_JSON_REPAIR_MAX_OUTPUT_TOKENS` is unset — tight cap so repair does not
  * request 32k completions by default (see `maxOutputTokensForJsonRepair`).
@@ -1089,7 +1090,8 @@ function shouldFoldSystemPromptIntoUserForProvider(provider: string | undefined)
 	const p = provider.toLowerCase();
 	if (OPENAI_COMPAT_CHAT_PROVIDERS_FOLD_SYSTEM.has(p)) return true;
 	const extractionBase = process.env.EXTRACTION_BASE_URL?.trim().toLowerCase() ?? '';
-	// `buildExtractionOpenAiCompatibleRoute` always labels the client `provider: 'openai'`. Fireworks
+	// `buildExtractionOpenAiCompatibleRoute` uses `provider: 'openai'` for Fireworks/Together/etc., or
+	// `provider: 'vertex'` for `generativelanguage.googleapis.com` (native Gemini). Fireworks
 	// deployment templates return 400 ("roles must alternate…") when `system` is sent separately;
 	// Together SFT eval defaults to the same folded shape (see `EXTRACTION_EVAL_FOLD_SYSTEM`).
 	if (p === 'openai' && extractionBase) {
@@ -1119,6 +1121,19 @@ function makeStageBudget(stage: StageKey): StageBudget {
 
 function maxOutputTokensForExtraction(budget: StageBudget): number {
 	return budget.maxOutputTokens ?? DEFAULT_INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS;
+}
+
+/** Replace one extraction batch with two smaller batches (passage list bisect or single-passage text bisect). */
+function replaceExtractionBatchWithSplitHalves(batch: PassageRecord[]): PassageRecord[][] | null {
+	if (batch.length > 1) {
+		const mid = Math.ceil(batch.length / 2);
+		return [batch.slice(0, mid), batch.slice(mid)];
+	}
+	const only = batch[0];
+	if (!only) return null;
+	const bisected = splitPassageRecordForExtractionRetry(only);
+	if (!bisected) return null;
+	return [[bisected[0]], [bisected[1]]];
 }
 
 function maxOutputTokensForJsonRepair(budget: StageBudget): number {
@@ -4680,27 +4695,31 @@ async function main() {
 								m.includes('(aborted)') ||
 								m.includes('aborterror') ||
 								(m.includes('timeout') && m.includes('extraction'));
-							if (apiMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
-								if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
-								const mid = Math.ceil(batch.length / 2);
-								batchQueue.splice(i + 1, 0, batch.slice(0, mid), batch.slice(mid));
-								const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
-								console.warn(
-									`  [SPLIT] Batch ${batchLabel} truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
-								);
-								batchLabel--;
-								return 'split';
+							if (apiMsg.includes('truncated (max_tokens reached)')) {
+								const halves = replaceExtractionBatchWithSplitHalves(batch);
+								if (halves) {
+									if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
+									batchQueue.splice(i, 1, halves[0]!, halves[1]!);
+									const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
+									console.warn(
+										`  [SPLIT] Batch ${batchLabel} truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
+									);
+									batchLabel--;
+									return 'split';
+								}
 							}
-							if (wallClockFail && batch.length > 1) {
-								if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
-								const mid = Math.ceil(batch.length / 2);
-								batchQueue.splice(i + 1, 0, batch.slice(0, mid), batch.slice(mid));
-								const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
-								console.warn(
-									`  [SPLIT] Batch ${batchLabel} stalled (timeout/abort) — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
-								);
-								batchLabel--;
-								return 'split';
+							if (wallClockFail) {
+								const halves = replaceExtractionBatchWithSplitHalves(batch);
+								if (halves) {
+									if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
+									batchQueue.splice(i, 1, halves[0]!, halves[1]!);
+									const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
+									console.warn(
+										`  [SPLIT] Batch ${batchLabel} stalled (timeout/abort) — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
+									);
+									batchLabel--;
+									return 'split';
+								}
 							}
 							throw apiError;
 						}
@@ -4762,16 +4781,18 @@ async function main() {
 								);
 							} catch (fixError) {
 								const fixMsg = fixError instanceof Error ? fixError.message : String(fixError);
-								if (fixMsg.includes('truncated (max_tokens reached)') && batch.length > 1) {
-									if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
-									const mid = Math.ceil(batch.length / 2);
-									batchQueue.splice(i + 1, 0, batch.slice(0, mid), batch.slice(mid));
-									const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
-									console.warn(
-										`  [SPLIT] Batch ${batchLabel} repair response truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
-									);
-									batchLabel--;
-									return 'split';
+								if (fixMsg.includes('truncated (max_tokens reached)')) {
+									const halves = replaceExtractionBatchWithSplitHalves(batch);
+									if (halves) {
+										if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
+										batchQueue.splice(i, 1, halves[0]!, halves[1]!);
+										const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
+										console.warn(
+											`  [SPLIT] Batch ${batchLabel} repair response truncated — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
+										);
+										batchLabel--;
+										return 'split';
+									}
 								}
 								throw fixError;
 							}
@@ -4910,7 +4931,9 @@ async function main() {
 									} satisfies ParResult;
 								})
 							);
-							parResults.sort((a, b) => a.order - b.order);
+							parResults.sort((a, b) =>
+								a.order !== b.order ? a.order - b.order : a.queuePos - b.queuePos
+							);
 							for (const pr of parResults) {
 								const offsetClaims = attachPassageMetadataToClaims(
 									pr.validated,
