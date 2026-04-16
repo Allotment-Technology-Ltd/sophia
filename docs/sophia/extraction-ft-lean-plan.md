@@ -42,7 +42,7 @@ Training **messages** must match production: same folded system + user shape as 
 | **A** | Agent / you | After JSONL changes: `pnpm ops:phase2-step-a-together-packaging -- --export-dir data/phase1-training-export` (still named “together” — output is **generic chat JSONL**). |
 | **B** | You | Confirm starting weights (see **Sophia default SFT weights** below) and run `firectl model get …` → **`Tunable: true`** where required. |
 | **C** | You + agent | `pnpm ops:fireworks-submit-sft -- --dry-run …` then live submit with **`FIREWORKS_API_KEY`** and account id (`FIREWORKS_ACCOUNT_ID` or infer from `EXTRACTION_MODEL`). Optional: `--write-report data/phase1-training-export/fireworks-sft-job-submitted.json`. |
-| **D** | You | Wait for job completion in Fireworks UI or `firectl sftj get …`; then **`firectl deployment create <output-model-slug>`** (see [extraction-fireworks-deploy.md](./extraction-fireworks-deploy.md)). |
+| **D** | You | Wait for job completion in Fireworks UI or `firectl sftj get …`; then **`firectl deployment create`** the same short id you passed as `--output-model` (e.g. `sophia-extract-sft-iter1` — **not** wrapped in `<`/`>`; shells treat `<` as redirection). See [extraction-fireworks-deploy.md](./extraction-fireworks-deploy.md). |
 | **E** | Agent / you | Set `EXTRACTION_MODEL` to the new **deployment** id; run `pnpm ops:eval-extraction-compare`. |
 
 ### Sophia default SFT weights (this deployment)

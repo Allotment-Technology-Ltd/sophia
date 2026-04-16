@@ -31,7 +31,7 @@
  *   pnpm exec tsx --env-file=.env scripts/fireworks-submit-sft.ts -- \
  *     --training-file data/phase1-training-export/train.together.jsonl \
  *     --validation-file data/phase1-training-export/validation.together.jsonl \
- *     --warm-start-from accounts/adam-boon1984-17nryg/models/<PRIOR_SFT_OUTPUT> \
+ *     --warm-start-from accounts/adam-boon1984-17nryg/models/my-prior-sft-output \
  *     --output-model sophia-extract-sft-iter2 \
  *     --write-report data/phase1-training-export/fireworks-sft-job-submitted.json
  */

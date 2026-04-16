@@ -42,27 +42,28 @@ Copy the **Iteration template** block below into a new `## YYYY-MM-DD — Iterat
 pnpm ops:phase2-step-a-together-packaging -- --export-dir data/phase1-training-export
 
 # Fireworks: dry-run then live (set FIREWORKS_API_KEY; FIREWORKS_ACCOUNT_ID or EXTRACTION_MODEL for account inference).
-# First SFT from uploaded merged extraction weights (`firectl model get sophia-extract-m7b-ft` → Tunable: true verified 2026-04-16):
+# First SFT from uploaded merged extraction weights (`firectl model get sophia-extract-m7b-ft` → Tunable: true verified 2026-04-16).
+# Use a real slug (lowercase, digits, hyphens) — do NOT wrap in <angle brackets>; zsh treats < as redirection.
 pnpm ops:fireworks-submit-sft -- --dry-run \
   --training-file data/phase1-training-export/train.together.jsonl \
   --validation-file data/phase1-training-export/validation.together.jsonl \
   --base-model accounts/adam-boon1984-17nryg/models/sophia-extract-m7b-ft \
-  --output-model <your-output-slug>
+  --output-model sophia-extract-sft-iter1
 
 pnpm ops:fireworks-submit-sft -- \
   --training-file data/phase1-training-export/train.together.jsonl \
   --validation-file data/phase1-training-export/validation.together.jsonl \
   --base-model accounts/adam-boon1984-17nryg/models/sophia-extract-m7b-ft \
-  --output-model <your-output-slug> \
+  --output-model sophia-extract-sft-iter1 \
   --write-report data/phase1-training-export/fireworks-sft-job-submitted.json
 
-# Later iteration: continue from prior Fireworks SFT output (do not pass --base-model):
+# Later iteration: continue from prior Fireworks SFT output (omit --base-model):
 # pnpm ops:fireworks-submit-sft -- ... \
-#   --warm-start-from accounts/adam-boon1984-17nryg/models/<PRIOR_SFT_OUTPUT_MODEL> \
-#   --output-model <next-slug>
+#   --warm-start-from accounts/adam-boon1984-17nryg/models/my-prior-sft-output \
+#   --output-model sophia-extract-sft-iter2
 ```
 
-Then **`firectl deployment create <output-model-slug>`** (or Fireworks UI) when the job completes — see [extraction-fireworks-deploy.md](./extraction-fireworks-deploy.md).
+Then **`firectl deployment create sophia-extract-sft-iter1`** (same short id as `--output-model`) when the job completes — see [extraction-fireworks-deploy.md](./extraction-fireworks-deploy.md).
 
 **Commands (legacy — Together LoRA):**
 
