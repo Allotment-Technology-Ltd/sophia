@@ -12,6 +12,8 @@
 #   the same image as the web app; sophia + sophia-ingestion-job-poller + sophia-ingest-worker all use the pushed commit tag.
 #   docs/**, repomix*.json  →  no image build or Cloud Run deploy (workflow_dispatch --force still works).
 #   .gitignore alone  →  no deploy; but data/*.json baked into the image (SEP catalog) must match deploy paths.
+#   Empty commits (no files under deploy paths) → security only; deploy jobs skip. Retrigger image + Cloud Run
+#   via workflow_dispatch (force_app_deploy) or any commit that touches deploy paths (this file counts).
 #
 # TARGET REGION: europe-west2 (London) — all resources are in this region.
 # Region drift was resolved in March 2026: the live us-central1 service was
