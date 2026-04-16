@@ -6,6 +6,8 @@
 
 **Vendor eval archive:** [../local/operations/extraction-vendor-ft-spike-eval-record.md](../local/operations/extraction-vendor-ft-spike-eval-record.md).
 
+**Who does what:** [extraction-ft-lean-pause-points.md](./extraction-ft-lean-pause-points.md) (PAUSE 0 = warm endpoint + env before eval).
+
 ---
 
 ## How to append a new iteration

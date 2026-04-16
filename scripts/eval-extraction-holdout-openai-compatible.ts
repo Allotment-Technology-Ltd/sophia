@@ -22,7 +22,8 @@
  * `user-assistant-folded-system`). Set `EXTRACTION_EVAL_FOLD_SYSTEM=0` to send a separate `system` message.
  *
  * **Fireworks / scale-to-zero:** optional warmup (default on when `EXTRACTION_BASE_URL` is Fireworks) plus
- * retries on **503** / **429** / SDK-marked retryable errors between attempts (`EXTRACTION_EVAL_MAX_TRANSIENT_RETRIES`, default 8).
+ * outer-loop retries on **503** / **429** / wrapped `AI_RetryError` (`EXTRACTION_EVAL_MAX_TRANSIENT_RETRIES`, default 8).
+ * Per-call SDK retries: `EXTRACTION_EVAL_MAX_RETRIES` (default **14** on Fireworks hosts so `DEPLOYMENT_SCALING_UP` can clear; else SDK default **2**).
  * Disable warmup: `EXTRACTION_EVAL_WARMUP=0` or `--no-warmup`.
  *
  * **Fireworks deployment model ids:** the OpenAI SDK treats `accounts/.../deployments/...` as a “reasoning” model and
@@ -187,14 +188,45 @@ function httpStatusFromError(e: unknown): number | undefined {
 	return undefined;
 }
 
+/** AI SDK `RetryError` after exhausting inner attempts — unwrap for 503/429 so outer retries can run. */
+function httpStatusFromRetryBundle(e: unknown): number | undefined {
+	if (!e || typeof e !== 'object') return undefined;
+	const o = e as Record<string, unknown>;
+	const last = httpStatusFromError(o.lastError);
+	if (last !== undefined) return last;
+	const errors = o.errors;
+	if (Array.isArray(errors)) {
+		for (const err of errors) {
+			const h = httpStatusFromError(err);
+			if (h !== undefined) return h;
+		}
+	}
+	return undefined;
+}
+
 function isTransientEvalHttpError(e: unknown): boolean {
-	const st = httpStatusFromError(e);
+	const st = httpStatusFromError(e) ?? httpStatusFromRetryBundle(e);
 	if (st === 503 || st === 429) return true;
-	if (e && typeof e === 'object') {
-		const o = e as Record<string, unknown>;
-		if (o.isRetryable === true) return true;
+	if (e && typeof e !== 'object') return false;
+	const o = e as Record<string, unknown>;
+	if (o.isRetryable === true) return true;
+	/** @see https://sdk.vercel.ai — wraps last provider error */
+	if (typeof o.name === 'string' && o.name.includes('Retry')) {
+		const nested = httpStatusFromRetryBundle(e);
+		if (nested === 503 || nested === 429) return true;
 	}
 	return false;
+}
+
+/** Per-`generateText` SDK retries (separate from `EXTRACTION_EVAL_MAX_TRANSIENT_RETRIES` outer loop). */
+function generationMaxRetriesForBaseUrl(baseURL: string): number | undefined {
+	const raw = process.env.EXTRACTION_EVAL_MAX_RETRIES?.trim();
+	if (raw) {
+		const n = parseInt(raw, 10);
+		if (Number.isFinite(n) && n >= 0) return n;
+	}
+	/** Fireworks scale-to-zero: default inner retries > SDK default (2) so warmup often succeeds without operator hand-waving. */
+	return baseURL.includes('fireworks.ai') ? 14 : undefined;
 }
 
 async function withTransientRetries<T>(label: string, fn: () => Promise<T>): Promise<T> {
@@ -251,6 +283,7 @@ async function main() {
 	}
 
 	const baseURL = process.env.EXTRACTION_BASE_URL?.trim() ?? '';
+	const generationMaxRetries = generationMaxRetriesForBaseUrl(baseURL);
 	/** Fireworks deployment ids + OpenAI SDK: non-`gpt-*` ids hit "reasoning model" path → bogus temperature warnings. */
 	const omitTemperature =
 		baseURL.includes('fireworks.ai') || route.modelId.includes('/deployments/');
@@ -267,7 +300,8 @@ async function main() {
 				model: route.model,
 				messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
 				...(omitTemperature ? {} : { temperature: 0 }),
-				maxOutputTokens: 8
+				maxOutputTokens: 8,
+				...(generationMaxRetries !== undefined ? { maxRetries: generationMaxRetries } : {})
 			})
 		);
 		console.error('[eval:warmup] done');
@@ -324,6 +358,8 @@ async function main() {
 		);
 
 		const t0 = Date.now();
+		const retryOpts =
+			generationMaxRetries !== undefined ? { maxRetries: generationMaxRetries } : {};
 		const result = await withTransientRetries(`row-${rows + 1}`, () =>
 			generateText(
 				foldSystem
@@ -336,14 +372,16 @@ async function main() {
 								}
 							],
 							...(omitTemperature ? {} : { temperature: 0.1 }),
-							maxOutputTokens: 8192
+							maxOutputTokens: 8192,
+							...retryOpts
 						}
 					: {
 							model: route.model,
 							system: EXTRACTION_SYSTEM,
 							messages: [{ role: 'user', content: userMsg }],
 							...(omitTemperature ? {} : { temperature: 0.1 }),
-							maxOutputTokens: 8192
+							maxOutputTokens: 8192,
+							...retryOpts
 						}
 			)
 		);
