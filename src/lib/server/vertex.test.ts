@@ -273,7 +273,8 @@ describe('resolveReasoningModelRoute', () => {
     expect(mockCreateOpenAI).toHaveBeenCalledWith(
       expect.objectContaining({
         baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
-        apiKey: 'AIza-gemini-openai-compat'
+        apiKey: 'AIza-gemini-openai-compat',
+        fetch: expect.any(Function)
       })
     );
   });

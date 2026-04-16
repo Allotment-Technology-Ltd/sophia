@@ -101,6 +101,8 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
   --out data/phase1-training-export/eval-golden-baseline-gemini-3-flash-preview-200.json
 ```
 
+**Troubleshooting `400` — *Multiple authentication credentials*:** Google’s OpenAI-compat gateway errors if more than one auth mechanism is present (often **`Authorization: Bearer`** from the OpenAI SDK **plus** **`x-goog-api-key`**). Sophia’s `getOpenAIForExtractionOverride` (`src/lib/server/vertex.ts`) normalizes **`generativelanguage.googleapis.com`** requests to **only** `x-goog-api-key`. If you still see duplicates, check for **extra** env vars (e.g. both **`GEMINI_API_KEY`** and **`GOOGLE_AI_API_KEY`** with different middleware) or a **global fetch** wrapper.
+
 **Verify the report:** open the JSON and confirm **`modelId`** / host match the baseline you intended (an earlier run saved as `eval-golden-baseline-gpt4o-mini-200.json` accidentally recorded **Fireworks** `hz8ot3bv` because `.env.local` still had **`EXTRACTION_*`** set).
 
 **When the file exists:** append its headline metrics to the table in **§2** and re-state the recommendation. **If** `subsetTextMatchRate` and `schemaPassRate` are **non-inferior** to FT on the same 200 rows, the **economic** decision shifts to **cost/latency** and **ingest** behaviour (out of scope here). **If** baseline **beats** FT on schema or text match, **pause** further FT spend until you diagnose (data, prompt fold, temperature, deployment).
@@ -145,3 +147,4 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
 | 2026-04-16 | §4 Option B: **`gemini-3-flash-preview`** + Studio vs **Vertex-only** key caveat (prod model id, different auth surface). |
 | 2026-04-16 | §4: **Vertex AI Studio `AQ…` API keys** — table mapping `GOOGLE_AI_API_KEY` to `vertex.ts` / `gemini.ts` / embeddings / holdout eval; publisher `aiplatform…?key=` vs `generativelanguage…/openai`. |
 | 2026-04-16 | Link [Vertex inference model reference](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference) (Express vs regional REST, `generateContent` / `streamGenerateContent`). |
+| 2026-04-16 | Troubleshooting: **Multiple authentication credentials** on `generativelanguage…/openai` + `vertex.ts` fetch normalization note. |

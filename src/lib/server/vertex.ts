@@ -119,6 +119,38 @@ function togetherOpenAiCompatibleFetch(
 	};
 }
 
+/**
+ * Generative Language **OpenAI-compatible** (`…/v1beta/openai`) rejects **400** *Multiple authentication
+ * credentials* if the client sends more than one mechanism (e.g. `Authorization: Bearer` from the OpenAI
+ * SDK **and** `x-goog-api-key`, or Bearer plus a second header injected elsewhere). Normalize to **only**
+ * `x-goog-api-key` for API-key auth on this host.
+ */
+function generativeLanguageOpenAiCompatibleFetch(
+	apiKey: string,
+	inner: typeof fetch = globalThis.fetch.bind(globalThis)
+): typeof fetch {
+	return async (input, init) => {
+		const headers = new Headers(
+			init?.headers !== undefined ? (init.headers as HeadersInit) : undefined
+		);
+		headers.delete('Authorization');
+		headers.delete('authorization');
+		headers.delete('x-goog-api-key');
+		headers.set('x-goog-api-key', apiKey);
+		return inner(input as RequestInfo | URL, { ...init, headers } as RequestInit);
+	};
+}
+
+function extractionOverrideFetchForBaseUrl(baseURL: string, apiKey: string): typeof fetch {
+	if (
+		baseURL.includes('generativelanguage.googleapis.com') ||
+		baseURL.includes('googleapis.com/v1beta/openai')
+	) {
+		return generativeLanguageOpenAiCompatibleFetch(apiKey);
+	}
+	return togetherOpenAiCompatibleFetch(baseURL);
+}
+
 function getOpenAIForExtractionOverride(baseURL: string, apiKey: string) {
 	const cacheKey = `${baseURL}::${apiKey}`;
 	const existing = extractionOpenAiOverrideByCacheKey.get(cacheKey);
@@ -126,7 +158,7 @@ function getOpenAIForExtractionOverride(baseURL: string, apiKey: string) {
 	const instance = createOpenAI({
 		baseURL,
 		apiKey,
-		fetch: togetherOpenAiCompatibleFetch(baseURL)
+		fetch: extractionOverrideFetchForBaseUrl(baseURL, apiKey)
 	});
 	extractionOpenAiOverrideByCacheKey.set(cacheKey, instance);
 	return instance;
