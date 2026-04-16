@@ -230,6 +230,10 @@ For multi-gigabyte tarballs and extracted HF trees, prefer a **private** bucket 
 
 After a pilot, **rotate** the Fireworks API key if it was shared or pasted into chat logs. Remove **`EXTRACTION_*`** / **`FIREWORKS_API_KEY`** from **`.env.local`** when you are done so local scripts do not keep calling the vendor (see **Step F** in the exact-commands section below).
 
+### Ingestion (`scripts/ingest.ts`) — Fireworks chat template
+
+On-demand deployments may use a **Jinja** chat template that rejects a separate OpenAI **`system`** message (HTTP **400**: roles must alternate `user`/`assistant`). Sophia folds **`EXTRACTION_SYSTEM`** into the **`user`** message when **`EXTRACTION_BASE_URL`** points at **`api.fireworks.ai`** (same idea as Together SFT + **`together.xyz`**). If you add another OpenAI-compatible host with the same constraint, extend the fold rule in `scripts/ingest.ts` / `model-call.ts` or set a dedicated **`EXTRACTION_API_KEY`** and match the eval script’s folding behaviour.
+
 ### Lineage sidecar (weights ↔ manifest ↔ eval)
 
 Machine-readable hashes and historical deployment ids for job **`ft-d95bacfb-6f78`** live in [`data/phase1-training-export/artifact-ft-d95bacfb-6f78.json`](../../data/phase1-training-export/artifact-ft-d95bacfb-6f78.json). Refresh after re-download or re-extract:

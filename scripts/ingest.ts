@@ -1058,7 +1058,18 @@ const OPENAI_COMPAT_CHAT_PROVIDERS_FOLD_SYSTEM = new Set([
 
 function shouldFoldSystemPromptIntoUserForProvider(provider: string | undefined): boolean {
 	if (!provider) return false;
-	return OPENAI_COMPAT_CHAT_PROVIDERS_FOLD_SYSTEM.has(provider.toLowerCase());
+	const p = provider.toLowerCase();
+	if (OPENAI_COMPAT_CHAT_PROVIDERS_FOLD_SYSTEM.has(p)) return true;
+	const extractionBase = process.env.EXTRACTION_BASE_URL?.trim().toLowerCase() ?? '';
+	// `buildExtractionOpenAiCompatibleRoute` always labels the client `provider: 'openai'`. Fireworks
+	// deployment templates return 400 ("roles must alternate…") when `system` is sent separately;
+	// Together SFT eval defaults to the same folded shape (see `EXTRACTION_EVAL_FOLD_SYSTEM`).
+	if (p === 'openai' && extractionBase) {
+		if (extractionBase.includes('fireworks.ai') || extractionBase.includes('together.xyz')) {
+			return true;
+		}
+	}
+	return false;
 }
 
 function makeStageBudget(stage: StageKey): StageBudget {
