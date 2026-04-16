@@ -17,6 +17,7 @@ import type {
 	CostTracker,
 	IngestTimingPayload
 } from './types.js';
+import { shouldOmitGenerateTextTemperature } from '../ingestGenerateTextTemperature.js';
 
 /** When `INGEST_STAGE_JSON_REPAIR_MAX_OUTPUT_TOKENS` is unset on the shared `StageBudget`. */
 const DEFAULT_JSON_REPAIR_MAX_OUTPUT_TOKENS = 8192;
@@ -231,28 +232,33 @@ export async function callStageModel(params: {
 			const callStarted = Date.now();
 			const routingProvider = plan.route.provider ?? plan.provider;
 			const foldSystem = shouldFoldSystemPromptIntoUserForProvider(routingProvider);
+			const omitTemperature = shouldOmitGenerateTextTemperature(
+				stage,
+				routingProvider,
+				plan.model
+			);
+			const textGenBase = foldSystem
+				? {
+						model: plan.route.model,
+						messages: [
+							{
+								role: 'user' as const,
+								content: `${systemPrompt}\n\n${userMessage}`
+							}
+						],
+						maxOutputTokens: maxTokens
+					}
+				: {
+						model: plan.route.model,
+						system: systemPrompt,
+						messages: [{ role: 'user' as const, content: userMessage }],
+						maxOutputTokens: maxTokens
+					};
+			const textGenParams = omitTemperature
+				? textGenBase
+				: { ...textGenBase, temperature: 0.1 as const };
 			const result = await withTimeout(
-				generateText(
-					foldSystem
-						? {
-								model: plan.route.model,
-								messages: [
-									{
-										role: 'user',
-										content: `${systemPrompt}\n\n${userMessage}`
-									}
-								],
-								temperature: 0.1,
-								maxOutputTokens: maxTokens
-							}
-						: {
-								model: plan.route.model,
-								system: systemPrompt,
-								messages: [{ role: 'user', content: userMessage }],
-								temperature: 0.1,
-								maxOutputTokens: maxTokens
-							}
-				),
+				generateText(textGenParams),
 				budget.timeoutMs,
 				`${stage} ${plan.provider}:${plan.model}`
 			);

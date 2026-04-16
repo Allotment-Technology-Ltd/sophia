@@ -47,6 +47,8 @@ RULES:
 OUTPUT — MACHINE-PARSEABLE JSON ONLY:
 - Return exactly one JSON array of claim objects. No wrapper object, no key wrapping the array.
 - The first non-whitespace character must be "[" and the last must be "]".
+- Never emit a bare single object as the full response (wrong: {"text":"…",…}). Never concatenate multiple top-level objects without an array (wrong: {"text":"…"} , {"text":"…"}). If you have one claim, respond as a one-element array: [{"text":"…",…}].
+- Do not prefix or suffix the array with an extra object, summary, or duplicate closing brackets.
 - Use double quotes for every key and string value. Escape literal double-quotes inside strings as \\" and line breaks as \\n.
 - No trailing commas after the last property or array element. No comments, no NaN/Infinity, no undefined.
 - Do not wrap the array in markdown code fences or add any text before or after the array.

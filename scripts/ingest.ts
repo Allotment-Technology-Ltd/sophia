@@ -39,6 +39,7 @@ import {
 	runWithIngestTelemetryHeartbeat
 } from '../src/lib/server/ingestion/ingestionTelemetry.js';
 import { buildIngestMetricsAdvisory } from '../src/lib/server/ingestion/ingestRunMetricsAdvisor.js';
+import { shouldOmitGenerateTextTemperature } from '../src/lib/server/ingestion/ingestGenerateTextTemperature.ts';
 import {
 	assertSepPresetDiscipline,
 	buildSepPresetFingerprint,
@@ -1111,6 +1112,39 @@ function maxOutputTokensForExtraction(budget: StageBudget): number {
 
 function maxOutputTokensForJsonRepair(budget: StageBudget): number {
 	return budget.maxOutputTokens ?? DEFAULT_INGEST_STAGE_JSON_REPAIR_MAX_OUTPUT_TOKENS;
+}
+
+/**
+ * Caps extraction batch packing.
+ * For `sep_entry`, defaults to ~58% of the section token limit when no env overrides are set
+ * (finetuned / low-output models handle smaller batches better). Opt out with
+ * `INGEST_EXTRACTION_DISABLE_SEP_DEFAULT_SMALL_BATCH=1`.
+ */
+function resolveIngestExtractionBatchTokenLimit(sectionTokenLimit: number, sourceType: string): number {
+	const cap = parsePositiveInt(process.env.INGEST_EXTRACTION_MAX_TOKENS_PER_BATCH);
+	const fracRaw = (process.env.INGEST_EXTRACTION_BATCH_TOKEN_FRACTION ?? '').trim();
+	const sepDefaultOff =
+		(process.env.INGEST_EXTRACTION_DISABLE_SEP_DEFAULT_SMALL_BATCH ?? '').trim() === '1';
+	const useSepDefault =
+		!fracRaw &&
+		cap === undefined &&
+		!sepDefaultOff &&
+		sourceType.trim().toLowerCase() === 'sep_entry';
+
+	let limit = sectionTokenLimit;
+	if (useSepDefault) {
+		limit = Math.max(400, Math.floor(sectionTokenLimit * 0.58));
+	} else if (fracRaw) {
+		const f = Number(fracRaw);
+		if (Number.isFinite(f) && f > 0 && f <= 1) {
+			limit = Math.max(400, Math.floor(sectionTokenLimit * f));
+		}
+	}
+	if (cap !== undefined) {
+		limit = Math.min(limit, cap);
+	}
+	limit = Math.min(limit, sectionTokenLimit);
+	return Math.max(400, limit);
 }
 
 function currentInputTokens(): number {
@@ -2453,31 +2487,36 @@ async function callStageModel(params: {
 				provider: routingProvider,
 				model: activePlan.model
 			});
+			const omitTemperature = shouldOmitGenerateTextTemperature(
+				stage,
+				routingProvider,
+				activePlan.model
+			);
+			const textGenBase = foldSystem
+				? {
+						model: activePlan.route.model,
+						messages: [
+							{
+								role: 'user' as const,
+								content: `${systemPrompt}\n\n${userMessage}`
+							}
+						],
+						maxOutputTokens: maxTokens
+					}
+				: {
+						model: activePlan.route.model,
+						system: systemPrompt,
+						messages: [{ role: 'user' as const, content: userMessage }],
+						maxOutputTokens: maxTokens
+					};
+			const textGenParams = omitTemperature
+				? textGenBase
+				: { ...textGenBase, temperature: 0.1 as const };
 			const result = await runWithIngestTelemetryHeartbeat({
 				stage,
 				work: () =>
 					withTimeout(
-						generateText(
-							foldSystem
-								? {
-										model: activePlan.route.model,
-										messages: [
-											{
-												role: 'user',
-												content: `${systemPrompt}\n\n${userMessage}`
-											}
-										],
-										temperature: 0.1,
-										maxOutputTokens: maxTokens
-									}
-								: {
-										model: activePlan.route.model,
-										system: systemPrompt,
-										messages: [{ role: 'user', content: userMessage }],
-										temperature: 0.1,
-										maxOutputTokens: maxTokens
-									}
-						),
+						generateText(textGenParams),
 						budget.timeoutMs,
 						`${stage} ${activePlan.provider}:${activePlan.model}`
 					)
@@ -4137,7 +4176,16 @@ async function main() {
 		passages = filtered;
 	}
 
-	const extractionBatches = buildPassageBatches(passages, sectionTokenLimit);
+	const extractionBatchTokenLimit = resolveIngestExtractionBatchTokenLimit(
+		sectionTokenLimit,
+		sourceMeta.source_type
+	);
+	if (extractionBatchTokenLimit < sectionTokenLimit) {
+		console.log(
+			`  [INFO] Extraction batch cap: ~${extractionBatchTokenLimit.toLocaleString()} tokens/batch (section limit ${sectionTokenLimit.toLocaleString()}; sep_entry uses a smaller default unless INGEST_EXTRACTION_DISABLE_SEP_DEFAULT_SMALL_BATCH=1, or set INGEST_EXTRACTION_MAX_TOKENS_PER_BATCH / INGEST_EXTRACTION_BATCH_TOKEN_FRACTION)`
+		);
+	}
+	const extractionBatches = buildPassageBatches(passages, extractionBatchTokenLimit);
 	const cu = sourceMeta.canonical_url?.trim();
 	const su = sourceMeta.url?.trim();
 	const partialLoadOpts: LoadPartialResultsOpts = {
