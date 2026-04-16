@@ -204,6 +204,11 @@ function slugDatasetId(prefix: string): string {
 	return `${safe}-${stamp}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** SFT job `dataset` / `evaluationDataset` must be full resource names, not bare dataset ids. */
+function datasetResourceName(accountId: string, datasetShortId: string): string {
+	return `accounts/${accountId}/datasets/${datasetShortId}`;
+}
+
 async function main(): Promise<void> {
 	loadServerEnv();
 	const opts = parseArgs(process.argv.slice(2));
@@ -224,9 +229,10 @@ async function main(): Promise<void> {
 		console.error('Missing FIREWORKS_API_KEY (omit for --dry-run only)');
 		process.exit(2);
 	}
-	if (!opts.dryRun && !accountId) {
+	if (!accountId) {
 		console.error(
-			'Missing account id: set FIREWORKS_ACCOUNT_ID or EXTRACTION_MODEL=accounts/<id>/deployments/...'
+			'Missing account id: set FIREWORKS_ACCOUNT_ID or EXTRACTION_MODEL=accounts/<id>/deployments/... ' +
+				'(required so dataset fields use accounts/<id>/datasets/<dataset-id> format).'
 		);
 		process.exit(2);
 	}
@@ -253,8 +259,12 @@ async function main(): Promise<void> {
 	const trainDatasetId = opts.trainDatasetId ?? slugDatasetId('sophia-train');
 	const valDatasetId = opts.valDatasetId ?? (opts.validationFile ? slugDatasetId('sophia-val') : null);
 
+	const trainDatasetResource = datasetResourceName(accountId, trainDatasetId);
+	const valDatasetResource =
+		valDatasetId != null ? datasetResourceName(accountId, valDatasetId) : null;
+
 	const jobPayload: Record<string, unknown> = {
-		dataset: trainDatasetId,
+		dataset: trainDatasetResource,
 		outputModel: opts.outputModel.trim(),
 		epochs: opts.epochs
 	};
@@ -263,8 +273,8 @@ async function main(): Promise<void> {
 	} else {
 		jobPayload.baseModel = base;
 	}
-	if (opts.validationFile && valDatasetId) {
-		jobPayload.evaluationDataset = valDatasetId;
+	if (opts.validationFile && valDatasetResource) {
+		jobPayload.evaluationDataset = valDatasetResource;
 	}
 	if (opts.loraRank != null && Number.isFinite(opts.loraRank)) {
 		jobPayload.loraRank = opts.loraRank;
@@ -275,15 +285,18 @@ async function main(): Promise<void> {
 			JSON.stringify(
 				{
 					dryRun: true,
-					accountId: accountId ?? '(infer from FIREWORKS_ACCOUNT_ID or EXTRACTION_MODEL)',
+					accountId,
 					trainDatasetId,
 					valDatasetId,
+					trainDatasetResource,
+					valDatasetResource,
 					trainingFile: opts.trainingFile || null,
 					validationFile: opts.validationFile,
 					trainExamples,
 					valExamples,
 					wouldPostJob: jobPayload,
-					note: 'Confirm datasetId naming rules: https://docs.fireworks.ai/getting-started/concepts#resource-names-and-ids'
+					note:
+						'Job body uses full dataset resource names (accounts/.../datasets/...). Short ids are only for create/upload API paths. Resource naming: https://docs.fireworks.ai/getting-started/concepts#resource-names-and-ids'
 				},
 				null,
 				2
