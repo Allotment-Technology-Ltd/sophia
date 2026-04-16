@@ -3881,8 +3881,9 @@
                   </summary>
                   <div class="mt-4 space-y-4">
                     <p class="text-xs text-sophia-dark-muted">
-                      Per-run worker timeout overrides (milliseconds). Fields default to the same 360000 ms baseline as the ingest worker /
-                      <span class="font-mono">scripts/ingest.ts</span>; the server may still apply stricter caps from
+                      Per-run worker timeout overrides (milliseconds). Most stages default to 360000 ms like the ingest worker;
+                      extraction defaults to 180000 ms (see <span class="font-mono">scripts/ingest.ts</span> /
+                      <span class="font-mono">adminIngestWorkerUiDefaults</span>). The server may still apply stricter caps from
                       <span class="font-mono">.env</span>. Stage-specific values map to
                       <span class="font-mono">INGEST_STAGE_*_TIMEOUT_MS</span>. Saved in this browser with worker defaults above; hover each control
                       for pairing advice.

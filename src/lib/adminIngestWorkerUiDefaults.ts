@@ -1,6 +1,6 @@
 /**
  * Default worker / batch UI values aligned with `scripts/ingest.ts` defaults and the
- * `sophia-ingest-worker` Cloud Run profile (ADMIN_INGEST_MAX_CONCURRENT=3, stage timeouts 360s; conservative batch defaults to reduce 429 / TPM / truncation pressure).
+ * `sophia-ingest-worker` Cloud Run profile (ADMIN_INGEST_MAX_CONCURRENT=3, general LLM stage timeouts 360s, extraction 180s; conservative batch defaults to reduce 429 / TPM / truncation pressure).
  * Used by Admin → Ingest (single run + durable jobs) so operators start from a known-good baseline.
  */
 export const ADMIN_INGEST_WORKER_UI_DEFAULTS = {
@@ -19,7 +19,7 @@ export const ADMIN_INGEST_WORKER_UI_DEFAULTS = {
 	ingestModelTimeoutMs: '360000',
 	validationModelTimeoutMs: '360000',
 	validationStageTimeoutMs: '360000',
-	extractionStageTimeoutMs: '360000',
+	extractionStageTimeoutMs: '180000',
 	relationsStageTimeoutMs: '360000',
 	groupingStageTimeoutMs: '360000',
 	embeddingStageTimeoutMs: '360000',
@@ -123,7 +123,7 @@ export const ADMIN_INGEST_WORKER_UI_TOOLTIPS = {
 		'Maps to INGEST_STAGE_VALIDATION_TIMEOUT_MS. Whole-stage budget for validation. If you raise VALIDATION_BATCH_TARGET_TOKENS, raise this (or per-call VALIDATION_MODEL_TIMEOUT_MS) so batches do not hit mid-stage timeouts.',
 
 	extractionStageTimeoutMs:
-		'Maps to INGEST_STAGE_EXTRACTION_TIMEOUT_MS. Increase for very large books; decrease to surface stuck extraction sooner.',
+		'Maps to INGEST_STAGE_EXTRACTION_TIMEOUT_MS (default 180000 in worker UI; unset in shell uses ingest.ts 180s fallback). Increase for very large books; decrease to surface stuck extraction sooner — timed-out batches split (including single-passage text bisect).',
 
 	relationsStageTimeoutMs:
 		'Maps to INGEST_STAGE_RELATIONS_TIMEOUT_MS. Whole-stage budget for relation discovery. If you raise RELATIONS_BATCH_TARGET_TOKENS or RELATIONS_BATCH_OVERLAP_CLAIMS, allow more time here or lower batch targets to avoid timing out late in the stage.',

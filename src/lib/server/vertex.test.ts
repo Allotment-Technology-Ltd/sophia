@@ -261,7 +261,7 @@ describe('resolveReasoningModelRoute', () => {
     );
   });
 
-  it('buildExtractionOpenAiCompatibleRoute uses GOOGLE_AI_API_KEY for Google OpenAI-compatible base URL', async () => {
+  it('buildExtractionOpenAiCompatibleRoute uses native @ai-sdk/google for generativelanguage.googleapis.com (not OpenAI shim)', async () => {
     process.env.GOOGLE_AI_API_KEY = 'AIza-gemini-openai-compat';
     delete process.env.OPENAI_API_KEY;
     process.env.EXTRACTION_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai';
@@ -270,13 +270,33 @@ describe('resolveReasoningModelRoute', () => {
     const { buildExtractionOpenAiCompatibleRoute } = await import('./vertex');
     const route = buildExtractionOpenAiCompatibleRoute();
     expect(route).not.toBeNull();
-    expect(mockCreateOpenAI).toHaveBeenCalledWith(
+    expect(route?.provider).toBe('vertex');
+    expect(route?.model).toBe('google:gemini-2.0-flash');
+    expect(mockCreateGoogleGenerativeAI).toHaveBeenCalledWith(
       expect.objectContaining({
-        baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
-        apiKey: 'AIza-gemini-openai-compat',
-        fetch: expect.any(Function)
+        apiKey: 'AIza-gemini-openai-compat'
       })
     );
+    expect(mockCreateOpenAI).not.toHaveBeenCalled();
+  });
+
+  it('buildExtractionOpenAiCompatibleRoute strips ?key= from generativelanguage EXTRACTION_BASE_URL; still uses native Google client', async () => {
+    process.env.GOOGLE_AI_API_KEY = 'AIza-gemini-openai-compat';
+    delete process.env.OPENAI_API_KEY;
+    process.env.EXTRACTION_BASE_URL =
+      'https://generativelanguage.googleapis.com/v1beta/openai?key=duplicate-from-rest-docs';
+    process.env.EXTRACTION_MODEL = 'gemini-2.0-flash';
+
+    const { buildExtractionOpenAiCompatibleRoute } = await import('./vertex');
+    const route = buildExtractionOpenAiCompatibleRoute();
+    expect(route).not.toBeNull();
+    expect(route?.provider).toBe('vertex');
+    expect(mockCreateGoogleGenerativeAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: 'AIza-gemini-openai-compat'
+      })
+    );
+    expect(mockCreateOpenAI).not.toHaveBeenCalled();
   });
 
   it('falls back to anthropic default when Restormel returns an unknown anthropic model id', async () => {

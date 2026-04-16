@@ -101,7 +101,7 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
   --out data/phase1-training-export/eval-golden-baseline-gemini-3-flash-preview-200.json
 ```
 
-**Troubleshooting `400` — *Multiple authentication credentials*:** Google’s OpenAI-compat gateway errors if more than one auth mechanism is present (often **`Authorization: Bearer`** from the OpenAI SDK **plus** **`x-goog-api-key`**). Sophia’s `getOpenAIForExtractionOverride` (`src/lib/server/vertex.ts`) normalizes **`generativelanguage.googleapis.com`** requests to **only** `x-goog-api-key`. If you still see duplicates, check for **extra** env vars (e.g. both **`GEMINI_API_KEY`** and **`GOOGLE_AI_API_KEY`** with different middleware) or a **global fetch** wrapper.
+**Troubleshooting `400` — auth:** *Multiple authentication credentials* usually means **Bearer + something else** (e.g. **`x-goog-api-key`** or **`?key=`** on the URL). `getOpenAIForExtractionOverride` (`src/lib/server/vertex.ts`) strips **only** those extras and keeps **`Authorization: Bearer`** (Google rejects the call if Bearer is missing). If errors persist, check for a **global fetch** wrapper or duplicate query keys.
 
 **Verify the report:** open the JSON and confirm **`modelId`** / host match the baseline you intended (an earlier run saved as `eval-golden-baseline-gpt4o-mini-200.json` accidentally recorded **Fireworks** `hz8ot3bv` because `.env.local` still had **`EXTRACTION_*`** set).
 

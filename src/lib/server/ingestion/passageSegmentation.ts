@@ -356,3 +356,77 @@ export function renderPassageBatch(passages: PassageRecord[]): string {
 		)
 		.join('\n\n');
 }
+
+const DEFAULT_EXTRACTION_SPLIT_MIN_CHARS = 400;
+
+function findMidSplitIndexInPassageText(text: string, minCharsPerPart: number): number {
+	const n = text.length;
+	if (n < minCharsPerPart * 2) return -1;
+	const mid = Math.floor(n / 2);
+
+	const ok = (idx: number) => idx > 0 && idx < n && idx >= minCharsPerPart && n - idx >= minCharsPerPart;
+
+	const paraBack = text.lastIndexOf('\n\n', mid);
+	if (paraBack !== -1 && ok(paraBack + 2)) return paraBack + 2;
+
+	const paraFwd = text.indexOf('\n\n', mid);
+	if (paraFwd !== -1 && ok(paraFwd + 2)) return paraFwd + 2;
+
+	const nlBack = text.lastIndexOf('\n', mid);
+	if (nlBack !== -1 && ok(nlBack + 1)) return nlBack + 1;
+
+	if (ok(mid)) return mid;
+	return -1;
+}
+
+/**
+ * When a single passage still exceeds extraction time or max_tokens, bisect its text so the
+ * ingest loop can replace one batch with two smaller prompts (mirrors multi-passage batch splits).
+ */
+export function splitPassageRecordForExtractionRetry(
+	passage: PassageRecord,
+	opts?: { minCharsPerPart?: number }
+): [PassageRecord, PassageRecord] | null {
+	const minChars = Math.max(120, opts?.minCharsPerPart ?? DEFAULT_EXTRACTION_SPLIT_MIN_CHARS);
+	const text = passage.text;
+	const splitAt = findMidSplitIndexInPassageText(text, minChars);
+	if (splitAt <= 0 || splitAt >= text.length) return null;
+
+	const leftRaw = text.slice(0, splitAt);
+	const rightRaw = text.slice(splitAt);
+	if (leftRaw.length < minChars || rightRaw.length < minChars) return null;
+
+	const sectionTitle = passage.section_title ?? null;
+	const leftRole = classifyPassageRole(leftRaw, sectionTitle);
+	const rightRole = classifyPassageRole(rightRaw, sectionTitle);
+
+	const baseOrder = passage.order_in_source;
+	const left = PassageRecordSchema.parse({
+		id: `${passage.id}-s0`,
+		order_in_source: baseOrder,
+		section_title: passage.section_title,
+		text: leftRaw,
+		summary: summarisePassage(leftRaw),
+		role: leftRole.role,
+		role_confidence: leftRole.confidence,
+		span: {
+			start: passage.span.start,
+			end: passage.span.start + leftRaw.length - 1
+		}
+	});
+	const right = PassageRecordSchema.parse({
+		id: `${passage.id}-s1`,
+		// Same order as the parent: extraction parallel merge sorts by `queuePos` when orders tie.
+		order_in_source: baseOrder,
+		section_title: passage.section_title,
+		text: rightRaw,
+		summary: summarisePassage(rightRaw),
+		role: rightRole.role,
+		role_confidence: rightRole.confidence,
+		span: {
+			start: passage.span.start + splitAt,
+			end: passage.span.end
+		}
+	});
+	return [left, right];
+}
