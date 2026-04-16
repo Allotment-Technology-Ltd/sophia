@@ -135,8 +135,10 @@ function getOpenAIForExtractionOverride(baseURL: string, apiKey: string) {
 /**
  * When **`EXTRACTION_BASE_URL`** and **`EXTRACTION_MODEL`** are set, ingestion `planIngestionStage('extraction')`
  * uses this OpenAI-compatible chat route (Fireworks, vLLM, Together-hosted chat, etc.).
- * API key: **`EXTRACTION_API_KEY`** or fallback **`OPENAI_API_KEY`**, or vendor fallbacks
- * (**`TOGETHER_API_KEY`** on Together hosts, **`FIREWORKS_API_KEY`** on `api.fireworks.ai`).
+ * API key: **`EXTRACTION_API_KEY`** if set; otherwise **host-specific** keys so operator BYOK
+ * (`OPENAI_API_KEY` merged into ingest workers) does not override Fireworks: on **`api.fireworks.ai`**
+ * use **`FIREWORKS_API_KEY`** then `OPENAI_API_KEY`; on **Together** use **`TOGETHER_API_KEY`** then
+ * `OPENAI_API_KEY`; elsewhere `OPENAI_API_KEY`, then Together, then Fireworks.
  * Does not affect `resolveExtractionModelRoute` callers outside ingestion planning (e.g. verification extraction).
  */
 export function readExtractionOpenAiCompatibleOverride():
@@ -146,16 +148,26 @@ export function readExtractionOpenAiCompatibleOverride():
   const baseURL = process.env.EXTRACTION_BASE_URL?.trim();
   const modelId = process.env.EXTRACTION_MODEL?.trim();
   if (!baseURL || !modelId) return null;
+  const explicit = process.env.EXTRACTION_API_KEY?.trim();
+  const openaiKey = process.env.OPENAI_API_KEY?.trim();
   const togetherKey = process.env.TOGETHER_API_KEY?.trim();
   const fireworksKey = process.env.FIREWORKS_API_KEY?.trim();
-  const apiKey =
-    process.env.EXTRACTION_API_KEY?.trim() ||
-    process.env.OPENAI_API_KEY?.trim() ||
-    (togetherKey && baseURL.includes('together.xyz') ? togetherKey : undefined) ||
-    (fireworksKey && baseURL.includes('fireworks.ai') ? fireworksKey : undefined);
+
+  /** Prefer vendor keys for that host before generic `OPENAI_API_KEY` (BYOK merges OpenAI for catalog routes). */
+  let apiKey: string | undefined;
+  if (explicit) {
+    apiKey = explicit;
+  } else if (baseURL.includes('fireworks.ai')) {
+    apiKey = fireworksKey || openaiKey;
+  } else if (baseURL.includes('together.xyz')) {
+    apiKey = togetherKey || openaiKey;
+  } else {
+    apiKey = openaiKey || togetherKey || fireworksKey;
+  }
+
   if (!apiKey) {
     throw new Error(
-      'EXTRACTION_BASE_URL and EXTRACTION_MODEL require EXTRACTION_API_KEY or OPENAI_API_KEY (or TOGETHER_API_KEY on Together, FIREWORKS_API_KEY on Fireworks)'
+      'EXTRACTION_BASE_URL and EXTRACTION_MODEL require EXTRACTION_API_KEY, or OPENAI_API_KEY, or (on Fireworks) FIREWORKS_API_KEY, or (on Together) TOGETHER_API_KEY'
     );
   }
   return { baseURL, apiKey, modelId };

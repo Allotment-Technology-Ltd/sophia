@@ -243,6 +243,24 @@ describe('resolveReasoningModelRoute', () => {
     );
   });
 
+  it('buildExtractionOpenAiCompatibleRoute prefers FIREWORKS_API_KEY over operator OPENAI_API_KEY on Fireworks host', async () => {
+    process.env.GOOGLE_AI_API_KEY = 'AIza-default-test';
+    process.env.EXTRACTION_BASE_URL = 'https://api.fireworks.ai/inference/v1';
+    process.env.EXTRACTION_MODEL = 'accounts/demo/deployments/extract-1';
+    process.env.FIREWORKS_API_KEY = 'fw-test-key';
+    process.env.OPENAI_API_KEY = 'sk-openai-from-byok-merge';
+
+    const { buildExtractionOpenAiCompatibleRoute } = await import('./vertex');
+    const route = buildExtractionOpenAiCompatibleRoute();
+    expect(route).not.toBeNull();
+    expect(mockCreateOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseURL: 'https://api.fireworks.ai/inference/v1',
+        apiKey: 'fw-test-key'
+      })
+    );
+  });
+
   it('falls back to anthropic default when Restormel returns an unknown anthropic model id', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
     mockResolveProviderDecision.mockResolvedValue({
