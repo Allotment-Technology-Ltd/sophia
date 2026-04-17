@@ -50,6 +50,7 @@ OUTPUT — MACHINE-PARSEABLE JSON ONLY:
 - Never emit a bare single object as the full response (wrong: {"text":"…",…}). Never concatenate multiple top-level objects without an array (wrong: {"text":"…"} , {"text":"…"}). If you have one claim, respond as a one-element array: [{"text":"…",…}].
 - Do not prefix or suffix the array with an extra object, summary, or duplicate closing brackets.
 - Use double quotes for every key and string value. Escape literal double-quotes inside strings as \\" and line breaks as \\n.
+- **In each "text" value, write plain prose only.** Never paste raw \`<passage>…</passage>\` XML, HTML, or other angle-bracket markup into JSON strings — it breaks JSON escaping and invalidates the output. Paraphrase the claim; use **passage_id** to reference the passage.
 - No trailing commas after the last property or array element. No comments, no NaN/Infinity, no undefined.
 - Do not wrap the array in markdown code fences or add any text before or after the array.
 

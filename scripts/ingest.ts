@@ -4999,32 +4999,64 @@ async function main() {
 										return 'split';
 									}
 								}
+								const halvesOnRepairFail = replaceExtractionBatchWithSplitHalves(batch);
+								if (halvesOnRepairFail) {
+									if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
+									batchQueue.splice(i, 1, halvesOnRepairFail[0]!, halvesOnRepairFail[1]!);
+									const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
+									const shortDetail = fixMsg.length > 200 ? `${fixMsg.slice(0, 200)}…` : fixMsg;
+									console.warn(
+										`  [SPLIT] Batch ${batchLabel} JSON repair call failed — splitting into 2 smaller passage batches (${shortDetail}) (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
+									);
+									batchLabel--;
+									return 'split';
+								}
 								throw fixError;
 							}
 
-							const fixedParsed = parseExtractionJsonFromModelResponse(fixedResponse);
-							const fixedValidated = ExtractionOutputSchema.parse(
-								normalizeExtractionPayload(fixedParsed, domainOverride)
-							);
-							const fixedClaims = attachPassageMetadataToClaims(
-								fixedValidated,
-								batch,
-								allClaims.length,
-								sourceMeta
-							);
-							allClaims.push(...fixedClaims);
-							if (activeIngestTiming) {
-								activeIngestTiming.extraction_claims_recovered_via_json_repair += fixedValidated.length;
-							}
-							console.log(
-								`  [OK] Fixed and extracted ${fixedValidated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
-							);
+							try {
+								const fixedParsed = parseExtractionJsonFromModelResponse(fixedResponse);
+								const fixedValidated = ExtractionOutputSchema.parse(
+									normalizeExtractionPayload(fixedParsed, domainOverride)
+								);
+								const fixedClaims = attachPassageMetadataToClaims(
+									fixedValidated,
+									batch,
+									allClaims.length,
+									sourceMeta
+								);
+								allClaims.push(...fixedClaims);
+								if (activeIngestTiming) {
+									activeIngestTiming.extraction_claims_recovered_via_json_repair += fixedValidated.length;
+								}
+								console.log(
+									`  [OK] Fixed and extracted ${fixedValidated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
+								);
 
-							partial.extraction_progress = {
-								claims_so_far: [...allClaims],
-								remaining_batches: batchQueue.slice(i + 1)
-							};
-							await savePartialResults(slug, partial);
+								partial.extraction_progress = {
+									claims_so_far: [...allClaims],
+									remaining_batches: batchQueue.slice(i + 1)
+								};
+								await savePartialResults(slug, partial);
+							} catch (secondParseError) {
+								const halvesOnBadRepair = replaceExtractionBatchWithSplitHalves(batch);
+								if (halvesOnBadRepair) {
+									if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
+									batchQueue.splice(i, 1, halvesOnBadRepair[0]!, halvesOnBadRepair[1]!);
+									const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
+									const detail =
+										secondParseError instanceof Error
+											? secondParseError.message
+											: String(secondParseError);
+									const shortDetail = detail.length > 220 ? `${detail.slice(0, 220)}…` : detail;
+									console.warn(
+										`  [SPLIT] Batch ${batchLabel} repaired JSON still invalid — splitting into 2 smaller passage batches (${shortDetail}) (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
+									);
+									batchLabel--;
+									return 'split';
+								}
+								throw secondParseError;
+							}
 						}
 						return 'done';
 					};
