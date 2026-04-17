@@ -1,7 +1,15 @@
 import { hasOwnerRole, isSeedOwnerEmail, syncAuthenticatedUserRole, type UserRoleRecord } from '$lib/server/authRoles';
 import { verifyBearerTokenForApi } from '$lib/server/bearerAuthVerification';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
-import type { Handle } from '@sveltejs/kit';
+import type { Handle, RequestEvent } from '@sveltejs/kit';
+
+/** Avoid CDN / browser caching of API responses (stale 404s after deploys; auth varies by caller). */
+function withApiCacheHeaders(event: RequestEvent, response: Response): Response {
+  if (event.url.pathname.startsWith('/api/')) {
+    response.headers.set('Cache-Control', 'private, no-store, max-age=0, must-revalidate');
+  }
+  return response;
+}
 
 export const handle: Handle = async ({ event, resolve }) => {
   // Only enforce Bearer token auth on protected API routes.
@@ -18,12 +26,15 @@ export const handle: Handle = async ({ event, resolve }) => {
     const requestId = resolveRequestId(event.request);
     const authHeader = event.request.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
-      return problemJson({
-        status: 401,
-        title: 'Authentication required',
-        detail: 'Provide a valid Neon Auth JWT in the Authorization header.',
-        requestId
-      });
+      return withApiCacheHeaders(
+        event,
+        problemJson({
+          status: 401,
+          title: 'Authentication required',
+          detail: 'Provide a valid Neon Auth JWT in the Authorization header.',
+          requestId
+        })
+      );
     }
 
     try {
@@ -63,25 +74,31 @@ export const handle: Handle = async ({ event, resolve }) => {
         '[AUTH] bearer verification failed:',
         err instanceof Error ? err.message : String(err)
       );
-      return problemJson({
-        status: 401,
-        title: 'Authentication failed',
-        detail: 'The provided bearer token is invalid or expired.',
-        requestId
-      });
+      return withApiCacheHeaders(
+        event,
+        problemJson({
+          status: 401,
+          title: 'Authentication failed',
+          detail: 'The provided bearer token is invalid or expired.',
+          requestId
+        })
+      );
     }
 
     const isOwnerRestrictedApi =
       event.url.pathname.startsWith('/api/stoa') || event.url.pathname.startsWith('/api/learn');
     if (isOwnerRestrictedApi && !hasOwnerRole(event.locals.user)) {
-      return problemJson({
-        status: 403,
-        title: 'Forbidden',
-        detail: 'Owner access is required for this module.',
-        requestId
-      });
+      return withApiCacheHeaders(
+        event,
+        problemJson({
+          status: 403,
+          title: 'Forbidden',
+          detail: 'Owner access is required for this module.',
+          requestId
+        })
+      );
     }
   }
 
-  return resolve(event);
+  return withApiCacheHeaders(event, await resolve(event));
 };
