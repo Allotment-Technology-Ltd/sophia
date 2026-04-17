@@ -68,6 +68,11 @@ export function ingestOptInStopBeforeStore(payload: { stop_before_store?: boolea
   return payload.stop_before_store === true;
 }
 
+/** When true, Stage 1 completes and checkpoints to Neon then exits (no relations onward). */
+export function ingestOptInStopAfterExtraction(payload: { stop_after_extraction?: boolean }): boolean {
+  return payload.stop_after_extraction === true;
+}
+
 /** Mirrors `STAGES_ORDER` / `--force-stage` in `scripts/ingest.ts`. */
 export const INGEST_CLI_FORCE_STAGES = [
   'extracting',
@@ -85,6 +90,11 @@ export interface IngestRunPayload {
   validate: boolean;
   /** When true, ingest stops before Surreal store (preview); omit or false for full pipeline including store. */
   stop_before_store?: boolean;
+  /**
+   * When true, ingest exits after Stage 1 (extraction) checkpoints; relations onward run in a later promote step.
+   * Incompatible with `stop_before_store` on the same run — extraction-only wins when both are set.
+   */
+  stop_after_extraction?: boolean;
   /** Preferred embedding profile (wizard / Restormel); pipeline may still use server defaults. */
   embedding_model?: string;
   /**
@@ -180,12 +190,20 @@ export interface IngestRunPayload {
     groupingAutoTune?: boolean;
     /** When set, maps to `INGEST_RELATIONS_AUTO_TUNE` (`true` = `1`). Omitted: ingest default (on). */
     relationsAutoTune?: boolean;
+    /**
+     * Per-run OpenAI-compatible extraction endpoint (maps to `EXTRACTION_BASE_URL` / `EXTRACTION_MODEL`).
+     * Use for fine-tuned or custom deployments; keys are also persisted on `ingestion_jobs.worker_defaults`.
+     */
+    extractionOpenAiCompatibleBaseUrl?: string;
+    extractionOpenAiCompatibleModel?: string;
   };
   model_chain: {
     extract: string;
     relate: string;
     group: string;
     validate: string;
+    remediate: string;
+    json_repair: string;
   };
   /** Recorded in Firestore for analytics (production; legacy values may appear on old runs). */
   pipeline_preset?: IngestionPipelinePreset;
@@ -221,6 +239,32 @@ function ingestChildPipelineDefaultsIfUnset(): Record<string, string> {
 		out.INGEST_EXTRACTION_BATCH_TOKEN_FRACTION = DEFAULT_INGEST_EXTRACTION_BATCH_TOKEN_FRACTION;
 	}
 	return out;
+}
+
+/** Default model-chain labels when Restormel + canonical routing should apply (no pins). */
+export const DEFAULT_MODEL_CHAIN_FULL: IngestRunPayload['model_chain'] = {
+  extract: 'auto',
+  relate: 'auto',
+  group: 'auto',
+  validate: 'auto',
+  remediate: 'auto',
+  json_repair: 'auto'
+};
+
+/** Fills missing keys for older persisted payloads (4-field model_chain). */
+export function normalizeModelChain(
+  partial: Partial<IngestRunPayload['model_chain']> | undefined | null
+): IngestRunPayload['model_chain'] {
+  const d = DEFAULT_MODEL_CHAIN_FULL;
+  if (!partial || typeof partial !== 'object') return { ...d };
+  return {
+    extract: typeof partial.extract === 'string' ? partial.extract : d.extract,
+    relate: typeof partial.relate === 'string' ? partial.relate : d.relate,
+    group: typeof partial.group === 'string' ? partial.group : d.group,
+    validate: typeof partial.validate === 'string' ? partial.validate : d.validate,
+    remediate: typeof partial.remediate === 'string' ? partial.remediate : d.remediate,
+    json_repair: typeof partial.json_repair === 'string' ? partial.json_repair : d.json_repair
+  };
 }
 
 function batchOverridesToEnv(
@@ -265,7 +309,9 @@ function batchOverridesToEnv(
     forceReingest,
     forceStageMissingCheckpoint,
     groupingAutoTune,
-    relationsAutoTune
+    relationsAutoTune,
+    extractionOpenAiCompatibleBaseUrl,
+    extractionOpenAiCompatibleModel
   } = overrides;
 
   const asPositiveInt = (v: unknown): number | null => {
@@ -403,6 +449,15 @@ function batchOverridesToEnv(
     out.INGEST_RELATIONS_AUTO_TUNE = relationsAutoTune ? '1' : '0';
   }
 
+  if (typeof extractionOpenAiCompatibleBaseUrl === 'string') {
+    const u = extractionOpenAiCompatibleBaseUrl.trim();
+    if (u) out.EXTRACTION_BASE_URL = u;
+  }
+  if (typeof extractionOpenAiCompatibleModel === 'string') {
+    const m = extractionOpenAiCompatibleModel.trim();
+    if (m) out.EXTRACTION_MODEL = m;
+  }
+
   return out;
 }
 
@@ -468,6 +523,8 @@ export function modelChainLabelsToEnv(chain: IngestRunPayload['model_chain']): R
   apply(chain.relate, 'RELATIONS');
   apply(chain.group, 'GROUPING');
   apply(chain.validate, 'VALIDATION');
+  apply(chain.remediate, 'REMEDIATION');
+  apply(chain.json_repair, 'JSON_REPAIR');
   return out;
 }
 
@@ -518,7 +575,7 @@ export interface StageStatus {
 /** Lightweight row for admin “all ingestions” list (in-memory only). */
 export interface IngestRunSummary {
   id: string;
-  status: 'queued' | 'running' | 'awaiting_sync' | 'done' | 'error';
+  status: 'queued' | 'running' | 'awaiting_sync' | 'awaiting_promote' | 'done' | 'error';
   createdAt: number;
   completedAt?: number;
   sourceUrl: string;
@@ -531,7 +588,7 @@ export interface IngestRunSummary {
 
 export interface IngestRunState {
   id: string;
-  status: 'queued' | 'running' | 'awaiting_sync' | 'done' | 'error';
+  status: 'queued' | 'running' | 'awaiting_sync' | 'awaiting_promote' | 'done' | 'error';
   stages: Record<string, StageStatus>;
   logLines: string[];
   error?: string;
@@ -896,12 +953,7 @@ class IngestRunManager extends EventEmitter {
               source_type: inferSourceTypeFromUrl(row.canonical_url),
               validate: false,
               stop_before_store: false,
-              model_chain: {
-                extract: 'auto',
-                relate: 'auto',
-                group: 'auto',
-                validate: 'auto'
-              },
+              model_chain: { ...DEFAULT_MODEL_CHAIN_FULL },
               queue_record_id: row.id,
               queue_attempt_count: (row.attempt_count ?? 0) + 1
             },
@@ -1033,9 +1085,12 @@ class IngestRunManager extends EventEmitter {
 
     const runId = randomBytes(8).toString('hex');
     const initialStatus: IngestRunState['status'] = neonQueueEnabled() ? 'queued' : 'running';
+    const stopAfter = ingestOptInStopAfterExtraction(payload);
     const snapshot: IngestRunPayload = {
       ...payload,
-      stop_before_store: ingestOptInStopBeforeStore(payload),
+      model_chain: normalizeModelChain(payload.model_chain),
+      stop_after_extraction: stopAfter,
+      stop_before_store: stopAfter ? false : ingestOptInStopBeforeStore(payload),
       pipeline_version: payload.pipeline_version ?? resolvePipelineVersion(),
       embedding_fingerprint: payload.embedding_fingerprint ?? resolveEmbeddingFingerprint()
     };
@@ -1116,6 +1171,10 @@ class IngestRunManager extends EventEmitter {
             return loaded;
           }
           if (mem.status === 'running' && loaded.status === 'awaiting_sync') {
+            this.runs.set(runId, loaded);
+            return loaded;
+          }
+          if (mem.status === 'running' && loaded.status === 'awaiting_promote') {
             this.runs.set(runId, loaded);
             return loaded;
           }
@@ -1248,7 +1307,11 @@ class IngestRunManager extends EventEmitter {
         this.scheduleNeonSnapshotPersist(runId);
       }
       // Periodic Firestore merge so overnight failures still leave a durable row (not only in-memory UI).
-      if (state.status === 'running' || state.status === 'awaiting_sync') {
+      if (
+        state.status === 'running' ||
+        state.status === 'awaiting_sync' ||
+        state.status === 'awaiting_promote'
+      ) {
         const now = Date.now();
         const raw = (process.env.ADMIN_INGEST_REPORT_PERSIST_INTERVAL_MS ?? '120000').trim();
         const interval = Math.max(30_000, Math.min(60 * 60_000, parseInt(raw, 10) || 120_000));
@@ -1377,6 +1440,10 @@ class IngestRunManager extends EventEmitter {
     }
 
     this.addLog(runId, '[CANCEL] Ingestion cancelled by operator.');
+    this.addLog(
+      runId,
+      '[TERMINAL] Run stopped before pipeline completion (status error — not stored as a full ingest unless you resume from checkpoints).'
+    );
     this.flushNeonActivityBump(runId);
     this.flushNeonSnapshotPersist(runId);
     this.schedulePersistReport(runId);
@@ -1423,6 +1490,11 @@ class IngestRunManager extends EventEmitter {
     }
 
     if (state.status === 'awaiting_sync') {
+      this.finalizeCancel(runId);
+      return { ok: true };
+    }
+
+    if (state.status === 'awaiting_promote') {
       this.finalizeCancel(runId);
       return { ok: true };
     }
@@ -1477,12 +1549,14 @@ class IngestRunManager extends EventEmitter {
         const mc = options.model_chain;
         payload = {
           ...payload,
-          model_chain: {
+          model_chain: normalizeModelChain({
             extract: mc.extract ?? payload.model_chain.extract,
             relate: mc.relate ?? payload.model_chain.relate,
             group: mc.group ?? payload.model_chain.group,
-            validate: mc.validate ?? payload.model_chain.validate
-          }
+            validate: mc.validate ?? payload.model_chain.validate,
+            remediate: mc.remediate ?? payload.model_chain.remediate,
+            json_repair: mc.json_repair ?? payload.model_chain.json_repair
+          })
         };
       }
       if (options.batch_overrides) {
@@ -1510,6 +1584,78 @@ class IngestRunManager extends EventEmitter {
     );
     if (state.payload.queue_record_id) {
       // Keep queue state aligned with checkpoint-resumed runs so operators can see retries in progress.
+      void markLinkedQueueStatus(state.payload.queue_record_id, 'ingesting');
+    }
+    void this.execStartIngestChild(runId, state.payload, state.sourceFilePath, {
+      forSyncOnly: false,
+      resumeFromFailure: true
+    });
+    return { ok: true };
+  }
+
+  /**
+   * After `--stop-after-extraction`, continue the pipeline from relations (`--force-stage relating`) using Neon checkpoints.
+   * Default `stop_before_store: true` matches the Expand preview + Sync flow.
+   */
+  async promoteStagedExtractionRun(
+    runId: string,
+    options?: { stop_before_store?: boolean }
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    let state = this.runs.get(runId);
+    if (!state && isNeonIngestPersistenceEnabled()) {
+      const loaded = await neonLoadIngestRun(runId);
+      if (loaded) {
+        this.runs.set(runId, loaded);
+        state = loaded;
+      }
+    }
+    if (!state) return { ok: false, error: 'Run not found.' };
+    if (state.status !== 'awaiting_promote') {
+      return { ok: false, error: 'Run is not paused after extraction (nothing to promote).' };
+    }
+    if (!state.sourceFilePath) {
+      if (!isNeonIngestPersistenceEnabled()) {
+        return { ok: false, error: 'No source file checkpoint was found for this run.' };
+      }
+      try {
+        const { txtPath, restored } = await neonRestoreSourceTextToDataSources(state.id);
+        if (!restored) {
+          return { ok: false, error: 'No source file checkpoint was found for this run.' };
+        }
+        state.sourceFilePath = txtPath;
+        this.flushNeonSnapshotPersist(runId);
+      } catch (e) {
+        return {
+          ok: false,
+          error: `Could not restore source from Neon: ${e instanceof Error ? e.message : String(e)}`
+        };
+      }
+    }
+
+    const stopBefore = options?.stop_before_store !== false;
+    let payload: IngestRunPayload = {
+      ...state.payload,
+      stop_after_extraction: false,
+      stop_before_store: stopBefore,
+      batch_overrides: {
+        ...(state.payload.batch_overrides ?? {}),
+        forceStage: 'relating'
+      }
+    };
+    const nextVersion = (state.payloadVersion ?? 1) + 1;
+    state.payload = payload;
+    state.payloadVersion = nextVersion;
+    void neonMergePayloadAndVersion(runId, payload, nextVersion);
+
+    state.status = 'running';
+    state.error = undefined;
+    state.completedAt = undefined;
+    state.cancelledByUser = false;
+    state.currentAction = 'Promoting: relations → … → Surreal (from Neon checkpoints)…';
+    state.resumable = false;
+    this.flushNeonSnapshotPersist(runId);
+    this.addLog(runId, '[PROMOTE] Continuing pipeline from relations (force-stage relating).');
+    if (state.payload.queue_record_id) {
       void markLinkedQueueStatus(state.payload.queue_record_id, 'ingesting');
     }
     void this.execStartIngestChild(runId, state.payload, state.sourceFilePath, {
@@ -1587,12 +1733,14 @@ class IngestRunManager extends EventEmitter {
         const mc = options.model_chain;
         payload = {
           ...payload,
-          model_chain: {
+          model_chain: normalizeModelChain({
             extract: mc.extract ?? payload.model_chain.extract,
             relate: mc.relate ?? payload.model_chain.relate,
             group: mc.group ?? payload.model_chain.group,
-            validate: mc.validate ?? payload.model_chain.validate
-          }
+            validate: mc.validate ?? payload.model_chain.validate,
+            remediate: mc.remediate ?? payload.model_chain.remediate,
+            json_repair: mc.json_repair ?? payload.model_chain.json_repair
+          })
         };
       }
       if (options.batch_overrides) {
@@ -1769,9 +1917,11 @@ class IngestRunManager extends EventEmitter {
     payload: IngestRunPayload;
     sourceFile: string;
     stopBeforeStore: boolean;
+    stopAfterExtraction: boolean;
     forSync: boolean;
   }): Promise<void> {
-    const { runId, code, signal, payload, sourceFile, stopBeforeStore, forSync } = args;
+    const { runId, code, signal, payload, sourceFile, stopBeforeStore, stopAfterExtraction, forSync } =
+      args;
     const s = this.runs.get(runId);
     if (s) {
       s.process = undefined;
@@ -1790,6 +1940,36 @@ class IngestRunManager extends EventEmitter {
       code === 130;
 
     if (code === 0) {
+      if (stopAfterExtraction && !forSync) {
+        this.releaseGlobalSlotIfHeld(runId);
+        const order = orderedStagesAfterFetch(payload.validate === true);
+        this.updateStageStatus(runId, 'fetch', 'done');
+        this.updateStageStatus(runId, 'extract', 'done');
+        for (const key of order) {
+          if (key === 'extract' || key === 'fetch') continue;
+          if (s?.stages[key]?.status === 'skipped') continue;
+          if (key === 'store') {
+            this.updateStageStatus(runId, 'store', 'idle');
+            continue;
+          }
+          this.updateStageStatus(runId, key, 'idle');
+        }
+        if (s) {
+          s.status = 'awaiting_promote';
+          s.currentAction =
+            'Extraction checkpointed in Neon. Use Promote to run relations → store (or operator hub).';
+          s.completedAt = undefined;
+        }
+        this.addLog(
+          runId,
+          '[STAGE] Extraction-only run finished. Promote this run to continue from relations (pipeline tail).'
+        );
+        this.schedulePersistReport(runId);
+        this.flushNeonActivityBump(runId);
+        await this.flushNeonSnapshotPersistAwait(runId);
+        this.scheduleLinkedIngestionJobReconcile(payload.ingestion_job_id?.trim());
+        return;
+      }
       if (stopBeforeStore) {
         const order = orderedStagesAfterFetch(payload.validate === true);
         for (const key of order) {
@@ -1940,12 +2120,16 @@ class IngestRunManager extends EventEmitter {
       );
     }
 
-    const pinEnvFlat = modelChainLabelsToEnv(payload.model_chain);
+    const payloadNorm: IngestRunPayload = {
+      ...payload,
+      model_chain: normalizeModelChain(payload.model_chain)
+    };
+    const pinEnvFlat = modelChainLabelsToEnv(payloadNorm.model_chain);
     const embeddingEnvOverrides = embeddingPreferenceToEnv(payload.embedding_model);
     const operatorModelPins = Object.keys(pinEnvFlat).length > 0;
     const batchEnvOverrides: Record<string, string> = {
       ...ingestChildPipelineDefaultsIfUnset(),
-      ...batchOverridesToEnv(payload.batch_overrides),
+      ...batchOverridesToEnv(payloadNorm.batch_overrides),
       ...embeddingEnvOverrides,
       ...pinEnvFlat,
       ...(operatorModelPins ? { INGEST_NO_MODEL_FALLBACK: '1' } : {})
@@ -1961,7 +2145,9 @@ class IngestRunManager extends EventEmitter {
     }
     const ingestPinsJsonCli = encodeIngestPinsJsonCliArg(pinEnvFlat);
     const forSync = options.forSyncOnly;
-    const stopBeforeStore = forSync ? false : ingestOptInStopBeforeStore(payload);
+    let stopBeforeStore = forSync ? false : ingestOptInStopBeforeStore(payload);
+    const stopAfterExtraction = forSync ? false : ingestOptInStopAfterExtraction(payload);
+    if (stopAfterExtraction) stopBeforeStore = false;
     const orchestrationEnv = isNeonIngestPersistenceEnabled()
       ? { INGEST_ORCHESTRATION_RUN_ID: runId }
       : {};
@@ -2083,6 +2269,7 @@ class IngestRunManager extends EventEmitter {
       `[INGEST_PINS] spawn: model_chain=${summarizeIngestPinsForLog(pinEnvFlat)} flat_env_keys=${Object.keys(pinEnvFlat).length} cli_json=${ingestPinsJsonCli ? `yes(len=${ingestPinsJsonCli.length})` : 'no'}`
     );
     if (payload.validate) ingestTail.push('--validate');
+    if (stopAfterExtraction) ingestTail.push('--stop-after-extraction');
     if (stopBeforeStore) ingestTail.push('--stop-before-store');
     const forceStage = payload.batch_overrides?.forceStage;
     /** `--force-stage validating` must stay on auto-retry or the worker falls back to full extraction. */
@@ -2152,6 +2339,7 @@ class IngestRunManager extends EventEmitter {
         payload,
         sourceFile,
         stopBeforeStore,
+        stopAfterExtraction,
         forSync
       }).catch((e) => console.warn('[ingest-runs] handleIngestChildProcessClosed:', e));
     });

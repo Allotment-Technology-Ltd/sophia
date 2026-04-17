@@ -279,7 +279,7 @@
 		const params = new URLSearchParams();
 		params.set('runId', runId);
 		params.set('monitor', '1');
-		const url = `/admin/ingest?${params.toString()}`;
+		const url = `/admin/ingest/legacy-wizard?${params.toString()}`;
 		if (!browser) return;
 		const win = window.open(url, '_blank', 'noopener,noreferrer');
 		if (!win || win.closed) {
@@ -321,13 +321,17 @@
 
 	const hasPendingOrRunning = $derived(
 		items.some(
-			(i) => i.status === 'pending' || i.status === 'running' || i.status === 'awaiting_sync'
+			(i) =>
+				i.status === 'pending' ||
+				i.status === 'running' ||
+				i.status === 'awaiting_sync' ||
+				i.status === 'awaiting_tail'
 		)
 	);
 
 	function jobItemStatusRank(status: string): number {
 		const t = (status ?? '').toLowerCase();
-		if (t === 'running' || t === 'awaiting_sync') return 0;
+		if (t === 'running' || t === 'awaiting_sync' || t === 'awaiting_tail') return 0;
 		if (t === 'pending') return 1;
 		if (t === 'error') return 2;
 		if (t === 'cancelled') return 3;
@@ -580,12 +584,15 @@
 			const j = job;
 			const awaiting =
 				typeof j?.summary?.awaiting_sync === 'number' ? j.summary.awaiting_sync : 0;
+			const awaitingTail =
+				typeof j?.summary?.awaiting_tail === 'number' ? j.summary.awaiting_tail : 0;
 			const terminal =
 				(j &&
 					j.status === 'done' &&
 					(typeof j.summary?.pending === 'number' ? j.summary.pending : 0) === 0 &&
 					(typeof j.summary?.running === 'number' ? j.summary.running : 0) === 0 &&
-					awaiting === 0) ||
+					awaiting === 0 &&
+					awaitingTail === 0) ||
 				j?.status === 'cancelled';
 			const baseMs = terminal ? 30_000 : 5000;
 			const delayMs = ok ? baseMs : Math.min(60_000, baseMs * 3);
@@ -1079,7 +1086,11 @@
 									{it.url}
 								</td>
 								<td class="py-3 pr-3">
-									{it.status === 'awaiting_sync' ? 'awaiting sync' : it.status}
+									{it.status === 'awaiting_sync'
+										? 'awaiting sync'
+										: it.status === 'awaiting_tail'
+											? 'awaiting tail (promote)'
+											: it.status}
 									{#if it.dlqEnqueuedAt}
 										<span
 											class="ml-1 inline-block rounded bg-amber-500/20 px-1.5 font-mono text-[10px] uppercase tracking-wide text-amber-100"
@@ -1143,7 +1154,7 @@
 												</button>
 											{/if}
 										</div>
-									{:else if it.status === 'running' || it.status === 'awaiting_sync'}
+									{:else if it.status === 'running' || it.status === 'awaiting_sync' || it.status === 'awaiting_tail'}
 										<button
 											type="button"
 											class="rounded border border-[var(--color-border)] px-3 py-2 text-left uppercase tracking-[0.06em] text-sophia-dark-muted hover:border-red-400/50 hover:text-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:opacity-50"

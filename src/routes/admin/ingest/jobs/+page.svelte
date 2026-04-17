@@ -6,11 +6,18 @@
 		ADMIN_INGEST_WORKER_UI_DEFAULTS as JOB_UI,
 		ADMIN_INGEST_WORKER_UI_TOOLTIPS as JOB_TT
 	} from '$lib/adminIngestWorkerUiDefaults';
+	import {
+		loadOperatorPhasePinsFromStorage,
+		operatorPhasePinsToModelChain,
+		operatorPhasePinsToWorkerExtras
+	} from '$lib/ingestion/operatorPhasePins';
 
 	type JobSummary = {
 		total?: number;
 		pending?: number;
 		running?: number;
+		/** Child runs finished extraction-only (`awaiting_promote`); promote to continue the pipeline tail. */
+		awaiting_tail?: number;
 		done?: number;
 		error?: number;
 		cancelled?: number;
@@ -102,8 +109,9 @@
 		if (st === 'running') return 0;
 		const p = j.summary?.pending ?? 0;
 		const r = j.summary?.running ?? 0;
+		const t = j.summary?.awaiting_tail ?? 0;
 		const e = j.summary?.error ?? 0;
-		if (p > 0 || r > 0) return 1;
+		if (p > 0 || r > 0 || t > 0) return 1;
 		if (e > 0) return 2;
 		if (st === 'cancelled') return 4;
 		if (st === 'done') return 5;
@@ -550,6 +558,16 @@
 			submitMessage = workerBuild.error;
 			return;
 		}
+		const wdBase: Record<string, unknown> =
+			workerBuild.payload && typeof workerBuild.payload === 'object' && !Array.isArray(workerBuild.payload)
+				? { ...(workerBuild.payload as Record<string, unknown>) }
+				: {};
+		const opPins = loadOperatorPhasePinsFromStorage();
+		if (opPins) {
+			wdBase.model_chain = operatorPhasePinsToModelChain(opPins);
+			Object.assign(wdBase, operatorPhasePinsToWorkerExtras(opPins));
+		}
+		const hasWorkerDefaults = Object.keys(wdBase).length > 0;
 		submitting = true;
 		try {
 			const res = await fetch('/api/admin/ingest/jobs', {
@@ -564,9 +582,7 @@
 					notes: String(notes ?? '').trim() || null,
 					validate: validateLlm,
 					merge_into_latest_running_job: mergeIntoRunningJob,
-					...(workerBuild.payload && Object.keys(workerBuild.payload).length > 0
-						? { worker_defaults: workerBuild.payload }
-						: {})
+					...(hasWorkerDefaults ? { worker_defaults: wdBase } : {})
 				})
 			});
 			const body = await res.json().catch(() => ({}));
@@ -690,10 +706,12 @@
 
 	function formatSummary(s: JobSummary | undefined): string {
 		if (!s) return '—';
+		const tail = s.awaiting_tail ?? 0;
 		const parts = [
 			`total ${s.total ?? '?'}`,
 			`pending ${s.pending ?? '?'}`,
 			`running ${s.running ?? '?'}`,
+			...(tail > 0 ? [`tail ${tail}`] : []),
 			`done ${s.done ?? '?'}`,
 			`err ${s.error ?? '?'}`
 		];
@@ -854,6 +872,16 @@
 			<strong class="font-medium text-sophia-dark-text">Advance this job’s queue</strong> there (or the poller) to run a
 			tick. If no admin tab is open, use Cloud Run Job + Scheduler — see
 			<span class="font-mono text-xs">docs/local/operations/ingestion-credits-and-workers.md</span>.
+		</p>
+		<p class="mt-3 text-sm text-sophia-dark-muted">
+			<a class="font-medium text-sophia-dark-text underline underline-offset-2" href="/admin/ingest/operator"
+				>Operator hub</a
+			>
+			— staged bulk extract, continue-from-Neon, and
+			<a class="font-medium text-sophia-dark-text underline underline-offset-2" href="/admin/ingest/operator/activity"
+				>Activity</a
+			>
+			(runs, jobs, reports). This page is the batch job form and queue tooling below.
 		</p>
 	</header>
 
@@ -1078,8 +1106,10 @@
 					Shown numbers match the current production-friendly baseline (ingest script defaults + ingest worker caps). They are
 					stored on the job row and remembered in this browser. Hover any field for env var names and rate-limit / pairing
 					advice. Durable jobs always pin <span class="font-mono text-xs">voyage__voyage-4-lite</span> on the child (1024-dim corpus); embed
-					batch size only affects Vertex embedding runs. For full model routing, use
-					<a href="/admin/ingest" class="text-[var(--color-sage)] underline-offset-2 hover:underline">single-run ingest</a>.
+					batch size only affects Vertex embedding runs. 					For full model routing, use the unlisted
+					<a href="/admin/ingest/legacy-wizard" class="text-[var(--color-sage)] underline-offset-2 hover:underline"
+						>legacy wizard</a
+					>.
 				</p>
 				<label
 					class="mt-3 flex cursor-pointer items-center gap-3 rounded border border-[var(--color-border)]/60 bg-black/15 p-3"
@@ -1335,10 +1365,10 @@
 					{advanceQueuesBusy ? 'Advancing…' : 'Advance all queues'}
 				</button>
 				<a
-					href="/admin/ingest/batch"
+					href="/admin/ingest/operator/bulk-extract"
 					class="inline-flex min-h-[44px] items-center rounded-lg border border-[var(--color-border)] px-5 py-3 font-mono text-sm uppercase tracking-[0.08em] text-sophia-dark-muted no-underline transition hover:border-[var(--color-sage)] hover:text-sophia-dark-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)]"
 				>
-					STOA batch
+					Bulk extraction
 				</a>
 			</div>
 		</div>

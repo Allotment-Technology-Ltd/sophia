@@ -1,3 +1,9 @@
+import {
+  getRestormelGatewayConnectionSummary,
+  getStoredRestormelGatewayKeyOverride,
+  type RestormelGatewayKeySource
+} from './restormelGatewaySettings.js';
+
 export interface RestormelPolicyViolation {
   policyId?: string;
   policyName?: string;
@@ -169,6 +175,7 @@ import {
  * @see https://github.com/Allotment-Technology-Ltd/restormel-keys/blob/main/zuplo-gateway/docs/pages/dashboard-api/routes-steps.md
  */
 const ROUTE_STEP_ALLOWED_PROVIDERS = new Set<string>([
+	'aizolo',
 	'anthropic',
 	'cohere',
 	'deepseek',
@@ -180,6 +187,7 @@ const ROUTE_STEP_ALLOWED_PROVIDERS = new Set<string>([
 	'portkey',
 	'together',
 	'vercel',
+	'vertex',
 	'voyage'
 ]);
 
@@ -276,27 +284,60 @@ export const RESTORMEL_BASE_URL = normalizeRestormelBaseUrl(
 export const RESTORMEL_DASHBOARD_API_BASE = `${RESTORMEL_BASE_URL}/api`;
 export const RESTORMEL_ENVIRONMENT_ID =
   process.env.RESTORMEL_ENVIRONMENT_ID?.trim() || 'production';
-const RESTORMEL_GATEWAY_KEY = process.env.RESTORMEL_GATEWAY_KEY?.trim() || '';
+/** Env-only gateway key; effective bearer may come from Neon (`admin_restormel_gateway`) instead. */
+const RESTORMEL_GATEWAY_KEY_ENV = process.env.RESTORMEL_GATEWAY_KEY?.trim() || '';
 const RESTORMEL_PROJECT_ID = process.env.RESTORMEL_PROJECT_ID?.trim() || '';
 
+const GATEWAY_BEARER_CACHE_TTL_MS = 30_000;
+let gatewayBearerCache: { token: string; expiresAt: number } | null = null;
+
+/** Call after saving or clearing the DB-stored gateway key so the next Keys request picks up the new bearer. */
+export function invalidateRestormelGatewayKeyCache(): void {
+  gatewayBearerCache = null;
+}
+
+async function resolveEffectiveGatewayBearer(): Promise<string> {
+  const now = Date.now();
+  if (gatewayBearerCache && now < gatewayBearerCache.expiresAt) {
+    return gatewayBearerCache.token;
+  }
+
+  const fromDb = await getStoredRestormelGatewayKeyOverride();
+  if (fromDb) {
+    gatewayBearerCache = { token: fromDb, expiresAt: now + GATEWAY_BEARER_CACHE_TTL_MS };
+    return fromDb;
+  }
+  if (RESTORMEL_GATEWAY_KEY_ENV) {
+    gatewayBearerCache = {
+      token: RESTORMEL_GATEWAY_KEY_ENV,
+      expiresAt: now + GATEWAY_BEARER_CACHE_TTL_MS
+    };
+    return RESTORMEL_GATEWAY_KEY_ENV;
+  }
+  throw new Error('RESTORMEL_GATEWAY_KEY is not configured');
+}
+
 /** Redacted flags for admin pipeline UI (no secrets). */
-export function getRestormelIngestWorkerDiagnostics(): {
+export async function getRestormelIngestWorkerDiagnostics(): Promise<{
   keysBaseHost: string | null;
   environmentId: string;
   projectIdConfigured: boolean;
   gatewayKeyConfigured: boolean;
-} {
+  gatewayKeySource: RestormelGatewayKeySource;
+}> {
   let keysBaseHost: string | null = null;
   try {
     keysBaseHost = new URL(RESTORMEL_BASE_URL).host;
   } catch {
     keysBaseHost = null;
   }
+  const summary = await getRestormelGatewayConnectionSummary(RESTORMEL_GATEWAY_KEY_ENV);
   return {
     keysBaseHost,
     environmentId: RESTORMEL_ENVIRONMENT_ID,
     projectIdConfigured: RESTORMEL_PROJECT_ID.length > 0,
-    gatewayKeyConfigured: RESTORMEL_GATEWAY_KEY.length > 0
+    gatewayKeyConfigured: summary.configured,
+    gatewayKeySource: summary.source
   };
 }
 
@@ -482,15 +523,6 @@ function resolveUserMessage(code: string, violations: RestormelPolicyViolation[]
   return 'AI model routing is temporarily unavailable right now.';
 }
 
-function ensureRestormelConfig(projectRequired = true): void {
-  if (!RESTORMEL_GATEWAY_KEY) {
-    throw new Error('RESTORMEL_GATEWAY_KEY is not configured');
-  }
-  if (projectRequired && !RESTORMEL_PROJECT_ID) {
-    throw new Error('RESTORMEL_PROJECT_ID is not configured');
-  }
-}
-
 async function parseRestormelBody(res: Response): Promise<unknown> {
   const contentType = res.headers.get('content-type') ?? '';
   if (contentType.includes('application/json')) {
@@ -567,7 +599,7 @@ function toDashboardError(
   });
 }
 
-async function requestRestormel<T>(
+async function requestRestormelWithStatus<T>(
   endpoint: string,
   options?: {
     method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -575,8 +607,12 @@ async function requestRestormel<T>(
     projectId?: string;
     requireProjectId?: boolean;
   }
-): Promise<T> {
-  ensureRestormelConfig(options?.requireProjectId ?? true);
+): Promise<{ status: number; payload: T }> {
+  const requireProjectId = options?.requireProjectId ?? true;
+  const bearer = await resolveEffectiveGatewayBearer();
+  if (requireProjectId && !RESTORMEL_PROJECT_ID) {
+    throw new Error('RESTORMEL_PROJECT_ID is not configured');
+  }
 
   const method = options?.method ?? 'GET';
   const hasBody = options?.body !== undefined;
@@ -584,7 +620,7 @@ async function requestRestormel<T>(
   const res = await fetch(url, {
     method,
     headers: {
-      Authorization: `Bearer ${RESTORMEL_GATEWAY_KEY}`,
+      Authorization: `Bearer ${bearer}`,
       ...(hasBody || method === 'POST' || method === 'PUT' || method === 'PATCH'
         ? { 'Content-Type': 'application/json' }
         : {})
@@ -597,7 +633,20 @@ async function requestRestormel<T>(
     throw toDashboardError(endpoint, res.status, payload);
   }
 
-  return payload as T;
+  return { status: res.status, payload: payload as T };
+}
+
+async function requestRestormel<T>(
+  endpoint: string,
+  options?: {
+    method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+    body?: unknown;
+    projectId?: string;
+    requireProjectId?: boolean;
+  }
+): Promise<T> {
+  const { payload } = await requestRestormelWithStatus<T>(endpoint, options);
+  return payload;
 }
 
 function projectPath(projectId?: string): string {
@@ -676,13 +725,56 @@ export async function restormelListRoutes(
   );
 }
 
+/**
+ * Create a route in Restormel Keys (`POST …/projects/{id}/routes`). Returns upstream HTTP status (typically **201**).
+ */
+export async function restormelPostRoute(payload: Record<string, unknown>): Promise<{
+  httpStatus: number;
+  data: RestormelRouteRecord;
+}> {
+  const { status, payload: json } = await requestRestormelWithStatus<{ data: RestormelRouteRecord }>(
+    `${projectPath()}/routes`,
+    {
+      method: 'POST',
+      body: payload
+    }
+  );
+  return { httpStatus: status, data: json.data };
+}
+
 export async function restormelSaveRoute(
   payload: Record<string, unknown>
 ): Promise<{ data: RestormelRouteRecord }> {
-  return requestRestormel<{ data: RestormelRouteRecord }>(`${projectPath()}/routes`, {
-    method: 'POST',
-    body: payload
-  });
+  const { data } = await restormelPostRoute(payload);
+  return { data };
+}
+
+export async function restormelGetProjectRoute(
+  routeId: string
+): Promise<{ data: RestormelRouteRecord }> {
+  return requestRestormel<{ data: RestormelRouteRecord }>(
+    `${projectPath()}/routes/${encodeURIComponent(routeId)}`
+  );
+}
+
+export async function restormelPatchProjectRoute(
+  routeId: string,
+  payload: Record<string, unknown>
+): Promise<{ data: RestormelRouteRecord }> {
+  return requestRestormel<{ data: RestormelRouteRecord }>(
+    `${projectPath()}/routes/${encodeURIComponent(routeId)}`,
+    {
+      method: 'PATCH',
+      body: payload
+    }
+  );
+}
+
+export async function restormelDeleteProjectRoute(routeId: string): Promise<{ ok: boolean }> {
+  return requestRestormel<{ ok: boolean }>(
+    `${projectPath()}/routes/${encodeURIComponent(routeId)}`,
+    { method: 'DELETE' }
+  );
 }
 
 export async function restormelListRouteSteps(
@@ -1104,7 +1196,10 @@ export async function restormelValidateRouteBinding(options: {
   stage?: string | null;
   task?: string | null;
 }): Promise<ValidateRouteBindingResult> {
-  ensureRestormelConfig();
+  const token = await resolveEffectiveGatewayBearer();
+  if (!RESTORMEL_PROJECT_ID) {
+    throw new Error('RESTORMEL_PROJECT_ID is not configured');
+  }
   return validateRouteBinding({
     baseUrl: RESTORMEL_BASE_URL,
     projectId: RESTORMEL_PROJECT_ID,
@@ -1113,7 +1208,7 @@ export async function restormelValidateRouteBinding(options: {
     workload: options.workload ?? undefined,
     stage: options.stage ?? undefined,
     task: options.task ?? undefined,
-    auth: { type: 'bearer', token: RESTORMEL_GATEWAY_KEY }
+    auth: { type: 'bearer', token }
   });
 }
 

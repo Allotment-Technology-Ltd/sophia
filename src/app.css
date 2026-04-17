@@ -131,7 +131,7 @@
   }
 
   /**
-   * Admin hub headers (/admin, /admin/ingest, /admin/ingest/runs): nav links + icon buttons share one control.
+   * Admin hub headers (/admin, /admin/ingest/operator, activity): nav links + icon buttons share one control.
    * Body is serif; without this, buttons inherit display font and look wrong next to links.
    */
   .admin-hub-action {

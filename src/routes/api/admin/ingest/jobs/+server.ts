@@ -53,6 +53,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			validate?: unknown;
 			merge_into_latest_running_job?: unknown;
 			worker_defaults?: unknown;
+			/** When true, each child run uses `--stop-after-extraction` (bulk Fireworks extraction wave). */
+			stop_after_extraction?: unknown;
 		};
 		const rawUrls = payload.urls;
 		if (!Array.isArray(rawUrls) || rawUrls.length === 0) {
@@ -71,6 +73,15 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		const runReason = typeof payload.run_reason === 'string' ? payload.run_reason : null;
 		const validate = payload.validate === true;
 		const mergeIntoLatestRunningJob = payload.merge_into_latest_running_job === true;
+		let workerDefaults: unknown = payload.worker_defaults;
+		if (payload.stop_after_extraction === true) {
+			const base =
+				workerDefaults && typeof workerDefaults === 'object' && !Array.isArray(workerDefaults)
+					? { ...(workerDefaults as Record<string, unknown>) }
+					: {};
+			base.stop_after_extraction = true;
+			workerDefaults = base;
+		}
 		const created = await createIngestionJob({
 			urls,
 			concurrency,
@@ -80,7 +91,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			actorEmail: actor.email ?? null,
 			validate,
 			mergeIntoLatestRunningJob,
-			workerDefaults: payload.worker_defaults
+			workerDefaults
 		});
 		if (!created) {
 			return json({ error: 'Failed to create job' }, { status: 500 });

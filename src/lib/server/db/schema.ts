@@ -429,3 +429,11 @@ export const sourceTrainingGovernance = pgTable(
   })
 );
 
+/** Single-row override: Restormel Keys gateway bearer, encrypted like BYOK (`encryptByokSecret`). */
+export const adminRestormelGateway = pgTable('admin_restormel_gateway', {
+  id: text('id').primaryKey(),
+  gatewayKeyEncrypted: jsonb('gateway_key_encrypted').$type<Record<string, unknown> | null>(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedByUid: text('updated_by_uid')
+});
+

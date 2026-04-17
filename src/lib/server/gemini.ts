@@ -1,5 +1,6 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { generateText } from 'ai';
 import { env } from '$env/dynamic/private';
+import { getGoogleAiStudioOpenAiCompatibleChatModel } from './vertex';
 
 /** Prefer current Gemini 3 Flash preview on Vertex / AI Studio. */
 export const VALIDATION_MODEL = 'gemini-3-flash-preview';
@@ -7,9 +8,6 @@ const VALIDATION_MODELS = parseModelList(process.env.GEMINI_MODELS, [
 	VALIDATION_MODEL,
 	'gemini-3.1-flash-lite-preview'
 ]);
-
-const geminiApiKey = env.GOOGLE_AI_API_KEY;
-const client = geminiApiKey ? new GoogleGenerativeAI(geminiApiKey) : null;
 
 let totalTokensUsed = 0;
 
@@ -50,18 +48,21 @@ function isModelUnavailableError(error: unknown): boolean {
 		message.includes('model:') ||
 		message.includes('not available') ||
 		message.includes('unsupported model') ||
-		message.includes('invalid model')
+		message.includes('invalid model') ||
+		message.includes('does not exist') ||
+		message.includes('unknown model')
 	);
 }
 
 /**
- * Call Gemini API with exponential backoff retry
+ * Call Gemini via Google AI Studio OpenAI-compatible Chat Completions (not @google/generative-ai).
  */
 async function callWithRetry(
 	prompt: string,
 	options: RetryOptions = DEFAULT_RETRY_OPTIONS
 ): Promise<string> {
-	if (!client) {
+	const apiKey = env.GOOGLE_AI_API_KEY?.trim();
+	if (!apiKey) {
 		throw new Error('GOOGLE_AI_API_KEY is not configured');
 	}
 
@@ -74,30 +75,22 @@ async function callWithRetry(
 					`[GEMINI] Validation request (model: ${modelName}, attempt ${attempt + 1}/${options.maxRetries + 1})`
 				);
 
-				const model = client.getGenerativeModel({ model: modelName });
-				const result = await model.generateContent({
-					contents: [
-						{
-							role: 'user',
-							parts: [{ text: prompt }]
-						}
-					],
-					generationConfig: {
-						temperature: 0.1
-					}
+				const model = getGoogleAiStudioOpenAiCompatibleChatModel(apiKey, modelName);
+				const result = await generateText({
+					model,
+					temperature: 0.1,
+					prompt
 				});
 
-				const response = result.response;
-				const text = response?.text() || '';
-
-				if (response?.usageMetadata) {
-					const tokensUsed = (response.usageMetadata.totalTokenCount || 0) -
-						(response.usageMetadata.cachedContentTokenCount || 0);
-					totalTokensUsed += tokensUsed;
-					console.log(
-						`[GEMINI] Used ${tokensUsed} tokens (session total: ${totalTokensUsed})`
-					);
-				}
+				const text = result.text ?? '';
+				const usage = result.usage;
+				const inputTokens = usage?.inputTokens ?? 0;
+				const outputTokens = usage?.outputTokens ?? 0;
+				const tokensUsed = inputTokens + outputTokens;
+				totalTokensUsed += tokensUsed;
+				console.log(
+					`[GEMINI] Used ${tokensUsed} tokens (session total: ${totalTokensUsed})`
+				);
 
 				return text;
 			} catch (error) {
@@ -167,7 +160,7 @@ export function getEstimatedValidationCost(): string {
 	const outputTokens = (totalTokensUsed * 2) / 3;
 
 	const inputCost = (inputTokens / 1_000_000) * 0.075;
-	const outputCost = (outputTokens / 1_000_000) * 0.30;
+	const outputCost = (outputTokens / 1_000_000) * 0.3;
 	const totalCost = inputCost + outputCost;
 
 	return totalCost.toFixed(6);

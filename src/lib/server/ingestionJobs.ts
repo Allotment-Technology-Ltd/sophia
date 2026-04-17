@@ -28,6 +28,7 @@ import { runIngestionJobPreflightOrThrow } from './ingestion/ingestionJobPreflig
 import {
 	inferSourceTypeFromUrl,
 	ingestRunManager,
+	normalizeModelChain,
 	type IngestRunPayload,
 	type IngestRunState
 } from './ingestRuns';
@@ -42,6 +43,7 @@ import {
 	ingestRunStillOccupiesLlmConcurrencySlot
 } from './ingestion/ingestCapacityAtStore';
 import { sweepStalledIngestRuns, sweepWorkerOrphanIngestRuns } from './ingestion/ingestWatchdog';
+import { applyJobPipelineFlagsFromWorkerDefaults } from './ingestion/hydrateIngestPayloadJobDefaults';
 import { sanitizeIngestionJobWorkerDefaults } from './ingestionJobWorkerDefaults';
 import { canonicalizeSourceUrl } from './sourceIdentity';
 
@@ -377,6 +379,8 @@ export type IngestionJobItemStatus =
 	| 'running'
 	/** Child ingest run is in `awaiting_sync` (pipeline LLM work finished; Surreal sync pending). */
 	| 'awaiting_sync'
+	/** Child run finished extraction-only (`awaiting_promote`); operator must promote to pipeline tail. */
+	| 'awaiting_tail'
 	| 'done'
 	| 'error'
 	| 'skipped'
@@ -393,7 +397,7 @@ function isIngestionJobItemRowTerminal(status: string): boolean {
 
 /** Item rows that still have an attached child run worth polling in {@link reconcileIngestionJobView}. */
 function jobItemStatusHasActiveChildWorker(status: string): boolean {
-	return status === 'running' || status === 'awaiting_sync';
+	return status === 'running' || status === 'awaiting_sync' || status === 'awaiting_tail';
 }
 
 function buildJobId(): string {
@@ -541,7 +545,21 @@ export async function createIngestionJob(
 	);
 	const pipelineVersion = resolvePipelineVersion();
 	const embeddingFingerprint = CANONICAL_VOYAGE_EMBEDDING_FINGERPRINT;
-	const workerDefaults = sanitizeIngestionJobWorkerDefaults(args.workerDefaults) ?? {};
+	const sanitizedWd = sanitizeIngestionJobWorkerDefaults(args.workerDefaults) ?? {};
+	const rawWd =
+		args.workerDefaults && typeof args.workerDefaults === 'object' && !Array.isArray(args.workerDefaults)
+			? (args.workerDefaults as Record<string, unknown>)
+			: {};
+	const workerDefaults: Record<string, unknown> = { ...sanitizedWd };
+	if (rawWd.stop_after_extraction === true) workerDefaults.stop_after_extraction = true;
+	if (rawWd.stop_before_store === true) workerDefaults.stop_before_store = true;
+	if (rawWd.model_chain && typeof rawWd.model_chain === 'object' && !Array.isArray(rawWd.model_chain)) {
+		workerDefaults.model_chain = rawWd.model_chain;
+	}
+	const extUrl = typeof rawWd.extractionOpenAiCompatibleBaseUrl === 'string' ? rawWd.extractionOpenAiCompatibleBaseUrl.trim() : '';
+	const extModel = typeof rawWd.extractionOpenAiCompatibleModel === 'string' ? rawWd.extractionOpenAiCompatibleModel.trim() : '';
+	if (extUrl) workerDefaults.extractionOpenAiCompatibleBaseUrl = extUrl;
+	if (extModel) workerDefaults.extractionOpenAiCompatibleModel = extModel;
 
 	await db.insert(ingestionJobs).values({
 		id,
@@ -556,6 +574,8 @@ export async function createIngestionJob(
 			total: urls.length,
 			pending: urls.length,
 			running: 0,
+			awaiting_sync: 0,
+			awaiting_tail: 0,
 			done: 0,
 			error: 0,
 			cancelled: 0,
@@ -600,6 +620,7 @@ function mapChildRunToItemStatus(status: string): IngestionJobItemStatus {
 	if (status === 'error') return 'error';
 	if (status === 'cancelled') return 'cancelled';
 	if (status === 'awaiting_sync') return 'awaiting_sync';
+	if (status === 'awaiting_promote') return 'awaiting_tail';
 	return 'running';
 }
 
@@ -613,7 +634,9 @@ async function loadChildIngestRunStateForJobReconcile(runId: string): Promise<In
 	const fromNeon = await neonLoadIngestRun(rid);
 	if (
 		fromNeon &&
-		(terminalRunStatus(fromNeon.status) || (fromNeon.status as string) === 'awaiting_sync')
+		(terminalRunStatus(fromNeon.status) ||
+			(fromNeon.status as string) === 'awaiting_sync' ||
+			(fromNeon.status as string) === 'awaiting_promote')
 	) {
 		return fromNeon;
 	}
@@ -623,6 +646,7 @@ async function loadChildIngestRunStateForJobReconcile(runId: string): Promise<In
 }
 
 function isStuckIngestRun(run: IngestRunState): boolean {
+	if (run.status === 'awaiting_promote') return false;
 	const wallMs = parseInt(process.env.INGEST_JOB_ITEM_MAX_WALL_MS ?? '0', 10);
 	const staleMs = parseInt(process.env.INGEST_JOB_ITEM_STALE_MS ?? '0', 10);
 	if ((!Number.isFinite(wallMs) || wallMs <= 0) && (!Number.isFinite(staleMs) || staleMs <= 0)) {
@@ -661,7 +685,8 @@ export async function reconcileIngestionJobView(
 					or(
 						eq(ingestionJobItems.status, 'pending'),
 						eq(ingestionJobItems.status, 'running'),
-						eq(ingestionJobItems.status, 'awaiting_sync')
+						eq(ingestionJobItems.status, 'awaiting_sync'),
+						eq(ingestionJobItems.status, 'awaiting_tail')
 					)
 				)
 			)
@@ -744,6 +769,25 @@ export async function reconcileIngestionJobView(
 			continue;
 		}
 
+		if (run.status === 'awaiting_promote') {
+			if (it.status !== 'awaiting_tail') {
+				await db
+					.update(ingestionJobItems)
+					.set({
+						status: 'awaiting_tail',
+						lastError: null,
+						updatedAt: new Date()
+					})
+					.where(eq(ingestionJobItems.id, it.id));
+				await appendIngestionJobEvent(jobId, 'item_child_awaiting_tail', {
+					itemId: it.id,
+					url: it.url,
+					childRunId: it.childRunId
+				});
+			}
+			continue;
+		}
+
 		if (run.status === 'running' && it.status === 'awaiting_sync') {
 			await db
 				.update(ingestionJobItems)
@@ -754,6 +798,23 @@ export async function reconcileIngestionJobView(
 				})
 				.where(eq(ingestionJobItems.id, it.id));
 			await appendIngestionJobEvent(jobId, 'item_child_resumed_from_awaiting_sync', {
+				itemId: it.id,
+				url: it.url,
+				childRunId: it.childRunId
+			});
+			continue;
+		}
+
+		if (run.status === 'running' && it.status === 'awaiting_tail') {
+			await db
+				.update(ingestionJobItems)
+				.set({
+					status: 'running',
+					lastError: null,
+					updatedAt: new Date()
+				})
+				.where(eq(ingestionJobItems.id, it.id));
+			await appendIngestionJobEvent(jobId, 'item_child_resumed_from_awaiting_tail', {
 				itemId: it.id,
 				url: it.url,
 				childRunId: it.childRunId
@@ -814,6 +875,7 @@ export async function reconcileIngestionJobView(
 		pending: refreshed.filter((r) => r.status === 'pending').length,
 		running: refreshed.filter((r) => r.status === 'running').length,
 		awaiting_sync: refreshed.filter((r) => r.status === 'awaiting_sync').length,
+		awaiting_tail: refreshed.filter((r) => r.status === 'awaiting_tail').length,
 		done: refreshed.filter((r) => r.status === 'done').length,
 		error: refreshed.filter((r) => r.status === 'error').length,
 		cancelled: refreshed.filter((r) => r.status === 'cancelled').length,
@@ -824,6 +886,7 @@ export async function reconcileIngestionJobView(
 		summary.pending === 0 &&
 		summary.running === 0 &&
 		summary.awaiting_sync === 0 &&
+		summary.awaiting_tail === 0 &&
 		summary.total > 0;
 	const jobStatus = allTerminal ? 'done' : 'running';
 
@@ -893,6 +956,7 @@ async function tickIngestionJobUnlocked(
 		pending: refreshed.filter((r) => r.status === 'pending').length,
 		running: refreshed.filter((r) => r.status === 'running').length,
 		awaiting_sync: refreshed.filter((r) => r.status === 'awaiting_sync').length,
+		awaiting_tail: refreshed.filter((r) => r.status === 'awaiting_tail').length,
 		done: refreshed.filter((r) => r.status === 'done').length,
 		error: refreshed.filter((r) => r.status === 'error').length,
 		cancelled: refreshed.filter((r) => r.status === 'cancelled').length,
@@ -937,18 +1001,38 @@ async function tickIngestionJobUnlocked(
 			job.workerDefaults && typeof job.workerDefaults === 'object' && !Array.isArray(job.workerDefaults)
 				? job.workerDefaults
 				: {};
+		const fullWd =
+			jobDefaultsRaw && typeof jobDefaultsRaw === 'object' && !Array.isArray(jobDefaultsRaw)
+				? (jobDefaultsRaw as Record<string, unknown>)
+				: {};
 		const jobBatchOverrides = sanitizeIngestionJobWorkerDefaults(jobDefaultsRaw) ?? {};
 		const batchOverrides = { ...jobBatchOverrides };
 		if (batchOverrides.ingestProvider === undefined) {
 			batchOverrides.ingestProvider = 'auto';
 		}
-		const payload: IngestRunPayload = {
+		const extUrl =
+			typeof fullWd.extractionOpenAiCompatibleBaseUrl === 'string'
+				? fullWd.extractionOpenAiCompatibleBaseUrl.trim()
+				: '';
+		const extModel =
+			typeof fullWd.extractionOpenAiCompatibleModel === 'string'
+				? fullWd.extractionOpenAiCompatibleModel.trim()
+				: '';
+		if (extUrl) batchOverrides.extractionOpenAiCompatibleBaseUrl = extUrl;
+		if (extModel) batchOverrides.extractionOpenAiCompatibleModel = extModel;
+		const rawMc = fullWd.model_chain;
+		const modelChain = normalizeModelChain(
+			rawMc && typeof rawMc === 'object' && !Array.isArray(rawMc)
+				? (rawMc as Partial<IngestRunPayload['model_chain']>)
+				: undefined
+		);
+		let payload: IngestRunPayload = {
 			source_url: it.url,
 			source_type: it.sourceType,
 			validate: job.validateLlm === true,
 			stop_before_store: false,
 			embedding_model: CANONICAL_VOYAGE_EMBEDDING_MODEL_LABEL,
-			model_chain: { extract: 'auto', relate: 'auto', group: 'auto', validate: 'auto' },
+			model_chain: modelChain,
 			queue_record_id: it.queueRecordId ?? undefined,
 			pipeline_version: job.pipelineVersion ?? undefined,
 			embedding_fingerprint: job.embeddingFingerprint ?? undefined,
@@ -956,6 +1040,7 @@ async function tickIngestionJobUnlocked(
 			batch_overrides: batchOverrides,
 			...(jobRunReason ? { run_reason: jobRunReason } : {})
 		};
+		payload = applyJobPipelineFlagsFromWorkerDefaults(payload, jobDefaultsRaw);
 		const existingRunId = it.childRunId?.trim();
 		if (existingRunId) {
 			const prior = await loadChildIngestRunStateForJobReconcile(existingRunId);
@@ -1503,6 +1588,7 @@ export async function cancelEntireIngestionJob(
 		pending: refreshed.filter((r) => r.status === 'pending').length,
 		running: refreshed.filter((r) => r.status === 'running').length,
 		awaiting_sync: refreshed.filter((r) => r.status === 'awaiting_sync').length,
+		awaiting_tail: refreshed.filter((r) => r.status === 'awaiting_tail').length,
 		done: refreshed.filter((r) => r.status === 'done').length,
 		error: refreshed.filter((r) => r.status === 'error').length,
 		cancelled: refreshed.filter((r) => r.status === 'cancelled').length,

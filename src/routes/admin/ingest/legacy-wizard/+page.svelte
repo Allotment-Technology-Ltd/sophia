@@ -19,9 +19,14 @@
     ADMIN_INGEST_WORKER_UI_DEFAULTS as W,
     ADMIN_INGEST_WORKER_UI_TOOLTIPS as WT
   } from '$lib/adminIngestWorkerUiDefaults';
+  import {
+    loadOperatorPhasePinsFromStorage,
+    mergeModelChainWithOperatorPins,
+    operatorPhasePinsToWorkerExtras
+  } from '$lib/ingestion/operatorPhasePins';
 
   type StageStatus = 'idle' | 'running' | 'done' | 'error' | 'skipped';
-  type FlowState = 'setup' | 'running' | 'awaiting_sync' | 'done' | 'error';
+  type FlowState = 'setup' | 'running' | 'awaiting_sync' | 'awaiting_promote' | 'done' | 'error';
   type PipelinePreset = typeof INGESTION_PIPELINE_PRESET;
 
   type Stage = {
@@ -364,6 +369,7 @@
   /** Server-reported error line after a run ends in error/cancel; Source step shows next steps. */
   let sourceRunEndedDetail = $state<string | null>(null);
   let syncing = $state(false);
+  let promoting = $state(false);
   let runId = $state('');
   let runError = $state('');
   let urlError = $state('');
@@ -427,6 +433,7 @@
     environmentId: string;
     projectIdConfigured: boolean;
     gatewayKeyConfigured: boolean;
+    gatewayKeySource?: 'database' | 'environment' | 'none';
   };
   type EmbeddingHealthSnapshot = {
     activeProvider: string | null;
@@ -495,6 +502,34 @@
     ingestion_embedding: '',
     ingestion_json_repair: ''
   });
+
+  function buildWizardModelChainForRun() {
+    return mergeModelChainWithOperatorPins(
+      {
+        extract: stageModelIds.ingestion_extraction,
+        relate: stageModelIds.ingestion_relations,
+        group: stageModelIds.ingestion_grouping,
+        validate: stageModelIds.ingestion_validation,
+        remediate: (stageModelIds as Record<string, string>).ingestion_remediation?.trim() || 'auto',
+        json_repair: stageModelIds.ingestion_json_repair || 'auto'
+      },
+      loadOperatorPhasePinsFromStorage()
+    );
+  }
+
+  function mergeOperatorFtIntoBatch(base: Record<string, unknown>) {
+    const op = loadOperatorPhasePinsFromStorage();
+    if (!op) return base;
+    const ex = operatorPhasePinsToWorkerExtras(op);
+    const out = { ...base };
+    if (ex.extractionOpenAiCompatibleBaseUrl) {
+      out.extractionOpenAiCompatibleBaseUrl = ex.extractionOpenAiCompatibleBaseUrl;
+    }
+    if (ex.extractionOpenAiCompatibleModel) {
+      out.extractionOpenAiCompatibleModel = ex.extractionOpenAiCompatibleModel;
+    }
+    return out;
+  }
 
   function isLikelyEmbeddingModel(entry: Pick<CatalogEntry, 'provider' | 'modelId'>): boolean {
     if (isEmbeddingModelEntry(entry)) return true;
@@ -1329,7 +1364,13 @@
           keysBaseHost: typeof host === 'string' ? host : null,
           environmentId: raw.environmentId,
           projectIdConfigured: raw.projectIdConfigured,
-          gatewayKeyConfigured: raw.gatewayKeyConfigured
+          gatewayKeyConfigured: raw.gatewayKeyConfigured,
+          gatewayKeySource:
+            raw.gatewayKeySource === 'database' ||
+            raw.gatewayKeySource === 'environment' ||
+            raw.gatewayKeySource === 'none'
+              ? raw.gatewayKeySource
+              : undefined
         };
       } else {
         ingestWorkerDiagnostics = null;
@@ -1639,6 +1680,7 @@
     }
     if (runProcessExitedAt != null) return `Not running (exited ${formatDateTime(runProcessExitedAt)})`;
     if (flowState === 'awaiting_sync') return 'Waiting for Sync';
+    if (flowState === 'awaiting_promote') return 'Extraction staged — promote to continue';
     return 'Not running';
   }
 
@@ -2164,7 +2206,9 @@
 
   /** True while a worker run is actively executing (not failed/done/setup). */
   function runInProgress(): boolean {
-    return flowState === 'running' || flowState === 'awaiting_sync';
+    return (
+      flowState === 'running' || flowState === 'awaiting_sync' || flowState === 'awaiting_promote'
+    );
   }
 
   function pipelineStepReady(): boolean {
@@ -2209,6 +2253,7 @@
       costEstimateAcknowledged ||
       flowState === 'running' ||
       flowState === 'awaiting_sync' ||
+      flowState === 'awaiting_promote' ||
       flowState === 'done' ||
       flowState === 'error'
     );
@@ -2218,6 +2263,7 @@
     return (
       flowState === 'running' ||
       flowState === 'awaiting_sync' ||
+      flowState === 'awaiting_promote' ||
       flowState === 'done' ||
       flowState === 'error'
     );
@@ -2616,13 +2662,8 @@
           validate: runValidate,
           pipeline_preset: INGESTION_PIPELINE_PRESET,
           embedding_model: stageModelIds.ingestion_embedding,
-          batch_overrides: mergedBatchOverrides,
-          model_chain: {
-            extract: stageModelIds.ingestion_extraction,
-            relate: stageModelIds.ingestion_relations,
-            group: stageModelIds.ingestion_grouping,
-            validate: stageModelIds.ingestion_validation
-          }
+          batch_overrides: mergeOperatorFtIntoBatch(mergedBatchOverrides),
+          model_chain: buildWizardModelChainForRun()
         })
       });
 
@@ -2654,7 +2695,7 @@
       const params = new URLSearchParams(window.location.search);
       params.set('monitor', '1');
       params.set('runId', runId);
-      window.history.replaceState({}, '', `/admin/ingest?${params.toString()}`);
+      window.history.replaceState({}, '', `/admin/ingest/legacy-wizard?${params.toString()}`);
       startPolling();
     } catch (error) {
       runError = error instanceof Error ? error.message : 'Failed to start ingestion.';
@@ -2685,6 +2726,30 @@
       runError = e instanceof Error ? e.message : 'Sync failed.';
     } finally {
       syncing = false;
+    }
+  }
+
+  /** Resume pipeline after `--stop-after-extraction` (Neon-staged claims). */
+  async function promoteStagedTail(): Promise<void> {
+    if (!runId || promoting || syncing) return;
+    promoting = true;
+    runError = '';
+    try {
+      const response = await fetch(`/api/admin/ingest/run/${encodeURIComponent(runId)}/promote`, {
+        method: 'POST',
+        headers: await authHeaders()
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(typeof body?.error === 'string' ? body.error : 'Promote request failed.');
+      }
+      flowState = 'running';
+      lastAppliedRunStatus = 'running';
+      startPolling();
+    } catch (e) {
+      runError = e instanceof Error ? e.message : 'Promote failed.';
+    } finally {
+      promoting = false;
     }
   }
 
@@ -2739,13 +2804,8 @@
           ...(await authHeaders())
         },
         body: JSON.stringify({
-          model_chain: {
-            extract: stageModelIds.ingestion_extraction,
-            relate: stageModelIds.ingestion_relations,
-            group: stageModelIds.ingestion_grouping,
-            validate: stageModelIds.ingestion_validation
-          },
-          batch_overrides: mergedBatchOverrides
+          model_chain: buildWizardModelChainForRun(),
+          batch_overrides: mergeOperatorFtIntoBatch(mergedBatchOverrides)
         })
       });
       const body = await response.json().catch(() => ({}));
@@ -2786,13 +2846,8 @@
         },
         body: JSON.stringify({
           respawn_stale_worker: true,
-          model_chain: {
-            extract: stageModelIds.ingestion_extraction,
-            relate: stageModelIds.ingestion_relations,
-            group: stageModelIds.ingestion_grouping,
-            validate: stageModelIds.ingestion_validation
-          },
-          batch_overrides: mergedBatchOverrides
+          model_chain: buildWizardModelChainForRun(),
+          batch_overrides: mergeOperatorFtIntoBatch(mergedBatchOverrides)
         })
       });
       const body = await response.json().catch(() => ({}));
@@ -2814,7 +2869,7 @@
     params.delete('monitor');
     params.delete('runId');
     const query = params.toString();
-    window.history.replaceState({}, '', query ? `/admin/ingest?${query}` : '/admin/ingest');
+    window.history.replaceState({}, '', query ? `/admin/ingest/legacy-wizard?${query}` : '/admin/ingest/legacy-wizard');
   }
 
   function dismissFirestoreReportPanel(): void {
@@ -2823,7 +2878,7 @@
     const params = new URLSearchParams(window.location.search);
     params.delete('reportRunId');
     const query = params.toString();
-    window.history.replaceState({}, '', query ? `/admin/ingest?${query}` : '/admin/ingest');
+    window.history.replaceState({}, '', query ? `/admin/ingest/legacy-wizard?${query}` : '/admin/ingest/legacy-wizard');
   }
 
   /** After a failed or cancelled run: free Source for a new URL, clear pre-scan lock, return to setup. */
@@ -2928,6 +2983,7 @@
       runCapturedIssues = body.issues as RunCapturedIssue[];
     }
 
+    const awaitingPromote = body?.awaitingPromote === true || body?.status === 'awaiting_promote';
     const awaitingSync = body?.awaitingSync === true || body?.status === 'awaiting_sync';
     const syncStart = typeof body?.syncStartedAt === 'number' ? body.syncStartedAt : undefined;
     const syncEnd = typeof body?.syncCompletedAt === 'number' ? body.syncCompletedAt : undefined;
@@ -2956,13 +3012,18 @@
         return { ...stage, status: 'done' as StageStatus, result: undefined };
       });
       clearPolling();
+    } else if (awaitingPromote) {
+      flowState = 'awaiting_promote';
+      lastAppliedRunStatus = 'awaiting_promote';
     } else if (awaitingSync) {
       flowState = 'awaiting_sync';
       lastAppliedRunStatus = 'awaiting_sync';
     } else if (body?.status === 'error') {
       const err = typeof body?.error === 'string' ? body.error : 'Ingestion failed.';
       const wasActive =
-        lastAppliedRunStatus === 'running' || lastAppliedRunStatus === 'awaiting_sync';
+        lastAppliedRunStatus === 'running' ||
+        lastAppliedRunStatus === 'awaiting_sync' ||
+        lastAppliedRunStatus === 'awaiting_promote';
       if (wasActive) {
         lastAppliedRunStatus = null;
         unlockSourceAfterFailedRun(err);
@@ -3082,7 +3143,9 @@
     if (pollTimer) clearTimeout(pollTimer);
     const delay =
       runProcessAlive &&
-      (lastAppliedRunStatus === 'running' || lastAppliedRunStatus === 'awaiting_sync')
+      (lastAppliedRunStatus === 'running' ||
+        lastAppliedRunStatus === 'awaiting_sync' ||
+        lastAppliedRunStatus === 'awaiting_promote')
         ? 550
         : 1800;
     pollTimer = setTimeout(async () => {
@@ -3301,7 +3364,7 @@
       activeStep = 'review';
       if (params.get('monitor') !== '1') {
         params.set('monitor', '1');
-        window.history.replaceState({}, '', `/admin/ingest?${params.toString()}`);
+        window.history.replaceState({}, '', `/admin/ingest/legacy-wizard?${params.toString()}`);
       }
       startPolling();
     }
@@ -3311,23 +3374,27 @@
 </script>
 
 <svelte:head>
-  <title>Ingestion — Admin</title>
+  <title>Ingestion (legacy wizard) — Admin</title>
 </svelte:head>
 
 <main class="expand-page">
   <header class="expand-hero">
     <div class="flex flex-wrap items-start justify-between gap-4">
       <div>
-        <p class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-dim">Admin</p>
+        <p class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-dim">Admin · Legacy</p>
         <h1 class="mt-2 font-serif text-3xl text-sophia-dark-text sm:text-[2.1rem]">Ingestion orchestration and routing</h1>
         <p class="mt-2 max-w-3xl text-sm leading-6 text-sophia-dark-muted">
-          Configure source setup, pre-scan assumptions, stage-level model choices, and run with a clear cost view.
+          Unlisted escape hatch for full pre-scan, routing, and cost review. Prefer the
+          <a class="text-sophia-dark-text underline underline-offset-2" href="/admin/ingest/operator">operator hub</a>
+          and <a class="text-sophia-dark-text underline underline-offset-2" href="/admin/ingest/jobs">durable jobs</a> for normal
+          batch work.
         </p>
       </div>
       <nav class="flex flex-wrap items-center gap-2" aria-label="Admin shortcuts">
         <a href="/admin" class="admin-hub-action">Admin home</a>
-        <a href="/admin/ingest/runs" class="admin-hub-action">All runs</a>
-        <a href="/admin/ingest/batch" class="admin-hub-action">STOA batches</a>
+        <a href="/admin/ingest/operator" class="admin-hub-action">Operator hub</a>
+        <a href="/admin/ingest/operator/activity" class="admin-hub-action">Activity</a>
+        <a href="/admin/ingest/jobs" class="admin-hub-action">Durable jobs</a>
         <a href="/admin/operator-byok" class="admin-hub-action">Operator BYOK</a>
       </nav>
     </div>
@@ -3440,7 +3507,7 @@
           </p>
           <p class="mt-2 max-w-3xl text-sm text-sophia-dark-muted">
             This is a read-only snapshot. Live log polling only works for runs still held in memory on the server (see
-            <a href="/admin/ingest/runs" class="text-sophia-dark-text underline underline-offset-2">All runs</a>). To
+            <a href="/admin/ingest/operator/activity" class="text-sophia-dark-text underline underline-offset-2">Activity</a>). To
             continue the pipeline, use the same source URL below so checkpoints can resume.
           </p>
         </div>
@@ -3554,7 +3621,7 @@
                     </p>
                     <p class="max-w-2xl text-sm leading-relaxed text-sophia-dark-muted">
                       To reopen a finished or orphaned run after a deploy, open
-                      <a href="/admin/ingest/runs" class="text-sophia-dark-text underline decoration-sophia-dark-border underline-offset-2 hover:decoration-sophia-dark-text">All runs</a>
+                      <a href="/admin/ingest/operator/activity" class="text-sophia-dark-text underline decoration-sophia-dark-border underline-offset-2 hover:decoration-sophia-dark-text">Activity</a>
                       and use <strong class="text-sophia-dark-text">View report</strong> for the Firestore snapshot, or
                       <strong class="text-sophia-dark-text">Open live</strong> only if this instance still holds the run in
                       memory.
@@ -3907,8 +3974,12 @@
                             {ingestWorkerDiagnostics.projectIdConfigured ? 'set' : 'missing'}
                           </li>
                           <li>
-                            <span class="text-sophia-dark-dim">RESTORMEL_GATEWAY_KEY:</span>
+                            <span class="text-sophia-dark-dim">Gateway bearer:</span>
                             {ingestWorkerDiagnostics.gatewayKeyConfigured ? 'set' : 'missing'}
+                            {#if ingestWorkerDiagnostics.gatewayKeySource}
+                              <span class="text-sophia-dark-dim">
+                                ({ingestWorkerDiagnostics.gatewayKeySource})</span>
+                            {/if}
                           </li>
                         </ul>
                         <p class="mt-3 text-[0.65rem] leading-relaxed text-sophia-dark-dim">
@@ -4920,7 +4991,17 @@
               <div class="rounded border border-sophia-dark-border bg-sophia-dark-bg/30 p-4">
                 <div class="flex items-end justify-between gap-4">
                   <h3 class="font-mono text-[0.7rem] uppercase tracking-[0.14em] text-sophia-dark-dim">Run ingestion</h3>
-                  <span class="font-mono text-xs text-sophia-dark-muted">{flowState === 'setup' ? 'Ready' : flowState === 'done' ? 'Complete' : flowState === 'error' ? 'Failed' : 'Monitoring'}</span>
+                  <span class="font-mono text-xs text-sophia-dark-muted"
+                    >{flowState === 'setup'
+                      ? 'Ready'
+                      : flowState === 'done'
+                        ? 'Complete'
+                        : flowState === 'error'
+                          ? 'Failed'
+                          : flowState === 'awaiting_promote'
+                            ? 'Awaiting promote'
+                            : 'Monitoring'}</span
+                  >
                 </div>
                 {#if flowState === 'setup'}
                   <button type="button" onclick={() => void startIngestion()} class="mt-4 w-full rounded border border-sophia-dark-sage/45 bg-sophia-dark-sage/14 px-5 py-3 font-mono text-sm uppercase tracking-[0.12em] text-sophia-dark-sage hover:bg-sophia-dark-sage/20 disabled:opacity-50" disabled={starting || !ingestionModelsReady() || !costEstimateAcknowledged}>
@@ -4964,11 +5045,11 @@
                       <p class="mt-1">Last failure stage: <span class="text-sophia-dark-copper">{stageName(runLastFailureStage)}</span></p>
                     {/if}
                   </div>
-                  {#if flowState === 'running' || flowState === 'awaiting_sync'}
+                  {#if flowState === 'running' || flowState === 'awaiting_sync' || flowState === 'awaiting_promote'}
                     <button
                       type="button"
                       onclick={() => void cancelIngestion()}
-                      disabled={cancelling || syncing}
+                      disabled={cancelling || syncing || promoting}
                       class="mt-4 w-full rounded border border-sophia-dark-copper/55 bg-sophia-dark-copper/10 px-5 py-3 font-mono text-sm uppercase tracking-[0.12em] text-sophia-dark-copper hover:bg-sophia-dark-copper/16 disabled:opacity-50"
                     >
                       {cancelling ? 'Cancelling…' : 'Cancel ingestion'}
@@ -4987,6 +5068,23 @@
                       Neon may still show this run as running while this revision has no child process. This starts
                       ingest.ts from checkpoints on <em>this</em> instance.
                     </p>
+                  {/if}
+                  {#if flowState === 'awaiting_promote'}
+                    <p class="mt-4 font-mono text-xs leading-relaxed text-sophia-dark-muted">
+                      Extraction finished and claims are staged in Neon. Continue with relation → validate → … → store from checkpoints, or cancel. Bulk jobs: use the{' '}
+                      <a class="text-sophia-dark-sage underline hover:text-sophia-dark-sage/90" href="/admin/ingest/operator"
+                        >Operator hub</a
+                      >{' '}
+                      to promote many items.
+                    </p>
+                    <button
+                      type="button"
+                      onclick={() => void promoteStagedTail()}
+                      disabled={promoting || syncing}
+                      class="mt-4 w-full rounded border border-sophia-dark-sage/55 bg-sophia-dark-sage/20 px-5 py-3 font-mono text-sm uppercase tracking-[0.12em] text-sophia-dark-sage hover:bg-sophia-dark-sage/28 disabled:opacity-50"
+                    >
+                      {promoting ? 'Starting tail…' : 'Promote — run pipeline tail (relating onward)'}
+                    </button>
                   {/if}
                   {#if flowState === 'awaiting_sync'}
                     <button type="button" onclick={() => void syncToSurreal()} disabled={syncing} class="mt-4 rounded border border-sophia-dark-sage/55 bg-sophia-dark-sage/20 px-5 py-3 font-mono text-sm uppercase tracking-[0.12em] text-sophia-dark-sage hover:bg-sophia-dark-sage/28 disabled:opacity-50">
