@@ -53,4 +53,18 @@ describe('buildIngestMetricsAdvisory', () => {
 		expect(a.severity).toBe('watch');
 		expect(a.recommendations.some((r) => /Grouping wall/i.test(r))).toBe(true);
 	});
+
+	it('flags remediation-heavy wall share', () => {
+		const a = buildIngestMetricsAdvisory(
+			{
+				total_wall_ms: 500_000,
+				model_retries: 0,
+				stage_ms: { validating: 80_000, remediating: 200_000, embedding: 10_000 }
+			},
+			{}
+		);
+		expect(a.severity).toBe('watch');
+		expect(a.signals.stage_wall_remediating_ms).toBe(200_000);
+		expect(a.recommendations.some((r) => /Remediation phase dominated/i.test(r))).toBe(true);
+	});
 });

@@ -416,6 +416,8 @@ export type CreateIngestionJobArgs = {
 	urls: string[];
 	concurrency?: number;
 	notes?: string | null;
+	/** Optional operator tag (e.g. experiment vs re-ingest) — stored on `job_created` event payload only. */
+	runReason?: string | null;
 	actorUid: string;
 	actorEmail: string | null;
 	validate?: boolean;
@@ -564,7 +566,10 @@ export async function createIngestionJob(
 		concurrency,
 		pipelineVersion,
 		embeddingFingerprint,
-		workerDefaultKeys: Object.keys(workerDefaults)
+		workerDefaultKeys: Object.keys(workerDefaults),
+		...(args.runReason?.trim()
+			? { run_reason: args.runReason.trim().slice(0, 200) }
+			: {})
 	});
 
 	void tickIngestionJob(id);

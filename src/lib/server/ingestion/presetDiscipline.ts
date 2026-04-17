@@ -22,6 +22,8 @@ export function buildSepPresetFingerprint(env: NodeJS.ProcessEnv): Record<string
 		validation_batch_source_context_chars: env.VALIDATION_BATCH_SOURCE_CONTEXT_CHARS ?? null,
 		relations_batch_target_tokens: env.RELATIONS_BATCH_TARGET_TOKENS ?? null,
 		relations_batch_overlap_claims: env.RELATIONS_BATCH_OVERLAP_CLAIMS ?? null,
+		ingest_relations_auto_tune: env.INGEST_RELATIONS_AUTO_TUNE ?? null,
+		ingest_grouping_auto_tune: env.INGEST_GROUPING_AUTO_TUNE ?? null,
 		ingest_validation_sample_rate: env.INGEST_VALIDATION_SAMPLE_RATE ?? null,
 		ingest_validation_mode: env.INGEST_VALIDATION_MODE ?? null,
 		ingest_no_model_fallback: env.INGEST_NO_MODEL_FALLBACK === '1',

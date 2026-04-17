@@ -8,12 +8,16 @@ export const ADMIN_INGEST_WORKER_UI_DEFAULTS = {
 	extractionMaxTokensPerSection: '5000',
 	passageInsertConcurrency: '8',
 	claimInsertConcurrency: '8',
-	remediationMaxClaims: '16',
+	remediationMaxClaims: '8',
 	relationsBatchOverlapClaims: '3',
 	googleExtractionConcurrencyFloor: '6',
 	groupingTargetTokens: '72000',
 	validationTargetTokens: '100000',
 	relationsTargetTokens: '10000',
+	/** Default on for large-scale ingest; set worker env `INGEST_RELATIONS_AUTO_TUNE=0` to disable. */
+	relationsAutoTune: '1',
+	/** Default on for large-scale ingest; set worker env `INGEST_GROUPING_AUTO_TUNE=0` to disable. */
+	groupingAutoTune: '1',
 	embedBatchSize: '250',
 	/** Matches typical worker `INGEST_MODEL_TIMEOUT_MS` / stage caps (ms). */
 	ingestModelTimeoutMs: '360000',
@@ -69,7 +73,10 @@ export const ADMIN_INGEST_WORKER_UI_TOOLTIPS = {
 		'When validation is on: maps to INGEST_REMEDIATION. Disabling skips remediation (faster, cheaper) but leaves low-faithfulness claims as-is unless you handle them elsewhere.',
 
 	remediationRevalidate:
-		'Maps to INGEST_REMEDIATION_REVALIDATE. Second validation pass after repair—increases quality and cost; if 429s spike after remediation, try disabling revalidate first before lowering concurrency.',
+		'Maps to INGEST_REMEDIATION_REVALIDATE (`1` / `true` / `full`). **Full** second validation on the post-repair graph — roughly doubles validation calls vs a single pass. By default ingest runs **targeted** revalidation (only batches that touch repaired claims) unless you set INGEST_REMEDIATION_TARGETED_REVALIDATE=0. If 429s spike after remediation, disable full revalidate and/or targeted revalidate before lowering concurrency.',
+
+	remediationTargetedRevalidate:
+		'Maps to INGEST_REMEDIATION_TARGETED_REVALIDATE (default on). After claim repair, re-run only validation batches intersecting repaired positions, then merge — cheaper than a full second pass. Set `0` / `false` to skip entirely when you accept pre-repair validation scores for untouched claims.',
 
 	watchdogPhaseIdleJson:
 		'Maps to INGEST_WATCHDOG_PHASE_IDLE_JSON (JSON, ms per phase). Per-phase idle limits before Neon watchdog marks a run stuck. Tighter values fail faster on hangs but risk false positives on slow stages; if you tighten here, consider raising INGEST_WATCHDOG_PHASE_BASELINE_MULT slightly only if legitimate slow stages get killed.',
@@ -104,11 +111,17 @@ export const ADMIN_INGEST_WORKER_UI_TOOLTIPS = {
 	groupingTargetTokens:
 		'Maps to GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS. Larger batches = fewer grouping calls but heavier requests; lower if grouping timeouts or rate limits appear. The ingest script also pre-splits grouping when estimated JSON output would exceed max_output (see INGEST_GROUPING_OUTPUT_VS_INPUT_FACTOR, INGEST_GROUPING_OUTPUT_HEADROOM, INGEST_GROUPING_MAX_CLAIMS_PER_BATCH) and raises Gemini max_output unless INGEST_GROUPING_MAX_OUTPUT_TOKENS is set. Disable pre-split with INGEST_GROUPING_PREEMPT_OUTPUT_SPLITS=0 if you intentionally run one huge batch.',
 
+	groupingAutoTune:
+		'Maps to INGEST_GROUPING_AUTO_TUNE. Default **1** (on): ingest may lower the effective grouping batch target on risky graphs before model caps — see resolveGroupingAutoBatchTarget.ts. Set to 0 to disable.',
+
 	validationTargetTokens:
 		'Maps to VALIDATION_BATCH_TARGET_TOKENS (when validation is on). Larger batches bundle more claims per validation call—watch TPM; lower if validation retries spike.',
 
 	relationsTargetTokens:
-		'Maps to RELATIONS_BATCH_TARGET_TOKENS. Default in code is 12000 for TPM safety. Raising can reduce relation batch count but risks rate limits; if you raise target tokens, consider lowering relations overlap claims.',
+		'Maps to RELATIONS_BATCH_TARGET_TOKENS. Default in code is 10000 for TPM safety. Raising can reduce relation batch count but risks rate limits; if you raise target tokens, consider lowering relations overlap claims.',
+
+	relationsAutoTune:
+		'Maps to INGEST_RELATIONS_AUTO_TUNE. Default **1** (on): ingest lowers the effective relations batch target on large claim graphs (before model ceiling caps) to reduce TPM splits and 429s — see resolveRelationsAutoBatchTarget.ts. Pair with INGEST_RELATIONS_AUTO_CAP_TOKENS (default 8000) and thresholds. Set to 0 to disable.',
 
 	embedBatchSize:
 		'Maps to VERTEX_EMBED_BATCH_SIZE (embedding API chunk size). Larger batches mean fewer round trips but larger bursts toward quota; for Voyage, same chunking applies in embedTexts. If you raise batch size, set VERTEX_EMBED_BATCH_DELAY_MS > 0 or disable Google throughput mode to add pacing when on Vertex embeddings.',

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	dropRelationsByValidation,
+	filterValidationBatchesTouchingClaimPositions,
 	selectRemediationPositions,
 	sliceSourceAroundClaim,
 	shouldRerunRelationsAfterRemediation
@@ -44,6 +45,16 @@ describe('remediationLogic', () => {
 		const t = '0123456789'.repeat(200);
 		const s = sliceSourceAroundClaim(t, 100, 120, { maxChars: 50, pad: 5 });
 		expect(s.length).toBeLessThanOrEqual(50);
+	});
+
+	it('filterValidationBatchesTouchingClaimPositions keeps batches with repaired claims', () => {
+		const batches = [
+			{ claims: [{ position_in_source: 1 }, { position_in_source: 2 }] },
+			{ claims: [{ position_in_source: 9 }] }
+		];
+		const hit = filterValidationBatchesTouchingClaimPositions(batches, new Set([2]));
+		expect(hit).toHaveLength(1);
+		expect(hit[0]?.claims.map((c) => c.position_in_source)).toEqual([1, 2]);
 	});
 
 	it('shouldRerunRelationsAfterRemediation', () => {

@@ -67,6 +67,8 @@
 	let jobIngestLogPins = $state(false);
 	let jobRemediationEnabled = $state(true);
 	let jobRemediationRevalidate = $state(false);
+	/** Default on: matches ingest `INGEST_REMEDIATION_TARGETED_REVALIDATE` (batches touching repaired claims only). */
+	let jobRemediationTargetedRevalidate = $state(true);
 	let jobWatchdogPhaseIdleJson = $state('');
 	let jobWatchdogBaselineMult = $state('');
 
@@ -185,6 +187,7 @@
 		if (validateLlm) {
 			o.ingestRemediationEnabled = jobRemediationEnabled;
 			o.ingestRemediationRevalidate = jobRemediationRevalidate;
+			o.ingestRemediationTargetedRevalidate = jobRemediationTargetedRevalidate;
 		}
 		const idleRaw = String(jobWatchdogPhaseIdleJson ?? '').trim();
 		if (idleRaw) {
@@ -227,6 +230,7 @@
 					jobIngestLogPins,
 					jobRemediationEnabled,
 					jobRemediationRevalidate,
+					jobRemediationTargetedRevalidate,
 					jobWatchdogPhaseIdleJson,
 					jobWatchdogBaselineMult,
 					jobForceReingest,
@@ -759,6 +763,9 @@
 				if (typeof p.jobRemediationEnabled === 'boolean') jobRemediationEnabled = p.jobRemediationEnabled;
 				if (typeof p.jobRemediationRevalidate === 'boolean')
 					jobRemediationRevalidate = p.jobRemediationRevalidate;
+				if (typeof p.jobRemediationTargetedRevalidate === 'boolean')
+					jobRemediationTargetedRevalidate = p.jobRemediationTargetedRevalidate;
+				else if (!('jobRemediationTargetedRevalidate' in p)) jobRemediationTargetedRevalidate = true;
 				if (typeof p.jobWatchdogPhaseIdleJson === 'string')
 					jobWatchdogPhaseIdleJson = p.jobWatchdogPhaseIdleJson;
 				if (typeof p.jobWatchdogBaselineMult === 'string' || typeof p.jobWatchdogBaselineMult === 'number') {
@@ -806,6 +813,7 @@
 			jobIngestLogPins +
 			jobRemediationEnabled +
 			jobRemediationRevalidate +
+			jobRemediationTargetedRevalidate +
 			jobWatchdogPhaseIdleJson +
 			jobWatchdogBaselineMult +
 			jobForceReingest +
@@ -1221,7 +1229,11 @@
 						</label>
 						<label class="flex cursor-pointer items-center gap-3" title={JOB_TT.remediationRevalidate}>
 							<input type="checkbox" bind:checked={jobRemediationRevalidate} class="h-5 w-5 rounded border-[var(--color-border)]" title={JOB_TT.remediationRevalidate} />
-							<span class="text-sm text-sophia-dark-text">Re-validate after remediation</span>
+							<span class="text-sm text-sophia-dark-text">Full second validation after remediation</span>
+						</label>
+						<label class="flex cursor-pointer items-center gap-3" title={JOB_TT.remediationTargetedRevalidate}>
+							<input type="checkbox" bind:checked={jobRemediationTargetedRevalidate} class="h-5 w-5 rounded border-[var(--color-border)]" title={JOB_TT.remediationTargetedRevalidate} />
+							<span class="text-sm text-sophia-dark-text">Targeted re-validation (repaired batches only)</span>
 						</label>
 					</div>
 				{/if}

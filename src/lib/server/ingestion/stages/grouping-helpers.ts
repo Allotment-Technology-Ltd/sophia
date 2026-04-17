@@ -39,13 +39,24 @@ export function normalizeGroupingRole(value: unknown): string {
 	return 'key_premise';
 }
 
+/** If the model returned `{"named_arguments":[...]}`, unwrap to the array for downstream Zod. */
+export function unwrapGroupingModelPayload(payload: unknown): unknown {
+	if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+		const named = (payload as Record<string, unknown>).named_arguments;
+		if (Array.isArray(named)) return named;
+	}
+	return payload;
+}
+
 /**
  * Normalise grouping JSON before Zod parse. **Invalid or missing `position_in_source` refs are dropped**
  * (not coerced to `1`), so malformed model output cannot collapse many claims onto position 1.
+ * Accepts either a bare array or `{"named_arguments":[...]}` (see `unwrapGroupingModelPayload`).
  */
 export function normalizeGroupingPayload(payload: unknown): unknown {
-	if (!Array.isArray(payload)) return payload;
-	return payload.map((item) => {
+	const root = unwrapGroupingModelPayload(payload);
+	if (!Array.isArray(root)) return root;
+	return root.map((item) => {
 		if (!item || typeof item !== 'object') return item;
 		const typed = item as Record<string, unknown>;
 		const claims = Array.isArray(typed.claims)
@@ -65,6 +76,21 @@ export function normalizeGroupingPayload(payload: unknown): unknown {
 			: [];
 		return { ...typed, claims };
 	});
+}
+
+/**
+ * Remove claim refs whose `position_in_source` is not in the current batch's claim set.
+ * Prevents degenerate "collapsed" health signals when the model cites positions outside the batch excerpt.
+ */
+export function filterGroupingOutputToKnownClaimPositions(
+	output: GroupingOutput,
+	allowedPositions: ReadonlySet<number>
+): GroupingOutput {
+	const mapped = output.map((argument) => ({
+		...argument,
+		claims: argument.claims.filter((c) => allowedPositions.has(c.position_in_source))
+	}));
+	return mapped.filter((a) => a.claims.length > 0);
 }
 
 export function splitClaimsIntoGroupingBatches(

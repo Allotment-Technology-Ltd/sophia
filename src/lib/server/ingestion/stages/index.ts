@@ -56,5 +56,6 @@ export {
 	buildValidationBatch,
 	buildValidationBatches,
 	mergeValidationOutputs,
+	summarizeRemediationRevalidationDiff,
 	runValidationBatchWithContextSplitting
 } from './validation-helpers.js';

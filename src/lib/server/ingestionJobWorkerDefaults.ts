@@ -90,6 +90,9 @@ export function sanitizeIngestionJobWorkerDefaults(raw: unknown): BO | undefined
   if (typeof o.ingestRemediationRevalidate === 'boolean') {
     out.ingestRemediationRevalidate = o.ingestRemediationRevalidate;
   }
+  if (typeof o.ingestRemediationTargetedRevalidate === 'boolean') {
+    out.ingestRemediationTargetedRevalidate = o.ingestRemediationTargetedRevalidate;
+  }
   if (typeof o.ingestRemediationForceRelationsRerun === 'boolean') {
     out.ingestRemediationForceRelationsRerun = o.ingestRemediationForceRelationsRerun;
   }
