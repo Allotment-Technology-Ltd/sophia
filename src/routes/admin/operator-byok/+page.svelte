@@ -209,7 +209,7 @@
       </div>
       <nav class="flex flex-wrap gap-2" aria-label="Admin shortcuts">
         <a href="/admin" class="op-byok-nav-link">Admin home</a>
-        <a href="/admin/ingest" class="op-byok-nav-link">Expand</a>
+        <a href="/admin/ingest/operator" class="op-byok-nav-link">Ingestion</a>
       </nav>
     </div>
   </header>

@@ -28,6 +28,7 @@ export function ingestRunStillOccupiesLlmConcurrencySlot(
 ): boolean {
 	if (!run) return true;
 	if (run.status === 'done' || run.status === 'error') return false;
+	if (run.status === 'awaiting_promote') return false;
 	/** Preview runs finished LLM work but still hold a job slot until operator sync — do not stampede new LLM children. */
 	if (run.status === 'awaiting_sync') return true;
 	if ((run.currentStageKey ?? '').trim().toLowerCase() === 'store') return false;

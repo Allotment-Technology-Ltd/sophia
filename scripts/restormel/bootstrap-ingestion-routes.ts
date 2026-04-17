@@ -10,21 +10,13 @@
  *   RESTORMEL_ENVIRONMENT_ID (default: production)
  *   RESTORMEL_KEYS_BASE / RESTORMEL_BASE_URL (optional)
  *
- * Default published steps (unless overridden below):
- *   - **ingestion_extraction / relations / grouping / json_repair / remediation / shared:** Mistral-only
- *     (`mistral-medium-latest` → `mistral-large-latest` → `mistral-small-latest`) for fine-tune lineage
- *     (matches Sophia canonical pipeline: medium first for long SEP wall-clock).
- *   - **ingestion_validation:** Vertex + Anthropic + Vertex (second-opinion path; matches canonical validation).
+ * **Default published steps** match `canonicalModelChainForStage()` in
+ * `src/lib/ingestionCanonicalPipeline.ts` (same primary + fallback ordering as durable Neon jobs when
+ * `INGEST_PIN_*` is unset). **Extraction** starts with **Vertex `gemini-3-flash-preview`** — not an OpenAI-compatible
+ * fine-tune (FT belongs in `EXTRACTION_*` env / operator pins, not as Restormel step 0).
  *
- * Optional overrides (apply to the active profile — labeler vs validation — see source):
- *   RESTORMEL_BOOTSTRAP_PRIMARY_PROVIDER / RESTORMEL_BOOTSTRAP_PRIMARY_MODEL
- *   RESTORMEL_BOOTSTRAP_FALLBACK_PROVIDER / RESTORMEL_BOOTSTRAP_FALLBACK_MODEL
- *   RESTORMEL_BOOTSTRAP_FALLBACK2_PROVIDER / RESTORMEL_BOOTSTRAP_FALLBACK2_MODEL
- *
- * Validation-only overrides (when adjusting the validation route chain):
- *   RESTORMEL_BOOTSTRAP_VALIDATION_PRIMARY_PROVIDER / RESTORMEL_BOOTSTRAP_VALIDATION_PRIMARY_MODEL
- *   RESTORMEL_BOOTSTRAP_VALIDATION_FALLBACK_PROVIDER / RESTORMEL_BOOTSTRAP_VALIDATION_FALLBACK_MODEL
- *   RESTORMEL_BOOTSTRAP_VALIDATION_FALLBACK2_PROVIDER / RESTORMEL_BOOTSTRAP_VALIDATION_FALLBACK2_MODEL
+ * Optional: set `RESTORMEL_BOOTSTRAP_LEGACY_CHAIN=1` to use the old three-step env-based chain from
+ * `RESTORMEL_BOOTSTRAP_PRIMARY_*` / `FALLBACK*` instead of the canonical pipeline.
  *
  * Usage:
  *   pnpm restormel:ingestion-bootstrap plan
@@ -33,6 +25,10 @@
  *   pnpm restormel:ingestion-bootstrap verify
  */
 
+import {
+  canonicalModelChainForStage,
+  type IngestionLlmStageKey
+} from '../../src/lib/ingestionCanonicalPipeline.js';
 import type { RestormelRouteRecord, RestormelStepRecord } from '../../src/lib/server/restormel.js';
 import {
   RestormelDashboardError,
@@ -43,6 +39,16 @@ import {
   restormelResolve,
   restormelSaveRoute
 } from '../../src/lib/server/restormel.js';
+
+/** Aligns `ingestion_*` Restormel route stages with `IngestionLlmStageKey` (shared route uses extraction chain). */
+const ROUTE_STAGE_TO_LLM: Record<string, IngestionLlmStageKey> = {
+  ingestion_extraction: 'extraction',
+  ingestion_relations: 'relations',
+  ingestion_grouping: 'grouping',
+  ingestion_validation: 'validation',
+  ingestion_remediation: 'remediation',
+  ingestion_json_repair: 'json_repair'
+};
 
 type StageDef = {
   /** Substage key without prefix (matches DiscoverableIngestionStage). */
@@ -81,7 +87,15 @@ function findSharedRoute(routes: RestormelRouteRecord[]): RestormelRouteRecord |
   return routes.find((r) => normalizeStage(r.workload) === 'ingestion' && !normalizeStage(r.stage));
 }
 
-function buildDefaultSteps(): RestormelStepRecord[] {
+/** Maps contract provider slugs to Dashboard route-step `providerPreference` values. */
+function providerPreferenceForRouteStep(provider: string): string {
+  const p = provider.trim().toLowerCase();
+  if (p === 'google') return 'vertex';
+  return p;
+}
+
+/** Legacy three-tier chain from env (opt-in via `RESTORMEL_BOOTSTRAP_LEGACY_CHAIN=1`). */
+function buildLegacyEnvSteps(): RestormelStepRecord[] {
   const primaryProvider = process.env.RESTORMEL_BOOTSTRAP_PRIMARY_PROVIDER?.trim() || 'vertex';
   const primaryModel =
     process.env.RESTORMEL_BOOTSTRAP_PRIMARY_MODEL?.trim() || 'gemini-3-flash-preview';
@@ -140,6 +154,50 @@ function buildDefaultSteps(): RestormelStepRecord[] {
   ];
 }
 
+const MAX_ROUTE_STEPS = 10;
+
+/**
+ * Publishes the same ordered model tiers as `canonicalModelChainForStage` (durable job defaults).
+ * Extraction step 0 is always Vertex Gemini flash in canonical profile — not a fine-tuned OpenAI deployment.
+ */
+function buildCanonicalRestormelSteps(routeStage: string): RestormelStepRecord[] {
+  if (['1', 'true', 'yes'].includes((process.env.RESTORMEL_BOOTSTRAP_LEGACY_CHAIN ?? '').trim().toLowerCase())) {
+    return buildLegacyEnvSteps();
+  }
+  const llm = ROUTE_STAGE_TO_LLM[routeStage] ?? 'extraction';
+  const chain = canonicalModelChainForStage(llm).slice(0, MAX_ROUTE_STEPS);
+
+  const switchCriteria = {
+    onFailureKinds: [
+      'timeout',
+      'rate_limit',
+      'provider_unhealthy',
+      'quota_exceeded',
+      'unknown_error'
+    ],
+    requiresHealthyProvider: true
+  };
+
+  return chain.map((tier, idx) => {
+    const step: RestormelStepRecord = {
+      id: `step_${idx}`,
+      orderIndex: idx,
+      enabled: true,
+      providerPreference: providerPreferenceForRouteStep(tier.provider),
+      modelId: tier.modelId
+    };
+    if (idx < chain.length - 1) {
+      step.switchCriteria = switchCriteria;
+      step.retryPolicy = {
+        maxRetries: 1,
+        backoffMs: 1000,
+        retryOnFailureKinds: ['timeout']
+      };
+    }
+    return step;
+  });
+}
+
 function printHelp(): void {
   console.log(`bootstrap-ingestion-routes
 
@@ -150,7 +208,7 @@ Commands:
   verify            POST /resolve for each ingestion_* stage (smoke test)
 
 Environment: RESTORMEL_GATEWAY_KEY, RESTORMEL_PROJECT_ID, RESTORMEL_ENVIRONMENT_ID
-Optional: RESTORMEL_BOOTSTRAP_* model/provider overrides (see script header).
+Optional: RESTORMEL_BOOTSTRAP_LEGACY_CHAIN=1 + RESTORMEL_BOOTSTRAP_* for the old 3-step env chain.
 `);
 }
 
@@ -210,8 +268,8 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function applyStepsAndPublish(routeId: string): Promise<void> {
-  const desired = buildDefaultSteps();
+async function applyStepsAndPublish(routeId: string, routeStage: string): Promise<void> {
+  const desired = buildCanonicalRestormelSteps(routeStage);
 
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -268,8 +326,11 @@ async function cmdPlan(includeShared: boolean): Promise<void> {
     );
   }
 
-  console.log('\nDefault step chain (apply uses this unless RESTORMEL_BOOTSTRAP_* is set):');
-  console.log(JSON.stringify(buildDefaultSteps(), null, 2));
+  console.log('\nCanonical step chains per stage (apply publishes these unless RESTORMEL_BOOTSTRAP_LEGACY_CHAIN=1):');
+  for (const s of DEDICATED_STAGES) {
+    console.log(`\n--- ${s.routeStage} ---`);
+    console.log(JSON.stringify(buildCanonicalRestormelSteps(s.routeStage), null, 2));
+  }
 }
 
 async function cmdApply(includeShared: boolean): Promise<void> {
@@ -292,7 +353,7 @@ async function cmdApply(includeShared: boolean): Promise<void> {
     } else {
       console.log(`Using existing route ${route.id} (${s.routeStage})`);
     }
-    await applyStepsAndPublish(route.id);
+    await applyStepsAndPublish(route.id, s.routeStage);
   }
 
   if (includeShared) {
@@ -302,7 +363,7 @@ async function cmdApply(includeShared: boolean): Promise<void> {
     } else {
       console.log(`Using existing shared route ${route.id}`);
     }
-    await applyStepsAndPublish(route.id);
+    await applyStepsAndPublish(route.id, 'ingestion_extraction');
   }
 
   console.log('\nDone. Optional: run `pnpm restormel:ingestion-bootstrap verify`.');

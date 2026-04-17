@@ -1,33 +1,34 @@
-import { describe, it, expect } from 'vitest';
-import { mergeJobWorkerDefaultsIntoPayload } from './hydrateIngestPayloadJobDefaults.js';
-import type { IngestRunPayload } from '../ingestRuns.js';
+import { describe, expect, it } from 'vitest';
+import { applyJobPipelineFlagsFromWorkerDefaults } from './hydrateIngestPayloadJobDefaults';
+import type { IngestRunPayload } from '../ingestRuns';
 
-function basePayload(over: Partial<IngestRunPayload> = {}): IngestRunPayload {
-	return {
-		source_url: 'https://example.com/p',
-		source_type: 'institutional',
-		validate: true,
-		model_chain: { extract: 'auto', relate: 'auto', group: 'auto', validate: 'auto' },
-		ingestion_job_id: 'ingest_job_test',
-		...over
-	};
-}
+const basePayload = (): IngestRunPayload => ({
+  source_url: 'https://example.com/a',
+  source_type: 'institutional',
+  validate: false,
+  model_chain: {
+    extract: 'auto',
+    relate: 'auto',
+    group: 'auto',
+    validate: 'auto',
+    remediate: 'auto',
+    json_repair: 'auto'
+  }
+});
 
-describe('mergeJobWorkerDefaultsIntoPayload', () => {
-	it('fills missing forceStage from job worker_defaults', () => {
-		const p = basePayload({
-			batch_overrides: { ingestProvider: 'vertex' }
-		});
-		const out = mergeJobWorkerDefaultsIntoPayload(p, { forceStage: 'validating' });
-		expect(out.batch_overrides?.forceStage).toBe('validating');
-		expect(out.batch_overrides?.ingestProvider).toBe('vertex');
-	});
+describe('applyJobPipelineFlagsFromWorkerDefaults', () => {
+  it('sets stop_after_extraction and clears stop_before_store', () => {
+    const p = applyJobPipelineFlagsFromWorkerDefaults(basePayload(), {
+      stop_after_extraction: true,
+      stop_before_store: true
+    });
+    expect(p.stop_after_extraction).toBe(true);
+    expect(p.stop_before_store).toBe(false);
+  });
 
-	it('keeps run-level forceStage over job default', () => {
-		const p = basePayload({
-			batch_overrides: { forceStage: 'embedding', ingestProvider: 'mistral' }
-		});
-		const out = mergeJobWorkerDefaultsIntoPayload(p, { forceStage: 'validating' });
-		expect(out.batch_overrides?.forceStage).toBe('embedding');
-	});
+  it('leaves payload unchanged when no flags', () => {
+    const b = basePayload();
+    const p = applyJobPipelineFlagsFromWorkerDefaults(b, { extractionConcurrency: 2 });
+    expect(p).toBe(b);
+  });
 });

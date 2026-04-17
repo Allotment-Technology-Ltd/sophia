@@ -44,6 +44,7 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
     id: state.id,
     status: state.status,
     awaitingSync: state.status === 'awaiting_sync',
+    awaitingPromote: state.status === 'awaiting_promote',
     stages: state.stages,
     logLines: logLinesPayload,
     logLineTotal,

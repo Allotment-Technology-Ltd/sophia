@@ -1,10 +1,10 @@
 <script lang="ts">
   const destinations = [
     {
-      href: '/admin/ingest',
-      title: 'Expand',
+      href: '/admin/ingest/operator',
+      title: 'Ingestion',
       description:
-        'Ingestion orchestration: source setup, pre-scan, Restormel pipeline and model routing, cost review, run and SurrealDB sync. This is the primary operator workspace.',
+        'Operator hub: staged bulk extraction (Fireworks + promote), resume from Neon, durable multi-URL jobs, activity, and links to the batch job form. This is the primary ingestion entry.',
       emphasis: true
     },
     {
@@ -19,27 +19,6 @@
       title: 'Issue resolution',
       description:
         'Embedding corpus maintenance (inventory, re-embed job, poller-driven progress) and quarantined claim triage with passage-bounded remediation. Legacy /admin/quarantine redirects here.',
-      emphasis: false
-    },
-    {
-      href: '/admin/ingest/runs',
-      title: 'Ingestion runs',
-      description:
-        'List runs on this server, reopen a run to resume monitoring, logs, sync, and resume actions. Runs are in-memory until the process restarts.',
-      emphasis: false
-    },
-    {
-      href: '/admin/ingest/batch',
-      title: 'Batch ingestions',
-      description:
-        'Tradition-based STOA batch wizard: scan canonical open-license repositories, choose 5–30 sources, then queue/review/run from one flow.',
-      emphasis: false
-    },
-    {
-      href: '/admin/ingest/jobs',
-      title: 'Durable ingestion jobs',
-      description:
-        'Neon-backed multi-URL jobs with full Surreal store, live status, and append-only timeline. Use with the ingestion job poller on GCP for SEP-scale batches.',
       emphasis: false
     },
     {
@@ -82,7 +61,7 @@
     <p class="font-mono text-xs uppercase tracking-[0.12em] text-sophia-dark-dim">Admin</p>
     <h1 class="mt-2 font-serif text-3xl text-sophia-dark-text sm:text-[2.1rem]">Operator hub</h1>
     <p class="mt-2 max-w-3xl text-sm leading-6 text-sophia-dark-muted">
-      Entry points for administration and ingestion control. Use Expand for the full workflow; use Ingestion runs when you need to return to an active or recent job; use Operator BYOK to manage fallback keys on the owner UID bucket.
+      Entry points for administration and ingestion control. Start ingestion from the Ingestion card (operator hub). Use Operator BYOK to manage fallback keys on the owner UID bucket.
     </p>
   </header>
 

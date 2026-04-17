@@ -387,7 +387,10 @@ export async function neonAbandonIngestRunForJobCancel(runId: string): Promise<n
       currentAction: 'Job cancelled'
     })
     .where(
-      and(eq(ingestRuns.id, runId), inArray(ingestRuns.status, ['queued', 'running', 'awaiting_sync']))
+      and(
+        eq(ingestRuns.id, runId),
+        inArray(ingestRuns.status, ['queued', 'running', 'awaiting_sync', 'awaiting_promote'])
+      )
     )
     .returning({ id: ingestRuns.id });
   return updated.length;

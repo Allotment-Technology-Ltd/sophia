@@ -22,9 +22,11 @@ export const GET: RequestHandler = async ({ locals }) => {
     restormelListRoutes()
   ]);
 
+  const ingestWorkerDiagnostics = await getRestormelIngestWorkerDiagnostics();
+
   return json({
     environmentId: RESTORMEL_ENVIRONMENT_ID,
-    ingestWorkerDiagnostics: getRestormelIngestWorkerDiagnostics(),
+    ingestWorkerDiagnostics,
     recommendations: getRestormelRecommendationSupport(),
     capabilities: capabilities.status === 'fulfilled' ? capabilities.value.data : null,
     switchCriteria: switchCriteria.status === 'fulfilled' ? switchCriteria.value.data : null,

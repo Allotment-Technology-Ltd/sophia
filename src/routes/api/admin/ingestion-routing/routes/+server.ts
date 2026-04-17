@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
-import { restormelListRoutes, restormelSaveRoute } from '$lib/server/restormel';
+import { restormelListRoutes, restormelPostRoute } from '$lib/server/restormel';
 import { parseJsonBody, restormelJsonError } from '$lib/server/restormelAdmin';
 
 export const GET: RequestHandler = async ({ locals }) => {
@@ -25,8 +25,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   }
 
   try {
-    const response = await restormelSaveRoute((body ?? {}) as Record<string, unknown>);
-    return json({ route: response.data });
+    const { httpStatus, data } = await restormelPostRoute((body ?? {}) as Record<string, unknown>);
+    return json({ route: data }, { status: httpStatus === 201 ? 201 : 200 });
   } catch (error) {
     return restormelJsonError(error);
   }

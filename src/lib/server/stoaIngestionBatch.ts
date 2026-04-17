@@ -7,7 +7,7 @@ import {
 	computeLaunchThrottleBackoffMs,
 	isLaunchThrottleError
 } from '$lib/server/ingestion/ingestionJobErrorClassify';
-import { ingestRunManager, type IngestRunPayload } from '$lib/server/ingestRuns';
+import { DEFAULT_MODEL_CHAIN_FULL, ingestRunManager, type IngestRunPayload } from '$lib/server/ingestRuns';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 
@@ -1138,7 +1138,7 @@ async function maybeLaunchQueuedItems(batch: StoaBatchRunView): Promise<StoaBatc
 				source_type: item.sourceType,
 				validate: false,
 				stop_before_store: false,
-				model_chain: { extract: 'auto', relate: 'auto', group: 'auto', validate: 'auto' },
+				model_chain: { ...DEFAULT_MODEL_CHAIN_FULL },
 				queue_record_id: item.queueRecordId
 			};
 			const childRunId = await ingestRunManager.createRun(payload, batch.requestedByEmail ?? 'stoa-batch@sophia.local');

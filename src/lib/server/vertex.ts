@@ -1,5 +1,4 @@
 import * as https from 'node:https';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createMistral } from '@ai-sdk/mistral';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -24,7 +23,6 @@ import { resolveProviderDecision, type ResolveFailureKind } from './resolve-prov
 
 let anthropicInstance: ReturnType<typeof createAnthropic> | null = null;
 const anthropicByApiKey = new Map<string, ReturnType<typeof createAnthropic>>();
-const googleByApiKey = new Map<string, ReturnType<typeof createGoogleGenerativeAI>>();
 const openAICompatibleByCacheKey = new Map<string, ReturnType<typeof createOpenAI>>();
 /** Ingestion-only OpenAI-compatible extraction (`EXTRACTION_BASE_URL`); isolated from catalog `openai` keys. */
 const extractionOpenAiOverrideByCacheKey = new Map<string, ReturnType<typeof createOpenAI>>();
@@ -45,14 +43,6 @@ function getAnthropicForApiKey(apiKey?: string) {
     apiKey: process.env.ANTHROPIC_API_KEY
   });
   return anthropicInstance;
-}
-
-function getGoogleForApiKey(apiKey: string) {
-  const existing = googleByApiKey.get(apiKey);
-  if (existing) return existing;
-  const instance = createGoogleGenerativeAI({ apiKey });
-  googleByApiKey.set(apiKey, instance);
-  return instance;
 }
 
 function getPlatformApiKey(provider: ReasoningProvider): string | undefined {
@@ -133,6 +123,9 @@ function isGoogleAiOpenAiCompatibleHost(baseOrUrl: string): boolean {
 		return false;
 	}
 }
+
+/** Google AI Studio OpenAI-compatible Chat Completions base (API key + Bearer; not Vertex regional ADC). */
+export const GOOGLE_AI_STUDIO_OPENAI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai';
 
 /**
  * Operators sometimes put `?key=` on **`EXTRACTION_BASE_URL`** (copy-paste from REST docs). Any env
@@ -319,6 +312,12 @@ function getOpenAIForExtractionOverride(baseURL: string, apiKey: string) {
 	return instance;
 }
 
+/** Gemini on Google AI Studio via OpenAI-compatible chat (same transport as `EXTRACTION_BASE_URL` generativelanguage hosts). */
+export function getGoogleAiStudioOpenAiCompatibleChatModel(apiKey: string, modelId: string) {
+	const client = getOpenAIForExtractionOverride(GOOGLE_AI_STUDIO_OPENAI_BASE_URL, apiKey.trim());
+	return client.chat(modelId as any);
+}
+
 /**
  * When **`EXTRACTION_BASE_URL`** and **`EXTRACTION_MODEL`** are set, ingestion `planIngestionStage('extraction')`
  * uses this OpenAI-compatible chat route (Fireworks, vLLM, Together-hosted chat, etc.).
@@ -390,47 +389,20 @@ export function buildExtractionOpenAiCompatibleRoute(): ReasoningModelRoute | nu
   const o = readExtractionOpenAiCompatibleOverride();
   if (!o) return null;
 
-  /**
-   * **Google AI Studio** (`generativelanguage.googleapis.com`): use native `@ai-sdk/google` (same as catalog
-   * Gemini). The OpenAI-compatible HTTP surface (`…/v1beta/openai`) expects **Bearer**-only auth; in practice
-   * some environments still hit **400** *Multiple authentication credentials* on that shim. The native
-   * Generative Language API uses **`x-goog-api-key`** only and avoids that failure mode.
-   *
-   * Other OpenAI-compat bases (e.g. some `…googleapis.com/v1beta/openai` hosts) keep the OpenAI client path.
-   */
-  if (isGenerativeLanguageHost(o.baseURL)) {
-    return {
-      model: getGoogleForApiKey(o.apiKey)(o.modelId as any),
-      provider: 'vertex',
-      modelId: o.modelId,
-      supportsGrounding: false,
-      credentialSource: 'byok',
-      routingSource: 'requested',
-      resolvedExplanation:
-        'Native Gemini API (@ai-sdk/google) for generativelanguage.googleapis.com; EXTRACTION_BASE_URL may point at …/v1beta/openai but routing uses the standard Generative Language API for reliable auth.',
-      resolvedRouteId: null,
-      resolvedFailureKind: undefined,
-      resolvedStepId: null,
-      resolvedOrderIndex: null,
-      resolvedSwitchReasonCode: null,
-      resolvedEstimatedCostUsd: null,
-      resolvedMatchedCriteria: null,
-      resolvedFallbackCandidates: null,
-      resolvedStepChain: null
-    };
-  }
-
   const client = getOpenAIForExtractionOverride(o.baseURL, o.apiKey);
   const model = client.chat(o.modelId as any);
+  const googleAiStudioOpenAi = isGenerativeLanguageHost(o.baseURL);
   return {
     model,
-    provider: 'openai',
+    /** Same Gemini billing/telemetry family as catalog `vertex`; transport is OpenAI-compatible Chat Completions. */
+    provider: googleAiStudioOpenAi ? 'vertex' : 'openai',
     modelId: o.modelId,
     supportsGrounding: false,
     credentialSource: 'byok',
     routingSource: 'requested',
-    resolvedExplanation:
-      'OpenAI-compatible ingestion extraction (EXTRACTION_BASE_URL + EXTRACTION_MODEL); Restormel resolve skipped for this stage plan.',
+    resolvedExplanation: googleAiStudioOpenAi
+      ? 'Google AI Studio Gemini via OpenAI-compatible Chat Completions (generativelanguage.googleapis.com …/v1beta/openai); avoids native Google Generative AI SDK.'
+      : 'OpenAI-compatible ingestion extraction (EXTRACTION_BASE_URL + EXTRACTION_MODEL); Restormel resolve skipped for this stage plan.',
     resolvedRouteId: null,
     resolvedFailureKind: undefined,
     resolvedStepId: null,
@@ -599,30 +571,21 @@ export function normalizeAnthropicModelIdForApi(modelId: string): string {
 }
 
 function buildVertexRoute(modelId: string, byokVertexKey?: string): ReasoningModelRoute {
-  if (byokVertexKey) {
-    return {
-      model: getGoogleForApiKey(byokVertexKey)(modelId),
-      provider: 'vertex',
-      modelId,
-      supportsGrounding: false,
-      credentialSource: 'byok'
-    };
+  const key = byokVertexKey?.trim() || getPlatformApiKey('vertex')?.trim();
+  if (!key) {
+    throw new Error(
+      'Gemini (catalog provider `vertex`) requires GOOGLE_AI_API_KEY or a stored Gemini/Google BYOK key. Vertex ADC is not supported.'
+    );
   }
 
-  const platformGoogleKey = getPlatformApiKey('vertex');
-  if (platformGoogleKey) {
-    return {
-      model: getGoogleForApiKey(platformGoogleKey)(modelId),
-      provider: 'vertex',
-      modelId,
-      supportsGrounding: false,
-      credentialSource: 'platform'
-    };
-  }
-
-  throw new Error(
-    'Gemini (catalog provider `vertex`) requires GOOGLE_AI_API_KEY or a stored Gemini/Google BYOK key. Vertex ADC is not supported.'
-  );
+  const client = getOpenAIForExtractionOverride(GOOGLE_AI_STUDIO_OPENAI_BASE_URL, key);
+  return {
+    model: client.chat(modelId as any),
+    provider: 'vertex',
+    modelId,
+    supportsGrounding: false,
+    credentialSource: byokVertexKey?.trim() ? 'byok' : 'platform'
+  };
 }
 
 function buildAnthropicRoute(modelId: string, byokAnthropicKey?: string): ReasoningModelRoute {

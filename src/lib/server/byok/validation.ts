@@ -109,5 +109,8 @@ export async function validateProviderApiKey(provider: ByokProvider, apiKey: str
   if (provider === 'cohere') {
     return validateCohere(normalized);
   }
+  if (provider === 'aizolo') {
+    return validateOpenAICompatible('aizolo', normalized);
+  }
   return validateOpenAICompatible(provider, normalized);
 }

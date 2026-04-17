@@ -13,8 +13,8 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { VoyageAIClient } from 'voyageai';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Surreal } from 'surrealdb';
+import { googleAiStudioOpenAiChatCompletion } from './lib/googleAiStudioOpenAi.ts';
 
 export interface HealthCheckConfig {
 	surreal_url: string;
@@ -221,7 +221,8 @@ export class HealthChecker {
 	}
 
 	/**
-	 * Check Google Gemini API (optional — only if validation enabled)
+	 * Check Google Gemini API (optional — only if validation enabled).
+	 * Uses Google AI Studio OpenAI-compatible Chat Completions (not @google/generative-ai).
 	 */
 	private async checkGeminiAPI(): Promise<HealthStatus> {
 		const start = Date.now();
@@ -237,25 +238,24 @@ export class HealthChecker {
 				};
 			}
 
-			const client = new GoogleGenerativeAI(this.config.google_ai_api_key);
-			const model = client.getGenerativeModel({ model: 'gemini-3-flash-preview' });
-
-			const response = await model.generateContent({
-				contents: [
-					{
-						role: 'user',
-						parts: [{ text: 'Say ok' }]
-					}
-				],
-				generationConfig: { temperature: 0.1 }
+			const { text, usage } = await googleAiStudioOpenAiChatCompletion({
+				apiKey: this.config.google_ai_api_key,
+				model: 'gemini-3-flash-preview',
+				userMessage: 'Say ok',
+				temperature: 0.1,
+				maxTokens: 32
 			});
 
 			const latency = Date.now() - start;
+			const tok =
+				usage?.promptTokens != null && usage?.completionTokens != null
+					? `, tokens in+out=${usage.promptTokens}+${usage.completionTokens}`
+					: '';
 
 			return {
 				service,
-				healthy: true,
-				details: `API working (latency: ${latency}ms)`,
+				healthy: Boolean(text?.trim()),
+				details: `API working (latency: ${latency}ms${tok})`,
 				latencyMs: latency
 			};
 		} catch (error) {

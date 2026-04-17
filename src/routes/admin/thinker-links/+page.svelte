@@ -186,7 +186,7 @@
       sourceType: normalizeSourceTypeForIngest(preview.source_type),
       inspect: '1'
     });
-    return `/admin/ingest?${params.toString()}`;
+    return `/admin/ingest/legacy-wizard?${params.toString()}`;
   }
 
   function setSuggestion(item: UnresolvedQueueItem, qid: string, label: string): void {
@@ -292,7 +292,7 @@
       </div>
       <nav class="flex flex-wrap gap-2" aria-label="Admin shortcuts">
         <a href="/admin" class="thinker-nav-link">Admin home</a>
-        <a href="/admin/ingest" class="thinker-nav-link">Expand</a>
+        <a href="/admin/ingest/operator" class="thinker-nav-link">Ingestion</a>
       </nav>
     </div>
   </header>

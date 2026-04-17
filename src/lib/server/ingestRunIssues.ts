@@ -379,14 +379,24 @@ function summarizeIssues(issues: IngestIssueRecord[]): Record<string, number> {
 export interface IngestRunSnapshotForReport {
   id: string;
   actorEmail?: string;
-  status: 'queued' | 'running' | 'awaiting_sync' | 'done' | 'error';
+  status: 'queued' | 'running' | 'awaiting_sync' | 'awaiting_promote' | 'done' | 'error';
   payload: {
     source_url: string;
     source_type: string;
     validate?: boolean;
     stop_before_store?: boolean;
+    stop_after_extraction?: boolean;
+    pipeline_version?: string;
+    embedding_fingerprint?: string;
     pipeline_preset?: 'production' | 'budget' | 'balanced' | 'complexity';
-    model_chain: { extract: string; relate: string; group: string; validate: string };
+    model_chain: {
+      extract: string;
+      relate: string;
+      group: string;
+      validate: string;
+      remediate: string;
+      json_repair: string;
+    };
     embedding_model?: string;
     batch_overrides?: {
       extractionMaxTokensPerSection?: number;
@@ -510,6 +520,9 @@ function buildIngestRunReportEnvelope(state: IngestRunSnapshotForReport): Record
     pipelinePreset: payload.pipeline_preset ?? null,
     validate: payload.validate === true,
     stopBeforeStore: payload.stop_before_store !== false,
+    stopAfterExtraction: payload.stop_after_extraction === true,
+    pipelineVersion: payload.pipeline_version ?? null,
+    embeddingFingerprint: payload.embedding_fingerprint ?? null,
     modelChain: payload.model_chain,
     embeddingModel: payload.embedding_model ?? null,
     batchOverrides: payload.batch_overrides ?? null,
@@ -561,6 +574,9 @@ export async function persistIngestRunReport(state: IngestRunSnapshotForReport):
         pipelinePreset: envelope.pipelinePreset,
         validate: envelope.validate,
         stopBeforeStore: envelope.stopBeforeStore,
+        stopAfterExtraction: envelope.stopAfterExtraction,
+        pipelineVersion: envelope.pipelineVersion,
+        embeddingFingerprint: envelope.embeddingFingerprint,
         modelChain: envelope.modelChain,
         embeddingModel: envelope.embeddingModel,
         batchOverrides: envelope.batchOverrides,

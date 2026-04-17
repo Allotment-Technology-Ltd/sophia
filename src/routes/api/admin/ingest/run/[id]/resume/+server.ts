@@ -22,9 +22,7 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
     body = {};
   }
 
-  const model_chain = body.model_chain as
-    | Partial<{ extract: string; relate: string; group: string; validate: string }>
-    | undefined;
+  const model_chain = body.model_chain as Partial<IngestRunPayload['model_chain']> | undefined;
   const batch_overrides = body.batch_overrides as
     | Partial<NonNullable<IngestRunPayload['batch_overrides']>>
     | undefined;

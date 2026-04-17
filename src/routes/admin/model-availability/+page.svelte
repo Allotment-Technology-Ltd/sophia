@@ -534,7 +534,7 @@
       </div>
       <nav class="flex flex-wrap gap-2" aria-label="Admin shortcuts">
         <a href="/admin" class="admin-hub-action">Admin home</a>
-        <a href="/admin/ingest" class="admin-hub-action">Expand</a>
+        <a href="/admin/ingest/operator" class="admin-hub-action">Ingestion</a>
       </nav>
     </div>
   </header>

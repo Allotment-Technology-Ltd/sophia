@@ -1177,7 +1177,7 @@ function shouldFoldSystemPromptIntoUserForProvider(provider: string | undefined)
 	if (OPENAI_COMPAT_CHAT_PROVIDERS_FOLD_SYSTEM.has(p)) return true;
 	const extractionBase = process.env.EXTRACTION_BASE_URL?.trim().toLowerCase() ?? '';
 	// `buildExtractionOpenAiCompatibleRoute` uses `provider: 'openai'` for Fireworks/Together/etc., or
-	// `provider: 'vertex'` for `generativelanguage.googleapis.com` (native Gemini). Fireworks
+	// `provider: 'vertex'` for `generativelanguage.googleapis.com` (Gemini via OpenAI-compatible Chat Completions). Fireworks
 	// deployment templates return 400 ("roles must alternate…") when `system` is sent separately;
 	// Together SFT eval defaults to the same folded shape (see `EXTRACTION_EVAL_FOLD_SYSTEM`).
 	if (p === 'openai' && extractionBase) {

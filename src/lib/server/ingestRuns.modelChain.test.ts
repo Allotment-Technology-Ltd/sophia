@@ -11,7 +11,9 @@ describe('modelChainLabelsToEnv', () => {
       extract: 'anthropic · claude-sonnet-4-20250514',
       relate: 'google · gemini-3-flash-preview',
       group: 'anthropic · claude-sonnet-4-20250514',
-      validate: 'openai · gpt-4o'
+      validate: 'openai · gpt-4o',
+      remediate: 'auto',
+      json_repair: 'auto'
     };
     const env = modelChainLabelsToEnv(chain);
     expect(env.INGEST_PIN_PROVIDER_EXTRACTION).toBe('anthropic');
@@ -27,7 +29,9 @@ describe('modelChainLabelsToEnv', () => {
       extract: 'not-a-label',
       relate: '',
       group: 'weirdco · model-x',
-      validate: 'anthropic · claude-haiku-4-5-20251001'
+      validate: 'anthropic · claude-haiku-4-5-20251001',
+      remediate: 'auto',
+      json_repair: 'auto'
     });
     expect(env.INGEST_PIN_PROVIDER_EXTRACTION).toBeUndefined();
     expect(env.INGEST_PIN_PROVIDER_GROUPING).toBeUndefined();
@@ -39,7 +43,9 @@ describe('modelChainLabelsToEnv', () => {
       extract: 'auto',
       relate: 'auto',
       group: 'auto',
-      validate: 'auto'
+      validate: 'auto',
+      remediate: 'auto',
+      json_repair: 'auto'
     });
     expect(Object.keys(env).length).toBe(0);
   });
@@ -49,7 +55,9 @@ describe('modelChainLabelsToEnv', () => {
       extract: 'vertex · gemini-2.0-flash-001',
       relate: 'google · gemini-2.0-flash',
       group: 'auto',
-      validate: 'auto'
+      validate: 'auto',
+      remediate: 'auto',
+      json_repair: 'auto'
     });
     expect(env.INGEST_PIN_PROVIDER_EXTRACTION).toBe('vertex');
     expect(env.INGEST_PIN_MODEL_EXTRACTION).toBe('gemini-3-flash-preview');
@@ -62,7 +70,9 @@ describe('modelChainLabelsToEnv', () => {
       extract: 'vertex · gemini-2.0-flash-lite-001',
       relate: 'google · gemini-2.0-flash-lite',
       group: 'auto',
-      validate: 'auto'
+      validate: 'auto',
+      remediate: 'auto',
+      json_repair: 'auto'
     });
     expect(env.INGEST_PIN_MODEL_EXTRACTION).toBe('gemini-3.1-flash-lite-preview');
     expect(env.INGEST_PIN_MODEL_RELATIONS).toBe('gemini-3.1-flash-lite-preview');
@@ -73,7 +83,9 @@ describe('modelChainLabelsToEnv', () => {
       extract: 'vertex · gemini-2.5-flash',
       relate: 'google · gemini-2.5-flash',
       group: 'auto',
-      validate: 'auto'
+      validate: 'auto',
+      remediate: 'auto',
+      json_repair: 'auto'
     });
     expect(env.INGEST_PIN_MODEL_EXTRACTION).toBe('gemini-3-flash-preview');
     expect(env.INGEST_PIN_MODEL_RELATIONS).toBe('gemini-3-flash-preview');
@@ -84,7 +96,9 @@ describe('modelChainLabelsToEnv', () => {
       extract: 'anthropic · claude-3-5-haiku',
       relate: 'anthropic__claude-3-5-haiku',
       group: 'auto',
-      validate: 'auto'
+      validate: 'auto',
+      remediate: 'auto',
+      json_repair: 'auto'
     });
     expect(env.INGEST_PIN_MODEL_EXTRACTION).toBe('claude-3-5-haiku-20241022');
     expect(env.INGEST_PIN_MODEL_RELATIONS).toBe('claude-3-5-haiku-20241022');
@@ -95,7 +109,9 @@ describe('modelChainLabelsToEnv', () => {
       extract: 'anthropic__claude-sonnet-4-20250514',
       relate: 'anthropic__claude-sonnet-4-20250514',
       group: 'anthropic__claude-sonnet-4',
-      validate: 'mistral__mistral-large-latest'
+      validate: 'mistral__mistral-large-latest',
+      remediate: 'auto',
+      json_repair: 'auto'
     });
     expect(env.INGEST_PIN_PROVIDER_EXTRACTION).toBe('anthropic');
     expect(env.INGEST_PIN_MODEL_EXTRACTION).toBe('claude-sonnet-4-20250514');
@@ -110,7 +126,9 @@ describe('modelChainLabelsToEnv', () => {
       extract: 'anthropic__claude-sonnet-4-20250514',
       relate: 'anthropic__claude-sonnet-4-20250514',
       group: 'anthropic__claude-sonnet-4',
-      validate: 'mistral__mistral-large-latest'
+      validate: 'mistral__mistral-large-latest',
+      remediate: 'auto',
+      json_repair: 'auto'
     });
     const b64 = encodeIngestPinsJsonCliArg(env);
     expect(b64).toBeTruthy();
@@ -120,5 +138,20 @@ describe('modelChainLabelsToEnv', () => {
     >;
     expect(parsed.EXTRACTION).toEqual({ provider: 'anthropic', model: 'claude-sonnet-4-20250514' });
     expect(parsed.VALIDATION).toEqual({ provider: 'mistral', model: 'mistral-large-latest' });
+  });
+
+  it('maps remediation and json_repair pins', () => {
+    const env = modelChainLabelsToEnv({
+      extract: 'auto',
+      relate: 'auto',
+      group: 'auto',
+      validate: 'auto',
+      remediate: 'vertex · gemini-3-flash-preview',
+      json_repair: 'openai · ft-json-repair'
+    });
+    expect(env.INGEST_PIN_PROVIDER_REMEDIATION).toBe('vertex');
+    expect(env.INGEST_PIN_MODEL_REMEDIATION).toBe('gemini-3-flash-preview');
+    expect(env.INGEST_PIN_PROVIDER_JSON_REPAIR).toBe('openai');
+    expect(env.INGEST_PIN_MODEL_JSON_REPAIR).toBe('ft-json-repair');
   });
 });

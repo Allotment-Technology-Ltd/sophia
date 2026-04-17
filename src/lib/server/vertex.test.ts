@@ -2,14 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockCreateAnthropic,
-  mockCreateGoogleGenerativeAI,
   mockCreateMistral,
   mockCreateOpenAI,
   mockLoadServerEnv,
   mockResolveProviderDecision
 } = vi.hoisted(() => ({
   mockCreateAnthropic: vi.fn(() => vi.fn((modelId: string) => `anthropic:${modelId}`)),
-  mockCreateGoogleGenerativeAI: vi.fn(() => vi.fn((modelId: string) => `google:${modelId}`)),
   mockCreateMistral: vi.fn(() => vi.fn((modelId: string) => `mistral:${modelId}`)),
   mockCreateOpenAI: vi.fn(() => {
     const provider = ((modelId: string) => `openai-responses:${modelId}`) as any;
@@ -22,10 +20,6 @@ const {
 
 vi.mock('@ai-sdk/anthropic', () => ({
   createAnthropic: mockCreateAnthropic
-}));
-
-vi.mock('@ai-sdk/google', () => ({
-  createGoogleGenerativeAI: mockCreateGoogleGenerativeAI
 }));
 
 vi.mock('@ai-sdk/openai', () => ({
@@ -126,7 +120,7 @@ describe('resolveReasoningModelRoute', () => {
     expect(route.model).toBe('openai-chat:openrouter/auto');
   });
 
-  it('uses @ai-sdk/google for platform vertex when GOOGLE_AI_API_KEY is set', async () => {
+  it('uses OpenAI-compatible Chat Completions for platform vertex when GOOGLE_AI_API_KEY is set', async () => {
     process.env.GOOGLE_AI_API_KEY = 'AIza-test';
     mockResolveProviderDecision.mockResolvedValue({
       provider: 'vertex',
@@ -136,12 +130,17 @@ describe('resolveReasoningModelRoute', () => {
       explanation: 'route=interactive step=0 provider=vertex model=gemini-3-flash-preview'
     });
 
-    const { resolveReasoningModelRoute } = await import('./vertex');
+    const { resolveReasoningModelRoute, GOOGLE_AI_STUDIO_OPENAI_BASE_URL } = await import('./vertex');
     const route = await resolveReasoningModelRoute({ routeId: 'interactive' });
 
     expect(route.provider).toBe('vertex');
-    expect(route.model).toBe('google:gemini-3-flash-preview');
-    expect(mockCreateGoogleGenerativeAI).toHaveBeenCalled();
+    expect(route.model).toBe('openai-chat:gemini-3-flash-preview');
+    expect(mockCreateOpenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseURL: GOOGLE_AI_STUDIO_OPENAI_BASE_URL,
+        apiKey: 'AIza-test'
+      })
+    );
   });
 
   it('throws when platform vertex is selected but GOOGLE_AI_API_KEY is unset', async () => {
@@ -261,42 +260,42 @@ describe('resolveReasoningModelRoute', () => {
     );
   });
 
-  it('buildExtractionOpenAiCompatibleRoute uses native @ai-sdk/google for generativelanguage.googleapis.com (not OpenAI shim)', async () => {
+  it('buildExtractionOpenAiCompatibleRoute uses createOpenAI for generativelanguage.googleapis.com OpenAI-compat', async () => {
     process.env.GOOGLE_AI_API_KEY = 'AIza-gemini-openai-compat';
     delete process.env.OPENAI_API_KEY;
     process.env.EXTRACTION_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai';
     process.env.EXTRACTION_MODEL = 'gemini-2.0-flash';
 
-    const { buildExtractionOpenAiCompatibleRoute } = await import('./vertex');
+    const { buildExtractionOpenAiCompatibleRoute, GOOGLE_AI_STUDIO_OPENAI_BASE_URL } = await import('./vertex');
     const route = buildExtractionOpenAiCompatibleRoute();
     expect(route).not.toBeNull();
     expect(route?.provider).toBe('vertex');
-    expect(route?.model).toBe('google:gemini-2.0-flash');
-    expect(mockCreateGoogleGenerativeAI).toHaveBeenCalledWith(
+    expect(route?.model).toBe('openai-chat:gemini-2.0-flash');
+    expect(mockCreateOpenAI).toHaveBeenCalledWith(
       expect.objectContaining({
+        baseURL: GOOGLE_AI_STUDIO_OPENAI_BASE_URL,
         apiKey: 'AIza-gemini-openai-compat'
       })
     );
-    expect(mockCreateOpenAI).not.toHaveBeenCalled();
   });
 
-  it('buildExtractionOpenAiCompatibleRoute strips ?key= from generativelanguage EXTRACTION_BASE_URL; still uses native Google client', async () => {
+  it('buildExtractionOpenAiCompatibleRoute strips ?key= from generativelanguage EXTRACTION_BASE_URL; still uses OpenAI client', async () => {
     process.env.GOOGLE_AI_API_KEY = 'AIza-gemini-openai-compat';
     delete process.env.OPENAI_API_KEY;
     process.env.EXTRACTION_BASE_URL =
       'https://generativelanguage.googleapis.com/v1beta/openai?key=duplicate-from-rest-docs';
     process.env.EXTRACTION_MODEL = 'gemini-2.0-flash';
 
-    const { buildExtractionOpenAiCompatibleRoute } = await import('./vertex');
+    const { buildExtractionOpenAiCompatibleRoute, GOOGLE_AI_STUDIO_OPENAI_BASE_URL } = await import('./vertex');
     const route = buildExtractionOpenAiCompatibleRoute();
     expect(route).not.toBeNull();
     expect(route?.provider).toBe('vertex');
-    expect(mockCreateGoogleGenerativeAI).toHaveBeenCalledWith(
+    expect(mockCreateOpenAI).toHaveBeenCalledWith(
       expect.objectContaining({
+        baseURL: GOOGLE_AI_STUDIO_OPENAI_BASE_URL,
         apiKey: 'AIza-gemini-openai-compat'
       })
     );
-    expect(mockCreateOpenAI).not.toHaveBeenCalled();
   });
 
   it('falls back to anthropic default when Restormel returns an unknown anthropic model id', async () => {
