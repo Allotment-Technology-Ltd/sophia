@@ -80,4 +80,32 @@ describe('validateProviderApiKey', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain('voyage_validation_failed_404:{"detail":"Not Found"}');
   });
+
+  it('validates AiZolo keys via POST /chat/completions (not GET /models)', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await validateProviderApiKey('aizolo', 'aizolo_test_key');
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://chat.aizolo.com/api/v1/chat/completions',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer aizolo_test_key',
+          'Content-Type': 'application/json'
+        })
+      })
+    );
+  });
+
+  it('treats AiZolo 429 as valid (rate limit implies accepted key)', async () => {
+    const fetchMock = vi.fn(async () => new Response('too many', { status: 429 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await validateProviderApiKey('aizolo', 'aizolo_test_key');
+
+    expect(result).toEqual({ ok: true });
+  });
 });
