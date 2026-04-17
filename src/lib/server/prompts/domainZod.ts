@@ -129,3 +129,60 @@ export function coerceIngestDomainLabel(value: unknown): (typeof DOMAIN_VALUES)[
 	if (typeof v === 'string' && DOMAIN_SET.has(v)) return v as (typeof DOMAIN_VALUES)[number];
 	return UNKNOWN_DOMAIN;
 }
+
+/**
+ * Older Surreal deployments used a minimal `claim.domain` ASSERT (11 values). Current
+ * `DOMAIN_VALUES` is wider; ingestion can emit labels like `history_of_philosophy` that fail
+ * inserts on those DBs. When `INGEST_SURREAL_DOMAIN_LEGACY_COMPAT=1`, map extended labels into
+ * this legacy set before CREATE. Re-run `scripts/setup-schema.ts` (or widen ASSERT) to use the
+ * full taxonomy instead of relying on this shim.
+ */
+export const SURREAL_LEGACY_V1_DOMAIN_VALUES = [
+	'epistemology',
+	'metaphysics',
+	'ethics',
+	'philosophy_of_mind',
+	'political_philosophy',
+	'logic',
+	'aesthetics',
+	'philosophy_of_science',
+	'philosophy_of_language',
+	'applied_ethics',
+	'philosophy_of_ai'
+] as const;
+
+const LEGACY_V1_SET = new Set<string>(SURREAL_LEGACY_V1_DOMAIN_VALUES);
+
+/** Maps expanded taxonomy → closest legacy bucket (best-effort). */
+const DOMAIN_TO_LEGACY_V1: Partial<Record<(typeof DOMAIN_VALUES)[number], (typeof SURREAL_LEGACY_V1_DOMAIN_VALUES)[number]>> = {
+	comparative_philosophy: 'political_philosophy',
+	feminist_philosophy: 'ethics',
+	history_of_philosophy: 'political_philosophy',
+	metaphilosophy: 'metaphysics',
+	philosophy_general: 'metaphysics',
+	philosophy_of_biology: 'philosophy_of_science',
+	philosophy_of_law: 'political_philosophy',
+	philosophy_of_mathematics: 'logic',
+	philosophy_of_religion: 'metaphysics',
+	philosophy_of_social_science: 'political_philosophy'
+};
+
+/**
+ * Returns a `domain` string safe for Surreal `claim.domain` ASSERT.
+ * When legacy compat is off (default), returns the coerced taxonomy label.
+ * When `process.env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT` is `1`/`true`/`yes`, maps into {@link SURREAL_LEGACY_V1_DOMAIN_VALUES}.
+ */
+export function claimDomainForSurrealStorage(
+	value: unknown,
+	env: NodeJS.ProcessEnv = process.env
+): string {
+	const coerced = coerceIngestDomainLabel(value);
+	const legacy =
+		(env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT ?? '').trim().toLowerCase() === '1' ||
+		(env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT ?? '').trim().toLowerCase() === 'true' ||
+		(env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT ?? '').trim().toLowerCase() === 'yes';
+	if (!legacy) return coerced;
+	if (LEGACY_V1_SET.has(coerced)) return coerced;
+	const mapped = DOMAIN_TO_LEGACY_V1[coerced];
+	return mapped ?? 'philosophy_of_mind';
+}

@@ -184,7 +184,10 @@ import {
 	summarizeRemediationRevalidationDiff,
 	type RemediationRevalidationDiff
 } from '../src/lib/server/ingestion/stages/validation-helpers.js';
-import { coerceIngestDomainLabel } from '../src/lib/server/prompts/domainZod.js';
+import {
+	claimDomainForSurrealStorage,
+	coerceIngestDomainLabel
+} from '../src/lib/server/prompts/domainZod.js';
 
 import {
 	VALIDATION_SYSTEM,
@@ -6986,7 +6989,7 @@ async function main() {
 								{
 									text: claim.text,
 									claim_type: claim.claim_type,
-									domain: domainOverride ?? claim.domain,
+									domain: claimDomainForSurrealStorage(domainOverride ?? claim.domain),
 									source: sourceId,
 									passage: claim.passage_id
 										? passageRecordIdMap.get(claim.passage_id) ?? undefined
@@ -7306,7 +7309,7 @@ async function main() {
 							name: arg.name,
 							summary: arg.summary,
 							tradition: arg.tradition ?? undefined,
-							domain: arg.domain,
+							domain: claimDomainForSurrealStorage(arg.domain),
 							source: sourceId
 						}
 					);

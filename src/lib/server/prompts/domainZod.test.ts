@@ -1,33 +1,26 @@
-import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
-import { DOMAIN_VALUES, preprocessDomainForEnum } from './domainZod.js';
+import { describe, expect, it, afterEach } from 'vitest';
+import { claimDomainForSurrealStorage } from './domainZod';
 
-const DomainSchema = z.preprocess(preprocessDomainForEnum, z.enum(DOMAIN_VALUES));
+describe('claimDomainForSurrealStorage', () => {
+	const prev = process.env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT;
 
-describe('preprocessDomainForEnum', () => {
-	it('accepts a single valid label', () => {
-		expect(DomainSchema.parse('ethics')).toBe('ethics');
+	afterEach(() => {
+		if (prev === undefined) delete process.env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT;
+		else process.env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT = prev;
 	});
 
-	it('coerces when the model emits the full enum list as an array', () => {
-		const list = [...DOMAIN_VALUES];
-		const out = DomainSchema.parse(list);
-		expect(DOMAIN_VALUES).toContain(out);
+	it('returns coerced taxonomy when legacy compat is off', () => {
+		delete process.env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT;
+		expect(claimDomainForSurrealStorage('history_of_philosophy')).toBe('history_of_philosophy');
 	});
 
-	it('uses the first matching label when array has multiple strings', () => {
-		expect(DomainSchema.parse(['metaphysics', 'ethics'])).toBe('metaphysics');
+	it('maps history_of_philosophy into legacy assert set when compat is on', () => {
+		process.env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT = '1';
+		expect(claimDomainForSurrealStorage('history_of_philosophy')).toBe('political_philosophy');
 	});
 
-	it('falls back when the array has no valid strings', () => {
-		expect(DomainSchema.parse([])).toBe('epistemology');
-	});
-
-	it('maps unknown domains to philosophy_general', () => {
-		expect(DomainSchema.parse('philosophy_of_chemistry')).toBe('philosophy_general');
-	});
-
-	it('takes the first segment of comma-separated domains', () => {
-		expect(DomainSchema.parse('ethics, metaethics')).toBe('ethics');
+	it('passes through values already in the legacy set', () => {
+		process.env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT = '1';
+		expect(claimDomainForSurrealStorage('ethics')).toBe('ethics');
 	});
 });
