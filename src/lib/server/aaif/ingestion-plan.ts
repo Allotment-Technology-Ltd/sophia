@@ -1,10 +1,6 @@
 import type { AAIFLatency, AAIFRequest } from '@restormel/aaif';
 import type { ModelProvider } from '@restormel/contracts/providers';
 import type { RestormelFallbackCandidate } from '../restormel.js';
-import {
-  CANONICAL_INGESTION_PRIMARY_MODELS,
-  type IngestionLlmStageKey
-} from '../../ingestionCanonicalPipeline.js';
 import { getStoredRouteIdForIngestionStage } from '../ingestionRouteBindings.js';
 import { EMBEDDING_MODEL, getEmbeddingProvider } from '../embeddings.js';
 import {
@@ -160,23 +156,15 @@ function readEnvPinnedModel(
   return {};
 }
 
-/** Admin-spawned workers set `INGEST_PIN_PROVIDER_*` + `INGEST_PIN_MODEL_*` (see `modelChainLabelsToEnv`). */
-function readPinnedModel(
-  stage: IngestionStage,
-  preferred: IngestProviderPreference
-): { provider?: ModelProvider; modelId?: string } {
+/**
+ * Explicit pins only: `INGEST_PIN_PROVIDER_*` + `INGEST_PIN_MODEL_*` (and embedding is handled elsewhere).
+ * Do **not** inject canonical primary models from `ingestionCanonicalPipeline` here — those defaults are for fallback tiers
+ * and degraded resolve paths. Feeding them as `requestedProvider` made `resolveProviderDecision` treat every
+ * `auto` ingest as a non-auto provider and **skip Restormel** (`source=requested`, empty step metadata).
+ */
+function readPinnedModel(stage: IngestionStage): { provider?: ModelProvider; modelId?: string } {
   if (stage === 'embedding') return {};
-  const envOnly = readEnvPinnedModel(stage as Exclude<IngestionStage, 'embedding'>);
-  if (envOnly.provider && envOnly.modelId) return envOnly;
-
-  const disableCanonical = ['1', 'true', 'yes'].includes(
-    (process.env.INGEST_DISABLE_CANONICAL_DEFAULTS ?? '').trim().toLowerCase()
-  );
-  if (disableCanonical || preferred !== 'auto') return {};
-
-  const canon = CANONICAL_INGESTION_PRIMARY_MODELS[stage as IngestionLlmStageKey];
-  if (canon) return { provider: canon.provider, modelId: canon.modelId };
-  return {};
+  return readEnvPinnedModel(stage as Exclude<IngestionStage, 'embedding'>);
 }
 
 /**
@@ -470,7 +458,7 @@ export async function planIngestionStage(
     }
   }
 
-  const pin = readPinnedModel(stage, context.preferredProvider ?? 'auto');
+  const pin = readPinnedModel(stage);
   const requestedProvider = (pin.provider ?? context.preferredProvider ?? 'auto') as ModelProvider;
   const requestedModelId = pin.modelId;
   const routeIdForLog = routeIdForResolve ? '(bound)' : '(none)';

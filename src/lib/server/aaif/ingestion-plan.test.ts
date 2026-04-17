@@ -181,8 +181,8 @@ describe('planIngestionStage', () => {
     });
 
     expect(mockResolveExtractionModelRoute).toHaveBeenCalledWith({
-      requestedProvider: 'vertex',
-      requestedModelId: 'gemini-3-flash-preview',
+      requestedProvider: 'auto',
+      requestedModelId: undefined,
       routeId: 'interactive',
       failureMode: 'degraded_default',
       restormelContext: {

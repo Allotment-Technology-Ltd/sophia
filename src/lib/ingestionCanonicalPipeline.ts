@@ -4,7 +4,8 @@
  *
  * Env pins (`INGEST_PIN_*`) still override these defaults for the **first** resolve tier.
  * `scripts/ingest.ts` may still filter cross-tier fallbacks via `INGEST_FINETUNE_LABELER_*` on
- * sensitive stages. Restormel steers the primary route when ingest-provider is `auto` without pins.
+ * sensitive stages. With ingest-provider `auto` and no env pins, `planIngestionStage` calls Restormel first;
+ * these primaries apply to fallback chains and degraded resolve, not as fake “requested” providers.
  *
  * **Durable Neon jobs** force {@link CANONICAL_VOYAGE_EMBEDDING_MODEL_LABEL} on each child so the corpus
  * stays on **1024-dim Voyage** embeddings (Vertex text-embedding-005 is 768-dim and must not mix in).
