@@ -1230,6 +1230,38 @@ function isExtractionOutputTruncationError(message: string): boolean {
 	);
 }
 
+/**
+ * Operator signal when a multi-passage batch yields very few claims (common with under-recalling FT
+ * models or overly large batches). Env: INGEST_EXTRACTION_SPARSE_WARN_MIN_PASSAGES (default 10),
+ * INGEST_EXTRACTION_SPARSE_WARN_MAX_CLAIMS (default 2).
+ */
+function maybeWarnExtractionSparseBatch(args: {
+	passageCount: number;
+	claimCount: number;
+	batchLabel: number;
+}): void {
+	const minP = Math.max(
+		2,
+		parseInt(process.env.INGEST_EXTRACTION_SPARSE_WARN_MIN_PASSAGES ?? '10', 10) || 10
+	);
+	const maxClaims = Math.max(
+		0,
+		parseInt(process.env.INGEST_EXTRACTION_SPARSE_WARN_MAX_CLAIMS ?? '2', 10) || 2
+	);
+	if (args.passageCount < minP || args.claimCount > maxClaims) return;
+	console.warn(
+		`  [WARN] Sparse extraction: batch ${args.batchLabel} returned ${args.claimCount} claim(s) for ${args.passageCount} passages — model may be under-recalling; consider FT data emphasizing multi-claim outputs, smaller batches (INGEST_EXTRACTION_* token caps), or a non-FT fallback for comparison.`
+	);
+	emitIngestTelemetry({
+		event: 'extraction_sparse_batch',
+		batch_label: args.batchLabel,
+		passage_count: args.passageCount,
+		claim_count: args.claimCount,
+		ratio:
+			args.passageCount > 0 ? Math.round((1000 * args.claimCount) / args.passageCount) / 1000 : 0
+	});
+}
+
 /** Replace one extraction batch with two smaller batches (passage list bisect or single-passage text bisect). */
 function replaceExtractionBatchWithSplitHalves(batch: PassageRecord[]): PassageRecord[][] | null {
 	if (batch.length > 1) {
@@ -4332,6 +4364,9 @@ async function main() {
 			'  INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS   Fixed completion cap for Stage 1 (when unset, scales with passage count, capped by INGEST_EXTRACTION_MAX_OUTPUT_TOKENS_CAP default 32768)'
 		);
 		console.error(
+			'  INGEST_EXTRACTION_SPARSE_WARN_MIN_PASSAGES / INGEST_EXTRACTION_SPARSE_WARN_MAX_CLAIMS   Warn when multi-passage batches return very few claims (default 10 passages & ≤2 claims)'
+		);
+		console.error(
 			'  INGEST_GROUPING_ADAPTIVE=1 (default)   Mid–Stage 3: shrink batch targets + preempt headroom after truncation / JSON repair / collapse; INGEST_GROUPING_ADAPT_* knobs tune shrink ratio, floors, regroup cap, slow-call timeout growth'
 		);
 		console.error('\nRestormel route env vars (optional):');
@@ -4871,7 +4906,8 @@ async function main() {
 						const userMsg = EXTRACTION_USER(
 							`${sourceMeta.title} (Batch ${batchLabel})`,
 							sourceMeta.author.join(', ') || 'Unknown',
-							renderedBatch
+							renderedBatch,
+							{ passageCount: batch.length }
 						);
 						const extractionEstPromptTok = estimateTokens(renderedBatch);
 
@@ -4946,6 +4982,11 @@ async function main() {
 							console.log(
 								`  [OK] Extracted ${validated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
 							);
+							maybeWarnExtractionSparseBatch({
+								passageCount: batch.length,
+								claimCount: validated.length,
+								batchLabel
+							});
 
 							partial.extraction_progress = {
 								claims_so_far: [...allClaims],
@@ -5032,6 +5073,11 @@ async function main() {
 								console.log(
 									`  [OK] Fixed and extracted ${fixedValidated.length} claims from batch ${batchLabel} (${queuePos}/${queueTotal} in queue)`
 								);
+								maybeWarnExtractionSparseBatch({
+									passageCount: batch.length,
+									claimCount: fixedValidated.length,
+									batchLabel
+								});
 
 								partial.extraction_progress = {
 									claims_so_far: [...allClaims],

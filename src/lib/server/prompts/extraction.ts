@@ -4,6 +4,12 @@ import { DOMAIN_VALUES, preprocessDomainForEnum } from './domainZod.js';
 
 export const EXTRACTION_SYSTEM = `You are a philosophical text analyst specialising in argument mining. Your task is to extract every atomic philosophical claim from the argumentative passages provided.
 
+COVERAGE (read carefully — common failure mode):
+- A single API call may include **many** <passage> blocks. You must return a **JSON array with many claim objects** when the text supports them—typically **several claims per passage** for dense argumentative prose (definitions, distinctions, objections, replies, methodological points each become separate claims when each is atomic).
+- **Do not** return one mega-claim or one vague summary for a whole multi-passage batch. **Do not** collapse a section into a single "the author discusses X" claim unless the passages truly contain no further assertible content.
+- Work **passage by passage**: for each passage id, ask what distinct assertions it supports; list them as separate objects with the correct passage_id and position_in_source.
+- Long encyclopedia articles often pack multiple theses and supporting steps in one passage—split them into separate atomic claims rather than one long compound "text" field.
+
 DEFINITION: An atomic claim is a single, self-contained assertion that could be true or false. It expresses one idea. It is not a paragraph. It is not a compound statement connected by "and" or "but."
 
 FOR EACH CLAIM, PROVIDE:
@@ -43,6 +49,7 @@ RULES:
 - Include thought experiments as claims about what we should conclude from them.
 - Do not extract claims that are purely expository (e.g., 'In this section I will argue...').
 - If a claim is clearly stated multiple times, extract it once with the earliest position_in_source.
+- Prefer **recall** over excessive merging: if unsure whether two sentences are one claim or two, split into two claims with appropriate confidence.
 
 OUTPUT — MACHINE-PARSEABLE JSON ONLY:
 - Return exactly one JSON array of claim objects. No wrapper object, no key wrapping the array.
@@ -58,12 +65,29 @@ Example shape (illustrative): [{"text":"…","claim_type":"premise",…}]
 
 Respond ONLY with that JSON array. No preamble, no markdown, no explanation.`;
 
+export type ExtractionUserOptions = {
+	/** When >1, appends a scope reminder so the model does not emit a single claim for an entire batch. */
+	passageCount?: number;
+};
+
 export function EXTRACTION_USER(
 	sourceTitle: string,
 	sourceAuthor: string,
-	sourceText: string
+	sourceText: string,
+	options?: ExtractionUserOptions
 ): string {
-	return `Source: "${sourceTitle}" by ${sourceAuthor}\n\n<source_text>\n${sourceText}\n</source_text>`;
+	const base = `Source: "${sourceTitle}" by ${sourceAuthor}\n\n<source_text>\n${sourceText}\n</source_text>`;
+	const n = options?.passageCount;
+	if (typeof n === 'number' && Number.isFinite(n) && n > 1) {
+		return `${base}
+
+---
+SCOPE FOR THIS REQUEST:
+- The <source_text> above contains **${n}** distinct <passage> blocks (each with an id).
+- Your JSON array must usually include **multiple** claim objects—often **several per passage** when the material is argumentative. One claim for all ${n} passages is almost always incorrect.
+- Enumerate claims in passage order; use each passage's id in passage_id and keep position_in_source consistent with the source ordering rules.`;
+	}
+	return base;
 }
 
 // Zod schema for extracted claims
