@@ -189,7 +189,8 @@
       together: 'Quick (~15-25s)',
       openrouter: 'Quick (~20-35s)',
       cohere: 'Quick (~15-28s)',
-      perplexity: 'Quick (~15-30s)'
+      perplexity: 'Quick (~15-30s)',
+      aizolo: 'Quick (~15-25s)'
     },
     standard: {
       auto: 'Standard (~25s)',
@@ -202,7 +203,8 @@
       together: 'Standard (~35-60s)',
       openrouter: 'Standard (~45-75s)',
       cohere: 'Standard (~35-58s)',
-      perplexity: 'Standard (~35-60s)'
+      perplexity: 'Standard (~35-60s)',
+      aizolo: 'Standard (~35-60s)'
     },
     deep: {
       auto: 'Deep (~40s)',
@@ -215,7 +217,8 @@
       together: 'Deep (~65-120s)',
       openrouter: 'Deep (~80-150s)',
       cohere: 'Deep (~65-115s)',
-      perplexity: 'Deep (~65-120s)'
+      perplexity: 'Deep (~65-120s)',
+      aizolo: 'Deep (~65-120s)'
     }
   };
 

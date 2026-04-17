@@ -23,7 +23,7 @@ export async function getStoredRestormelGatewayKeyOverride(): Promise<string | n
       .where(eq(adminRestormelGateway.id, ROW_ID))
       .limit(1);
     if (!row?.gatewayKeyEncrypted) return null;
-    const plain = await decryptByokSecret(row.gatewayKeyEncrypted as EncryptedSecret);
+    const plain = await decryptByokSecret(row.gatewayKeyEncrypted as unknown as EncryptedSecret);
     const trimmed = plain.trim();
     return trimmed.length > 0 ? trimmed : null;
   } catch {
@@ -61,7 +61,7 @@ export async function getRestormelGatewayConnectionSummary(
       hasDatabaseRow = Boolean(row?.gatewayKeyEncrypted);
       if (row?.gatewayKeyEncrypted) {
         try {
-          const plain = await decryptByokSecret(row.gatewayKeyEncrypted as EncryptedSecret);
+          const plain = await decryptByokSecret(row.gatewayKeyEncrypted as unknown as EncryptedSecret);
           override = plain.trim() || null;
         } catch {
           override = null;

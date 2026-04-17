@@ -16,7 +16,7 @@
   import { resolveRouteForStage, type IngestionRouteLike } from '$lib/utils/ingestionRouting';
 
   let { data } = $props();
-  const restormelEnvironmentId = data.restormelEnvironmentId ?? 'production';
+  const restormelEnvironmentId = $derived(data.restormelEnvironmentId ?? 'production');
 
   type RouteRow = IngestionRouteLike & {
     name?: string | null;

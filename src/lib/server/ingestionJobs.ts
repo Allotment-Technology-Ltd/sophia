@@ -1032,7 +1032,7 @@ async function tickIngestionJobUnlocked(
 			validate: job.validateLlm === true,
 			stop_before_store: false,
 			embedding_model: CANONICAL_VOYAGE_EMBEDDING_MODEL_LABEL,
-			model_chain,
+			model_chain: modelChain,
 			queue_record_id: it.queueRecordId ?? undefined,
 			pipeline_version: job.pipelineVersion ?? undefined,
 			embedding_fingerprint: job.embeddingFingerprint ?? undefined,
