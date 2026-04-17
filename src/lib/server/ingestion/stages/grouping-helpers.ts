@@ -8,6 +8,52 @@ import type { GroupingOutput } from '$lib/server/prompts/grouping.js';
 import type { PhaseOneClaim, PhaseOneRelation, GroupingBatch } from './types.js';
 import { estimateTokens } from './model-call.js';
 
+/**
+ * Cheap pre-Stage-3 hints when the relation graph is empty or highly fragmented (often correlates
+ * with grouping integrity / preempt-split churn). Does not throw — hard integrity is enforced
+ * earlier by `assertClaimIntegrity` / `assertRelationIntegrity`.
+ */
+export function describePreGroupingGraphLint(
+	claims: PhaseOneClaim[],
+	relations: PhaseOneRelation[]
+): string[] {
+	const warnings: string[] = [];
+	if (claims.length === 0) return warnings;
+
+	const positions = new Set(claims.map((c) => c.position_in_source));
+	const degree = new Map<number, number>();
+	for (const p of positions) degree.set(p, 0);
+	for (const r of relations) {
+		if (positions.has(r.from_position)) {
+			degree.set(r.from_position, (degree.get(r.from_position) ?? 0) + 1);
+		}
+		if (positions.has(r.to_position)) {
+			degree.set(r.to_position, (degree.get(r.to_position) ?? 0) + 1);
+		}
+	}
+	let isolated = 0;
+	for (const p of positions) {
+		if ((degree.get(p) ?? 0) === 0) isolated += 1;
+	}
+
+	if (claims.length > 8 && relations.length === 0) {
+		warnings.push(
+			`pre-grouping: no Stage-2 relations for ${claims.length} claims — integrity retries are more likely; verify relations batching and source density.`
+		);
+	}
+
+	const isolatedRatio = isolated / claims.length;
+	if (claims.length >= 10 && isolatedRatio >= 0.65) {
+		warnings.push(
+			`pre-grouping: ${isolated}/${claims.length} claims (${Math.round(
+				isolatedRatio * 100
+			)}%) have no incident relation edges — graph is highly fragmented before argument grouping.`
+		);
+	}
+
+	return warnings;
+}
+
 export function normalizeGroupingRole(value: unknown): string {
 	if (typeof value !== 'string') return 'key_premise';
 	const normalized = value.toLowerCase().trim().replace(/[\s-]+/g, '_');

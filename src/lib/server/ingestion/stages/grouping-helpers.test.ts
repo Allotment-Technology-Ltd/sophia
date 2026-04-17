@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
 	analyzeGroupingReferenceHealth,
+	describePreGroupingGraphLint,
 	filterGroupingOutputToKnownClaimPositions,
 	normalizeGroupingPayload,
 	unwrapGroupingModelPayload
 } from './grouping-helpers.js';
 import type { GroupingOutput } from '$lib/server/prompts/grouping.js';
+import type { PhaseOneClaim, PhaseOneRelation } from './types.js';
 
 describe('unwrapGroupingModelPayload', () => {
 	it('unwraps named_arguments wrapper', () => {
@@ -84,6 +86,34 @@ describe('filterGroupingOutputToKnownClaimPositions', () => {
 		const out = filterGroupingOutputToKnownClaimPositions(input, new Set([2]));
 		expect(out).toHaveLength(1);
 		expect(out[0]!.name).toBe('Keeps');
+	});
+});
+
+describe('describePreGroupingGraphLint', () => {
+	const claim = (pos: number): PhaseOneClaim =>
+		({ position_in_source: pos } as PhaseOneClaim);
+
+	it('warns when there are many claims but no relations', () => {
+		const claims = Array.from({ length: 10 }, (_, i) => claim(i + 1));
+		const w = describePreGroupingGraphLint(claims, []);
+		expect(w.length).toBeGreaterThan(0);
+		expect(w[0]).toContain('no Stage-2 relations');
+	});
+
+	it('warns when most claims are relation-isolated', () => {
+		const claims = Array.from({ length: 12 }, (_, i) => claim(i + 1));
+		const relations: PhaseOneRelation[] = [
+			{
+				from_position: 1,
+				to_position: 2
+			} as PhaseOneRelation
+		];
+		const w = describePreGroupingGraphLint(claims, relations);
+		expect(w.some((x) => x.includes('fragmented'))).toBe(true);
+	});
+
+	it('returns no warnings for small graphs', () => {
+		expect(describePreGroupingGraphLint([claim(1), claim(2)], [])).toEqual([]);
 	});
 });
 

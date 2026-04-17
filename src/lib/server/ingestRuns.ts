@@ -201,6 +201,11 @@ export interface IngestRunPayload {
    * Worker skips `INGEST_CATALOG_ROUTING_JSON_B64` so routing is Restormel + canonical + finetune filter only.
    */
   ingestion_job_id?: string;
+  /**
+   * Operator tag from durable job creation (experiment vs re-ingest, etc.), copied from the job's
+   * `job_created` event. Stored on Neon `ingest_runs.payload` for reporting; not mapped to worker env.
+   */
+  run_reason?: string;
 }
 
 /** Defaults merged into ingest.ts child env when the host has not set these variables (durable runs). */

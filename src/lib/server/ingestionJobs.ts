@@ -64,6 +64,21 @@ function sleepMs(ms: number): Promise<void> {
 	return new Promise((r) => setTimeout(r, ms));
 }
 
+async function loadJobCreatedRunReason(jobId: string, db: SophiaDrizzleDb): Promise<string | undefined> {
+	const rows = await db
+		.select({ payload: ingestionJobEvents.payload })
+		.from(ingestionJobEvents)
+		.where(and(eq(ingestionJobEvents.jobId, jobId), eq(ingestionJobEvents.eventType, 'job_created')))
+		.orderBy(asc(ingestionJobEvents.seq))
+		.limit(1);
+	const p = rows[0]?.payload;
+	if (!p || typeof p !== 'object' || Array.isArray(p)) return undefined;
+	const rr = (p as Record<string, unknown>).run_reason;
+	if (typeof rr !== 'string') return undefined;
+	const t = rr.trim();
+	return t.length > 0 ? t.slice(0, 200) : undefined;
+}
+
 /** Random 0..max ms delay between spawning child runs (spread load). Env INGEST_JOB_LAUNCH_JITTER_MS (default 800). */
 function ingestJobLaunchJitterMs(): number {
 	const r = parseInt(process.env.INGEST_JOB_LAUNCH_JITTER_MS ?? '800', 10);
@@ -909,6 +924,9 @@ async function tickIngestionJobUnlocked(
 		)
 		.orderBy(asc(ingestionJobItems.updatedAt), asc(ingestionJobItems.id));
 
+	const jobRunReason =
+		slots > 0 && pendingItems.length > 0 ? await loadJobCreatedRunReason(jobId, db) : undefined;
+
 	for (let i = 0; i < slots && i < pendingItems.length; i++) {
 		if (i > 0) {
 			const j = ingestJobLaunchJitterMs();
@@ -935,7 +953,8 @@ async function tickIngestionJobUnlocked(
 			pipeline_version: job.pipelineVersion ?? undefined,
 			embedding_fingerprint: job.embeddingFingerprint ?? undefined,
 			ingestion_job_id: jobId,
-			batch_overrides: batchOverrides
+			batch_overrides: batchOverrides,
+			...(jobRunReason ? { run_reason: jobRunReason } : {})
 		};
 		const existingRunId = it.childRunId?.trim();
 		if (existingRunId) {

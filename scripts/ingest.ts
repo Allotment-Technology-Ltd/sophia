@@ -168,6 +168,7 @@ import {
 } from '../src/lib/server/prompts/grouping.js';
 import {
 	analyzeGroupingReferenceHealth,
+	describePreGroupingGraphLint,
 	filterGroupingOutputToKnownClaimPositions,
 	normalizeGroupingPayload
 } from '../src/lib/server/ingestion/stages/grouping-helpers.js';
@@ -613,6 +614,12 @@ interface IngestTimingPayload {
 	stage_output_tokens: Record<string, number>;
 	/** Vertex embedding path: characters counted for billing (`trackEmbeddingCost`); not LLM tokens. */
 	vertex_embed_chars: number;
+	/** Grouping batches that completed via `generateObject` (schema-constrained) without text fallback. */
+	grouping_structured_object_calls: number;
+	/** Grouping batches where structured object generation failed and `generateText` was used. */
+	grouping_structured_object_fallbacks: number;
+	/** Stage 6: wall ms for Surreal relation record `RELATE` subsection only (parallel chunks). */
+	store_relation_records_wall_ms: number;
 	/** Set when logging the final summary line (wall clock for entire run). */
 	total_wall_ms?: number;
 	/** Stage 6 skipped: see `INGEST_SKIP_STORE_WHEN_NO_GRAPH_CHANGES` + `skipped_surreal_store_reason`. */
@@ -822,7 +829,10 @@ function createEmptyTiming(): IngestTimingPayload {
 		total_output_tokens: 0,
 		stage_input_tokens: {},
 		stage_output_tokens: {},
-		vertex_embed_chars: 0
+		vertex_embed_chars: 0,
+		grouping_structured_object_calls: 0,
+		grouping_structured_object_fallbacks: 0,
+		store_relation_records_wall_ms: 0
 	};
 }
 
@@ -884,6 +894,12 @@ function logIngestTimingHumanBlock(t: IngestTimingPayload, totalWallMs: number):
 			: '',
 		t.vertex_embed_chars > 0
 			? `    ${'Vertex embed chars'.padEnd(26)} ${t.vertex_embed_chars.toLocaleString()}`
+			: '',
+		t.grouping_structured_object_calls > 0 || t.grouping_structured_object_fallbacks > 0
+			? `    ${'Grouping decode'.padEnd(26)} structured_ok=${t.grouping_structured_object_calls} text_fallback=${t.grouping_structured_object_fallbacks}`
+			: '',
+		t.store_relation_records_wall_ms > 0
+			? `    ${'Store · relation RELATE'.padEnd(26)} ${formatDuration(t.store_relation_records_wall_ms)}`
 			: ''
 	].filter((l) => l.length > 0 && !l.match(/^[\s]*$/));
 	console.log(lines.join('\n'));
@@ -2642,11 +2658,17 @@ async function callStageModel(params: {
 						}
 						clearIngestCircuitSuccess(stage, activePlan.provider, activePlan.model);
 						assertStageBudget(budget, tracker);
+						if (activeIngestTiming) {
+							activeIngestTiming.grouping_structured_object_calls += 1;
+						}
 						return JSON.stringify(objResult.object.named_arguments);
 					} catch (structuredErr) {
 						console.warn(
 							`  [WARN] Grouping structured object generation failed (${structuredErr instanceof Error ? formatModelCallErrorDetails(structuredErr) : String(structuredErr)}) — falling back to JSON text`
 						);
+						if (activeIngestTiming) {
+							activeIngestTiming.grouping_structured_object_fallbacks += 1;
+						}
 					}
 				}
 
@@ -5506,6 +5528,9 @@ async function main() {
 					claimCount: allClaims.length,
 					relationCount: relations.length
 				};
+				for (const hint of describePreGroupingGraphLint(allClaims, relations)) {
+					console.warn(`  [WARN] ${hint}`);
+				}
 				let batchIndex = startGroupingBatchIndex;
 				const groupingSplitOnTruncation = !['0', 'false', 'off', 'no'].includes(
 					(process.env.INGEST_GROUPING_SPLIT_ON_TRUNCATION ?? '1').trim().toLowerCase()
@@ -6965,6 +6990,7 @@ async function main() {
 					parseInt(process.env.INGEST_RELATE_STORE_CONCURRENCY || '8', 10) || 8
 				)
 			);
+			const relationRecordsStoreStart = Date.now();
 
 			async function createOneRelationRecord(rel: (typeof relations)[number]): Promise<boolean> {
 				const fromId = claimIdMap.get(rel.from_position);
@@ -7092,6 +7118,13 @@ async function main() {
 				relationsCreated += chunkResults.filter(Boolean).length;
 			}
 			if (relationProgress) console.log('');
+			const relationRecordsWallMs = Date.now() - relationRecordsStoreStart;
+			if (activeIngestTiming) {
+				activeIngestTiming.store_relation_records_wall_ms += relationRecordsWallMs;
+			}
+			console.log(
+				`  [STORE_TIMING] relation records wall=${relationRecordsWallMs}ms (concurrency=${RELATE_STORE_CONCURRENCY}, attempted=${relations.length}, created=${relationsCreated})`
+			);
 			console.log(`  [OK] Created ${relationsCreated} relation records`);
 
 				// 6f. Create argument records and part_of relations
