@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
-import { decryptByokSecret, encryptByokSecret, type EncryptedSecret } from '$lib/server/byok/crypto';
-import { adminRestormelGateway } from '$lib/server/db/schema';
-import { getDrizzleDb } from '$lib/server/db/neon';
+import { decryptByokSecret, encryptByokSecret, type EncryptedSecret } from './byok/crypto.js';
+import { adminRestormelGateway } from './db/schema.js';
+import { getDrizzleDb } from './db/neon.js';
 
 const ROW_ID = 'default';
 

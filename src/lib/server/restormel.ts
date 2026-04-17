@@ -2,7 +2,7 @@ import {
   getRestormelGatewayConnectionSummary,
   getStoredRestormelGatewayKeyOverride,
   type RestormelGatewayKeySource
-} from '$lib/server/restormelGatewaySettings';
+} from './restormelGatewaySettings.js';
 
 export interface RestormelPolicyViolation {
   policyId?: string;
