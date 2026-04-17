@@ -91,6 +91,40 @@ async function validateCohere(apiKey: string): Promise<ValidationResult> {
   return validateBearerModelsEndpoint('cohere', apiKey, 'https://api.cohere.com/v1/models');
 }
 
+/** AiZolo is OpenAI-compatible for POST /chat/completions but does not serve GET /v1/models (404 HTML). Validate with a minimal completion. @see https://chat.aizolo.com/api/v1/chat/completions */
+function getAizoloChatCompletionsUrl(): string {
+  const envName = REASONING_PROVIDER_BASE_URL_ENV.aizolo;
+  const fromEnv = envName ? process.env[envName]?.trim() : '';
+  const baseUrl =
+    fromEnv || REASONING_PROVIDER_DEFAULT_BASE_URL.aizolo || 'https://chat.aizolo.com/api/v1';
+  return `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+}
+
+async function validateAizolo(apiKey: string): Promise<ValidationResult> {
+  const url = getAizoloChatCompletionsUrl();
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'openai/gpt-4o-mini',
+      messages: [{ role: 'user', content: 'ok' }],
+      max_tokens: 1
+    })
+  });
+
+  if (response.ok) return { ok: true };
+  if (response.status === 429) return { ok: true };
+  if (response.status === 401 || response.status === 403) {
+    const body = await response.text();
+    return { ok: false, error: `aizolo_validation_failed_${response.status}:${body.slice(0, 200)}` };
+  }
+  const body = await response.text();
+  return { ok: false, error: `aizolo_validation_failed_${response.status}:${body.slice(0, 200)}` };
+}
+
 export async function validateProviderApiKey(provider: ByokProvider, apiKey: string): Promise<ValidationResult> {
   const normalized = apiKey.trim();
   if (!normalized) {
@@ -110,7 +144,7 @@ export async function validateProviderApiKey(provider: ByokProvider, apiKey: str
     return validateCohere(normalized);
   }
   if (provider === 'aizolo') {
-    return validateOpenAICompatible('aizolo', normalized);
+    return validateAizolo(normalized);
   }
   return validateOpenAICompatible(provider, normalized);
 }
