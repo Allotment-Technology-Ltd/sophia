@@ -437,3 +437,11 @@ export const adminRestormelGateway = pgTable('admin_restormel_gateway', {
   updatedByUid: text('updated_by_uid')
 });
 
+/** Per-phase Restormel route UUIDs chosen in admin UI (`ingestion_extraction`, …); overrides env when set. */
+export const adminIngestionRestormelRouteBindings = pgTable('admin_ingestion_restormel_route_bindings', {
+  id: text('id').primaryKey(),
+  bindings: jsonb('bindings').$type<Record<string, string>>().notNull().default({}),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedByUid: text('updated_by_uid')
+});
+

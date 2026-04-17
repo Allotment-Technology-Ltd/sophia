@@ -21,6 +21,10 @@ vi.mock('$lib/server/vertex', () => ({
   buildExtractionOpenAiCompatibleRoute: mockBuildExtractionOpenAiCompatibleRoute
 }));
 
+vi.mock('$lib/server/ingestionRouteBindings', () => ({
+  getStoredRouteIdForIngestionStage: vi.fn().mockResolvedValue(undefined)
+}));
+
 describe('planIngestionStage', () => {
   beforeEach(() => {
     vi.resetModules();

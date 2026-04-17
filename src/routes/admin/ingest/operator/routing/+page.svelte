@@ -17,6 +17,11 @@
 
   let { data } = $props();
   const restormelEnvironmentId = $derived(data.restormelEnvironmentId ?? 'production');
+  const embeddingRuntime = $derived(
+    data.embeddingRuntime as
+      | { providerName: string; documentModel: string; modelLabel: string; dimensions: number }
+      | undefined
+  );
 
   type RouteRow = IngestionRouteLike & {
     name?: string | null;
@@ -75,8 +80,17 @@
     { value: 'ingestion_grouping', label: 'ingestion_grouping' },
     { value: 'ingestion_validation', label: 'ingestion_validation' },
     { value: 'ingestion_remediation', label: 'ingestion_remediation' },
+    { value: 'ingestion_embedding', label: 'ingestion_embedding' },
     { value: 'ingestion_json_repair', label: 'ingestion_json_repair' }
   ];
+
+  /** Select value when no Neon override — workers use Keys route metadata + env, then discover. */
+  const ROUTE_AUTO = '__auto__';
+
+  /** Neon-persisted route UUID per admin stage key, or null = auto. */
+  let routeBindingOverrideByStage = $state<Record<string, string | null>>({});
+  let routeBindingsDbAvailable = $state(true);
+  let routeBindingsMessage = $state('');
 
   const PHASE_PIN_ROWS: { key: OperatorPhaseKey; label: string; hint: string }[] = [
     { key: 'EXTRACTION', label: 'Extraction', hint: 'Use auto to follow Restormel resolve + pins below for OpenAI-compatible FT.' },
@@ -160,14 +174,16 @@
     err = '';
     try {
       const h = await authHeaders();
-      const [rRes, cRes, gRes] = await Promise.all([
+      const [rRes, cRes, gRes, bRes] = await Promise.all([
         fetch('/api/admin/ingestion-routing/routes', { headers: h }),
         fetch('/api/admin/ingestion-routing/model-catalog', { headers: h }),
-        fetch('/api/admin/ingestion-routing/gateway', { headers: h })
+        fetch('/api/admin/ingestion-routing/gateway', { headers: h }),
+        fetch('/api/admin/ingestion-routing/route-bindings', { headers: h })
       ]);
       const rBody = await rRes.json().catch(() => ({}));
       const cBody = await cRes.json().catch(() => ({}));
       const gBody = await gRes.json().catch(() => ({}));
+      const bBody = await bRes.json().catch(() => ({}));
       if (!rRes.ok) throw new Error(typeof rBody.error === 'string' ? rBody.error : 'Routes failed');
       if (!cRes.ok) throw new Error(typeof cBody.error === 'string' ? cBody.error : 'Catalog failed');
       if (gRes.ok && gBody.summary && typeof gBody.summary === 'object') {
@@ -176,18 +192,33 @@
       } else {
         gatewaySummary = null;
       }
+      routeBindingsDbAvailable = bRes.ok && bBody.databaseAvailable !== false;
+      const serverBindings =
+        bRes.ok && bBody.bindings && typeof bBody.bindings === 'object'
+          ? (bBody.bindings as Record<string, string>)
+          : {};
       routes = Array.isArray(rBody.routes) ? (rBody.routes as RouteRow[]) : [];
       catalog = Array.isArray(cBody.entries) ? (cBody.entries as CatalogEntry[]) : [];
 
       const ingestOnly = routes.filter(
         (r) => (r.workload ?? '').trim().toLowerCase() === 'ingestion'
       );
+      const nextOverride: Record<string, string | null> = {};
+      for (const row of pipelineStages) {
+        const s = serverBindings[row.key];
+        nextOverride[row.key] = typeof s === 'string' && s.trim() ? s.trim() : null;
+      }
+      routeBindingOverrideByStage = nextOverride;
       const needSteps: string[] = [];
       for (const row of pipelineStages) {
-        const hit = resolveRouteForStage(ingestOnly, row.key, null);
-        if (hit?.id) needSteps.push(hit.id);
+        const o = nextOverride[row.key];
+        const eff =
+          typeof o === 'string' && o.trim()
+            ? o.trim()
+            : resolveRouteForStage(ingestOnly, row.key, null)?.id ?? '';
+        if (eff) needSteps.push(eff);
       }
-      await loadStepsForRoutes(needSteps);
+      await loadStepsForRoutes([...new Set(needSteps)]);
     } catch (e) {
       err = e instanceof Error ? e.message : String(e);
     } finally {
@@ -324,6 +355,64 @@
     }
   }
 
+  function sortedIngestionRoutesForPicker(list: RouteRow[]): RouteRow[] {
+    return [...list].sort((a, b) => {
+      const sa = (a.stage ?? '').trim().length > 0 ? 1 : 0;
+      const sb = (b.stage ?? '').trim().length > 0 ? 1 : 0;
+      if (sa !== sb) return sb - sa;
+      return (a.name ?? a.id).localeCompare(b.name ?? b.id, undefined, { sensitivity: 'base' });
+    });
+  }
+
+  function effectiveRouteIdForStage(stageKey: string): string {
+    const o = routeBindingOverrideByStage[stageKey];
+    if (typeof o === 'string' && o.trim()) return o.trim();
+    return resolveRouteForStage(ingestionRoutes, stageKey, null)?.id ?? '';
+  }
+
+  function bindingSelectValue(stageKey: string): string {
+    const o = routeBindingOverrideByStage[stageKey];
+    if (typeof o === 'string' && o.trim()) return o.trim();
+    return ROUTE_AUTO;
+  }
+
+  async function onPickRouteForStage(stageKey: string, raw: string) {
+    const nextOverride = raw === ROUTE_AUTO ? null : raw;
+    routeBindingOverrideByStage = { ...routeBindingOverrideByStage, [stageKey]: nextOverride };
+    routeBindingsMessage = '';
+    const eff = effectiveRouteIdForStage(stageKey);
+    if (!routeBindingsDbAvailable) {
+      routeBindingsMessage =
+        'DATABASE_URL unavailable here — bindings are not saved; configure RESTORMEL_INGEST_*_ROUTE_ID on workers or use an environment with Neon.';
+      await loadStepsForRoutes([eff].filter(Boolean));
+      return;
+    }
+    try {
+      const h = await authHeaders();
+      const res = await fetch('/api/admin/ingestion-routing/route-bindings', {
+        method: 'PUT',
+        headers: { ...h, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bindings: { [stageKey]: nextOverride } })
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof payload.error === 'string' ? payload.error : `HTTP ${res.status}`);
+      }
+      if (payload.bindings && typeof payload.bindings === 'object') {
+        const merged = payload.bindings as Record<string, string>;
+        const next: Record<string, string | null> = {};
+        for (const row of pipelineStages) {
+          const v = merged[row.key];
+          next[row.key] = typeof v === 'string' && v.trim() ? v.trim() : null;
+        }
+        routeBindingOverrideByStage = next;
+      }
+      await loadStepsForRoutes([effectiveRouteIdForStage(stageKey)].filter(Boolean));
+    } catch (e) {
+      routeBindingsMessage = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   async function clearGatewayOverride() {
     gatewayMessage = '';
     gatewayBusy = true;
@@ -364,11 +453,11 @@
   <p class="rt-lead">
     Before you run ingestion, each phase resolves a <strong>Restormel route</strong> (workload
     <code class="rt-code">ingestion</code>, stage <code class="rt-code">ingestion_*</code>) or a shared ingestion fallback.
-    This screen shows which route applies per phase, the <strong>model chain</strong> on that route, and
-    <strong>approximate list pricing</strong> from the merged catalog. You can <strong>create</strong> routes here (proxied to
-    Keys with the gateway key) or use the Keys dashboard, MCP, or CLI; then add steps, publish, and run resolve. Use
-    <strong>Per-phase worker model overrides</strong> below to pin fine-tuned or custom models for each stage before you
-    start runs from the legacy wizard or durable jobs.
+    <strong>Phases → routes → models</strong> below saves per-phase route UUIDs to <strong>Neon</strong> (workers read them
+    with <code class="rt-code">DATABASE_URL</code>; they override <code class="rt-code">RESTORMEL_INGEST_*_ROUTE_ID</code>
+    when set). You can <strong>create</strong> routes here (proxied to Keys) or in the Keys dashboard; then add steps,
+    publish, and run resolve. Use <strong>Per-phase worker model overrides</strong> for fine-tuned or custom models when
+    you start runs from the legacy wizard or durable jobs.
   </p>
 
   <section class="rt-sec" aria-labelledby="rt-gateway">
@@ -624,6 +713,28 @@
 
   <section class="rt-sec" aria-labelledby="rt-table">
     <h2 id="rt-table" class="rt-h2">Phases → routes → models</h2>
+    <p class="rt-p">
+      Pick a <strong>Restormel route</strong> per phase to pin which UUID is passed to
+      <code class="rt-code">POST /resolve</code> on workers (saved in <strong>Neon</strong>, overrides
+      <code class="rt-code">RESTORMEL_INGEST_*_ROUTE_ID</code> when set). Choose
+      <strong>Auto</strong> to clear the Neon override and fall back to env + Keys discovery.
+    </p>
+    {#if routeBindingsMessage}
+      <p class={routeBindingsMessage.includes('DATABASE_URL') ? 'rt-muted rt-p' : 'rt-err rt-p'} role="status">
+        {routeBindingsMessage}
+      </p>
+    {/if}
+    {#if embeddingRuntime}
+      <p class="rt-p rt-embed-note">
+        <strong>Embed (vectors):</strong> claim embeddings run in
+        <code class="rt-code">scripts/ingest.ts</code> via
+        <code class="rt-code">{embeddingRuntime.providerName}</code> ·
+        <code class="rt-code">{embeddingRuntime.documentModel}</code> ({embeddingRuntime.dimensions}-dim). That keeps
+        corpus dimensions consistent; it does not use Restormel AAIF resolve today. A Keys route with
+        <code class="rt-code">stage=ingestion_embedding</code> is optional (catalog / health checks); the chain shown
+        here does not change vector generation unless we add a future Restormel embedding executor.
+      </p>
+    {/if}
     {#if loading && !err}
       <p class="rt-muted">Loading routes and catalog…</p>
     {:else}
@@ -639,7 +750,8 @@
           </thead>
           <tbody>
             {#each pipelineStages as row (row.key)}
-              {@const route = resolveRouteForStage(ingestionRoutes, row.key, null)}
+              {@const effId = effectiveRouteIdForStage(row.key)}
+              {@const route = effId ? ingestionRoutes.find((r) => r.id === effId) ?? null : null}
               {@const steps = route?.id ? stepsByRouteId[route.id] ?? [] : []}
               {@const pin = PIN_SUFFIX[row.key]}
               <tr>
@@ -648,10 +760,26 @@
                   <code class="rt-code rt-small">{row.key}</code>
                 </td>
                 <td class="rt-route">
-                  {#if route}
-                    <span class="rt-muted">{route.name ?? '—'}</span>
-                    <code class="rt-code rt-small" title={route.id}>{route.id.slice(0, 10)}…</code>
-                    {#if route.isPublished === false}
+                  {#if ingestionRoutes.length === 0}
+                    <span class="rt-warn">No ingestion routes</span>
+                  {:else if route || effId}
+                    <label class="rt-route-label" for="rt-route-{row.key}">Route</label>
+                    <select
+                      id="rt-route-{row.key}"
+                      class="rt-input rt-route-select"
+                      value={bindingSelectValue(row.key)}
+                      onchange={(e) =>
+                        void onPickRouteForStage(row.key, (e.currentTarget as HTMLSelectElement).value)}
+                    >
+                      <option value={ROUTE_AUTO}>Auto (env + Keys discover)</option>
+                      {#each sortedIngestionRoutesForPicker(ingestionRoutes) as opt (opt.id)}
+                        <option value={opt.id}>
+                          {opt.name?.trim() || opt.id}
+                          {(opt.stage ?? '').trim() ? ` · ${opt.stage}` : ' · (shared)'}
+                        </option>
+                      {/each}
+                    </select>
+                    {#if route?.isPublished === false}
                       <span class="rt-badge">draft</span>
                     {/if}
                   {:else}
@@ -659,6 +787,13 @@
                   {/if}
                 </td>
                 <td class="rt-models">
+                  {#if row.key === 'ingestion_embedding' && embeddingRuntime}
+                    <p class="rt-embed-runtime">
+                      <strong>Worker (actual):</strong>
+                      {embeddingRuntime.providerName} · {embeddingRuntime.documentModel}
+                      <span class="rt-muted">({embeddingRuntime.dimensions}-dim)</span>
+                    </p>
+                  {/if}
                   {#if route && steps.length === 0}
                     <span class="rt-muted">No steps loaded (save/publish route in Keys).</span>
                   {:else if steps.length > 0}
@@ -870,7 +1005,34 @@
     font-weight: 600;
   }
   .rt-route {
-    max-width: 220px;
+    max-width: 280px;
+  }
+  .rt-route-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .rt-route-select {
+    width: 100%;
+    max-width: 260px;
+    margin-top: 4px;
+  }
+  .rt-embed-note {
+    font-size: 0.86rem;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+    background: color-mix(in srgb, var(--color-surface) 96%, var(--color-border));
+  }
+  .rt-embed-runtime {
+    margin: 0 0 8px;
+    font-size: 0.84rem;
   }
   .rt-models {
     min-width: 280px;

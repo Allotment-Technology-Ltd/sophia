@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
 import { query as surrealQuery } from '$lib/server/db';
+import { getStoredRouteIdForBindingKey } from '$lib/server/ingestionRouteBindings';
 import { resolveRouteForStage } from '$lib/utils/ingestionRouting';
 import {
   RESTORMEL_ENVIRONMENT_ID,
@@ -71,7 +72,8 @@ export const GET: RequestHandler = async ({ locals }) => {
       workload: 'ingestion'
     });
     const routes = Array.isArray(routesResp?.data) ? routesResp.data : [];
-    const embeddingRoute = resolveRouteForStage(routes, 'ingestion_embedding');
+    const prefEmbed = await getStoredRouteIdForBindingKey('ingestion_embedding');
+    const embeddingRoute = resolveRouteForStage(routes, 'ingestion_embedding', prefEmbed);
     if (embeddingRoute?.id) {
       const stepsResp = await restormelListRouteSteps(embeddingRoute.id);
       const steps = Array.isArray(stepsResp?.data) ? stepsResp.data : [];

@@ -5,6 +5,7 @@ import {
   CANONICAL_INGESTION_PRIMARY_MODELS,
   type IngestionLlmStageKey
 } from '../../ingestionCanonicalPipeline.js';
+import { getStoredRouteIdForIngestionStage } from '../ingestionRouteBindings.js';
 import { EMBEDDING_MODEL, getEmbeddingProvider } from '../embeddings.js';
 import {
   buildExtractionOpenAiCompatibleRoute,
@@ -183,6 +184,14 @@ function readPinnedModel(
  * When unset, resolve omits routeId; Restormel picks a published route by workload + stage
  * (dedicated ingestion_<substage> first, then shared ingestion with empty stage). Keys ≥0.2.11.
  */
+async function resolveRouteBindingForPlan(stage: IngestionStage): Promise<{ routeId?: string }> {
+  const fromNeon = await getStoredRouteIdForIngestionStage(stage);
+  if (fromNeon?.trim()) {
+    return { routeId: fromNeon.trim() };
+  }
+  return stageRouteBindingFromEnv(stage);
+}
+
 function stageRouteBindingFromEnv(stage: IngestionStage): { routeId?: string } {
   if (stage === 'validation') {
     const dedicated =
@@ -394,7 +403,7 @@ export async function planIngestionStage(
     };
   }
 
-  const routeIdForResolve = stageRouteBindingFromEnv(stage).routeId?.trim() || undefined;
+  const routeIdForResolve = (await resolveRouteBindingForPlan(stage)).routeId?.trim() || undefined;
 
   if (stage === 'extraction') {
     const extractionOverride = buildExtractionOpenAiCompatibleRoute();
@@ -550,7 +559,7 @@ export async function planIngestionStageWithExplicitModel(
   }
 
   const request = buildStageRequest(stage, context);
-  const routeIdForResolve = stageRouteBindingFromEnv(stage).routeId?.trim() || undefined;
+  const routeIdForResolve = (await resolveRouteBindingForPlan(stage)).routeId?.trim() || undefined;
 
   const route =
     stage === 'extraction'
