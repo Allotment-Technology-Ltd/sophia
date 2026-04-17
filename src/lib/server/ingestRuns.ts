@@ -148,8 +148,16 @@ export interface IngestRunPayload {
     remediationMaxClaims?: number;
     /** When false, sets `INGEST_REMEDIATION=0` for the worker. */
     ingestRemediationEnabled?: boolean;
-    /** `INGEST_REMEDIATION_REVALIDATE=1` for a second validation pass after repair. */
+    /**
+     * `INGEST_REMEDIATION_REVALIDATE=1` / `full` for a **full** second validation pass after repair (expensive).
+     * Omitted: ingest default (off); targeted revalidation may still run unless disabled separately.
+     */
     ingestRemediationRevalidate?: boolean;
+    /**
+     * When false, sets `INGEST_REMEDIATION_TARGETED_REVALIDATE=0` (skip default targeted revalidation batches
+     * after claim repair). Omitted: ingest default (targeted on).
+     */
+    ingestRemediationTargetedRevalidate?: boolean;
     /** `INGEST_REMEDIATION_FORCE_RELATIONS_RERUN=1`. */
     ingestRemediationForceRelationsRerun?: boolean;
     /**
@@ -168,6 +176,10 @@ export interface IngestRunPayload {
      * When `forceStage` is `validating`, {@link sanitizeIngestionJobWorkerDefaults} defaults this to `resume` unless set.
      */
     forceStageMissingCheckpoint?: 'error' | 'full' | 'resume';
+    /** When set, maps to `INGEST_GROUPING_AUTO_TUNE` (`true` = `1`). Omitted: ingest default (on). */
+    groupingAutoTune?: boolean;
+    /** When set, maps to `INGEST_RELATIONS_AUTO_TUNE` (`true` = `1`). Omitted: ingest default (on). */
+    relationsAutoTune?: boolean;
   };
   model_chain: {
     extract: string;
@@ -189,6 +201,11 @@ export interface IngestRunPayload {
    * Worker skips `INGEST_CATALOG_ROUTING_JSON_B64` so routing is Restormel + canonical + finetune filter only.
    */
   ingestion_job_id?: string;
+  /**
+   * Operator tag from durable job creation (experiment vs re-ingest, etc.), copied from the job's
+   * `job_created` event. Stored on Neon `ingest_runs.payload` for reporting; not mapped to worker env.
+   */
+  run_reason?: string;
 }
 
 /** Defaults merged into ingest.ts child env when the host has not set these variables (durable runs). */
@@ -243,9 +260,12 @@ function batchOverridesToEnv(
     remediationMaxClaims,
     ingestRemediationEnabled,
     ingestRemediationRevalidate,
+    ingestRemediationTargetedRevalidate,
     ingestRemediationForceRelationsRerun,
     forceReingest,
-    forceStageMissingCheckpoint
+    forceStageMissingCheckpoint,
+    groupingAutoTune,
+    relationsAutoTune
   } = overrides;
 
   const asPositiveInt = (v: unknown): number | null => {
@@ -358,6 +378,9 @@ function batchOverridesToEnv(
   if (typeof ingestRemediationRevalidate === 'boolean') {
     out.INGEST_REMEDIATION_REVALIDATE = ingestRemediationRevalidate ? '1' : '0';
   }
+  if (typeof ingestRemediationTargetedRevalidate === 'boolean') {
+    out.INGEST_REMEDIATION_TARGETED_REVALIDATE = ingestRemediationTargetedRevalidate ? '1' : '0';
+  }
   if (typeof ingestRemediationForceRelationsRerun === 'boolean') {
     out.INGEST_REMEDIATION_FORCE_RELATIONS_RERUN = ingestRemediationForceRelationsRerun ? '1' : '0';
   }
@@ -371,6 +394,13 @@ function batchOverridesToEnv(
     forceStageMissingCheckpoint === 'resume'
   ) {
     out.INGEST_FORCE_STAGE_MISSING_CHECKPOINT = forceStageMissingCheckpoint;
+  }
+
+  if (typeof groupingAutoTune === 'boolean') {
+    out.INGEST_GROUPING_AUTO_TUNE = groupingAutoTune ? '1' : '0';
+  }
+  if (typeof relationsAutoTune === 'boolean') {
+    out.INGEST_RELATIONS_AUTO_TUNE = relationsAutoTune ? '1' : '0';
   }
 
   return out;

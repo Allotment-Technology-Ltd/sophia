@@ -22,7 +22,7 @@ import * as path from 'path';
 import { Surreal } from 'surrealdb';
 import { signinSurrealWithFallback } from './lib/surrealSignin.js';
 import { resolveSurrealRpcUrl } from '../src/lib/server/surrealEnv.ts';
-import { generateText } from 'ai';
+import { generateObject, generateText } from 'ai';
 import {
 	estimateIngestLlmUsageUsd,
 	INGEST_EMBED_USD_PER_MILLION_CHARS
@@ -162,11 +162,23 @@ import {
 	GROUPING_SYSTEM,
 	GROUPING_USER,
 	GroupingOutputSchema,
+	GroupingStructuredRootSchema,
 	type Argument,
 	type GroupingOutput
 } from '../src/lib/server/prompts/grouping.js';
-import { normalizeGroupingPayload } from '../src/lib/server/ingestion/stages/grouping-helpers.js';
+import {
+	analyzeGroupingReferenceHealth,
+	describePreGroupingGraphLint,
+	filterGroupingOutputToKnownClaimPositions,
+	normalizeGroupingPayload
+} from '../src/lib/server/ingestion/stages/grouping-helpers.js';
+import { resolveGroupingAutoBatchTarget } from '../src/lib/server/ingestion/resolveGroupingAutoBatchTarget.js';
+import { resolveRelationsAutoBatchTarget } from '../src/lib/server/ingestion/resolveRelationsAutoBatchTarget.js';
 import { normalizeExtractionPayload } from '../src/lib/server/ingestion/stages/extraction-helpers.js';
+import {
+	summarizeRemediationRevalidationDiff,
+	type RemediationRevalidationDiff
+} from '../src/lib/server/ingestion/stages/validation-helpers.js';
 import { coerceIngestDomainLabel } from '../src/lib/server/prompts/domainZod.js';
 
 import {
@@ -182,6 +194,7 @@ import {
 } from '../src/lib/server/prompts/remediation.js';
 import {
 	dropRelationsByValidation,
+	filterValidationBatchesTouchingClaimPositions,
 	selectRemediationPositions,
 	sliceSourceAroundClaim,
 	shouldRerunRelationsAfterRemediation
@@ -258,6 +271,27 @@ const INGEST_PREFILTER_ENABLED = process.env.INGEST_PREFILTER_ENABLED !== 'false
 const INGEST_VALIDATION_SAMPLE_RATE = Math.max(0, Math.min(1,
 	Number(process.env.INGEST_VALIDATION_SAMPLE_RATE || '1.0')
 ));
+
+function parseUint32Env(raw: string | undefined): number | null {
+	const t = (raw ?? '').trim();
+	if (!t) return null;
+	const n = Number(t);
+	if (!Number.isFinite(n)) return null;
+	return n >>> 0;
+}
+
+/** When set with `INGEST_VALIDATION_SAMPLE_RATE` below 1, batch subsampling order is deterministic (BML / regression). */
+const INGEST_VALIDATION_SAMPLE_SEED = parseUint32Env(process.env.INGEST_VALIDATION_SAMPLE_SEED);
+
+function mulberry32(seed: number): () => number {
+	let a = seed >>> 0;
+	return () => {
+		a += 0x6d2b79f5;
+		let t = Math.imul(a ^ (a >>> 15), a | 1);
+		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+}
 
 /** Default `cli` respects `--validate`; `off` skips validation; `full`/`sampled` force validation (sampled uses INGEST_VALIDATION_SAMPLE_RATE). */
 function resolveShouldValidate(cliFlag: boolean): boolean {
@@ -347,9 +381,10 @@ const VALIDATION_BATCH_SOURCE_MAX_CHARS =
 	parsePositiveInt(process.env.VALIDATION_BATCH_SOURCE_MAX_CHARS) ?? 24_000;
 const VALIDATION_BATCH_SOURCE_CONTEXT_CHARS =
 	parsePositiveInt(process.env.VALIDATION_BATCH_SOURCE_CONTEXT_CHARS) ?? 800;
+/** Default 3: BML (2026-04) on Descartes lowered total wall vs 2.2 with same validation batch count — override with VALIDATION_TOKEN_ESTIMATE_MULTIPLIER. */
 const VALIDATION_TOKEN_ESTIMATE_MULTIPLIER = Math.max(
 	1,
-	Number(process.env.VALIDATION_TOKEN_ESTIMATE_MULTIPLIER || '2.2')
+	Number(process.env.VALIDATION_TOKEN_ESTIMATE_MULTIPLIER || '3')
 );
 /** Post-validation repair: enabled when --validate unless INGEST_REMEDIATION=0 */
 function ingestRemediationEnabled(): boolean {
@@ -357,22 +392,41 @@ function ingestRemediationEnabled(): boolean {
 	if (v === '0' || v === 'false' || v === 'no') return false;
 	return true;
 }
+/** Default 85 (2026-04): stricter repair queue vs legacy 80 — override with INGEST_REMEDIATION_FAITHFULNESS_MIN. */
 const INGEST_REMEDIATION_FAITHFULNESS_MIN = Math.max(
 	0,
-	Math.min(100, Number(process.env.INGEST_REMEDIATION_FAITHFULNESS_MIN ?? '80') || 80)
+	Math.min(100, Number(process.env.INGEST_REMEDIATION_FAITHFULNESS_MIN ?? '85') || 85)
 );
+/** Default 8: latency/cost guardrail (BML 2026-04); raise via INGEST_REMEDIATION_MAX_CLAIMS when more repairs are worth the spend. */
 const INGEST_REMEDIATION_MAX_CLAIMS = (() => {
-	const raw = Number(process.env.INGEST_REMEDIATION_MAX_CLAIMS ?? '16');
+	const raw = Number(process.env.INGEST_REMEDIATION_MAX_CLAIMS ?? '8');
 	if (!Number.isFinite(raw) || raw <= 0) return 24;
 	return Math.max(1, Math.trunc(raw));
 })();
+/** Default 85 (2026-04): align with stricter validation — override with INGEST_REMEDIATION_VALIDITY_MIN. */
 const INGEST_REMEDIATION_VALIDITY_MIN = Math.max(
 	0,
-	Math.min(100, Number(process.env.INGEST_REMEDIATION_VALIDITY_MIN ?? '80') || 80)
+	Math.min(100, Number(process.env.INGEST_REMEDIATION_VALIDITY_MIN ?? '85') || 85)
 );
+/** Full second validation pass on the post-repair graph (expensive). */
 const INGEST_REMEDIATION_REVALIDATE =
 	(process.env.INGEST_REMEDIATION_REVALIDATE ?? '').trim().toLowerCase() === '1' ||
-	(process.env.INGEST_REMEDIATION_REVALIDATE ?? '').trim().toLowerCase() === 'true';
+	(process.env.INGEST_REMEDIATION_REVALIDATE ?? '').trim().toLowerCase() === 'true' ||
+	(process.env.INGEST_REMEDIATION_REVALIDATE ?? '').trim().toLowerCase() === 'full';
+/**
+ * When true (default), after claim repair re-run only validation batches that touch repaired positions,
+ * then merge — not a full-graph second pass. Set `INGEST_REMEDIATION_TARGETED_REVALIDATE=0` to skip.
+ * Superseded when `INGEST_REMEDIATION_REVALIDATE` / `force_revalidate` (full pass) is on.
+ */
+const INGEST_REMEDIATION_TARGETED_REVALIDATE = (() => {
+	const v = (process.env.INGEST_REMEDIATION_TARGETED_REVALIDATE ?? '').trim().toLowerCase();
+	if (v === '0' || v === 'false' || v === 'no') return false;
+	return true;
+})();
+/** Per-claim/relation/argument lines after `[METRIC] remediation_revalidation_diff`. */
+const INGEST_REMEDIATION_REVALIDATION_DETAIL =
+	(process.env.INGEST_REMEDIATION_REVALIDATION_DETAIL ?? '').trim().toLowerCase() === '1' ||
+	(process.env.INGEST_REMEDIATION_REVALIDATION_DETAIL ?? '').trim().toLowerCase() === 'true';
 const INGEST_REMEDIATION_FORCE_RELATIONS_RERUN =
 	(process.env.INGEST_REMEDIATION_FORCE_RELATIONS_RERUN ?? '').trim().toLowerCase() === '1' ||
 	(process.env.INGEST_REMEDIATION_FORCE_RELATIONS_RERUN ?? '').trim().toLowerCase() === 'true';
@@ -560,6 +614,12 @@ interface IngestTimingPayload {
 	stage_output_tokens: Record<string, number>;
 	/** Vertex embedding path: characters counted for billing (`trackEmbeddingCost`); not LLM tokens. */
 	vertex_embed_chars: number;
+	/** Grouping batches that completed via `generateObject` (schema-constrained) without text fallback. */
+	grouping_structured_object_calls: number;
+	/** Grouping batches where structured object generation failed and `generateText` was used. */
+	grouping_structured_object_fallbacks: number;
+	/** Stage 6: wall ms for Surreal relation record `RELATE` subsection only (parallel chunks). */
+	store_relation_records_wall_ms: number;
 	/** Set when logging the final summary line (wall clock for entire run). */
 	total_wall_ms?: number;
 	/** Stage 6 skipped: see `INGEST_SKIP_STORE_WHEN_NO_GRAPH_CHANGES` + `skipped_surreal_store_reason`. */
@@ -769,7 +829,10 @@ function createEmptyTiming(): IngestTimingPayload {
 		total_output_tokens: 0,
 		stage_input_tokens: {},
 		stage_output_tokens: {},
-		vertex_embed_chars: 0
+		vertex_embed_chars: 0,
+		grouping_structured_object_calls: 0,
+		grouping_structured_object_fallbacks: 0,
+		store_relation_records_wall_ms: 0
 	};
 }
 
@@ -831,6 +894,12 @@ function logIngestTimingHumanBlock(t: IngestTimingPayload, totalWallMs: number):
 			: '',
 		t.vertex_embed_chars > 0
 			? `    ${'Vertex embed chars'.padEnd(26)} ${t.vertex_embed_chars.toLocaleString()}`
+			: '',
+		t.grouping_structured_object_calls > 0 || t.grouping_structured_object_fallbacks > 0
+			? `    ${'Grouping decode'.padEnd(26)} structured_ok=${t.grouping_structured_object_calls} text_fallback=${t.grouping_structured_object_fallbacks}`
+			: '',
+		t.store_relation_records_wall_ms > 0
+			? `    ${'Store · relation RELATE'.padEnd(26)} ${formatDuration(t.store_relation_records_wall_ms)}`
 			: ''
 	].filter((l) => l.length > 0 && !l.match(/^[\s]*$/));
 	console.log(lines.join('\n'));
@@ -1570,6 +1639,42 @@ function ingestGroupingAdaptiveEnabled(): boolean {
 	return v !== '0' && v !== 'false' && v !== 'off' && v !== 'no';
 }
 
+/** Default on: Stage 3 may lower batch target using claim-graph heuristics (see `resolveGroupingAutoBatchTarget`). Set `INGEST_GROUPING_AUTO_TUNE=0` to disable. */
+function ingestGroupingAutoTuneEnabled(): boolean {
+	const v = (process.env.INGEST_GROUPING_AUTO_TUNE ?? '1').trim().toLowerCase();
+	return v !== '0' && v !== 'false' && v !== 'off' && v !== 'no';
+}
+
+function ingestGroupingAutoCapTokens(): number {
+	return parsePositiveInt(process.env.INGEST_GROUPING_AUTO_CAP_TOKENS) ?? 24_000;
+}
+
+function ingestGroupingAutoLargeClaimThreshold(): number {
+	return parsePositiveInt(process.env.INGEST_GROUPING_AUTO_LARGE_CLAIM_THRESHOLD) ?? 100;
+}
+
+/** Default on: Stage 2 may lower relations batch target on large graphs (see `resolveRelationsAutoBatchTarget`). Set `INGEST_RELATIONS_AUTO_TUNE=0` to disable. */
+function ingestRelationsAutoTuneEnabled(): boolean {
+	const v = (process.env.INGEST_RELATIONS_AUTO_TUNE ?? '1').trim().toLowerCase();
+	return v !== '0' && v !== 'false' && v !== 'off' && v !== 'no';
+}
+
+function ingestRelationsAutoCapTokens(): number {
+	return parsePositiveInt(process.env.INGEST_RELATIONS_AUTO_CAP_TOKENS) ?? 8_000;
+}
+
+function ingestRelationsAutoLargeClaimThreshold(): number {
+	return parsePositiveInt(process.env.INGEST_RELATIONS_AUTO_LARGE_CLAIM_THRESHOLD) ?? 80;
+}
+
+function ingestRelationsAutoLargeTotalClaimJsonTokensThreshold(): number {
+	return parsePositiveInt(process.env.INGEST_RELATIONS_AUTO_LARGE_TOTAL_JSON_TOKENS) ?? 60_000;
+}
+
+function ingestRelationsAutoMinTargetTokens(): number {
+	return parsePositiveInt(process.env.INGEST_RELATIONS_AUTO_MIN_TARGET_TOKENS) ?? 4_000;
+}
+
 function createGroupingAdaptiveState(initialTargetTokens: number): GroupingAdaptiveState {
 	return {
 		effectiveTargetTokens: initialTargetTokens,
@@ -2058,35 +2163,6 @@ function assertEmbeddingVectorsMatchConfig(vectors: number[][], label: string): 
 	}
 }
 
-function analyzeGroupingReferenceHealth(arguments_: GroupingOutput): {
-	totalReferences: number;
-	uniquePositions: number;
-	positionOneReferences: number;
-	positionOneShare: number;
-	collapsed: boolean;
-} {
-	const positions: number[] = [];
-	for (const argument of arguments_) {
-		for (const claimRef of argument.claims) {
-			positions.push(claimRef.position_in_source);
-		}
-	}
-	const totalReferences = positions.length;
-	const uniquePositions = new Set(positions).size;
-	const positionOneReferences = positions.filter((position) => position === 1).length;
-	const positionOneShare = totalReferences > 0 ? positionOneReferences / totalReferences : 0;
-	const collapsed =
-		totalReferences >= 20 &&
-		(uniquePositions <= 3 || (positionOneShare >= 0.8 && positionOneReferences >= 20));
-	return {
-		totalReferences,
-		uniquePositions,
-		positionOneReferences,
-		positionOneShare,
-		collapsed
-	};
-}
-
 function normalizeExtractionDomain(value: unknown): string {
 	return coerceIngestDomainLabel(value);
 }
@@ -2512,12 +2588,132 @@ async function callStageModel(params: {
 			const abortTimer = setTimeout(() => {
 				abortController.abort();
 			}, budget.timeoutMs);
-			let result: Awaited<ReturnType<typeof generateText>>;
 			try {
+				if (stage === 'grouping') {
+					const structuredSuffix = `\n\nReturn a single JSON object (no markdown) with exactly this structure: {"named_arguments":[ ... ]} where "named_arguments" is the array of named-argument objects matching the system specification.`;
+					const structuredUser = `${userMessage}${structuredSuffix}`;
+					const structuredBase = foldSystem
+						? {
+								model: activePlan.route.model,
+								messages: [
+									{
+										role: 'user' as const,
+										content: `${systemPrompt}\n\n${structuredUser}`
+									}
+								],
+								maxOutputTokens: maxTokens,
+								schema: GroupingStructuredRootSchema,
+								abortSignal: abortController.signal
+							}
+						: {
+								model: activePlan.route.model,
+								system: systemPrompt,
+								messages: [{ role: 'user' as const, content: structuredUser }],
+								maxOutputTokens: maxTokens,
+								schema: GroupingStructuredRootSchema,
+								abortSignal: abortController.signal
+							};
+					const structParams = omitTemperature
+						? structuredBase
+						: { ...structuredBase, temperature: 0.1 as const };
+					try {
+						const objResult = await runWithIngestTelemetryHeartbeat({
+							stage,
+							work: () => generateObject(structParams as Parameters<typeof generateObject>[0])
+						});
+						if (objResult.finishReason === 'length') {
+							throw new Error('Model output was truncated (max_tokens reached)');
+						}
+						if (activeIngestTiming) {
+							const wall = Date.now() - callStarted;
+							activeIngestTiming.model_calls[stage] =
+								(activeIngestTiming.model_calls[stage] ?? 0) + 1;
+							activeIngestTiming.model_call_wall_ms[stage] =
+								(activeIngestTiming.model_call_wall_ms[stage] ?? 0) + wall;
+							activeIngestTiming.stage_models[stage] = `${routingProvider}/${activePlan.model}`;
+						}
+						const wallMs = Date.now() - callStarted;
+						emitIngestTelemetry({
+							event: 'model_call_end',
+							stage,
+							provider: routingProvider,
+							model: activePlan.model,
+							duration_ms: wallMs,
+							input_tokens: objResult.usage?.inputTokens ?? 0,
+							output_tokens: objResult.usage?.outputTokens ?? 0
+						});
+						const inputTokens = objResult.usage?.inputTokens ?? 0;
+						const outputTokens = objResult.usage?.outputTokens ?? 0;
+						if (activeIngestTiming) {
+							bumpStageTokens(stage, inputTokens, outputTokens);
+						}
+						ingestTpmGuard.recordUsage(routingProvider, inputTokens + outputTokens);
+						const usageCostUsd = trackReasoningCost(activePlan.model, inputTokens, outputTokens);
+						console.log(
+							`  [ROUTE] ${stage} (structured): ${activePlan.provider}/${activePlan.model} source=${activePlan.routingSource} step=${activePlan.selectedStepId ?? '—'} order=${activePlan.selectedOrderIndex ?? '—'} switch=${activePlan.switchReasonCode ?? '—'} cost~$${usageCostUsd.toFixed(4)}`
+						);
+						if ((process.env.INGEST_LLM_HEALTH_RECORD_SUCCESS || '').trim() === '1') {
+							void noteIngestModelSuccessInDb(activePlan.provider, activePlan.model);
+							void noteIngestStageModelSuccessInDb(stage, activePlan.provider, activePlan.model);
+						}
+						clearIngestCircuitSuccess(stage, activePlan.provider, activePlan.model);
+						assertStageBudget(budget, tracker);
+						if (activeIngestTiming) {
+							activeIngestTiming.grouping_structured_object_calls += 1;
+						}
+						return JSON.stringify(objResult.object.named_arguments);
+					} catch (structuredErr) {
+						console.warn(
+							`  [WARN] Grouping structured object generation failed (${structuredErr instanceof Error ? formatModelCallErrorDetails(structuredErr) : String(structuredErr)}) — falling back to JSON text`
+						);
+						if (activeIngestTiming) {
+							activeIngestTiming.grouping_structured_object_fallbacks += 1;
+						}
+					}
+				}
+
+				let result: Awaited<ReturnType<typeof generateText>>;
 				result = await runWithIngestTelemetryHeartbeat({
 					stage,
 					work: () => generateText({ ...textGenParams, abortSignal: abortController.signal })
 				});
+				if (activeIngestTiming) {
+					const wall = Date.now() - callStarted;
+					activeIngestTiming.model_calls[stage] = (activeIngestTiming.model_calls[stage] ?? 0) + 1;
+					activeIngestTiming.model_call_wall_ms[stage] =
+						(activeIngestTiming.model_call_wall_ms[stage] ?? 0) + wall;
+					activeIngestTiming.stage_models[stage] = `${routingProvider}/${activePlan.model}`;
+				}
+				const wallMs = Date.now() - callStarted;
+				emitIngestTelemetry({
+					event: 'model_call_end',
+					stage,
+					provider: routingProvider,
+					model: activePlan.model,
+					duration_ms: wallMs,
+					input_tokens: result.usage?.inputTokens ?? 0,
+					output_tokens: result.usage?.outputTokens ?? 0
+				});
+				const inputTokens = result.usage?.inputTokens ?? 0;
+				const outputTokens = result.usage?.outputTokens ?? 0;
+				if (activeIngestTiming) {
+					bumpStageTokens(stage, inputTokens, outputTokens);
+				}
+				ingestTpmGuard.recordUsage(routingProvider, inputTokens + outputTokens);
+				const usageCostUsd = trackReasoningCost(activePlan.model, inputTokens, outputTokens);
+				if (result.finishReason === 'length') {
+					throw new Error('Model output was truncated (max_tokens reached)');
+				}
+				console.log(
+					`  [ROUTE] ${stage}: ${activePlan.provider}/${activePlan.model} source=${activePlan.routingSource} step=${activePlan.selectedStepId ?? '—'} order=${activePlan.selectedOrderIndex ?? '—'} switch=${activePlan.switchReasonCode ?? '—'} cost~$${usageCostUsd.toFixed(4)}`
+				);
+				if ((process.env.INGEST_LLM_HEALTH_RECORD_SUCCESS || '').trim() === '1') {
+					void noteIngestModelSuccessInDb(activePlan.provider, activePlan.model);
+					void noteIngestStageModelSuccessInDb(stage, activePlan.provider, activePlan.model);
+				}
+				clearIngestCircuitSuccess(stage, activePlan.provider, activePlan.model);
+				assertStageBudget(budget, tracker);
+				return result.text;
 			} catch (e) {
 				if (abortController.signal.aborted) {
 					throw new Error(
@@ -2528,43 +2724,6 @@ async function callStageModel(params: {
 			} finally {
 				clearTimeout(abortTimer);
 			}
-			if (activeIngestTiming) {
-				const wall = Date.now() - callStarted;
-				activeIngestTiming.model_calls[stage] = (activeIngestTiming.model_calls[stage] ?? 0) + 1;
-				activeIngestTiming.model_call_wall_ms[stage] =
-					(activeIngestTiming.model_call_wall_ms[stage] ?? 0) + wall;
-				activeIngestTiming.stage_models[stage] = `${routingProvider}/${activePlan.model}`;
-			}
-			const wallMs = Date.now() - callStarted;
-			emitIngestTelemetry({
-				event: 'model_call_end',
-				stage,
-				provider: routingProvider,
-				model: activePlan.model,
-				duration_ms: wallMs,
-				input_tokens: result.usage?.inputTokens ?? 0,
-				output_tokens: result.usage?.outputTokens ?? 0
-			});
-			const inputTokens = result.usage?.inputTokens ?? 0;
-			const outputTokens = result.usage?.outputTokens ?? 0;
-			if (activeIngestTiming) {
-				bumpStageTokens(stage, inputTokens, outputTokens);
-			}
-			ingestTpmGuard.recordUsage(routingProvider, inputTokens + outputTokens);
-			const usageCostUsd = trackReasoningCost(activePlan.model, inputTokens, outputTokens);
-			if (result.finishReason === 'length') {
-				throw new Error('Model output was truncated (max_tokens reached)');
-			}
-			console.log(
-				`  [ROUTE] ${stage}: ${activePlan.provider}/${activePlan.model} source=${activePlan.routingSource} step=${activePlan.selectedStepId ?? '—'} order=${activePlan.selectedOrderIndex ?? '—'} switch=${activePlan.switchReasonCode ?? '—'} cost~$${usageCostUsd.toFixed(4)}`
-			);
-			if ((process.env.INGEST_LLM_HEALTH_RECORD_SUCCESS || '').trim() === '1') {
-				void noteIngestModelSuccessInDb(activePlan.provider, activePlan.model);
-				void noteIngestStageModelSuccessInDb(stage, activePlan.provider, activePlan.model);
-			}
-			clearIngestCircuitSuccess(stage, activePlan.provider, activePlan.model);
-			assertStageBudget(budget, tracker);
-			return result.text;
 		}
 
 		for (let attempt = 0; attempt <= budget.maxRetries; attempt++) {
@@ -5067,9 +5226,22 @@ async function main() {
 
 			let relationsBatchTarget = RELATIONS_BATCH_TARGET_TOKENS;
 			if (RELATIONS_BATCH_TARGET_TOKENS > 0) {
+				const relationsAuto = resolveRelationsAutoBatchTarget({
+					claims: allClaims,
+					batchTargetFromEnv: RELATIONS_BATCH_TARGET_TOKENS,
+					overlapClaims: RELATIONS_BATCH_OVERLAP_CLAIMS,
+					autoTuneEnabled: ingestRelationsAutoTuneEnabled(),
+					autoCapTokens: ingestRelationsAutoCapTokens(),
+					largeClaimThreshold: ingestRelationsAutoLargeClaimThreshold(),
+					largeTotalClaimJsonTokensThreshold: ingestRelationsAutoLargeTotalClaimJsonTokensThreshold(),
+					minTargetTokens: ingestRelationsAutoMinTargetTokens()
+				});
+				if (relationsAuto.logLine) {
+					console.log(`  [INFO] ${relationsAuto.logLine}`);
+				}
 				const relationsCap = capIngestBatchTargetForPlan({
 					stage: 'relations',
-					requested: RELATIONS_BATCH_TARGET_TOKENS,
+					requested: relationsAuto.effectiveBatchTarget,
 					provider: relationPlan.provider,
 					model: relationPlan.model
 				});
@@ -5284,9 +5456,26 @@ async function main() {
 			console.log('│ STAGE 3: ARGUMENT GROUPING                              │');
 			console.log('└──────────────────────────────────────────────────────────┘');
 
+				const groupingMaxOut = resolveGroupingMaxOutputTokens(groupingPlan);
+				const groupingAutoBatch = resolveGroupingAutoBatchTarget({
+					claims: allClaims,
+					relationCount: relations.length,
+					batchTargetFromEnv: GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS,
+					tokenEstimateMultiplier: GROUPING_ANTHROPIC_TOKEN_ESTIMATE_MULTIPLIER,
+					outputVsInputFactor: GROUPING_OUTPUT_VS_INPUT_FACTOR,
+					outputHeadroom: GROUPING_OUTPUT_HEADROOM,
+					maxOutputTokens: groupingMaxOut,
+					autoTuneEnabled: ingestGroupingAutoTuneEnabled(),
+					autoCapTokens: ingestGroupingAutoCapTokens(),
+					largeClaimThreshold: ingestGroupingAutoLargeClaimThreshold()
+				});
+				if (groupingAutoBatch.logLine) {
+					console.log(`  [INFO] ${groupingAutoBatch.logLine}`);
+				}
+
 				const groupingCap = capIngestBatchTargetForPlan({
 					stage: 'grouping',
-					requested: GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS,
+					requested: groupingAutoBatch.effectiveBatchTarget,
 					provider: groupingPlan.provider,
 					model: groupingPlan.model
 				});
@@ -5296,8 +5485,6 @@ async function main() {
 						`  [INFO] Grouping batch target capped for ${groupingPlan.provider}/${groupingPlan.model}: ${groupingCap.requested.toLocaleString()} → ${groupingCap.value.toLocaleString()} (model ceiling ${groupingCap.modelCeiling.toLocaleString()})`
 					);
 				}
-
-				const groupingMaxOut = resolveGroupingMaxOutputTokens(groupingPlan);
 				let groupingBatches = buildGroupingBatches(allClaims, relations, groupingBatchTarget);
 				let groupingAdaptive: GroupingAdaptiveState | null = null;
 				if (ingestGroupingAdaptiveEnabled()) {
@@ -5341,6 +5528,9 @@ async function main() {
 					claimCount: allClaims.length,
 					relationCount: relations.length
 				};
+				for (const hint of describePreGroupingGraphLint(allClaims, relations)) {
+					console.warn(`  [WARN] ${hint}`);
+				}
 				let batchIndex = startGroupingBatchIndex;
 				const groupingSplitOnTruncation = !['0', 'false', 'off', 'no'].includes(
 					(process.env.INGEST_GROUPING_SPLIT_ON_TRUNCATION ?? '1').trim().toLowerCase()
@@ -5352,6 +5542,11 @@ async function main() {
 					console.log(
 						`  [BATCH ${batchIndex + 1}/${groupingBatches.length}] ${batch.claims.length} claims, ${batch.relations.length} relations (~${estimateTokens(claimsJson).toLocaleString()} claim tokens)`
 					);
+					if (batch.claims.length >= 12 && batch.relations.length === 0) {
+						console.log(
+							`  [INFO] Grouping batch has no within-batch relations — expect sparse arguments only (no invented cross-claim structure).`
+						);
+					}
 					const grpUserMsg = GROUPING_USER(claimsJson, relationsJson);
 					let grpRawResponse: string;
 					const groupingCallStarted = Date.now();
@@ -5461,6 +5656,27 @@ async function main() {
 							groupingMaxOut,
 							adaptive: groupingAdaptive
 						});
+					}
+
+					const allowedClaimPositions = new Set(
+						batch.claims.map((c) => c.position_in_source)
+					);
+					const groupingRefsBeforeFilter = batchArguments.reduce(
+						(n, a) => n + a.claims.length,
+						0
+					);
+					batchArguments = filterGroupingOutputToKnownClaimPositions(
+						batchArguments,
+						allowedClaimPositions
+					);
+					const groupingRefsAfterFilter = batchArguments.reduce(
+						(n, a) => n + a.claims.length,
+						0
+					);
+					if (groupingRefsBeforeFilter > groupingRefsAfterFilter) {
+						console.warn(
+							`  [WARN] Grouping batch ${batchIndex + 1}: dropped ${groupingRefsBeforeFilter - groupingRefsAfterFilter} claim ref(s) not in this batch's claim position set (out-of-batch positions).`
+						);
 					}
 
 					const batchHealth = analyzeGroupingReferenceHealth(batchArguments);
@@ -5727,6 +5943,16 @@ async function main() {
 						`  [INFO] Validation batch target capped for ${validationPlan.provider}/${validationPlan.model}: ${validationCap.requested.toLocaleString()} → ${validationCap.value.toLocaleString()} (model ceiling ${validationCap.modelCeiling.toLocaleString()})`
 					);
 				}
+				if (VALIDATION_BATCH_TARGET_TOKENS < 100_000) {
+					console.log(
+						`  [INFO] VALIDATION_BATCH_TARGET_TOKENS=${VALIDATION_BATCH_TARGET_TOKENS} is below default 100000 — BML showed validation wall can drop while remediation tokens rise; tune with relations/grouping together (docs/local/operations/ingest-validation-remediation-knobs-bml.md).`
+					);
+				}
+				if (VALIDATION_BATCH_SOURCE_MAX_CHARS < 20_000) {
+					console.warn(
+						`  [WARN] VALIDATION_BATCH_SOURCE_MAX_CHARS=${VALIDATION_BATCH_SOURCE_MAX_CHARS} is tight — faithfulness may suffer if excerpts miss evidence; QA before fleet-wide use (ingest-validation-remediation-knobs-bml.md).`
+					);
+				}
 
 			let validationBatches = buildValidationBatches(
 				allClaims,
@@ -5740,10 +5966,16 @@ async function main() {
 			if (INGEST_VALIDATION_SAMPLE_RATE < 1.0 && validationBatches.length > 1) {
 				const totalBatches = validationBatches.length;
 				const sampleCount = Math.max(1, Math.round(totalBatches * INGEST_VALIDATION_SAMPLE_RATE));
-				const shuffled = [...validationBatches].sort(() => Math.random() - 0.5);
-				validationBatches = shuffled.slice(0, sampleCount);
+				const rng = INGEST_VALIDATION_SAMPLE_SEED != null ? mulberry32(INGEST_VALIDATION_SAMPLE_SEED) : null;
+				const scored = validationBatches.map((batch, idx) => ({
+					batch,
+					idx,
+					key: rng ? rng() : Math.random()
+				}));
+				scored.sort((a, b) => (a.key === b.key ? a.idx - b.idx : a.key - b.key));
+				validationBatches = scored.slice(0, sampleCount).map((e) => e.batch);
 				console.log(
-					`  [SAMPLE] Spot-check validation: ${sampleCount}/${totalBatches} batches selected (${(INGEST_VALIDATION_SAMPLE_RATE * 100).toFixed(0)}% sample rate)`
+					`  [SAMPLE] Spot-check validation: ${sampleCount}/${totalBatches} batches selected (${(INGEST_VALIDATION_SAMPLE_RATE * 100).toFixed(0)}% sample rate)${INGEST_VALIDATION_SAMPLE_SEED != null ? ` seed=${INGEST_VALIDATION_SAMPLE_SEED}` : ''}`
 				);
 			}
 
@@ -6011,70 +6243,190 @@ async function main() {
 					}
 				}
 
-				if (INGEST_REMEDIATION_REVALIDATE && validationResult) {
-					const validationTracker2 = startStageUsage('validation');
-					const validationPlanningContext: IngestionPlanningContext = {
-						...basePlanningContext,
-						claimCount: allClaims.length,
-						relationCount: relations.length,
-						argumentCount: arguments_.length,
-						claimTextChars: allClaims.reduce((sum, c) => sum + (c.text?.length ?? 0), 0)
-					};
-					const validationExecCtx: ValidationBatchExecContext = {
-						validationPlan,
-						validationBudget,
-						validationTracker: validationTracker2,
-						jsonRepairPlan,
-						jsonRepairBudget,
-						repairTracker,
-						relations,
-						arguments_,
-						sourceText,
-						sourceTitle: sourceMeta.title,
-						planningContext: validationPlanningContext
-					};
-					const validationCap = capIngestBatchTargetForPlan({
+				const wantFullPostRepairRevalidate =
+					Boolean(validationResult) &&
+					(INGEST_REMEDIATION_REVALIDATE || policy?.force_revalidate === true);
+				const wantTargetedPostRepairRevalidate =
+					Boolean(validationResult) &&
+					!wantFullPostRepairRevalidate &&
+					INGEST_REMEDIATION_TARGETED_REVALIDATE &&
+					remediatedPositions.size > 0;
+
+				if (wantFullPostRepairRevalidate || wantTargetedPostRepairRevalidate) {
+					const validationCapRem = capIngestBatchTargetForPlan({
 						stage: 'validation',
 						requested: VALIDATION_BATCH_TARGET_TOKENS,
 						provider: validationPlan.provider,
 						model: validationPlan.model
 					});
-					const validationBatches = buildValidationBatches(
+					const validationBatchesRem = buildValidationBatches(
 						allClaims,
 						relations,
 						arguments_,
 						sourceText,
 						sourceMeta.title,
-						validationCap.value
+						validationCapRem.value
 					);
-					const batchOutputs2: ValidationOutput[] = [];
-					for (let bi = 0; bi < validationBatches.length; bi++) {
-						const merged = await runValidationBatchWithContextSplitting(
-							validationBatches[bi]!,
-							validationExecCtx,
-							0,
-							`Remediation revalidation ${bi + 1}/${validationBatches.length}`
+					const batchesToRun = wantFullPostRepairRevalidate
+						? validationBatchesRem
+						: filterValidationBatchesTouchingClaimPositions(
+								validationBatchesRem,
+								remediatedPositions
+							);
+					const revalMode: 'full' | 'targeted' = wantFullPostRepairRevalidate ? 'full' : 'targeted';
+					if (batchesToRun.length === 0) {
+						console.warn(
+							`  [WARN] Post-remediation ${revalMode} revalidation: no validation batches intersect repaired positions — skipping.`
 						);
-						if (merged) batchOutputs2.push(merged);
+					} else {
+						if (revalMode === 'targeted') {
+							console.log(
+								`  [INFO] Targeted post-remediation validation: ${batchesToRun.length}/${validationBatchesRem.length} batch(es), ${remediatedPositions.size} repaired position(s) (set INGEST_REMEDIATION_REVALIDATE=1 for full second pass).`
+							);
+						}
+						const validationTracker2 = startStageUsage('validation');
+						const validationPlanningContext: IngestionPlanningContext = {
+							...basePlanningContext,
+							claimCount: allClaims.length,
+							relationCount: relations.length,
+							argumentCount: arguments_.length,
+							claimTextChars: allClaims.reduce((sum, c) => sum + (c.text?.length ?? 0), 0)
+						};
+						const validationExecCtx: ValidationBatchExecContext = {
+							validationPlan,
+							validationBudget,
+							validationTracker: validationTracker2,
+							jsonRepairPlan,
+							jsonRepairBudget,
+							repairTracker,
+							relations,
+							arguments_,
+							sourceText,
+							sourceTitle: sourceMeta.title,
+							planningContext: validationPlanningContext
+						};
+						const batchOutputs2: ValidationOutput[] = [];
+						const batchLabelPrefix =
+							revalMode === 'full' ? 'Remediation revalidation' : 'Remediation targeted revalidate';
+						for (let bi = 0; bi < batchesToRun.length; bi++) {
+							const merged = await runValidationBatchWithContextSplitting(
+								batchesToRun[bi]!,
+								validationExecCtx,
+								0,
+								`${batchLabelPrefix} ${bi + 1}/${batchesToRun.length}`
+							);
+							if (merged) batchOutputs2.push(merged);
+						}
+						if (batchOutputs2.length > 0) {
+							const secondPass = mergeValidationOutputs(batchOutputs2);
+							const revalDiff = summarizeRemediationRevalidationDiff(
+								preRemediationValidation,
+								secondPass,
+								{ includePerEntityRows: INGEST_REMEDIATION_REVALIDATION_DETAIL }
+							);
+							const revalDiffForLog: Omit<
+								RemediationRevalidationDiff,
+								'perClaim' | 'perRelation' | 'perArgument'
+							> = {
+								version: revalDiff.version,
+								claims: revalDiff.claims,
+								relations: revalDiff.relations,
+								arguments: revalDiff.arguments
+							};
+							console.log(
+								`  [METRIC] remediation_revalidation_mode=${JSON.stringify({
+									mode: revalMode,
+									batches_run: batchesToRun.length,
+									batches_total: validationBatchesRem.length,
+									remediated_positions: remediatedPositions.size
+								})}`
+							);
+							console.log(
+								`  [METRIC] remediation_revalidation_diff=${JSON.stringify(revalDiffForLog)}`
+							);
+							if (INGEST_REMEDIATION_REVALIDATION_DETAIL) {
+								for (const row of revalDiff.perClaim ?? []) {
+									console.log(
+										`  [METRIC] remediation_revalidation_claim pos=${row.position_in_source} min=${row.min_faithfulness} s1=${row.faithfulness_pass1} s2=${row.faithfulness_pass2} lowered=${row.second_pass_lowered_min} q1=${row.quarantine_pass1} q2=${row.quarantine_pass2} q_tight=${row.quarantine_tightened_by_second}`
+									);
+								}
+								for (const row of revalDiff.perRelation ?? []) {
+									console.log(
+										`  [METRIC] remediation_revalidation_relation key=${row.key} min=${row.min_validity} v1=${row.validity_pass1} v2=${row.validity_pass2} lowered=${row.second_pass_lowered_min} q_tight=${row.quarantine_tightened_by_second}`
+									);
+								}
+								for (const row of revalDiff.perArgument ?? []) {
+									console.log(
+										`  [METRIC] remediation_revalidation_argument name=${JSON.stringify(row.argument_name)} min=${row.min_coherence} c1=${row.coherence_pass1} c2=${row.coherence_pass2} lowered=${row.second_pass_lowered_min} q_tight=${row.quarantine_tightened_by_second}`
+									);
+								}
+							}
+							validationResult = mergeValidationOutputs([preRemediationValidation, secondPass]);
+						}
+						logStageCost(
+							revalMode === 'full'
+								? 'Validation (remediation revalidate)'
+								: 'Validation (remediation targeted revalidate)',
+							validationTracker2,
+							validationPlan
+						);
 					}
-					if (batchOutputs2.length > 0) {
-						const secondPass = mergeValidationOutputs(batchOutputs2);
-						validationResult = mergeValidationOutputs([preRemediationValidation, secondPass]);
-					}
-					logStageCost('Validation (remediation revalidate)', validationTracker2, validationPlan);
 				}
 
+				const droppedRelationEdges = droppedBefore - relations.length;
 				const needsRerun = shouldRerunRelationsAfterRemediation({
 					remediatedPositions,
-					droppedRelationCount: droppedBefore - relations.length,
+					droppedRelationCount: droppedRelationEdges,
 					claimCount: allClaims.length,
 					forceEnv: INGEST_REMEDIATION_FORCE_RELATIONS_RERUN || policy?.force_relations_rerun === true,
 					remediatedShareThreshold: INGEST_REMEDIATION_RERUN_SHARE
 				});
 				if (needsRerun) {
+					console.log(
+						`  [INFO] Relations+grouping rerun after remediation (upstream quality matters more than micro-tuning validation alone — ingest-validation-remediation-knobs-bml.md §6): remediated_positions=${remediatedPositions.size}/${allClaims.length} dropped_relation_edges=${droppedRelationEdges} rerun_share_threshold=${INGEST_REMEDIATION_RERUN_SHARE}`
+					);
 					postValidationGraphMutatedForStoreSkip = true;
 					const relationsRt = startStageUsage('relations');
 					const groupingRt = startStageUsage('grouping');
+					let relationsBatchTargetForRemediation = RELATIONS_BATCH_TARGET_TOKENS;
+					if (RELATIONS_BATCH_TARGET_TOKENS > 0) {
+						const relationsAutoRem = resolveRelationsAutoBatchTarget({
+							claims: allClaims,
+							batchTargetFromEnv: RELATIONS_BATCH_TARGET_TOKENS,
+							overlapClaims: RELATIONS_BATCH_OVERLAP_CLAIMS,
+							autoTuneEnabled: ingestRelationsAutoTuneEnabled(),
+							autoCapTokens: ingestRelationsAutoCapTokens(),
+							largeClaimThreshold: ingestRelationsAutoLargeClaimThreshold(),
+							largeTotalClaimJsonTokensThreshold: ingestRelationsAutoLargeTotalClaimJsonTokensThreshold(),
+							minTargetTokens: ingestRelationsAutoMinTargetTokens()
+						});
+						if (relationsAutoRem.logLine) {
+							console.log(`  [INFO] ${relationsAutoRem.logLine}`);
+						}
+						relationsBatchTargetForRemediation = relationsAutoRem.effectiveBatchTarget;
+					}
+					const groupingMaxOutRem = resolveGroupingMaxOutputTokens(groupingPlan);
+					const groupingAutoRem = resolveGroupingAutoBatchTarget({
+						claims: allClaims,
+						relationCount: relations.length,
+						batchTargetFromEnv: GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS,
+						tokenEstimateMultiplier: GROUPING_ANTHROPIC_TOKEN_ESTIMATE_MULTIPLIER,
+						outputVsInputFactor: GROUPING_OUTPUT_VS_INPUT_FACTOR,
+						outputHeadroom: GROUPING_OUTPUT_HEADROOM,
+						maxOutputTokens: groupingMaxOutRem,
+						autoTuneEnabled: ingestGroupingAutoTuneEnabled(),
+						autoCapTokens: ingestGroupingAutoCapTokens(),
+						largeClaimThreshold: ingestGroupingAutoLargeClaimThreshold()
+					});
+					if (groupingAutoRem.logLine) {
+						console.log(`  [INFO] ${groupingAutoRem.logLine}`);
+					}
+					const groupingCapRem = capIngestBatchTargetForPlan({
+						stage: 'grouping',
+						requested: groupingAutoRem.effectiveBatchTarget,
+						provider: groupingPlan.provider,
+						model: groupingPlan.model
+					});
 					const out = await rerunRelationsAndGroupingForRemediation({
 						allClaims,
 						relationPlan,
@@ -6087,9 +6439,9 @@ async function main() {
 						relationsTracker: relationsRt,
 						groupingTracker: groupingRt,
 						basePlanningContext,
-						relationsBatchTarget: RELATIONS_BATCH_TARGET_TOKENS,
+						relationsBatchTarget: relationsBatchTargetForRemediation,
 						relationsOverlap: RELATIONS_BATCH_OVERLAP_CLAIMS,
-						groupingBatchTarget: GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS,
+						groupingBatchTarget: groupingCapRem.value,
 						attachRelationMetadata,
 						callStageModel,
 						fixJsonWithModel,
@@ -6631,127 +6983,149 @@ async function main() {
 			console.log(`  Creating ${relations.length} relation records...`);
 			let relationsCreated = 0;
 			const relationProgress = relations.length >= 30;
+			const RELATE_STORE_CONCURRENCY = Math.max(
+				1,
+				Math.min(
+					32,
+					parseInt(process.env.INGEST_RELATE_STORE_CONCURRENCY || '8', 10) || 8
+				)
+			);
+			const relationRecordsStoreStart = Date.now();
 
-				for (let ri = 0; ri < relations.length; ri++) {
-					const rel = relations[ri];
-					const fromId = claimIdMap.get(rel.from_position);
-					const toId = claimIdMap.get(rel.to_position);
+			async function createOneRelationRecord(rel: (typeof relations)[number]): Promise<boolean> {
+				const fromId = claimIdMap.get(rel.from_position);
+				const toId = claimIdMap.get(rel.to_position);
 
-					if (!fromId || !toId) {
-						console.warn(
-							`  [SKIP] Relation ${rel.from_position}->${rel.to_position}: missing claim ID`
-						);
-						continue;
-					}
-
-					if (relationProgress && (ri % 10 === 0 || ri === relations.length - 1)) {
-						process.stdout.write(`\r  [RELATIONS] ${ri + 1}/${relations.length}`);
-					}
-					try {
-						let relQuery = `RELATE $from->${rel.relation_type}->$to`;
-						const assignments = [
-							'relation_confidence = $relation_confidence',
-							'evidence_passages = $evidence_passages',
-							'relation_inference_mode = $relation_inference_mode',
-							'verification_state = $verification_state',
-							'review_state = $review_state',
-							'extractor_version = $extractor_version'
-						];
-						const vars: Record<string, unknown> = {
-							from: fromId,
-							to: toId,
-							relation_confidence: rel.relation_confidence,
-							evidence_passages: rel.evidence_passage_ids
-								.map((passageId) => passageRecordIdMap.get(passageId))
-								.filter((value): value is string => Boolean(value)),
-							relation_inference_mode: rel.relation_inference_mode,
-							verification_state: rel.verification_state,
-							review_state: rel.review_state,
-							extractor_version: rel.extractor_version
-						};
-
-						switch (rel.relation_type) {
-							case 'supports':
-							case 'contradicts': {
-								assignments.unshift('strength = $strength');
-								if (rel.note) assignments.push('note = $note');
-								vars.strength = rel.strength;
-								if (rel.note) vars.note = rel.note;
-								break;
-							}
-							case 'depends_on': {
-								const necessityMap: Record<string, string> = {
-									strong: 'essential',
-									moderate: 'supporting',
-									weak: 'contextual'
-								};
-								assignments.unshift('necessity = $necessity');
-								vars.necessity = necessityMap[rel.strength] || 'supporting';
-								break;
-							}
-							case 'responds_to': {
-								const responseMap: Record<string, string> = {
-									strong: 'direct_rebuttal',
-									moderate: 'undermining',
-									weak: 'concession'
-								};
-								assignments.unshift('response_type = $response_type');
-								vars.response_type = responseMap[rel.strength] || 'refinement';
-								break;
-							}
-							case 'refines': {
-								const refinementMap: Record<string, string> = {
-									strong: 'strengthens',
-									moderate: 'clarifies',
-									weak: 'qualifies'
-								};
-								assignments.unshift('refinement_type = $refinement_type');
-								vars.refinement_type = refinementMap[rel.strength] || 'clarifies';
-								break;
-							}
-							case 'exemplifies': {
-								if (rel.note) {
-									assignments.push('note = $note');
-									vars.note = rel.note;
-								}
-								break;
-							}
-							case 'defines': {
-								if (rel.note) {
-									assignments.push('note = $note');
-									vars.note = rel.note;
-								}
-								break;
-							}
-							case 'qualifies': {
-								const qualificationMap: Record<string, string> = {
-									strong: 'restrictive',
-									moderate: 'conditional',
-									weak: 'clarifying'
-								};
-								assignments.unshift('qualification_type = $qualification_type');
-								vars.qualification_type = qualificationMap[rel.strength] || 'conditional';
-								if (rel.note) {
-									assignments.push('note = $note');
-									vars.note = rel.note;
-								}
-								break;
-							}
-							default:
-								break;
-						}
-
-						relQuery += ` SET ${assignments.join(', ')}`;
-						await db.query(relQuery, vars);
-						relationsCreated++;
-					} catch (error) {
-						console.warn(
-							`  [SKIP] Failed to create relation ${rel.relation_type}: ${error instanceof Error ? error.message : String(error)}`
-						);
-					}
+				if (!fromId || !toId) {
+					console.warn(
+						`  [SKIP] Relation ${rel.from_position}->${rel.to_position}: missing claim ID`
+					);
+					return false;
 				}
-				if (relationProgress) console.log('');
-				console.log(`  [OK] Created ${relationsCreated} relation records`);
+
+				try {
+					let relQuery = `RELATE $from->${rel.relation_type}->$to`;
+					const assignments = [
+						'relation_confidence = $relation_confidence',
+						'evidence_passages = $evidence_passages',
+						'relation_inference_mode = $relation_inference_mode',
+						'verification_state = $verification_state',
+						'review_state = $review_state',
+						'extractor_version = $extractor_version'
+					];
+					const vars: Record<string, unknown> = {
+						from: fromId,
+						to: toId,
+						relation_confidence: rel.relation_confidence,
+						evidence_passages: rel.evidence_passage_ids
+							.map((passageId) => passageRecordIdMap.get(passageId))
+							.filter((value): value is string => Boolean(value)),
+						relation_inference_mode: rel.relation_inference_mode,
+						verification_state: rel.verification_state,
+						review_state: rel.review_state,
+						extractor_version: rel.extractor_version
+					};
+
+					switch (rel.relation_type) {
+						case 'supports':
+						case 'contradicts': {
+							assignments.unshift('strength = $strength');
+							if (rel.note) assignments.push('note = $note');
+							vars.strength = rel.strength;
+							if (rel.note) vars.note = rel.note;
+							break;
+						}
+						case 'depends_on': {
+							const necessityMap: Record<string, string> = {
+								strong: 'essential',
+								moderate: 'supporting',
+								weak: 'contextual'
+							};
+							assignments.unshift('necessity = $necessity');
+							vars.necessity = necessityMap[rel.strength] || 'supporting';
+							break;
+						}
+						case 'responds_to': {
+							const responseMap: Record<string, string> = {
+								strong: 'direct_rebuttal',
+								moderate: 'undermining',
+								weak: 'concession'
+							};
+							assignments.unshift('response_type = $response_type');
+							vars.response_type = responseMap[rel.strength] || 'refinement';
+							break;
+						}
+						case 'refines': {
+							const refinementMap: Record<string, string> = {
+								strong: 'strengthens',
+								moderate: 'clarifies',
+								weak: 'qualifies'
+							};
+							assignments.unshift('refinement_type = $refinement_type');
+							vars.refinement_type = refinementMap[rel.strength] || 'clarifies';
+							break;
+						}
+						case 'exemplifies': {
+							if (rel.note) {
+								assignments.push('note = $note');
+								vars.note = rel.note;
+							}
+							break;
+						}
+						case 'defines': {
+							if (rel.note) {
+								assignments.push('note = $note');
+								vars.note = rel.note;
+							}
+							break;
+						}
+						case 'qualifies': {
+							const qualificationMap: Record<string, string> = {
+								strong: 'restrictive',
+								moderate: 'conditional',
+								weak: 'clarifying'
+							};
+							assignments.unshift('qualification_type = $qualification_type');
+							vars.qualification_type = qualificationMap[rel.strength] || 'conditional';
+							if (rel.note) {
+								assignments.push('note = $note');
+								vars.note = rel.note;
+							}
+							break;
+						}
+						default:
+							break;
+					}
+
+					relQuery += ` SET ${assignments.join(', ')}`;
+					await db.query(relQuery, vars);
+					return true;
+				} catch (error) {
+					console.warn(
+						`  [SKIP] Failed to create relation ${rel.relation_type}: ${error instanceof Error ? error.message : String(error)}`
+					);
+					return false;
+				}
+			}
+
+			for (let ri = 0; ri < relations.length; ri += RELATE_STORE_CONCURRENCY) {
+				const chunk = relations.slice(ri, ri + RELATE_STORE_CONCURRENCY);
+				if (relationProgress) {
+					const done = Math.min(ri + chunk.length, relations.length);
+					process.stdout.write(`\r  [RELATIONS] ${done}/${relations.length}`);
+				}
+				const chunkResults = await Promise.all(chunk.map((rel) => createOneRelationRecord(rel)));
+				relationsCreated += chunkResults.filter(Boolean).length;
+			}
+			if (relationProgress) console.log('');
+			const relationRecordsWallMs = Date.now() - relationRecordsStoreStart;
+			if (activeIngestTiming) {
+				activeIngestTiming.store_relation_records_wall_ms += relationRecordsWallMs;
+			}
+			console.log(
+				`  [STORE_TIMING] relation records wall=${relationRecordsWallMs}ms (concurrency=${RELATE_STORE_CONCURRENCY}, attempted=${relations.length}, created=${relationsCreated})`
+			);
+			console.log(`  [OK] Created ${relationsCreated} relation records`);
 
 				// 6f. Create argument records and part_of relations
 			console.log(`  Creating ${arguments_.length} argument records...`);

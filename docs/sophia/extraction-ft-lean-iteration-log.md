@@ -208,6 +208,19 @@ EXTRACTION_EVAL_LOG_FIRST_FAILURE=1 pnpm ops:eval-extraction-holdout-openai-comp
 | Golden holdout | 200 | **0.995** (1 schema fail) | **1.0** (199 eligible) | ~0.005 | `gold_text_wrong_position` dominates strict match (document-level gold position vs single-sentence row — **expected**; do not read as extraction failure). |
 | Remit multidomain | 200 | **0.985** (3 schema fails) | **1.0** (197 eligible) | ~0.005 | Same mismatch story; **watch** remit schema vs golden if tuning for format. |
 
+### Golden: Fireworks FT vs **`gemini-3-flash-preview`** (prod model id; offline eval)
+
+Parallel **4×50** shard runs with **`EXTRACTION_MODEL=gemini-3-flash-preview`** (Generative Language OpenAI-compatible host — **not** identical to regional **Vertex** in prod, same model id). Merged report: [`data/phase1-training-export/eval-golden-baseline-gemini-3-flash-merged-216.json`](../../data/phase1-training-export/eval-golden-baseline-gemini-3-flash-merged-216.json) (**216** rows after merge; see caveat in [extraction-ft-golden-ab-recommendations.md](./extraction-ft-golden-ab-recommendations.md) §2.1).
+
+| Arm | Rows | `schemaPassRate` | `subsetTextMatchRate` | p50 / p95 (ms) |
+|-----|------|------------------|----------------------|----------------|
+| **FT `hz8ot3bv`** (same iteration) | 200 | **0.995** | **1.0** | 1847 / 2088 |
+| **Gemini flash (eval)** | 216 (merged) | **~0.741** | **~0.419** | ~31 944 / ~38 512 |
+
+Full interpretation: [extraction-ft-golden-ab-recommendations.md](./extraction-ft-golden-ab-recommendations.md) §2.1.
+
+**Speed / ops note:** The comparison was partly to see if we could **shorten extraction wall time** vs Vertex-backed production; offline numbers favour **FT** on latency and robustness vs this flash client, but **ingest-level** validation (`stage_ms.extracting` vs historical baselines) is still required. **Fireworks capacity** remains a **reliability** concern for depending on FT as primary hosting.
+
 ### Learn (provisional)
 
 | Decision | Rationale |
@@ -239,3 +252,9 @@ EXTRACTION_EVAL_LOG_FIRST_FAILURE=1 pnpm ops:eval-extraction-holdout-openai-comp
 Metrics and commands are frozen in **[extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md)**. Historical vendor spike numbers remain in **[../local/operations/extraction-vendor-ft-spike-eval-record.md](../local/operations/extraction-vendor-ft-spike-eval-record.md)**.
 
 First post-baseline combined eval is recorded in **Iteration 1 (2026-04-16)** above; use **`--out data/phase1-training-export/eval-compare-<date>-<deployment>-limit200.json`** for subsequent runs so reports are not overwritten by the default `eval-compare.json`.
+
+---
+
+## 2026-04-16 — Plan note: Vertex as production extraction default
+
+**Decision:** Live **ingestion extraction** is treated as **Vertex-first** (`vertex:…` Gemini ids in ingest config): it is the route we can operate **reliably** and still **reuse extractions for future training** under our pipeline and governance. **Fireworks SFT + FT deployments** stay the primary path for **training iterations and offline** `pnpm ops:eval-extraction-*` comparisons — that routing split is documented in [extraction-ft-lean-plan.md](./extraction-ft-lean-plan.md) § *Production extraction model — Vertex (plan change)*.

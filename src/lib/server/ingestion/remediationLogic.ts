@@ -75,3 +75,13 @@ export function shouldRerunRelationsAfterRemediation(params: {
 	const share = params.remediatedPositions.size / params.claimCount;
 	return share >= params.remediatedShareThreshold;
 }
+
+/** Re-run only validation batches that include at least one remediated claim position. */
+export function filterValidationBatchesTouchingClaimPositions<
+	T extends { claims: readonly { position_in_source: number }[] }
+>(batches: readonly T[], remediatedPositions: ReadonlySet<number>): T[] {
+	if (remediatedPositions.size === 0) return [];
+	return batches.filter((b) =>
+		b.claims.some((c) => remediatedPositions.has(c.position_in_source))
+	);
+}

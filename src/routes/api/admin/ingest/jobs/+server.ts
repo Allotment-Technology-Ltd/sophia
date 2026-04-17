@@ -49,6 +49,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			urls?: unknown;
 			concurrency?: unknown;
 			notes?: unknown;
+			run_reason?: unknown;
 			validate?: unknown;
 			merge_into_latest_running_job?: unknown;
 			worker_defaults?: unknown;
@@ -67,12 +68,14 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 				: 2;
 		const concurrency = Math.max(1, Math.min(MAX_DURABLE_INGEST_JOB_CONCURRENCY, rawConcurrency));
 		const notes = typeof payload.notes === 'string' ? payload.notes : null;
+		const runReason = typeof payload.run_reason === 'string' ? payload.run_reason : null;
 		const validate = payload.validate === true;
 		const mergeIntoLatestRunningJob = payload.merge_into_latest_running_job === true;
 		const created = await createIngestionJob({
 			urls,
 			concurrency,
 			notes,
+			runReason,
 			actorUid: actor.uid,
 			actorEmail: actor.email ?? null,
 			validate,

@@ -46,9 +46,23 @@
  *     --jsonl data/phase1-training-export/golden_holdout.jsonl \
  *     --limit 100 \
  *     --out data/phase1-training-export/eval-openai-ft-report.json
+ *
+ * **Resume / idempotency:** `--checkpoint <file.ndjson>` appends one JSON line per completed row (global input
+ * index `g`). `--resume` loads that file first and skips those rows; **`--limit` is the max additional rows
+ * to evaluate this invocation** (omit extra `--skip` math). Safe to re-run after failures.
+ *
+ * **Parallel shards:** `--shard-index I --shard-total N` evaluates only lines where `g % N === I` (after `--skip`).
+ * Use separate `--out` and `--checkpoint` per shard (e.g. four terminals / background jobs), then merge:
+ *   `pnpm ops:merge-extraction-eval-reports -- --out merged.json shard-0.json shard-1.json …`
+ *
+ * Example (200 rows, 4 shards, 50 rows per shard):
+ *   `--shard-index 0 --shard-total 4 --limit 50 --checkpoint /tmp/eval-s0.ndjson --out /tmp/eval-s0.json` (repeat for indices 1..3),
+ *   then merge the four `--out` reports (not the `.ndjson` files).
+ *
+ * **Manual skip:** `--skip K` still skips the first `K` non-empty input lines (before shard filter).
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, createReadStream, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { generateText } from 'ai';
 import { loadServerEnv } from '../src/lib/server/env.ts';
@@ -61,8 +75,12 @@ import {
 	type ExtractionOutput
 } from '../src/lib/server/prompts/extraction.ts';
 import { buildExtractionOpenAiCompatibleRoute } from '../src/lib/server/vertex.ts';
-import { createReadStream } from 'node:fs';
 import readline from 'node:readline';
+import {
+	createEmptyCheckpointAggregate,
+	type ExtractionEvalCheckpointLineV1,
+	loadCheckpointNdjson
+} from './lib/extractionEvalCheckpoint.ts';
 
 type JsonlLine = {
 	source_url?: string;
@@ -73,22 +91,38 @@ type JsonlLine = {
 function parseArgs(argv: string[]): {
 	jsonl: string;
 	limit: number;
+	skip: number;
 	out: string | null;
 	warmup: boolean;
 	mismatchDiagnostics: boolean;
 	mismatchSampleCap: number;
+	checkpoint: string | null;
+	resume: boolean;
+	shardIndex: number;
+	shardTotal: number;
 } {
 	let jsonl = '';
 	let limit = 500;
+	let skip = 0;
 	let out: string | null = null;
 	let warmup = true;
 	let mismatchDiagnostics = false;
 	let mismatchSampleCap = 20;
+	let checkpoint: string | null = null;
+	let resume = false;
+	let shardIndex = 0;
+	let shardTotal = 1;
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === '--jsonl' && argv[i + 1]) jsonl = argv[++i]!;
 		else if (a === '--limit' && argv[i + 1]) limit = Math.max(1, parseInt(argv[++i]!, 10));
+		else if (a === '--skip' && argv[i + 1]) skip = Math.max(0, parseInt(argv[++i]!, 10));
 		else if (a === '--out' && argv[i + 1]) out = argv[++i]!;
+		else if (a === '--checkpoint' && argv[i + 1]) checkpoint = argv[++i]!;
+		else if (a === '--resume') resume = true;
+		else if (a === '--shard-index' && argv[i + 1]) shardIndex = Math.max(0, parseInt(argv[++i]!, 10));
+		else if (a === '--shard-total' && argv[i + 1])
+			shardTotal = Math.max(1, parseInt(argv[++i]!, 10));
 		else if (a === '--no-warmup') warmup = false;
 		else if (a === '--mismatch-diagnostics') mismatchDiagnostics = true;
 		else if (a === '--mismatch-sample-cap' && argv[i + 1]) {
@@ -97,11 +131,31 @@ function parseArgs(argv: string[]): {
 	}
 	if (!jsonl) {
 		console.error(
-			'Usage: --jsonl <file.jsonl> [--limit N] [--out report.json] [--no-warmup] [--mismatch-diagnostics] [--mismatch-sample-cap N]'
+			'Usage: --jsonl <file.jsonl> [--limit N] [--skip K] [--out report.json] [--checkpoint path.ndjson] [--resume] [--shard-index I --shard-total N] [--no-warmup] [--mismatch-diagnostics] [--mismatch-sample-cap N]'
 		);
 		process.exit(2);
 	}
-	return { jsonl, limit, out, warmup, mismatchDiagnostics, mismatchSampleCap };
+	if (resume && !checkpoint) {
+		console.error('[eval] --resume requires --checkpoint <path.ndjson>');
+		process.exit(2);
+	}
+	if (shardTotal > 1 && shardIndex >= shardTotal) {
+		console.error('[eval] --shard-index must be < --shard-total');
+		process.exit(2);
+	}
+	return {
+		jsonl,
+		limit,
+		skip,
+		out,
+		warmup,
+		mismatchDiagnostics,
+		mismatchSampleCap,
+		checkpoint,
+		resume,
+		shardIndex,
+		shardTotal
+	};
 }
 
 type SubsetMismatchBucket =
@@ -268,10 +322,15 @@ async function main() {
 	const {
 		jsonl,
 		limit,
+		skip,
 		out,
 		warmup: warmupCli,
 		mismatchDiagnostics: mismatchDiagCli,
-		mismatchSampleCap
+		mismatchSampleCap,
+		checkpoint,
+		resume,
+		shardIndex,
+		shardTotal
 	} = parseArgs(process.argv.slice(2));
 	const mismatchDiagnostics =
 		mismatchDiagCli ||
@@ -282,7 +341,9 @@ async function main() {
 	const route = buildExtractionOpenAiCompatibleRoute();
 	if (!route) {
 		throw new Error(
-			'EXTRACTION_BASE_URL + EXTRACTION_MODEL plus a key (EXTRACTION_API_KEY, OPENAI_API_KEY, or FIREWORKS_API_KEY on Fireworks) must be set.'
+			'EXTRACTION_BASE_URL + EXTRACTION_MODEL plus a key (e.g. GOOGLE_AI_API_KEY / EXTRACTION_API_KEY / OPENAI_API_KEY) must be set. ' +
+				'Add them to `.env.local` (or `.env`), or prefix the command: EXTRACTION_BASE_URL=… EXTRACTION_MODEL=… pnpm exec tsx --env-file=.env.local … ' +
+				'Note: `pnpm ops:eval-extraction-holdout-openai-compatible` preloads `.env` and `.env.local` — shell-only exports are not inherited unless persisted in those files.'
 		);
 	}
 
@@ -302,8 +363,25 @@ async function main() {
 	);
 	const progressInterval = progressEveryRow ? 1 : 10;
 
+	if (checkpoint && !resume && existsSync(checkpoint) && statSync(checkpoint).size > 0) {
+		console.error(
+			`[eval] Refusing to write to existing checkpoint ${checkpoint} without --resume (would duplicate rows). Delete the file or pass --resume.`
+		);
+		process.exit(2);
+	}
+
+	const cpAgg = resume && checkpoint ? loadCheckpointNdjson(checkpoint) : createEmptyCheckpointAggregate();
+	if (checkpoint) {
+		mkdirSync(dirname(checkpoint), { recursive: true });
+	}
+
 	console.error(
-		`[eval] start model=${route.modelId} provider=${route.provider} limit=${limit} jsonl=${jsonl} warmup=${doWarmup}\n` +
+		`[eval] start model=${route.modelId} provider=${route.provider} skip=${skip} limit=${limit} ` +
+			`shard=${shardTotal > 1 ? `${shardIndex}/${shardTotal}` : 'off'} ` +
+			`checkpoint=${checkpoint ?? 'off'} resume=${resume} jsonl=${jsonl} warmup=${doWarmup}\n` +
+			(resume && checkpoint
+				? `[eval] resumed ${cpAgg.completed.size} row(s) from checkpoint; this run evaluates at most ${limit} additional row(s)\n`
+				: '') +
 			`[eval] (stdout is silent until the final JSON report; stderr shows progress every ${progressInterval} row(s); first inference can take minutes)`
 	);
 
@@ -321,24 +399,17 @@ async function main() {
 		console.error('[eval:warmup] done');
 	}
 
-	const latencies: number[] = [];
-	let okSchema = 0;
-	let rows = 0;
-	let subsetMatch = 0;
-	let subsetTextMatch = 0;
-	let subsetEligible = 0;
+	const latencies: number[] = [...cpAgg.latencies];
+	let okSchema = cpAgg.okSchema;
+	let subsetMatch = cpAgg.subsetMatch;
+	let subsetTextMatch = cpAgg.subsetTextMatch;
+	let subsetEligible = cpAgg.subsetEligible;
 
-	const mismatchBuckets: Record<SubsetMismatchBucket, number> = {
-		hit: 0,
-		split_across_claims: 0,
-		gold_text_wrong_position: 0,
-		gold_position_wrong_text: 0,
-		neither_literal: 0
-	};
-	let goldLabelTextEqualsInput = 0;
-	const mismatchClaimCounts: number[] = [];
+	const mismatchBuckets: Record<SubsetMismatchBucket, number> = { ...cpAgg.mismatchBuckets };
+	let goldLabelTextEqualsInput = cpAgg.goldLabelTextEqualsInput;
+	const mismatchClaimCounts: number[] = [...cpAgg.mismatchClaimCounts];
 	type MismatchSample = {
-		evalRow: number;
+		globalInputLineIndex: number;
 		bucket: Exclude<SubsetMismatchBucket, 'hit'>;
 		goldText: string;
 		inputEqualsGoldText: boolean;
@@ -351,12 +422,15 @@ async function main() {
 		(process.env.EXTRACTION_EVAL_FOLD_SYSTEM ?? '1').trim().toLowerCase()
 	);
 
+	const completed = cpAgg.completed;
+	let sessionNew = 0;
+	let lineGlobalIndex = -1;
+
 	const rl = readline.createInterface({ input: createReadStream(jsonl, { encoding: 'utf8' }) });
 
 	for await (const line of rl) {
 		const t = line.trim();
 		if (!t) continue;
-		if (rows >= limit) break;
 		let row: JsonlLine;
 		try {
 			row = JSON.parse(t) as JsonlLine;
@@ -364,6 +438,12 @@ async function main() {
 			continue;
 		}
 		if (!(row.input ?? '').trim()) continue;
+
+		lineGlobalIndex++;
+		if (lineGlobalIndex < skip) continue;
+		if (shardTotal > 1 && lineGlobalIndex % shardTotal !== shardIndex) continue;
+		if (completed.has(lineGlobalIndex)) continue;
+		if (sessionNew >= limit) break;
 
 		const userMsg = EXTRACTION_USER(
 			(row.source_url ?? 'eval-row').trim() || 'eval-row',
@@ -374,11 +454,13 @@ async function main() {
 		const t0 = Date.now();
 		const retryOpts =
 			generationMaxRetries !== undefined ? { maxRetries: generationMaxRetries } : {};
-		const rowOrdinal = rows + 1;
-		if (rowOrdinal === 1 || rowOrdinal % progressInterval === 0) {
-			console.error(`[eval] row ${rowOrdinal}/${limit} inference…`);
+		sessionNew++;
+		if (sessionNew === 1 || sessionNew % progressInterval === 0) {
+			console.error(
+				`[eval] row ${sessionNew}/${limit} (g=${lineGlobalIndex}) inference…`
+			);
 		}
-		const result = await withTransientRetries(`row-${rows + 1}`, () =>
+		const result = await withTransientRetries(`row-g${lineGlobalIndex}`, () =>
 			generateText(
 				foldSystem
 					? {
@@ -403,41 +485,64 @@ async function main() {
 						}
 			)
 		);
-		latencies.push(Date.now() - t0);
-		rows++;
+		const latencyMs = Date.now() - t0;
+		latencies.push(latencyMs);
+
+		let ck: ExtractionEvalCheckpointLineV1 = {
+			v: 1,
+			g: lineGlobalIndex,
+			latencyMs,
+			schemaOk: false,
+			subsetEligible: false,
+			subsetTextHit: false,
+			subsetStrictHit: false,
+			goldLabelEqInput: false,
+			mismatchBucket: null,
+			mismatchClaimCount: null
+		};
 
 		try {
 			const parsed = parseExtractionModelJson(result.text);
 			const validated = ExtractionOutputSchema.parse(parsed);
 			okSchema++;
+			ck.schemaOk = true;
 			const gold = ExtractionClaimSchema.safeParse(row.label);
 			if (gold.success && validated.length >= 1) {
 				subsetEligible++;
-				const g = gold.data;
+				const goldClaim = gold.data;
 				const inputTrim = (row.input ?? '').trim();
-				if (inputTrim === g.text.trim()) goldLabelTextEqualsInput++;
+				if (inputTrim === goldClaim.text.trim()) goldLabelTextEqualsInput++;
 
-				const textHit = validated.some((c) => c.text.trim() === g.text.trim());
+				const textHit = validated.some((c) => c.text.trim() === goldClaim.text.trim());
 				if (textHit) subsetTextMatch++;
+				ck.subsetEligible = true;
+				ck.subsetTextHit = textHit;
 
 				const hit = validated.some(
 					(c) =>
-						c.text.trim() === g.text.trim() &&
-						Number(c.position_in_source) === Number(g.position_in_source)
+						c.text.trim() === goldClaim.text.trim() &&
+						Number(c.position_in_source) === Number(goldClaim.position_in_source)
 				);
 				if (hit) subsetMatch++;
+				ck.subsetStrictHit = hit;
+				ck.goldLabelEqInput = inputTrim === goldClaim.text.trim();
+
+				const bucket = classifyGoldSubsetMismatch(validated, goldClaim);
+				ck.mismatchBucket = bucket;
+				if (bucket !== 'hit' && mismatchDiagnostics) {
+					ck.mismatchClaimCount = validated.length;
+				}
 
 				if (mismatchDiagnostics) {
-					const bucket = classifyGoldSubsetMismatch(validated, g);
 					mismatchBuckets[bucket]++;
 					if (bucket !== 'hit') {
 						mismatchClaimCounts.push(validated.length);
 						if (mismatchSamples.length < mismatchSampleCap) {
 							mismatchSamples.push({
-								evalRow: rows,
+								globalInputLineIndex: lineGlobalIndex,
 								bucket,
-								goldText: truncate(g.text, 200),
-								inputEqualsGoldText: inputTrim === g.text.trim(),
+								goldText: truncate(goldClaim.text, 200),
+								inputEqualsGoldText: inputTrim === goldClaim.text.trim(),
 								claimCount: validated.length,
 								claimsPreview: validated.slice(0, 5).map((c) => ({
 									position_in_source: c.position_in_source,
@@ -450,7 +555,7 @@ async function main() {
 			}
 		} catch (err) {
 			if (
-				rows === 1 &&
+				sessionNew === 1 &&
 				['1', 'true', 'yes'].includes(
 					(process.env.EXTRACTION_EVAL_LOG_FIRST_FAILURE ?? '').trim().toLowerCase()
 				)
@@ -461,8 +566,15 @@ async function main() {
 				);
 			}
 		}
+
+		if (checkpoint) {
+			appendFileSync(checkpoint, `${JSON.stringify(ck)}\n`, 'utf8');
+			completed.add(lineGlobalIndex);
+		}
 	}
 
+	const rows = latencies.length;
+	const latencyMsSamples = [...latencies];
 	latencies.sort((a, b) => a - b);
 	let inferenceHost: string | null = null;
 	try {
@@ -474,11 +586,22 @@ async function main() {
 	const report: Record<string, unknown> = {
 		generatedAt: new Date().toISOString(),
 		jsonl,
+		skipRowsPrefix: skip,
 		limit,
+		limitScope:
+			resume && checkpoint
+				? 'additional_rows_this_invocation_after_checkpoint'
+				: 'rows_this_invocation',
+		checkpointFile: checkpoint ?? null,
+		resumeLoaded: resume && checkpoint ? cpAgg.completed.size : 0,
+		sessionRowsEvaluated: sessionNew,
+		shardIndex: shardTotal > 1 ? shardIndex : null,
+		shardTotal: shardTotal > 1 ? shardTotal : null,
 		rowsEvaluated: rows,
 		schemaOkRows: okSchema,
 		schemaFailRows: rows - okSchema,
 		schemaPassRate: rows ? okSchema / rows : 0,
+		latencyMsSamples,
 		latencyMs: {
 			p50: percentile(latencies, 0.5),
 			p95: percentile(latencies, 0.95)

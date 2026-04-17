@@ -8,6 +8,52 @@ import type { GroupingOutput } from '$lib/server/prompts/grouping.js';
 import type { PhaseOneClaim, PhaseOneRelation, GroupingBatch } from './types.js';
 import { estimateTokens } from './model-call.js';
 
+/**
+ * Cheap pre-Stage-3 hints when the relation graph is empty or highly fragmented (often correlates
+ * with grouping integrity / preempt-split churn). Does not throw — hard integrity is enforced
+ * earlier by `assertClaimIntegrity` / `assertRelationIntegrity`.
+ */
+export function describePreGroupingGraphLint(
+	claims: PhaseOneClaim[],
+	relations: PhaseOneRelation[]
+): string[] {
+	const warnings: string[] = [];
+	if (claims.length === 0) return warnings;
+
+	const positions = new Set(claims.map((c) => c.position_in_source));
+	const degree = new Map<number, number>();
+	for (const p of positions) degree.set(p, 0);
+	for (const r of relations) {
+		if (positions.has(r.from_position)) {
+			degree.set(r.from_position, (degree.get(r.from_position) ?? 0) + 1);
+		}
+		if (positions.has(r.to_position)) {
+			degree.set(r.to_position, (degree.get(r.to_position) ?? 0) + 1);
+		}
+	}
+	let isolated = 0;
+	for (const p of positions) {
+		if ((degree.get(p) ?? 0) === 0) isolated += 1;
+	}
+
+	if (claims.length > 8 && relations.length === 0) {
+		warnings.push(
+			`pre-grouping: no Stage-2 relations for ${claims.length} claims — integrity retries are more likely; verify relations batching and source density.`
+		);
+	}
+
+	const isolatedRatio = isolated / claims.length;
+	if (claims.length >= 10 && isolatedRatio >= 0.65) {
+		warnings.push(
+			`pre-grouping: ${isolated}/${claims.length} claims (${Math.round(
+				isolatedRatio * 100
+			)}%) have no incident relation edges — graph is highly fragmented before argument grouping.`
+		);
+	}
+
+	return warnings;
+}
+
 export function normalizeGroupingRole(value: unknown): string {
 	if (typeof value !== 'string') return 'key_premise';
 	const normalized = value.toLowerCase().trim().replace(/[\s-]+/g, '_');
@@ -39,13 +85,24 @@ export function normalizeGroupingRole(value: unknown): string {
 	return 'key_premise';
 }
 
+/** If the model returned `{"named_arguments":[...]}`, unwrap to the array for downstream Zod. */
+export function unwrapGroupingModelPayload(payload: unknown): unknown {
+	if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+		const named = (payload as Record<string, unknown>).named_arguments;
+		if (Array.isArray(named)) return named;
+	}
+	return payload;
+}
+
 /**
  * Normalise grouping JSON before Zod parse. **Invalid or missing `position_in_source` refs are dropped**
  * (not coerced to `1`), so malformed model output cannot collapse many claims onto position 1.
+ * Accepts either a bare array or `{"named_arguments":[...]}` (see `unwrapGroupingModelPayload`).
  */
 export function normalizeGroupingPayload(payload: unknown): unknown {
-	if (!Array.isArray(payload)) return payload;
-	return payload.map((item) => {
+	const root = unwrapGroupingModelPayload(payload);
+	if (!Array.isArray(root)) return root;
+	return root.map((item) => {
 		if (!item || typeof item !== 'object') return item;
 		const typed = item as Record<string, unknown>;
 		const claims = Array.isArray(typed.claims)
@@ -65,6 +122,21 @@ export function normalizeGroupingPayload(payload: unknown): unknown {
 			: [];
 		return { ...typed, claims };
 	});
+}
+
+/**
+ * Remove claim refs whose `position_in_source` is not in the current batch's claim set.
+ * Prevents degenerate "collapsed" health signals when the model cites positions outside the batch excerpt.
+ */
+export function filterGroupingOutputToKnownClaimPositions(
+	output: GroupingOutput,
+	allowedPositions: ReadonlySet<number>
+): GroupingOutput {
+	const mapped = output.map((argument) => ({
+		...argument,
+		claims: argument.claims.filter((c) => allowedPositions.has(c.position_in_source))
+	}));
+	return mapped.filter((a) => a.claims.length > 0);
 }
 
 export function splitClaimsIntoGroupingBatches(

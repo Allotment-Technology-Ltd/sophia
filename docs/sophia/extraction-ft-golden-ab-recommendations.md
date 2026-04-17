@@ -3,6 +3,8 @@
 **Date:** 2026-04-16  
 **Scope:** Offline **golden holdout** (`golden_holdout.jsonl`) and **combined eval-compare** artefacts already on disk. **Ingest gates** (`[INGEST_TIMING]`, batch splits, live `passage_id` grounding) are **explicitly out of scope** here — see Phase 0 §3 in [`docs/local/operations/phase0-extraction-ingestion-baseline-report.md`](../local/operations/phase0-extraction-ingestion-baseline-report.md) when you need worker telemetry.
 
+**Production routing note:** The **plan** for which model serves live extraction was updated: **Vertex is the production default** (reliable operation + outputs usable for future training under our pipeline). Offline A/B here may still use Fireworks or other OpenAI-compatible endpoints; compare reports by `modelId`, not filename alone.
+
 **Not legal advice.**
 
 ---
@@ -32,6 +34,23 @@ All runs: **`golden_holdout.jsonl`**, **`--limit 200`**, **`--mismatch-diagnosti
 | FT (combined eval, `hz8ot3bv`) | Embedded in [`eval-compare-2026-04-16-fireworks-hz8ot3bv-limit200.json`](../../data/phase1-training-export/eval-compare-2026-04-16-fireworks-hz8ot3bv-limit200.json) → `goldenHoldout.report` | `…/deployments/hz8ot3bv` | 0.995 | **1** | **~0.005** | 1847 / 2088 | **1** / **198** |
 
 **Read-across:** On this **fixed 200-row** slice, **every** Fireworks deployment above hits **`subsetTextMatchRate = 1`** on subset-eligible rows and **`schemaPassRate ≈ 0.995`** (one schema fail per 200 rows — same failure *rate*, not yet proven to be the *same* row without row-id diffing). Latencies are **tight** (~1.8–1.9 s p50). **FT vs FT** on sentence match does **not** separate candidates — the metric is **saturated** here.
+
+### 2.1 Custom Fireworks model vs **Gemini 3 Flash** (same model id as production Vertex)
+
+This rows up **fine-tuned deployment `hz8ot3bv`** (SFT output served on Fireworks) against **`gemini-3-flash-preview`** on the **same** golden JSONL contract. Production ingestion uses **`vertex:gemini-3-flash-preview`** (Vertex routing); the offline run used the **Google Generative Language OpenAI-compatible** host (`https://generativelanguage.googleapis.com/v1beta/openai`) and **`GOOGLE_AI_API_KEY`** — **same model identifier**, different transport/auth than regional Vertex in Cloud Run. **Latency:** treat the table as strong evidence that **FT is much faster on this offline client** and that the flash run carried **heavy tails** (retries, rate limits, or slow responses — not proven which). That is **directional** for “can we shorten extraction wall time?” but **not** a substitute for timing **Vertex** on the real ingest path — see **Outcome** below.
+
+| Arm | Report | Rows | `schemaPassRate` | `subsetTextMatchRate` | Subset-eligible rows | p50 / p95 (ms) |
+|-----|--------|------|------------------|----------------------|----------------------|----------------|
+| **Custom FT (Fireworks)** | [`eval-compare-2026-04-16-fireworks-hz8ot3bv-limit200.json`](../../data/phase1-training-export/eval-compare-2026-04-16-fireworks-hz8ot3bv-limit200.json) → `goldenHoldout.report` | **200** | **0.995** | **1.0** | **199** | **1847** / **2088** |
+| **Gemini flash (eval)** | [`eval-golden-baseline-gemini-3-flash-merged-216.json`](../../data/phase1-training-export/eval-golden-baseline-gemini-3-flash-merged-216.json) (merged from `eval-golden-shard{0..3}.json` via [`scripts/merge-extraction-eval-reports.ts`](../../scripts/merge-extraction-eval-reports.ts)) | **216**† | **~0.741** | **~0.419** | **160** | **~31 944** / **~38 512** |
+
+†**Shard merge caveat:** Four parallel **`--limit 50`** shard runs were merged for an **≈200-row** intent; summed **`rowsEvaluated`** is **216** (checkpoint/session overlap on shard 0). For a strict **n=200** headline vs FT, re-run one process with **`--limit 200`** (no sharding) and the same `EXTRACTION_*` profile.
+
+**Outcome (plain language):** A major motivation for this comparison was whether we could **speed up the extraction phase** (and reduce tail behaviour) vs the **Vertex** route we use in production for reliability and **training-data reuse**.
+
+On this slice, the **custom FT model** shows **much lower median latency** on the eval harness, **stronger schema reliability**, and **ceiling sentence match** vs **`gemini-3-flash-preview`** on the Generative Language path. Together with fewer catastrophic rows, that supports a **provisional** read: **FT is likely to be quicker and less prone to rate-limit / retry pain than this flash client** — but **production Vertex** is a **different** stack (OAuth, regional routing, quotas). **Definitive** confirmation needs **controlled test ingestions** (same slugs, pinned env) and comparison of **`stage_ms.extracting`** (and related telemetry) against **historical averages** for Vertex-backed runs.
+
+**Operational caveat:** **Fireworks** has shown **capacity / availability** issues (`RESOURCE_EXHAUSTED`, placement constraints). Attractive offline metrics do not help if the deployment cannot be scheduled when needed — so **reliance on Fireworks as the sole extraction backend** remains a **business and SRE risk** until capacity is stable or a fallback (e.g. Vertex) is explicit in runbooks.
 
 ---
 
@@ -105,7 +124,7 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
 
 **Verify the report:** open the JSON and confirm **`modelId`** / host match the baseline you intended (an earlier run saved as `eval-golden-baseline-gpt4o-mini-200.json` accidentally recorded **Fireworks** `hz8ot3bv` because `.env.local` still had **`EXTRACTION_*`** set).
 
-**When the file exists:** append its headline metrics to the table in **§2** and re-state the recommendation. **If** `subsetTextMatchRate` and `schemaPassRate` are **non-inferior** to FT on the same 200 rows, the **economic** decision shifts to **cost/latency** and **ingest** behaviour (out of scope here). **If** baseline **beats** FT on schema or text match, **pause** further FT spend until you diagnose (data, prompt fold, temperature, deployment).
+**Gemini flash headline metrics** for the golden slice are already recorded in **§2.1** (merged shard JSON). For **OpenAI** (`gpt-4o-mini`), still produce a report whose **`modelId`** / host match OpenAI — **if** `subsetTextMatchRate` and `schemaPassRate` are **non-inferior** to FT on the same row count, the **economic** decision shifts to **cost/latency** and **ingest** behaviour (out of scope here). **If** baseline **beats** FT on schema or text match, **pause** further FT spend until you diagnose (data, prompt fold, temperature, deployment).
 
 ---
 
@@ -115,7 +134,7 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
 
 2. **Do not use golden-200 alone to pick between `ytv2kq38` / `keo1sj4o` / `hz8ot3bv`** — sentence-level match is **flat**; choose on **ops** (deployment stability, cost, ingest policy) or **narrower** probes (schema-failure row inspection).
 
-3. **Complete §4 baseline file** before any **prompt** or **training-data** change intended to “beat baseline” — otherwise you cannot attribute deltas.
+3. **Gemini flash vs FT** on the golden slice is **documented in §2.1** (merged eval). Still run a **valid OpenAI baseline** (or a single-pass **`--limit 200`** Gemini run) before any **prompt** or **training-data** change intended to “beat baseline” — otherwise you cannot attribute deltas across hosts.
 
 4. **Additional testing (recommended order):**
    - **Full golden 723** — same command pair, `--limit 723`, same two `EXTRACTION_*` profiles (baseline + chosen FT). Low incremental ambiguity vs 200 if rates stay stable.
@@ -123,6 +142,8 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
    - **Re-run `pnpm ops:eval-extraction-compare`** after any manifest / `golden_holdout` regeneration (fingerprints **must** match for trend lines).
 
 5. **When ingest gates return:** re-use the same **FT vs baseline** decision only after you add **`[INGEST_TIMING]`** / log-metrics pairs on a **small** fixed URL set (see [`extraction-offline-regression-pack.md`](./extraction-offline-regression-pack.md) §0 / §3a).
+
+6. **Speed + reliability trade-off:** Offline numbers support **faster extraction** and **fewer bad rows** for **FT vs flash on the eval path**; **ingest A/B** validates extraction wall time vs history. **Fireworks availability** is the current gating concern — treat **Vertex** as the dependable default until FT hosting is provably always reachable or a **fallback** is automated. **Concrete hosting options** (Vertex custom endpoint, GKE/vLLM, other GPU APIs, primary+fallback): [extraction-fireworks-deploy.md](./extraction-fireworks-deploy.md) § *Availability, capacity, and alternative hosting*.
 
 ---
 
@@ -134,6 +155,7 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
 | A/B protocol (prompt freeze, golden-first commands) | [`extraction-offline-regression-pack.md`](./extraction-offline-regression-pack.md) §0 |
 | Step F audit log | [`docs/local/operations/phase2-step-f-local-verification-log.md`](../local/operations/phase2-step-f-local-verification-log.md) |
 | Combined eval driver | [`scripts/eval-extraction-compare.ts`](../../scripts/eval-extraction-compare.ts) |
+| Fireworks capacity, fallback, alternative hosting | [extraction-fireworks-deploy.md](./extraction-fireworks-deploy.md) § *Availability, capacity, and alternative hosting* |
 | Vertex Gemini inference (REST, Express, `generateContent` / `streamGenerateContent`) | [Model reference — inference](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference) |
 
 ---
@@ -148,3 +170,7 @@ pnpm exec tsx --env-file=.env.local scripts/eval-extraction-holdout-openai-compa
 | 2026-04-16 | §4: **Vertex AI Studio `AQ…` API keys** — table mapping `GOOGLE_AI_API_KEY` to `vertex.ts` / `gemini.ts` / embeddings / holdout eval; publisher `aiplatform…?key=` vs `generativelanguage…/openai`. |
 | 2026-04-16 | Link [Vertex inference model reference](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference) (Express vs regional REST, `generateContent` / `streamGenerateContent`). |
 | 2026-04-16 | Troubleshooting: **Multiple authentication credentials** on `generativelanguage…/openai` + `vertex.ts` fetch normalization note. |
+| 2026-04-16 | Scope: **production extraction** pinned to **Vertex** (plan change); offline FT A/B may still use Fireworks — see [extraction-ft-lean-plan.md](./extraction-ft-lean-plan.md) § *Production extraction model — Vertex*. |
+| 2026-04-16 | **§2.1:** Custom Fireworks **`hz8ot3bv`** vs **`gemini-3-flash-preview`** (merged shard eval, [`eval-golden-baseline-gemini-3-flash-merged-216.json`](../../data/phase1-training-export/eval-golden-baseline-gemini-3-flash-merged-216.json)) — outcome table vs [`eval-compare-2026-04-16-fireworks-hz8ot3bv-limit200.json`](../../data/phase1-training-export/eval-compare-2026-04-16-fireworks-hz8ot3bv-limit200.json); prod Vertex same model id, different host/auth. |
+| 2026-04-16 | §2.1 outcome: **speed hypothesis** (extraction phase); provisional **FT faster / fewer tails** vs Generative Language flash path; **ingest timing** needed vs Vertex history; **Fireworks capacity** as reliability caveat. |
+| 2026-04-16 | §5.6 + related docs: link to [extraction-fireworks-deploy.md](./extraction-fireworks-deploy.md) § *Availability, capacity, and alternative hosting* (fallback, Vertex/GKE, other providers). |

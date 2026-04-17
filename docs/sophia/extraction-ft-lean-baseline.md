@@ -31,6 +31,12 @@ If your local `manifest.json` differs, copy the two `*_16` values from **your** 
 
 Optional: `EXTRACTION_EVAL_FOLD_SYSTEM` must match training packaging (default folded user = Step A default).
 
+**Production vs offline eval:** Ingestion in production uses **Vertex** (`vertex:…` model ids) as the go-to extraction route so runs stay **reliable** and outputs remain **eligible for reuse in future training** under our constraints — see **Production extraction model — Vertex** in [extraction-ft-lean-plan.md](./extraction-ft-lean-plan.md). Holdout scripts in this doc often point `EXTRACTION_*` at **Fireworks** (or OpenAI-compatible baselines) for **FT A/B**; do not assume the same host as prod without checking the report’s `modelId` / `inferenceHost`.
+
+**Measured gap (golden slice):** Custom Fireworks FT vs **`gemini-3-flash-preview`** (offline Google eval, same model id as prod flash) — headline metrics and caveats in [extraction-ft-golden-ab-recommendations.md](./extraction-ft-golden-ab-recommendations.md) §2.1.
+
+**Fireworks capacity / other hosts:** If deployments are hard to schedule, see [extraction-fireworks-deploy.md](./extraction-fireworks-deploy.md) § *Availability, capacity, and alternative hosting* (fallback routing, Vertex endpoint, GKE, other providers).
+
 ---
 
 ## Canonical commands (fixed `--limit 200`)

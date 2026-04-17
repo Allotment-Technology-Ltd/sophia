@@ -15,6 +15,12 @@ This document is the **revised** lean loop plan (hypothesis → build → measur
 - **Measure before merge** — same two-slice eval (`pnpm ops:eval-extraction-compare`, `--limit 200`).
 - **Learn in writing** — iteration log subsection per cycle.
 
+### Production extraction model — **Vertex (plan change)**
+
+The original lean loop assumed you might serve **fine-tuned extraction** from the same vendor you train on (e.g. Fireworks) or alternate APIs for A/B. **Production ingestion extraction is now pinned to Vertex (Gemini)** as the default route: it is the **only** stack we can run **reliably at scale** while still **reusing model outputs for future training** (data-handling, ToS, and operational path align with GCP workload identity and our ingest pipeline). **Fireworks SFT + dedicated deployments** remain the **primary build path for iterative fine-tuning and offline eval** (`pnpm ops:eval-extraction-*`); that is **not** the same as the production `vertex:…` extraction slug unless you explicitly wire it. See [extraction-ft-lean-baseline.md](./extraction-ft-lean-baseline.md) for env split.
+
+**When Fireworks capacity is unreliable:** Prefer a **primary + fallback** story (FT when up, Vertex for completion) and/or move serving toward **GCP** — options and trade-offs are spelled out in [extraction-fireworks-deploy.md](./extraction-fireworks-deploy.md) § *Availability, capacity, and alternative hosting*.
+
 ```mermaid
 flowchart LR
   hypothesize[Hypothesize]

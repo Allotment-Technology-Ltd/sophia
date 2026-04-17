@@ -107,12 +107,14 @@ export function buildIngestMetricsAdvisory(
 	const grpWall = stageMs(timing, 'grouping');
 	const embWall = stageMs(timing, 'embedding');
 	const valWall = stageMs(timing, 'validating');
+	const remWall = stageMs(timing, 'remediating');
 
 	signals.stage_wall_extracting_ms = extWall;
 	signals.stage_wall_relating_ms = relWall;
 	signals.stage_wall_grouping_ms = grpWall;
 	signals.stage_wall_embedding_ms = embWall;
 	signals.stage_wall_validating_ms = valWall;
+	signals.stage_wall_remediating_ms = remWall;
 
 	const grpIn = stageTokens(timing, 'stage_input_tokens', 'grouping');
 	const grpOut = stageTokens(timing, 'stage_output_tokens', 'grouping');
@@ -180,7 +182,14 @@ export function buildIngestMetricsAdvisory(
 	if (valWall > 0 && totalWall > 0 && valWall / totalWall > 0.35) {
 		bump('watch');
 		recommendations.push(
-			'Validation wall time is high: lower VALIDATION_BATCH_TARGET_TOKENS or enable sampling (INGEST_VALIDATION_SAMPLE_RATE) if quality policy allows.'
+			'Validation wall time is high: lower VALIDATION_BATCH_TARGET_TOKENS, enable sampling (INGEST_VALIDATION_SAMPLE_RATE) if quality policy allows, or tune VALIDATION_TOKEN_ESTIMATE_MULTIPLIER if batching mis-estimates prompt size.'
+		);
+	}
+
+	if (remWall > 0 && totalWall > 0 && remWall / totalWall > 0.2 && remWall > 60_000) {
+		bump('watch');
+		recommendations.push(
+			'Remediation phase dominated wall time: includes repair, re-embed, optional INGEST_REMEDIATION_REVALIDATE (full second validation), default targeted revalidation on touched batches, and relations+grouping rerun — set INGEST_REMEDIATION_TARGETED_REVALIDATE=0 to skip targeted pass, cap INGEST_REMEDIATION_MAX_CLAIMS, or tune INGEST_REMEDIATION_RERUN_SHARE after upstream quality improves.'
 		);
 	}
 

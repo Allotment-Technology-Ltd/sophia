@@ -4,8 +4,13 @@
  * Extracted from scripts/ingest.ts for testability and reuse.
  */
 
-import type { Argument, GroupingOutput } from '$lib/server/prompts/grouping.js';
-import { normalizeValidationOutput, VALIDATION_SYSTEM, VALIDATION_USER, type ValidationOutput } from '$lib/server/prompts/validation.js';
+import type { Argument, GroupingOutput } from '../../prompts/grouping.js';
+import {
+	normalizeValidationOutput,
+	VALIDATION_SYSTEM,
+	VALIDATION_USER,
+	type ValidationOutput
+} from '../../prompts/validation.js';
 import type { PhaseOneClaim, PhaseOneRelation, ValidationBatch, ValidationBatchExecContext } from './types.js';
 import { estimateTokens, callStageModel, fixJsonWithModel, parseJsonResponse } from './model-call.js';
 import { splitClaimsIntoGroupingBatches } from './grouping-helpers.js';
@@ -277,6 +282,314 @@ export function mergeValidationOutputs(outputs: ValidationOutput[]): ValidationO
 	};
 
 	return normalizeValidationOutput(merged);
+}
+
+export type RemediationRevalidationClaimRow = {
+	position_in_source: number;
+	faithfulness_pass1: number;
+	faithfulness_pass2: number;
+	min_faithfulness: number;
+	quarantine_pass1: boolean;
+	quarantine_pass2: boolean;
+	/** Pass-2 score is strictly lower than pass-1 (merge takes min). */
+	second_pass_lowered_min: boolean;
+	/** Merged quarantine is true while pass-1 alone was false (`!q1 && q2`). */
+	quarantine_tightened_by_second: boolean;
+};
+
+export type RemediationRevalidationRelationRow = {
+	key: string;
+	from_position: number;
+	to_position: number;
+	validity_pass1: number;
+	validity_pass2: number;
+	min_validity: number;
+	quarantine_pass1: boolean;
+	quarantine_pass2: boolean;
+	second_pass_lowered_min: boolean;
+	quarantine_tightened_by_second: boolean;
+};
+
+export type RemediationRevalidationArgumentRow = {
+	key: string;
+	argument_name: string;
+	coherence_pass1: number;
+	coherence_pass2: number;
+	min_coherence: number;
+	quarantine_pass1: boolean;
+	quarantine_pass2: boolean;
+	second_pass_lowered_min: boolean;
+	quarantine_tightened_by_second: boolean;
+};
+
+export type RemediationRevalidationDiff = {
+	version: 1;
+	claims: {
+		compared: number;
+		missing_in_second_pass: number;
+		second_lowered_min: number;
+		second_raised_min: number;
+		second_same_score: number;
+		quarantine_tightened_by_second: number;
+		mean_faithfulness_pass1: number | null;
+		mean_faithfulness_pass2: number | null;
+		mean_min_faithfulness: number | null;
+	};
+	relations: {
+		compared: number;
+		missing_in_second_pass: number;
+		second_lowered_min: number;
+		second_raised_min: number;
+		second_same_score: number;
+		quarantine_tightened_by_second: number;
+		mean_validity_pass1: number | null;
+		mean_validity_pass2: number | null;
+		mean_min_validity: number | null;
+	};
+	arguments: {
+		compared: number;
+		missing_in_second_pass: number;
+		second_lowered_min: number;
+		second_raised_min: number;
+		second_same_score: number;
+		quarantine_tightened_by_second: number;
+		mean_coherence_pass1: number | null;
+		mean_coherence_pass2: number | null;
+		mean_min_coherence: number | null;
+	};
+	perClaim?: RemediationRevalidationClaimRow[];
+	perRelation?: RemediationRevalidationRelationRow[];
+	perArgument?: RemediationRevalidationArgumentRow[];
+};
+
+function mean(nums: number[]): number | null {
+	if (nums.length === 0) return null;
+	let sum = 0;
+	for (const n of nums) sum += n;
+	return sum / nums.length;
+}
+
+/**
+ * Compare the **pre-remediation** validation snapshot vs the **post-repair revalidation**
+ * output (second pass only), before `mergeValidationOutputs` combines them with the first pass.
+ * Scores are not on identical claim text: pass 1 reflects pre-repair extractions; pass 2 reflects
+ * post-remediation text (and possibly fewer relations after edge drops).
+ * Merge semantics elsewhere: min(scores), quarantine OR — second pass only changes merged
+ * results when it is stricter (lower score or adds quarantine).
+ */
+export function summarizeRemediationRevalidationDiff(
+	firstPass: ValidationOutput,
+	secondPass: ValidationOutput,
+	options?: { includePerEntityRows?: boolean }
+): RemediationRevalidationDiff {
+	const includeRows = options?.includePerEntityRows === true;
+
+	const claims1 = firstPass.claims ?? [];
+	const claimMap2 = new Map<number, NonNullable<ValidationOutput['claims']>[number]>();
+	for (const c of secondPass.claims ?? []) {
+		claimMap2.set(c.position_in_source, c);
+	}
+
+	let missingClaims = 0;
+	const claimRows: RemediationRevalidationClaimRow[] = [];
+	let cLower = 0;
+	let cRaise = 0;
+	let cSame = 0;
+	let cQtight = 0;
+	const mins: number[] = [];
+	const s1s: number[] = [];
+	const s2s: number[] = [];
+
+	for (const c1 of claims1) {
+		const pos = c1.position_in_source;
+		const c2 = claimMap2.get(pos);
+		if (!c2) {
+			missingClaims++;
+			continue;
+		}
+		const s1 = c1.faithfulness_score;
+		const s2 = c2.faithfulness_score;
+		const q1 = Boolean(c1.quarantine);
+		const q2 = Boolean(c2.quarantine);
+		const minScore = Math.min(s1, s2);
+		const lowered = s2 < s1;
+		const raised = s2 > s1;
+		const same = s2 === s1;
+		if (lowered) cLower++;
+		else if (raised) cRaise++;
+		else if (same) cSame++;
+
+		const qtight = !q1 && q2;
+		if (qtight) cQtight++;
+
+		mins.push(minScore);
+		s1s.push(s1);
+		s2s.push(s2);
+
+		const row: RemediationRevalidationClaimRow = {
+			position_in_source: pos,
+			faithfulness_pass1: s1,
+			faithfulness_pass2: s2,
+			min_faithfulness: minScore,
+			quarantine_pass1: q1,
+			quarantine_pass2: q2,
+			second_pass_lowered_min: lowered,
+			quarantine_tightened_by_second: qtight
+		};
+		claimRows.push(row);
+	}
+
+	const rel1 = firstPass.relations ?? [];
+	const relMap2 = new Map<string, NonNullable<ValidationOutput['relations']>[number]>();
+	for (const r of secondPass.relations ?? []) {
+		relMap2.set(`${r.from_position}->${r.to_position}`, r);
+	}
+
+	let missingRel = 0;
+	const relRows: RemediationRevalidationRelationRow[] = [];
+	let rLower = 0;
+	let rRaise = 0;
+	let rSame = 0;
+	let rQtight = 0;
+	const rMins: number[] = [];
+	const r1s: number[] = [];
+	const r2s: number[] = [];
+
+	for (const a of rel1) {
+		const key = `${a.from_position}->${a.to_position}`;
+		const b = relMap2.get(key);
+		if (!b) {
+			missingRel++;
+			continue;
+		}
+		const s1 = a.validity_score;
+		const s2 = b.validity_score;
+		const q1 = Boolean(a.quarantine);
+		const q2 = Boolean(b.quarantine);
+		const minScore = Math.min(s1, s2);
+		if (s2 < s1) rLower++;
+		else if (s2 > s1) rRaise++;
+		else if (s2 === s1) rSame++;
+
+		const qtight = !q1 && q2;
+		if (qtight) rQtight++;
+
+		rMins.push(minScore);
+		r1s.push(s1);
+		r2s.push(s2);
+
+		relRows.push({
+			key,
+			from_position: a.from_position,
+			to_position: a.to_position,
+			validity_pass1: s1,
+			validity_pass2: s2,
+			min_validity: minScore,
+			quarantine_pass1: q1,
+			quarantine_pass2: q2,
+			second_pass_lowered_min: s2 < s1,
+			quarantine_tightened_by_second: qtight
+		});
+	}
+
+	const arg1 = firstPass.arguments ?? [];
+	const argMap2 = new Map<string, NonNullable<ValidationOutput['arguments']>[number]>();
+	for (const a of secondPass.arguments ?? []) {
+		argMap2.set(a.argument_name.trim().toLowerCase(), a);
+	}
+
+	let missingArg = 0;
+	const argRows: RemediationRevalidationArgumentRow[] = [];
+	let gLower = 0;
+	let gRaise = 0;
+	let gSame = 0;
+	let gQtight = 0;
+	const gMins: number[] = [];
+	const g1s: number[] = [];
+	const g2s: number[] = [];
+
+	for (const a of arg1) {
+		const key = a.argument_name.trim().toLowerCase();
+		const b = argMap2.get(key);
+		if (!b) {
+			missingArg++;
+			continue;
+		}
+		const s1 = a.coherence_score;
+		const s2 = b.coherence_score;
+		const q1 = Boolean(a.quarantine);
+		const q2 = Boolean(b.quarantine);
+		const minScore = Math.min(s1, s2);
+		if (s2 < s1) gLower++;
+		else if (s2 > s1) gRaise++;
+		else if (s2 === s1) gSame++;
+
+		const qtight = !q1 && q2;
+		if (qtight) gQtight++;
+
+		gMins.push(minScore);
+		g1s.push(s1);
+		g2s.push(s2);
+
+		argRows.push({
+			key,
+			argument_name: a.argument_name,
+			coherence_pass1: s1,
+			coherence_pass2: s2,
+			min_coherence: minScore,
+			quarantine_pass1: q1,
+			quarantine_pass2: q2,
+			second_pass_lowered_min: s2 < s1,
+			quarantine_tightened_by_second: qtight
+		});
+	}
+
+	const comparedClaims = claims1.length - missingClaims;
+
+	const out: RemediationRevalidationDiff = {
+		version: 1,
+		claims: {
+			compared: comparedClaims,
+			missing_in_second_pass: missingClaims,
+			second_lowered_min: cLower,
+			second_raised_min: cRaise,
+			second_same_score: cSame,
+			quarantine_tightened_by_second: cQtight,
+			mean_faithfulness_pass1: mean(s1s),
+			mean_faithfulness_pass2: mean(s2s),
+			mean_min_faithfulness: mean(mins)
+		},
+		relations: {
+			compared: rel1.length - missingRel,
+			missing_in_second_pass: missingRel,
+			second_lowered_min: rLower,
+			second_raised_min: rRaise,
+			second_same_score: rSame,
+			quarantine_tightened_by_second: rQtight,
+			mean_validity_pass1: mean(r1s),
+			mean_validity_pass2: mean(r2s),
+			mean_min_validity: mean(rMins)
+		},
+		arguments: {
+			compared: arg1.length - missingArg,
+			missing_in_second_pass: missingArg,
+			second_lowered_min: gLower,
+			second_raised_min: gRaise,
+			second_same_score: gSame,
+			quarantine_tightened_by_second: gQtight,
+			mean_coherence_pass1: mean(g1s),
+			mean_coherence_pass2: mean(g2s),
+			mean_min_coherence: mean(gMins)
+		}
+	};
+
+	if (includeRows) {
+		out.perClaim = claimRows;
+		out.perRelation = relRows;
+		out.perArgument = argRows;
+	}
+
+	return out;
 }
 
 const MAX_VALIDATION_CONTEXT_SPLIT_DEPTH = 8;

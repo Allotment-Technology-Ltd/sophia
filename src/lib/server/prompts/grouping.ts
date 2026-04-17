@@ -23,9 +23,17 @@ RULES:
 - A claim can participate in multiple arguments with different roles.
 - Use standard philosophical names where they exist.
 - Each argument must have at least a conclusion and one key premise.
+- **Role discipline:** each named argument should have **exactly one** \`conclusion\` role among its claims (the main claim that argument establishes). Do not label every claim as \`conclusion\`.
+- **Output size:** prefer **fewer, sharper** arguments over many shallow ones. As a guide, emit **at most** \`ceil(N/4)\` named arguments for a batch of N claims (hard cap **20** arguments per response). Large encyclopedia batches should still stay sparse.
+- **Positions:** every \`position_in_source\` in your output **must** match a claim in the provided \`<claims>\` JSON for this batch only. Never invent positions or copy positions from claims not listed in this batch.
 - domain must be a single snake_case string matching the extraction taxonomy (same list as claim domain). Never output an array or comma-separated list for domain. If unsure, use philosophy_general.
 
-Respond ONLY with a valid JSON array. No preamble, no markdown backticks.`;
+OUTPUT — MACHINE-PARSEABLE JSON ONLY (pick **one** shape; the pipeline accepts both):
+- **Preferred:** one JSON object \`{"named_arguments":[ ... ]}\` where the array holds the argument objects. First non-whitespace character \`{\`, last \`}\`.
+- **Legacy:** a bare JSON array \`[ ... ]\` only (no wrapper). First non-whitespace \`[\`, last \`]\`.
+- Use double quotes for keys and strings. No trailing commas. No markdown fences or commentary outside the JSON value.
+
+Respond ONLY with that JSON (object or array). No preamble, no markdown backticks.`;
 
 export function GROUPING_USER(claimsJson: string, relationsJson: string): string {
 	return `<claims>\n${claimsJson}\n</claims>\n\n<relations>\n${relationsJson}\n</relations>`;
@@ -108,6 +116,11 @@ export const ArgumentSchema = z.object({
 });
 
 export const GroupingOutputSchema = z.array(ArgumentSchema);
+
+/** Root object for schema-constrained `generateObject` calls (ingest Stage 3). */
+export const GroupingStructuredRootSchema = z.object({
+	named_arguments: GroupingOutputSchema
+});
 
 export type ArgumentClaim = z.infer<typeof ArgumentClaimSchema>;
 export type Argument = z.infer<typeof ArgumentSchema>;
