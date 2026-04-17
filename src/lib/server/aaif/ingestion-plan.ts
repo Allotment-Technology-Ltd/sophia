@@ -407,7 +407,8 @@ export async function planIngestionStage(
 
   if (stage === 'extraction') {
     const extractionOverride = buildExtractionOpenAiCompatibleRoute();
-    if (extractionOverride) {
+    /** Restormel-bound extraction (Neon or env route id) must not be bypassed by EXTRACTION_BASE_URL FT. */
+    if (extractionOverride && !routeIdForResolve) {
       const usage = estimateStageUsage(stage, context);
       return {
         stage,
@@ -442,7 +443,7 @@ export async function planIngestionStage(
     const repairEnvPin = readEnvPinnedModel('json_repair');
     const repairExplicitlyPinned = Boolean(repairEnvPin.provider && repairEnvPin.modelId);
     const extractionRepairRoute = buildExtractionOpenAiCompatibleRoute();
-    if (useExtractionRepair && extractionRepairRoute && !repairExplicitlyPinned) {
+    if (useExtractionRepair && extractionRepairRoute && !repairExplicitlyPinned && !routeIdForResolve) {
       const usage = estimateStageUsage(stage, context);
       return {
         stage,

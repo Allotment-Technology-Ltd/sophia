@@ -226,6 +226,64 @@
     }
   }
 
+  function sortedIngestionRoutesForPicker(list: RouteRow[]): RouteRow[] {
+    return [...list].sort((a, b) => {
+      const sa = (a.stage ?? '').trim().length > 0 ? 1 : 0;
+      const sb = (b.stage ?? '').trim().length > 0 ? 1 : 0;
+      if (sa !== sb) return sb - sa;
+      return (a.name ?? a.id).localeCompare(b.name ?? b.id, undefined, { sensitivity: 'base' });
+    });
+  }
+
+  function effectiveRouteIdForStage(stageKey: string): string {
+    const o = routeBindingOverrideByStage[stageKey];
+    if (typeof o === 'string' && o.trim()) return o.trim();
+    return resolveRouteForStage(ingestionRoutes, stageKey, null)?.id ?? '';
+  }
+
+  function bindingSelectValue(stageKey: string): string {
+    const o = routeBindingOverrideByStage[stageKey];
+    if (typeof o === 'string' && o.trim()) return o.trim();
+    return ROUTE_AUTO;
+  }
+
+  async function onPickRouteForStage(stageKey: string, raw: string) {
+    const nextOverride = raw === ROUTE_AUTO ? null : raw;
+    routeBindingOverrideByStage = { ...routeBindingOverrideByStage, [stageKey]: nextOverride };
+    routeBindingsMessage = '';
+    const eff = effectiveRouteIdForStage(stageKey);
+    if (!routeBindingsDbAvailable) {
+      routeBindingsMessage =
+        'DATABASE_URL unavailable here — route pins are not saved; set RESTORMEL_INGEST_*_ROUTE_ID on the worker or run where Neon is configured.';
+      await loadStepsForRoutes([eff].filter(Boolean));
+      return;
+    }
+    try {
+      const h = await authHeaders();
+      const res = await fetch('/api/admin/ingestion-routing/route-bindings', {
+        method: 'PUT',
+        headers: { ...h, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bindings: { [stageKey]: nextOverride } })
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof payload.error === 'string' ? payload.error : `HTTP ${res.status}`);
+      }
+      if (payload.bindings && typeof payload.bindings === 'object') {
+        const merged = payload.bindings as Record<string, string>;
+        const next: Record<string, string | null> = {};
+        for (const row of pipelineStages) {
+          const v = merged[row.key];
+          next[row.key] = typeof v === 'string' && v.trim() ? v.trim() : null;
+        }
+        routeBindingOverrideByStage = next;
+      }
+      await loadStepsForRoutes([effectiveRouteIdForStage(stageKey)].filter(Boolean));
+    } catch (e) {
+      routeBindingsMessage = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   async function createRouteInKeys() {
     createFeedback = '';
     const name = createName.trim();
@@ -352,64 +410,6 @@
       gatewayMessage = e instanceof Error ? e.message : String(e);
     } finally {
       gatewayBusy = false;
-    }
-  }
-
-  function sortedIngestionRoutesForPicker(list: RouteRow[]): RouteRow[] {
-    return [...list].sort((a, b) => {
-      const sa = (a.stage ?? '').trim().length > 0 ? 1 : 0;
-      const sb = (b.stage ?? '').trim().length > 0 ? 1 : 0;
-      if (sa !== sb) return sb - sa;
-      return (a.name ?? a.id).localeCompare(b.name ?? b.id, undefined, { sensitivity: 'base' });
-    });
-  }
-
-  function effectiveRouteIdForStage(stageKey: string): string {
-    const o = routeBindingOverrideByStage[stageKey];
-    if (typeof o === 'string' && o.trim()) return o.trim();
-    return resolveRouteForStage(ingestionRoutes, stageKey, null)?.id ?? '';
-  }
-
-  function bindingSelectValue(stageKey: string): string {
-    const o = routeBindingOverrideByStage[stageKey];
-    if (typeof o === 'string' && o.trim()) return o.trim();
-    return ROUTE_AUTO;
-  }
-
-  async function onPickRouteForStage(stageKey: string, raw: string) {
-    const nextOverride = raw === ROUTE_AUTO ? null : raw;
-    routeBindingOverrideByStage = { ...routeBindingOverrideByStage, [stageKey]: nextOverride };
-    routeBindingsMessage = '';
-    const eff = effectiveRouteIdForStage(stageKey);
-    if (!routeBindingsDbAvailable) {
-      routeBindingsMessage =
-        'DATABASE_URL unavailable here — bindings are not saved; configure RESTORMEL_INGEST_*_ROUTE_ID on workers or use an environment with Neon.';
-      await loadStepsForRoutes([eff].filter(Boolean));
-      return;
-    }
-    try {
-      const h = await authHeaders();
-      const res = await fetch('/api/admin/ingestion-routing/route-bindings', {
-        method: 'PUT',
-        headers: { ...h, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bindings: { [stageKey]: nextOverride } })
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(typeof payload.error === 'string' ? payload.error : `HTTP ${res.status}`);
-      }
-      if (payload.bindings && typeof payload.bindings === 'object') {
-        const merged = payload.bindings as Record<string, string>;
-        const next: Record<string, string | null> = {};
-        for (const row of pipelineStages) {
-          const v = merged[row.key];
-          next[row.key] = typeof v === 'string' && v.trim() ? v.trim() : null;
-        }
-        routeBindingOverrideByStage = next;
-      }
-      await loadStepsForRoutes([effectiveRouteIdForStage(stageKey)].filter(Boolean));
-    } catch (e) {
-      routeBindingsMessage = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -717,7 +717,10 @@
       Pick a <strong>Restormel route</strong> per phase to pin which UUID is passed to
       <code class="rt-code">POST /resolve</code> on workers (saved in <strong>Neon</strong>, overrides
       <code class="rt-code">RESTORMEL_INGEST_*_ROUTE_ID</code> when set). Choose
-      <strong>Auto</strong> to clear the Neon override and fall back to env + Keys discovery.
+      <strong>Auto</strong> to clear the Neon override and fall back to env + Keys discovery. When
+      <code class="rt-code">EXTRACTION_BASE_URL</code> is set on the worker but no extraction route is pinned here or
+      in env, extraction uses that OpenAI-compatible endpoint first — unless a Neon or env route id is set for
+      extraction, which takes precedence.
     </p>
     {#if routeBindingsMessage}
       <p class={routeBindingsMessage.includes('DATABASE_URL') ? 'rt-muted rt-p' : 'rt-err rt-p'} role="status">
