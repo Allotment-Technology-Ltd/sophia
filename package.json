@@ -120,7 +120,7 @@
     "@google-cloud/logging": "^11.1.0",
     "@google/generative-ai": "^0.24.1",
     "@neondatabase/neon-js": "0.2.0-beta.1",
-    "@neondatabase/serverless": "^0.10.4",
+    "@neondatabase/serverless": "^1.1.0",
     "@restormel/aaif": "workspace:*",
     "@restormel/context-packs": "^0.1.2",
     "@restormel/contracts": "^0.1.1",
