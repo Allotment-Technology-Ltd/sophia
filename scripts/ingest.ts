@@ -255,8 +255,20 @@ const INGEST_MODEL_TIMEOUT_MS = Number(process.env.INGEST_MODEL_TIMEOUT_MS || '3
 const INGEST_EXTRACTION_TIMEOUT_FALLBACK_MS = Number(process.env.INGEST_EXTRACTION_TIMEOUT_FALLBACK_MS || '180000');
 const VALIDATION_MODEL_TIMEOUT_MS = Number(process.env.VALIDATION_MODEL_TIMEOUT_MS || '300000');
 
-/** Fallback when `INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS` is unset (assert-only cap still uses env). */
-const DEFAULT_INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS = 8192;
+/**
+ * Baseline extraction completion budget when `INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS` is unset.
+ * Dense SEP batches (20–30 passages) routinely need >8k completion tokens of JSON; see
+ * `resolveExtractionMaxOutputTokensForBatch` for passage-scaled cap (still bounded by
+ * `INGEST_EXTRACTION_MAX_OUTPUT_TOKENS_CAP`).
+ */
+const DEFAULT_INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS = 16_384;
+/** Upper bound for extraction `maxOutputTokens` after auto-scaling (override via env for rare providers). */
+const INGEST_EXTRACTION_MAX_OUTPUT_TOKENS_CAP = (() => {
+	const raw = (process.env.INGEST_EXTRACTION_MAX_OUTPUT_TOKENS_CAP ?? '').trim();
+	const n = raw ? Number(raw) : Number.NaN;
+	if (Number.isFinite(n) && n >= 8192) return Math.min(131_072, Math.trunc(n));
+	return 32_768;
+})();
 /**
  * Fallback when `INGEST_STAGE_JSON_REPAIR_MAX_OUTPUT_TOKENS` is unset — tight cap so repair does not
  * request 32k completions by default (see `maxOutputTokensForJsonRepair`).
@@ -1188,8 +1200,34 @@ function makeStageBudget(stage: StageKey): StageBudget {
 	};
 }
 
-function maxOutputTokensForExtraction(budget: StageBudget): number {
-	return budget.maxOutputTokens ?? DEFAULT_INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS;
+/**
+ * When `INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS` is set, it wins (clamped to cap).
+ * Otherwise scale with passage count so multi-passage SEP batches do not exhaust every model at 8k.
+ */
+function resolveExtractionMaxOutputTokensForBatch(
+	budget: StageBudget,
+	passageCount: number,
+	estimatedPromptTokens: number
+): number {
+	if (budget.maxOutputTokens != null && budget.maxOutputTokens > 0) {
+		return Math.min(INGEST_EXTRACTION_MAX_OUTPUT_TOKENS_CAP, budget.maxOutputTokens);
+	}
+	const n = Math.max(1, Math.trunc(passageCount));
+	const base = DEFAULT_INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS;
+	const passageScaled = Math.ceil(n * 480 + 4096);
+	const promptHint = Math.ceil(Math.min(Math.max(0, estimatedPromptTokens), 14_000) * 0.25);
+	const resolved = Math.max(8192, base, passageScaled + promptHint);
+	return Math.min(INGEST_EXTRACTION_MAX_OUTPUT_TOKENS_CAP, resolved);
+}
+
+function isExtractionOutputTruncationError(message: string): boolean {
+	const m = message.toLowerCase();
+	return (
+		m.includes('max_tokens reached') ||
+		m.includes('max output tokens') ||
+		(m.includes('truncat') && m.includes('output')) ||
+		(m.includes('finishreason') && m.includes('length'))
+	);
 }
 
 /** Replace one extraction batch with two smaller batches (passage list bisect or single-passage text bisect). */
@@ -4291,6 +4329,9 @@ async function main() {
 			'  INGEST_STAGE_EXTRACTION_TIMEOUT_MS / INGEST_EXTRACTION_TIMEOUT_FALLBACK_MS   Per extraction HTTP call (default 180s if unset); INGEST_MODEL_TIMEOUT_MS applies to other LLM stages (default 360s)'
 		);
 		console.error(
+			'  INGEST_STAGE_EXTRACTION_MAX_OUTPUT_TOKENS   Fixed completion cap for Stage 1 (when unset, scales with passage count, capped by INGEST_EXTRACTION_MAX_OUTPUT_TOKENS_CAP default 32768)'
+		);
+		console.error(
 			'  INGEST_GROUPING_ADAPTIVE=1 (default)   Mid–Stage 3: shrink batch targets + preempt headroom after truncation / JSON repair / collapse; INGEST_GROUPING_ADAPT_* knobs tune shrink ratio, floors, regroup cap, slow-call timeout growth'
 		);
 		console.error('\nRestormel route env vars (optional):');
@@ -4832,6 +4873,7 @@ async function main() {
 							sourceMeta.author.join(', ') || 'Unknown',
 							renderedBatch
 						);
+						const extractionEstPromptTok = estimateTokens(renderedBatch);
 
 						let rawResponse: string;
 						try {
@@ -4843,7 +4885,11 @@ async function main() {
 								systemPrompt: EXTRACTION_SYSTEM,
 								userMessage: userMsg,
 								label: `Extracting batch ${batchLabel} (${queuePos}/${queueTotal})`,
-								maxTokens: maxOutputTokensForExtraction(extractionBudget),
+								maxTokens: resolveExtractionMaxOutputTokensForBatch(
+									extractionBudget,
+									batch.length,
+									extractionEstPromptTok
+								),
 								planningContext: basePlanningContext
 							});
 						} catch (apiError) {
@@ -4854,7 +4900,7 @@ async function main() {
 								m.includes('(aborted)') ||
 								m.includes('aborterror') ||
 								(m.includes('timeout') && m.includes('extraction'));
-							if (apiMsg.includes('truncated (max_tokens reached)')) {
+							if (isExtractionOutputTruncationError(apiMsg)) {
 								const halves = replaceExtractionBatchWithSplitHalves(batch);
 								if (halves) {
 									if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
@@ -4940,7 +4986,7 @@ async function main() {
 								);
 							} catch (fixError) {
 								const fixMsg = fixError instanceof Error ? fixError.message : String(fixError);
-								if (fixMsg.includes('truncated (max_tokens reached)')) {
+								if (isExtractionOutputTruncationError(fixMsg)) {
 									const halves = replaceExtractionBatchWithSplitHalves(batch);
 									if (halves) {
 										if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
@@ -5024,6 +5070,7 @@ async function main() {
 										sourceMeta.author.join(', ') || 'Unknown',
 										renderedBatch
 									);
+									const parEstTok = estimateTokens(renderedBatch);
 									const rawResponse = await callStageModelWithProgress({
 										stage: 'extraction',
 										plan: extractionPlan,
@@ -5032,7 +5079,11 @@ async function main() {
 										systemPrompt: EXTRACTION_SYSTEM,
 										userMessage: userMsg,
 										label: `Extracting batch ${batchOrd} (${queuePos}/${queueTotal})`,
-										maxTokens: maxOutputTokensForExtraction(extractionBudget),
+										maxTokens: resolveExtractionMaxOutputTokensForBatch(
+											extractionBudget,
+											b.length,
+											parEstTok
+										),
 										planningContext: basePlanningContext
 									});
 									logStageCost('Extraction', extractionTracker, extractionPlan);
