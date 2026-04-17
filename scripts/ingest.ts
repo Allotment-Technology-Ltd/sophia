@@ -174,6 +174,11 @@ import {
 } from '../src/lib/server/ingestion/stages/grouping-helpers.js';
 import { resolveGroupingAutoBatchTarget } from '../src/lib/server/ingestion/resolveGroupingAutoBatchTarget.js';
 import { resolveRelationsAutoBatchTarget } from '../src/lib/server/ingestion/resolveRelationsAutoBatchTarget.js';
+import {
+	estimateGroupingStructuredOutputTokens,
+	groupingBatchPreemptReason,
+	resolveGroupingPreemptMaxClaimsPerBatch
+} from '../src/lib/server/ingestion/groupingPreemptLimits.js';
 import { normalizeExtractionPayload } from '../src/lib/server/ingestion/stages/extraction-helpers.js';
 import {
 	summarizeRemediationRevalidationDiff,
@@ -382,7 +387,7 @@ const GROUPING_OUTPUT_VS_INPUT_FACTOR = Math.max(
 	1,
 	Math.min(4, Number(process.env.INGEST_GROUPING_OUTPUT_VS_INPUT_FACTOR ?? '1.85') || 1.85)
 );
-/** Fraction of maxOutputTokens used as ceiling for {@link estimatedGroupingStructuredOutputTokens} pre-split. */
+/** Fraction of maxOutputTokens used as ceiling for structured-output size pre-split (see groupingPreemptLimits). */
 const GROUPING_OUTPUT_HEADROOM = Math.max(
 	0.5,
 	Math.min(0.95, Number(process.env.INGEST_GROUPING_OUTPUT_HEADROOM ?? '0.82') || 0.82)
@@ -1647,20 +1652,21 @@ function resolveGroupingMaxOutputTokens(plan: IngestionStagePlan): number {
 	return 32_768;
 }
 
-function estimatedGroupingStructuredOutputTokens(batch: GroupingBatch): number {
-	const claimsJson = JSON.stringify(batch.claims, null, 2);
-	return Math.ceil(estimateTokens(claimsJson) * GROUPING_OUTPUT_VS_INPUT_FACTOR);
-}
-
 function groupingBatchLikelyExceedsMaxOutput(
 	batch: GroupingBatch,
 	maxOutputTokens: number,
-	outputHeadroomFraction: number = GROUPING_OUTPUT_HEADROOM
+	outputHeadroomFraction: number = GROUPING_OUTPUT_HEADROOM,
+	maxClaims: number | undefined = resolveGroupingPreemptMaxClaimsPerBatch()
 ): boolean {
-	const maxClaims = parsePositiveInt(process.env.INGEST_GROUPING_MAX_CLAIMS_PER_BATCH);
-	if (maxClaims != null && batch.claims.length > maxClaims) return true;
-	const estOut = estimatedGroupingStructuredOutputTokens(batch);
-	return estOut > Math.floor(maxOutputTokens * outputHeadroomFraction);
+	return (
+		groupingBatchPreemptReason({
+			batch,
+			maxOutputTokens,
+			outputHeadroomFraction,
+			outputVsInputFactor: GROUPING_OUTPUT_VS_INPUT_FACTOR,
+			maxClaims
+		}) !== null
+	);
 }
 
 /**
@@ -1675,19 +1681,34 @@ function subdivideGroupingBatchesForOutputHeadroom(
 	if (preemptOff === '0' || preemptOff.toLowerCase() === 'false' || preemptOff.toLowerCase() === 'off') {
 		return batches;
 	}
+	const maxClaims = resolveGroupingPreemptMaxClaimsPerBatch();
 	let out = [...batches];
 	for (let guard = 0; guard < 400; guard++) {
 		const i = out.findIndex((b) =>
-			groupingBatchLikelyExceedsMaxOutput(b, maxOutputTokens, outputHeadroomFraction)
+			groupingBatchLikelyExceedsMaxOutput(b, maxOutputTokens, outputHeadroomFraction, maxClaims)
 		);
 		if (i === -1) break;
 		const halves = splitGroupingBatchInHalf(out[i]!);
 		if (!halves) break;
-		const est = estimatedGroupingStructuredOutputTokens(out[i]!);
-		const budget = Math.floor(maxOutputTokens * outputHeadroomFraction);
-		console.log(
-			`  [PREEMPT] Splitting grouping batch ${i + 1}/${out.length} before model call — est. structured output ~${est.toLocaleString()} tok > ${budget.toLocaleString()} tok budget (${out[i]!.claims.length} claims)`
-		);
+		const batch = out[i]!;
+		const reason = groupingBatchPreemptReason({
+			batch,
+			maxOutputTokens,
+			outputHeadroomFraction,
+			outputVsInputFactor: GROUPING_OUTPUT_VS_INPUT_FACTOR,
+			maxClaims
+		});
+		if (reason === 'claims' && maxClaims != null) {
+			console.log(
+				`  [PREEMPT] Splitting grouping batch ${i + 1}/${out.length} before model call — ${batch.claims.length} claims > ${maxClaims} cap (dense graphs: token-only batching can pack too many claims; smaller batches reduce structured-generation wall time)`
+			);
+		} else {
+			const est = estimateGroupingStructuredOutputTokens(batch, GROUPING_OUTPUT_VS_INPUT_FACTOR);
+			const budget = Math.floor(maxOutputTokens * outputHeadroomFraction);
+			console.log(
+				`  [PREEMPT] Splitting grouping batch ${i + 1}/${out.length} before model call — est. structured output ~${est.toLocaleString()} tok > ${budget.toLocaleString()} tok budget (${batch.claims.length} claims)`
+			);
+		}
 		out.splice(i, 1, halves[0], halves[1]);
 	}
 	return out;
@@ -2655,9 +2676,11 @@ async function callStageModel(params: {
 			// Abort in-flight HTTP when the stage budget elapses. Plain `Promise.race` does not cancel
 			// `generateText`, so a stalled provider could sit until TCP idle — abortSignal tears down the fetch.
 			const abortController = new AbortController();
-			const abortTimer = setTimeout(() => {
+			let abortTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
 				abortController.abort();
 			}, budget.timeoutMs);
+			/** Signal used for the final generateText call — grouping may reset after structured `generateObject` fails. */
+			let textAbortSignal: AbortSignal = abortController.signal;
 			try {
 				if (stage === 'grouping') {
 					const structuredSuffix = `\n\nReturn a single JSON object (no markdown) with exactly this structure: {"named_arguments":[ ... ]} where "named_arguments" is the array of named-argument objects matching the system specification.`;
@@ -2739,13 +2762,21 @@ async function callStageModel(params: {
 						if (activeIngestTiming) {
 							activeIngestTiming.grouping_structured_object_fallbacks += 1;
 						}
+						// Structured attempt may consume the full stage timeout (or leave the controller aborted).
+						// Give JSON-text `generateText` a fresh budget so the fallback is not DOA.
+						if (abortTimer !== undefined) clearTimeout(abortTimer);
+						const textAbort = new AbortController();
+						textAbortSignal = textAbort.signal;
+						abortTimer = setTimeout(() => {
+							textAbort.abort();
+						}, budget.timeoutMs);
 					}
 				}
 
 				let result: Awaited<ReturnType<typeof generateText>>;
 				result = await runWithIngestTelemetryHeartbeat({
 					stage,
-					work: () => generateText({ ...textGenParams, abortSignal: abortController.signal })
+					work: () => generateText({ ...textGenParams, abortSignal: textAbortSignal })
 				});
 				if (activeIngestTiming) {
 					const wall = Date.now() - callStarted;
@@ -2785,14 +2816,14 @@ async function callStageModel(params: {
 				assertStageBudget(budget, tracker);
 				return result.text;
 			} catch (e) {
-				if (abortController.signal.aborted) {
+				if (textAbortSignal.aborted) {
 					throw new Error(
 						`${stage} ${activePlan.provider}:${activePlan.model} timed out after ${budget.timeoutMs}ms (aborted)`
 					);
 				}
 				throw e;
 			} finally {
-				clearTimeout(abortTimer);
+				if (abortTimer !== undefined) clearTimeout(abortTimer);
 			}
 		}
 
