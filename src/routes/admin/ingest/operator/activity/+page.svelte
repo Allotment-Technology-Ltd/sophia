@@ -69,13 +69,13 @@
     const params = new URLSearchParams();
     params.set('runId', runId);
     params.set('monitor', '1');
-    window.location.href = `/admin/ingest/legacy-wizard?${params.toString()}`;
+    window.location.href = `/admin/ingest/run-console?${params.toString()}`;
   }
 
   function viewSavedReport(runId: string): void {
     const params = new URLSearchParams();
     params.set('reportRunId', runId);
-    window.location.href = `/admin/ingest/legacy-wizard?${params.toString()}`;
+    window.location.href = `/admin/ingest/run-console?${params.toString()}`;
   }
 
   async function load() {
@@ -136,7 +136,7 @@
           {#each awaitingNeon as r (r.id)}
             <tr>
               <td>
-                <a class="op-a" href="/admin/ingest/legacy-wizard?runId={encodeURIComponent(r.id)}&monitor=1"
+                <a class="op-a" href="/admin/ingest/run-console?runId={encodeURIComponent(r.id)}&monitor=1"
                   >{r.id.slice(0, 10)}…</a>
               </td>
               <td class="op-ellip">{r.sourceUrl}</td>

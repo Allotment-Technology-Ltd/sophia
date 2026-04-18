@@ -37,8 +37,8 @@
     <p class="op-kicker">Admin</p>
     <h1 class="op-h1">Ingestion operator hub</h1>
     <p class="op-sub">
-      Start with <strong>Durable jobs</strong> for batch work. Use the staged flows when extraction and the pipeline tail are separate steps. <strong>Activity</strong> replaces the old “all runs” page (in-memory + Neon + Firestore reports). Rare full routing UI:
-      <a href="/admin/ingest/legacy-wizard">Legacy wizard</a>.
+      Start with <strong>Durable jobs</strong> for batch work. Use the staged flows when extraction and the pipeline tail are separate steps. <strong>Activity</strong> replaces the old “all runs” page (in-memory + Neon + Firestore reports). For live attach to a single orchestration run (same instance), use the
+      <a href="/admin/ingest/run-console">run console</a>.
     </p>
   </header>
 

@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { getIdToken } from '$lib/authClient';
 	import { MAX_DURABLE_INGEST_JOB_CONCURRENCY } from '$lib/ingestionJobConcurrency';
 	import {
@@ -43,6 +45,8 @@
 	let loading = $state(true);
 	let submitting = $state(false);
 	let submitMessage = $state('');
+	/** One-shot banner from run-console when a monitored run fails mid-flight (query param stripped after read). */
+	let ingestNotice = $state('');
 
 	let urlsInput = $state('');
 	let concurrency = $state(MAX_DURABLE_INGEST_JOB_CONCURRENCY);
@@ -815,6 +819,27 @@
 			/* ignore */
 		}
 		jobWorkerFieldsHydrated = true;
+
+		const prefill =
+			page.url.searchParams.get('prefillUrl')?.trim() ||
+			page.url.searchParams.get('sourceUrl')?.trim();
+		if (prefill) {
+			urlsInput = urlsInput.trim() ? `${urlsInput.trim()}\n${prefill}` : prefill;
+			const next = new URL(page.url);
+			next.searchParams.delete('prefillUrl');
+			next.searchParams.delete('sourceUrl');
+			next.searchParams.delete('inspect');
+			void goto(`${next.pathname}${next.search}`, { replaceState: true, noScroll: true });
+		}
+
+		const noticeParam = page.url.searchParams.get('ingestNotice');
+		if (noticeParam != null && noticeParam.trim() !== '') {
+			ingestNotice = noticeParam.trim();
+			const next = new URL(page.url);
+			next.searchParams.delete('ingestNotice');
+			void goto(`${next.pathname}${next.search}`, { replaceState: true, noScroll: true });
+		}
+
 		void loadJobs();
 		void loadSepPresets();
 		void loadDlq();
@@ -907,6 +932,25 @@
 		<p class="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100" role="alert">
 			{loadError}
 		</p>
+	{/if}
+
+	{#if ingestNotice}
+		<div
+			class="mb-4 flex items-start justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-50"
+			role="status"
+		>
+			<p class="min-w-0 flex-1 leading-6">
+				<strong class="font-medium text-amber-100">Run ended with an error</strong>
+				<span class="mt-1 block font-mono text-xs text-amber-100/90">{ingestNotice}</span>
+			</p>
+			<button
+				type="button"
+				class="shrink-0 rounded-md border border-amber-400/50 px-2 py-1 text-xs font-medium text-amber-100 hover:bg-amber-500/20"
+				onclick={() => (ingestNotice = '')}
+			>
+				Dismiss
+			</button>
+		</div>
 	{/if}
 
 	<section class="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5" aria-labelledby="new-job-heading">
@@ -1124,7 +1168,7 @@
 					<strong class="font-medium text-sophia-dark-text">Restormel Keys</strong> (per-phase route UUIDs in Neon + resolve); enable
 					<strong class="font-medium text-sophia-dark-text">Apply per-phase model overrides</strong> below only if you intentionally want
 					<code class="rounded bg-black/25 px-1 font-mono text-[11px]">INGEST_PIN_*</code> from this browser. The
-					<a href="/admin/ingest/legacy-wizard" class="text-[var(--color-sage)] underline-offset-2 hover:underline">legacy wizard</a>
+					<a href="/admin/ingest/run-console" class="text-[var(--color-sage)] underline-offset-2 hover:underline">live run console</a>
 					keeps its own merge behavior.
 				</p>
 				<label

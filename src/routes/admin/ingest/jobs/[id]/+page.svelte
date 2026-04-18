@@ -279,7 +279,7 @@
 		const params = new URLSearchParams();
 		params.set('runId', runId);
 		params.set('monitor', '1');
-		const url = `/admin/ingest/legacy-wizard?${params.toString()}`;
+		const url = `/admin/ingest/run-console?${params.toString()}`;
 		if (!browser) return;
 		const win = window.open(url, '_blank', 'noopener,noreferrer');
 		if (!win || win.closed) {

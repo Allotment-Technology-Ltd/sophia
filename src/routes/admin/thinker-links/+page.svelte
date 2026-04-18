@@ -166,27 +166,9 @@
     >;
   }
 
-  function normalizeSourceTypeForIngest(sourceType: string | null): string {
-    if (
-      sourceType === 'sep_entry' ||
-      sourceType === 'iep_entry' ||
-      sourceType === 'journal_article' ||
-      sourceType === 'book' ||
-      sourceType === 'web_article'
-    ) {
-      return sourceType;
-    }
-    return 'web_article';
-  }
-
   function sourceInspectHref(preview: SourcePreview): string | null {
     if (!preview.url) return null;
-    const params = new URLSearchParams({
-      sourceUrl: preview.url,
-      sourceType: normalizeSourceTypeForIngest(preview.source_type),
-      inspect: '1'
-    });
-    return `/admin/ingest/legacy-wizard?${params.toString()}`;
+    return `/admin/ingest/jobs?prefillUrl=${encodeURIComponent(preview.url)}`;
   }
 
   function setSuggestion(item: UnresolvedQueueItem, qid: string, label: string): void {

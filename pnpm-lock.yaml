@@ -72,10 +72,10 @@ importers:
         specifier: ^0.1.1
         version: 0.1.1
       '@restormel/keys':
-        specifier: 0.2.20
+        specifier: ^0.2.20
         version: 0.2.20
       '@restormel/keys-svelte':
-        specifier: 0.1.13
+        specifier: ^0.1.13
         version: 0.1.13(svelte@5.53.6)
       '@restormel/observability':
         specifier: ^0.1.2

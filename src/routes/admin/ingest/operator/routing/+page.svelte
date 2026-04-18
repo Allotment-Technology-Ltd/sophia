@@ -349,7 +349,7 @@
     saveOperatorPhasePinsToStorage(phasePins);
     phasePinsDirty = false;
     phasePinsMessage =
-      'Saved locally. Overrides merge into legacy wizard runs and durable jobs when you start them in this browser.';
+      'Saved locally. Overrides merge into the live run console (resume/respawn) and durable jobs when you start them in this browser.';
   }
 
   function clearPhasePins() {
@@ -457,7 +457,7 @@
     with <code class="rt-code">DATABASE_URL</code>; they override <code class="rt-code">RESTORMEL_INGEST_*_ROUTE_ID</code>
     when set). You can <strong>create</strong> routes here (proxied to Keys) or in the Keys dashboard; then add steps,
     publish, and run resolve. Use <strong>Per-phase worker model overrides</strong> for fine-tuned or custom models when
-    you start runs from the legacy wizard or durable jobs.
+    you start runs from durable jobs or resume from the live run console.
   </p>
 
   <section class="rt-sec" aria-labelledby="rt-gateway">
@@ -578,7 +578,7 @@
     <h2 id="rt-pins" class="rt-h2">Per-phase worker model overrides</h2>
     <p class="rt-p">
       Set <strong>INGEST_PIN_PROVIDER_*</strong> / <strong>INGEST_PIN_MODEL_*</strong> for each stage (saved in this browser).
-      Non-<code class="rt-code">auto</code> rows <strong>override</strong> the legacy wizard’s stage picks and are merged into
+      Non-<code class="rt-code">auto</code> rows <strong>override</strong> default stage picks and are merged into
       <strong>durable jobs</strong> when you enqueue from <a class="rt-a" href="/admin/ingest/jobs">Durable jobs</a>. For
       OpenAI-compatible <strong>extraction fine-tunes</strong>, add base URL + deployment model here — they map to
       <code class="rt-code">EXTRACTION_BASE_URL</code> / <code class="rt-code">EXTRACTION_MODEL</code> on the worker (same as
@@ -679,8 +679,8 @@
         and simulate when your IDE is connected.
       </li>
       <li>
-        <strong>Legacy wizard:</strong> full routing editor tabs remain on
-        <a class="rt-a" href="/admin/ingest/legacy-wizard">legacy wizard</a> (pre-scan + publish flows).
+        <strong>Run console:</strong> attach to an in-memory orchestration run (logs, cancel, resume) via
+        <a class="rt-a" href="/admin/ingest/run-console">live run console</a> — new work starts from durable jobs.
       </li>
     </ul>
   </section>

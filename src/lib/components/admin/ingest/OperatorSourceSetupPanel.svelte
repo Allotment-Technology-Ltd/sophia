@@ -7,8 +7,9 @@
   <p class="op-panel-lead">
     Paste canonical URLs (one per line), or use
     <a class="op-link" href="/admin/ingest/jobs">Durable ingestion jobs</a>
-    for SEP topic presets, trimming, and “exclude already ingested”. Rare single-source runs with the full routing wizard:
-    <a class="op-link" href="/admin/ingest/legacy-wizard">legacy wizard</a>.
+    for SEP topic presets, trimming, and “exclude already ingested”. To attach to an in-memory worker by run id (logs, cancel,
+    resume), use the
+    <a class="op-link" href="/admin/ingest/run-console">live run console</a>.
   </p>
   <slot />
 </section>
