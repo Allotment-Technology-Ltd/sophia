@@ -23,13 +23,14 @@ describe('ingestionFinetuneLabelerPolicy', () => {
 		expect(ingestFinetuneLabelerStrictEnabled(process.env)).toBe(false);
 	});
 
-	it('defaults allowed providers to mistral, vertex, deepseek, and groq', () => {
+	it('defaults allowed providers to mistral, vertex, deepseek, groq, and aizolo', () => {
 		delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;
 		expect(parseFinetuneLabelerAllowedProviders(process.env)).toEqual([
 			'mistral',
 			'vertex',
 			'deepseek',
-			'groq'
+			'groq',
+			'aizolo'
 		]);
 	});
 
@@ -55,7 +56,7 @@ describe('ingestionFinetuneLabelerPolicy', () => {
 		]);
 	});
 
-	it('keeps vertex, deepseek, mistral, and groq on relations when strict with defaults', () => {
+	it('keeps vertex, deepseek, mistral, groq, and aizolo on relations when strict with defaults', () => {
 		process.env.INGEST_FINETUNE_LABELER_STRICT = '1';
 		delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;
 		const tiers = [
@@ -63,13 +64,15 @@ describe('ingestionFinetuneLabelerPolicy', () => {
 			{ provider: 'deepseek', modelId: 'deepseek-chat' },
 			{ provider: 'mistral', modelId: 'mistral-medium-latest' },
 			{ provider: 'groq', modelId: 'llama-3.1-8b-instant' },
+			{ provider: 'aizolo', modelId: 'aizolo-gemini-gemini-3-flash-preview' },
 			{ provider: 'openai', modelId: 'gpt-4o-mini' }
 		];
 		expect(filterModelTiersForFinetunePolicy('relations', tiers, process.env)).toEqual([
 			{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 			{ provider: 'deepseek', modelId: 'deepseek-chat' },
 			{ provider: 'mistral', modelId: 'mistral-medium-latest' },
-			{ provider: 'groq', modelId: 'llama-3.1-8b-instant' }
+			{ provider: 'groq', modelId: 'llama-3.1-8b-instant' },
+			{ provider: 'aizolo', modelId: 'aizolo-gemini-gemini-3-flash-preview' }
 		]);
 	});
 

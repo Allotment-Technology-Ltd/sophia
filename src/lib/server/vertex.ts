@@ -744,13 +744,18 @@ async function resolveRoute(options: {
       `${decision.provider} provider requested but no BYOK key or platform API key is configured`;
 
     if (options.failureMode !== 'error' && decision.source === 'restormel') {
+      const keyEnv = REASONING_PROVIDER_PLATFORM_API_KEY_ENV[decision.provider];
+      const keyHint = keyEnv
+        ? `Configure ${keyEnv} on the worker (or add ${decision.provider} in Admin → Operator BYOK) so Restormel’s selected route can run. `
+        : '';
       console.warn(
         '[restormel] Selected provider is unavailable locally; using degraded default route',
         {
           routeId: decision.routeId,
           provider: decision.provider,
           model: decision.model,
-          selectedStepId: decision.selectedStepId
+          selectedStepId: decision.selectedStepId,
+          ...(keyEnv ? { expectedEnvVar: keyEnv } : {})
         }
       );
 
@@ -759,7 +764,7 @@ async function resolveRoute(options: {
         routingSource: 'degraded_default',
         resolvedRouteId: decision.routeId ?? null,
         resolvedExplanation:
-          `${missingProviderMessage}. Using the ${safeDefault.provider}/${safeDefault.model} degraded default instead.`,
+          `${keyHint}${missingProviderMessage}. Using the ${safeDefault.provider}/${safeDefault.model} degraded default instead.`,
         resolvedFailureKind: 'no_key_available',
         resolvedStepId: null,
         resolvedOrderIndex: null,
