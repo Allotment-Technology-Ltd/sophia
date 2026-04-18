@@ -50,6 +50,11 @@
 	let validateLlm = $state(false);
 	/** Append URLs to the most recently touched running job instead of starting a second job (eases global worker cap). */
 	let mergeIntoRunningJob = $state(false);
+	/**
+	 * When false (default), durable jobs do not send `model_chain` from Operator “per-phase worker model overrides”
+	 * (localStorage). Workers use Restormel resolve + Neon route bindings / env (`RESTORMEL_INGEST_*_ROUTE_ID`) instead.
+	 */
+	let applyOperatorPhaseModelPins = $state(false);
 
 	const JOB_WORKER_SETTINGS_KEY = 'sophia.admin.ingestJobWorkerDefaults.v2';
 
@@ -242,7 +247,8 @@
 					jobWatchdogPhaseIdleJson,
 					jobWatchdogBaselineMult,
 					jobForceReingest,
-					jobValidationTailOnly
+					jobValidationTailOnly,
+					applyOperatorPhaseModelPins
 				})
 			);
 		} catch {
@@ -562,10 +568,12 @@
 			workerBuild.payload && typeof workerBuild.payload === 'object' && !Array.isArray(workerBuild.payload)
 				? { ...(workerBuild.payload as Record<string, unknown>) }
 				: {};
-		const opPins = loadOperatorPhasePinsFromStorage();
-		if (opPins) {
-			wdBase.model_chain = operatorPhasePinsToModelChain(opPins);
-			Object.assign(wdBase, operatorPhasePinsToWorkerExtras(opPins));
+		if (applyOperatorPhaseModelPins) {
+			const opPins = loadOperatorPhasePinsFromStorage();
+			if (opPins) {
+				wdBase.model_chain = operatorPhasePinsToModelChain(opPins);
+				Object.assign(wdBase, operatorPhasePinsToWorkerExtras(opPins));
+			}
 		}
 		const hasWorkerDefaults = Object.keys(wdBase).length > 0;
 		submitting = true;
@@ -775,6 +783,11 @@
 				} else if (!('jobValidationTailOnly' in p)) {
 					jobValidationTailOnly = false;
 				}
+				if (typeof p.applyOperatorPhaseModelPins === 'boolean') {
+					applyOperatorPhaseModelPins = p.applyOperatorPhaseModelPins;
+				} else if (!('applyOperatorPhaseModelPins' in p)) {
+					applyOperatorPhaseModelPins = false;
+				}
 				if (typeof p.jobFailOnGroupingCollapse === 'boolean')
 					jobFailOnGroupingCollapse = p.jobFailOnGroupingCollapse;
 				if (typeof p.jobIngestLogPins === 'boolean') jobIngestLogPins = p.jobIngestLogPins;
@@ -835,7 +848,8 @@
 			jobWatchdogPhaseIdleJson +
 			jobWatchdogBaselineMult +
 			jobForceReingest +
-			jobValidationTailOnly
+			jobValidationTailOnly +
+			applyOperatorPhaseModelPins
 		);
 		persistJobWorkerFields();
 	});
@@ -1106,10 +1120,12 @@
 					Shown numbers match the current production-friendly baseline (ingest script defaults + ingest worker caps). They are
 					stored on the job row and remembered in this browser. Hover any field for env var names and rate-limit / pairing
 					advice. Durable jobs always pin <span class="font-mono text-xs">voyage__voyage-4-lite</span> on the child (1024-dim corpus); embed
-					batch size only affects Vertex embedding runs. 					For full model routing, use the unlisted
-					<a href="/admin/ingest/legacy-wizard" class="text-[var(--color-sage)] underline-offset-2 hover:underline"
-						>legacy wizard</a
-					>.
+					batch size only affects Vertex embedding runs. LLM routing for durable runs defaults to
+					<strong class="font-medium text-sophia-dark-text">Restormel Keys</strong> (per-phase route UUIDs in Neon + resolve); enable
+					<strong class="font-medium text-sophia-dark-text">Apply per-phase model overrides</strong> below only if you intentionally want
+					<code class="rounded bg-black/25 px-1 font-mono text-[11px]">INGEST_PIN_*</code> from this browser. The
+					<a href="/admin/ingest/legacy-wizard" class="text-[var(--color-sage)] underline-offset-2 hover:underline">legacy wizard</a>
+					keeps its own merge behavior.
 				</p>
 				<label
 					class="mt-3 flex cursor-pointer items-center gap-3 rounded border border-[var(--color-border)]/60 bg-black/15 p-3"
@@ -1295,6 +1311,21 @@
 			<label class="flex cursor-pointer items-center gap-3" title={JOB_TT.validateLlm}>
 				<input type="checkbox" bind:checked={validateLlm} class="h-5 w-5 rounded border-[var(--color-border)]" title={JOB_TT.validateLlm} />
 				<span class="text-sm text-sophia-dark-text">Run LLM validation stage</span>
+			</label>
+			<label class="mt-3 flex cursor-pointer items-start gap-3 rounded border border-[var(--color-border)]/50 bg-black/10 p-3">
+				<input
+					type="checkbox"
+					bind:checked={applyOperatorPhaseModelPins}
+					class="mt-0.5 h-5 w-5 shrink-0 rounded border-[var(--color-border)]"
+				/>
+				<span class="text-sm leading-snug text-sophia-dark-text">
+					<strong class="font-medium">Apply per-phase model overrides</strong> from Operator hub (saved in this browser:
+					<code class="rounded bg-black/25 px-1 font-mono text-[11px]">INGEST_PIN_*</code>). Off by default so durable runs follow
+					<a href="/admin/ingest/operator/routing" class="text-[var(--color-sage)] underline-offset-2 hover:underline"
+						>Ingestion routing</a
+					>
+					(Restormel resolve + Neon route bindings). Turn on only for explicit provider/model pins (e.g. fine-tune base URL on extraction).
+				</span>
 			</label>
 			<label class="mt-2 flex cursor-pointer items-start gap-3" title={JOB_TT.validationTailOnly}>
 				<input
