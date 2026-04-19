@@ -13,6 +13,7 @@ import {
 	REMEDIATION_REPAIR_USER
 } from '$lib/server/prompts/remediation';
 import { sliceSourceAroundClaim } from '$lib/server/ingestion/remediationLogic';
+import { shouldOmitGenerateTextTemperature } from '$lib/server/ingestion/ingestGenerateTextTemperature';
 
 function parseJsonResponse(text: string): unknown {
 	let cleaned = text.trim();
@@ -94,16 +95,25 @@ export async function applyRemediationToStoredClaim(claimId: string): Promise<{ 
 		validation_issues: ['operator-triggered quarantine remediation']
 	});
 
-	const result = await generateText({
+	const omitTemperature = shouldOmitGenerateTextTemperature(
+		'remediation',
+		plan.provider,
+		plan.model,
+		process.env
+	);
+	const genBase = {
 		model: plan.route.model,
 		system: REMEDIATION_REPAIR_SYSTEM,
-		messages: [{ role: 'user', content: userMsg }],
-		temperature: 0.1,
+		messages: [{ role: 'user' as const, content: userMsg }],
 		maxOutputTokens: 8192
+	};
+	const result = await generateText({
+		...genBase,
+		...(omitTemperature ? {} : { temperature: 0.1 as const })
 	});
 
 	const parsed = parseJsonResponse(result.text);
-	const out = normalizeRemediationRepairOutput(parsed, pos);
+	const out = normalizeRemediationRepairOutput(parsed, pos, { fallbackClaimText: row.text });
 
 	const [emb] = await embedTexts([out.revised_claim_text], {});
 

@@ -3,13 +3,11 @@
   import { goto } from '$app/navigation';
   import { getIdToken } from '$lib/authClient';
   import { isEmbeddingModelEntry } from '$lib/ingestionModelCatalogMerge';
-  import {
-    INGESTION_SOURCE_MODEL_HINTS,
-    type IngestionSourceTypeId
-  } from '$lib/ingestionModelCatalog';
+  import { INGESTION_SOURCE_MODEL_HINTS, type IngestionSourceTypeId } from '$lib/ingestionModelCatalog';
   import {
     entryMeetsPresetStageMinimum,
-    INGESTION_PIPELINE_PRESET
+    INGESTION_PIPELINE_PRESET,
+    normalizeIngestionPipelinePreset
   } from '$lib/ingestionPipelineModelRequirements';
   import { resolveRouteForStage } from '$lib/utils/ingestionRouting';
   import {
@@ -579,7 +577,48 @@
     return catalogEntries.find((e) => stableModelId(e) === id);
   }
 
-  /** Providers implied by Restormel stage picks + worker ingest preference from the merged catalog (same surface as Model availability). */
+  function sourceTypeForHints(): IngestionSourceTypeId {
+    switch (sourceType) {
+      case 'sep_entry':
+        return 'sep_entry';
+      case 'iep_entry':
+        return 'iep_entry';
+      case 'journal_article':
+        return 'journal_article';
+      case 'book':
+        return 'gutenberg_text';
+      case 'web_article':
+        return 'web_article';
+      default:
+        return 'web_article';
+    }
+  }
+
+  /** Parses labels like `anthropic · claude-sonnet-4-20250514` from {@link INGESTION_SOURCE_MODEL_HINTS}. */
+  function parseHintLabel(label: string): { provider: string; modelId: string } | null {
+    const t = label.trim();
+    const m = t.match(/^([^\s·]+)\s*·\s*(.+)$/);
+    if (!m) return null;
+    return { provider: m[1]!.trim(), modelId: m[2]!.trim() };
+  }
+
+  /** Rough relative $/1M tokens for preset scoring (catalog pricing or tier heuristic). */
+  function averageCostPerMillion(entry: CatalogEntry): number {
+    const p = entry.pricing;
+    if (p?.inputPerMillion != null && p?.outputPerMillion != null) {
+      return (p.inputPerMillion + p.outputPerMillion) / 2;
+    }
+    const tier = entry.costTier ?? 'medium';
+    if (tier === 'low') return 0.5;
+    if (tier === 'high') return 8;
+    return 2;
+  }
+
+  /**
+   * Providers implied by Restormel stage picks + worker ingest preference (for infra checklist).
+   * Split of the merged catalog (same surface as Model availability). Save routing still enforces
+   * Restormel route-step providers separately.
+   */
   function modelsForStage(row: (typeof RESTORMEL_STAGES)[number]): CatalogEntry[] {
     if (row.key === 'ingestion_fetch') return [];
     return row.embed ? embeddingModels : chatModels;
@@ -675,33 +714,6 @@
 
   function stageTokens(row: (typeof RESTORMEL_STAGES)[number]): number {
     return preScanEstimateForRow(row.key)?.totalTokens ?? 0;
-  }
-
-  function sourceTypeForHints(): IngestionSourceTypeId {
-    if (sourceType === 'sep_entry') return 'sep_entry';
-    if (sourceType === 'iep_entry') return 'iep_entry';
-    if (sourceType === 'journal_article') return 'journal_article';
-    if (sourceType === 'book') return 'gutenberg_text';
-    return 'web_article';
-  }
-
-  function parseHintLabel(label: string): { provider: string; modelId: string } | null {
-    const [provider, modelId] = label.split('·').map((part) => part.trim());
-    if (!provider || !modelId) return null;
-    return { provider, modelId };
-  }
-
-  function averageCostPerMillion(entry: CatalogEntry): number {
-    const inCost = entry.pricing?.inputPerMillion;
-    const outCost = entry.pricing?.outputPerMillion;
-    const hasIn = typeof inCost === 'number' && Number.isFinite(inCost) && inCost >= 0;
-    const hasOut = typeof outCost === 'number' && Number.isFinite(outCost) && outCost >= 0;
-    if (hasIn && hasOut) return (inCost + outCost) / 2;
-    if (hasIn) return inCost;
-    if (hasOut) return outCost;
-    if (entry.costTier === 'low') return 0.8;
-    if (entry.costTier === 'high') return 6;
-    return 2.5;
   }
 
   /** Production quality floors (see `ingestionPipelineModelRequirements.ts`). */
@@ -839,46 +851,19 @@
     return best;
   }
 
-  function applyPipelinePreset(preset: PipelinePreset): void {
-    if (catalogEntries.length === 0) return;
-    const nextModelIds = { ...stageModelIds };
-    const nextProviders = { ...stageProviders };
-    const nextFallbackModelIds = { ...stageFallbackModelIds };
-    const nextFallbackProviders = { ...stageFallbackProviders };
-    for (const row of RESTORMEL_STAGES) {
-      if (row.key === 'ingestion_fetch') continue;
-      if (row.key === 'ingestion_validation' && !runValidate) continue;
-      const primary = choosePresetModelForStage(row, preset, nextModelIds);
-      if (!primary) continue;
-      const primarySid = stableModelId(primary);
-      nextModelIds[row.key] = primarySid;
-      nextProviders[row.key] = primary.provider;
-      const fallbackPool = modelsForStage(row).filter((entry) => stableModelId(entry) !== primarySid);
-      const fallbackCandidates =
-        row.key === 'ingestion_validation'
-          ? fallbackPool.filter((entry) => !validationModelConflictsWithMap(entry, nextModelIds))
-          : fallbackPool;
-      const fallback =
-        fallbackCandidates.find((entry) => isStageRecommendedModel(row, entry, nextModelIds)) ??
-        fallbackCandidates[0] ??
-        null;
-      nextFallbackModelIds[row.key] = fallback ? stableModelId(fallback) : '';
-      nextFallbackProviders[row.key] = fallback?.provider ?? '';
-    }
-    stageModelIds = nextModelIds;
-    stageProviders = nextProviders;
-    stageFallbackModelIds = nextFallbackModelIds;
-    stageFallbackProviders = nextFallbackProviders;
-    selectedPreset = preset;
-    presetMessage = `Applied ${preset} pipeline recommendations.`;
-    ensureValidationModelIsIndependent();
-  }
-
   function stageTokenPressure(row: (typeof RESTORMEL_STAGES)[number]): 'low' | 'medium' | 'high' {
     const tokens = preScanEstimateForRow(row.key)?.totalTokens ?? 0;
     if (tokens >= 180_000) return 'high';
     if (tokens >= 80_000) return 'medium';
     return 'low';
+  }
+
+  /** Human-readable string for {@link stepComplexity} fallback (must mention low/high for substring checks). */
+  function stageSuitabilityLabel(row: (typeof RESTORMEL_STAGES)[number]): string {
+    const p = stageTokenPressure(row);
+    if (p === 'high') return 'high token pressure';
+    if (p === 'low') return 'low token pressure';
+    return 'medium workload';
   }
 
   function isRateLimitFriendly(row: (typeof RESTORMEL_STAGES)[number], entry: CatalogEntry): boolean {
@@ -952,6 +937,38 @@
   function modelOptionLabel(row: (typeof RESTORMEL_STAGES)[number], entry: CatalogEntry): string {
     const star = isStageRecommendedModel(row, entry) ? ' *' : '';
     return `${entry.label}${star}`;
+  }
+
+  /** Apply a pipeline preset to per-stage primary/fallback model picks (production floors; legacy names normalize). */
+  function applyPipelinePreset(
+    preset: PipelinePreset | 'budget' | 'balanced' | 'complexity'
+  ): void {
+    const normalized = normalizeIngestionPipelinePreset(preset);
+    selectedPreset = normalized;
+    if (catalogEntries.length === 0) return;
+    const provisional: Record<string, string> = {};
+    for (const row of RESTORMEL_STAGES) {
+      if (row.key === 'ingestion_fetch') continue;
+      if (row.key === 'ingestion_validation' && !runValidate) continue;
+      const picked = choosePresetModelForStage(row, normalized, provisional);
+      if (!picked) continue;
+      const sid = stableModelId(picked);
+      provisional[row.key] = sid;
+      stageModelIds = { ...stageModelIds, [row.key]: sid };
+      stageProviders = { ...stageProviders, [row.key]: picked.provider };
+      const list = modelsForStage(row).filter((e) => stableModelId(e) !== sid);
+      const fb = list[0];
+      if (fb) {
+        stageFallbackModelIds = { ...stageFallbackModelIds, [row.key]: stableModelId(fb) };
+        stageFallbackProviders = { ...stageFallbackProviders, [row.key]: fb.provider };
+      } else {
+        stageFallbackModelIds = { ...stageFallbackModelIds, [row.key]: '' };
+        stageFallbackProviders = { ...stageFallbackProviders, [row.key]: '' };
+      }
+    }
+    for (const row of RESTORMEL_STAGES) ensureStageProviderSelection(row);
+    ensureValidationModelIsIndependent();
+    presetMessage = `Applied ${normalized} pipeline recommendations.`;
   }
 
   function ensureStageProviderSelection(row: (typeof RESTORMEL_STAGES)[number]): void {
@@ -1933,14 +1950,6 @@
     return 'medium';
   }
 
-  function stageSuitabilityLabel(row: (typeof RESTORMEL_STAGES)[number]): string {
-    if (row.key === 'ingestion_fetch') return 'low';
-    const pressure = stageTokenPressure(row);
-    if (pressure === 'high') return 'high';
-    if (pressure === 'low') return 'low';
-    return 'medium';
-  }
-
   function stepLatency(row: (typeof RESTORMEL_STAGES)[number]): 'low' | 'balanced' | 'high' {
     const latency = preScanEstimateForRow(row.key)?.latency;
     return latency === 'low' || latency === 'high' || latency === 'balanced' ? latency : 'balanced';
@@ -2042,7 +2051,7 @@
       case 'ui_preset': {
         const p = tw.preset;
         if (p === 'production' || p === 'budget' || p === 'balanced' || p === 'complexity') {
-          applyPipelinePreset(INGESTION_PIPELINE_PRESET);
+          applyPipelinePreset(p);
         }
         break;
       }

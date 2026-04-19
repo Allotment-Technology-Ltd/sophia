@@ -17,6 +17,14 @@ describe('remediation repair', () => {
 		expect(() => normalizeRemediationRepairOutput(raw, 3)).toThrow(/position_in_source/);
 	});
 
+	it('fills missing revised_claim_text from fallback when provided', () => {
+		const raw = { position_in_source: 3, notes: 'model omitted text' };
+		const n = normalizeRemediationRepairOutput(raw, 3, {
+			fallbackClaimText: 'Original claim text.'
+		});
+		expect(n.revised_claim_text).toBe('Original claim text.');
+	});
+
 	it('REMEDIATION_REPAIR_USER embeds position without backticks in template', () => {
 		const u = REMEDIATION_REPAIR_USER({
 			position_in_source: 7,

@@ -41,4 +41,16 @@ describe('shouldOmitGenerateTextTemperature', () => {
 		expect(shouldOmitGenerateTextTemperature('extraction', 'openai', 'gpt-4o', env)).toBe(false);
 		expect(shouldOmitGenerateTextTemperature('relations', 'openai', 'gpt-4o', env)).toBe(true);
 	});
+
+	it('omits for Vertex Gemini 3 models (reasoning surface rejects temperature)', () => {
+		expect(
+			shouldOmitGenerateTextTemperature('validation', 'vertex', 'gemini-3-flash-preview', {})
+		).toBe(true);
+		expect(shouldOmitGenerateTextTemperature('validation', 'google', 'gemini-3-pro-preview', {})).toBe(
+			true
+		);
+		expect(shouldOmitGenerateTextTemperature('validation', 'vertex', 'gemini-2.5-flash', {})).toBe(
+			false
+		);
+	});
 });

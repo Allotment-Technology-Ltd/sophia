@@ -169,19 +169,20 @@ const DOMAIN_TO_LEGACY_V1: Partial<Record<(typeof DOMAIN_VALUES)[number], (typeo
 
 /**
  * Returns a `domain` string safe for Surreal `claim.domain` ASSERT.
- * When legacy compat is off (default), returns the coerced taxonomy label.
- * When `process.env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT` is `1`/`true`/`yes`, maps into {@link SURREAL_LEGACY_V1_DOMAIN_VALUES}.
+ * By default, maps expanded taxonomy labels into {@link SURREAL_LEGACY_V1_DOMAIN_VALUES}
+ * (typical production schemas only allow that subset). Set
+ * `INGEST_SURREAL_DOMAIN_LEGACY_COMPAT=0` when Surreal has been migrated to the full
+ * {@link DOMAIN_VALUES} list and inserts should preserve those labels verbatim.
  */
 export function claimDomainForSurrealStorage(
 	value: unknown,
 	env: NodeJS.ProcessEnv = process.env
 ): string {
 	const coerced = coerceIngestDomainLabel(value);
-	const legacy =
-		(env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT ?? '').trim().toLowerCase() === '1' ||
-		(env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT ?? '').trim().toLowerCase() === 'true' ||
-		(env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT ?? '').trim().toLowerCase() === 'yes';
-	if (!legacy) return coerced;
+	const raw = (env.INGEST_SURREAL_DOMAIN_LEGACY_COMPAT ?? '').trim().toLowerCase();
+	const useWideTaxonomy =
+		raw === '0' || raw === 'false' || raw === 'no';
+	if (useWideTaxonomy) return coerced;
 	if (LEGACY_V1_SET.has(coerced)) return coerced;
 	const mapped = DOMAIN_TO_LEGACY_V1[coerced];
 	return mapped ?? 'philosophy_of_mind';

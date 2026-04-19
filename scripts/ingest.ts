@@ -6373,7 +6373,9 @@ async function main() {
 						planningContext: remediationPlanningContext
 					});
 					const parsed = parseJsonResponse(raw);
-					const out = normalizeRemediationRepairOutput(parsed, pos);
+					const out = normalizeRemediationRepairOutput(parsed, pos, {
+						fallbackClaimText: claim.text
+					});
 					const prevClaimText = claim.text;
 					claim.text = out.revised_claim_text;
 					if (prevClaimText !== out.revised_claim_text) {

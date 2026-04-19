@@ -54,9 +54,19 @@ export type RemediationRepairOutput = z.infer<typeof RemediationRepairOutputSche
 
 export function normalizeRemediationRepairOutput(
 	raw: unknown,
-	expectedPosition: number
+	expectedPosition: number,
+	options?: { fallbackClaimText?: string }
 ): { revised_claim_text: string; notes?: string } {
-	const parsed = RemediationRepairOutputSchema.safeParse(raw);
+	let candidate: unknown = raw;
+	const fallback = options?.fallbackClaimText?.trim();
+	if (candidate && typeof candidate === 'object' && !Array.isArray(candidate) && fallback) {
+		const o = candidate as Record<string, unknown>;
+		const r = o.revised_claim_text;
+		if (r === undefined || r === null || (typeof r === 'string' && r.trim() === '')) {
+			candidate = { ...o, revised_claim_text: fallback };
+		}
+	}
+	const parsed = RemediationRepairOutputSchema.safeParse(candidate);
 	if (!parsed.success) {
 		throw new Error(`[REMEDIATION] Invalid repair JSON: ${parsed.error.message}`);
 	}
