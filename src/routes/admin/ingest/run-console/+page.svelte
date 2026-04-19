@@ -576,7 +576,7 @@
     return catalogEntries.find((e) => stableModelId(e) === id);
   }
 
-  /** Providers implied by Restormel stage picks + worker ingest preference (for infra checklist). */ split of the merged catalog (same surface as Model availability). Save routing still enforces Restormel route-step providers separately. */
+  /** Providers implied by Restormel stage picks + worker ingest preference from the merged catalog (same surface as Model availability). */
   function modelsForStage(row: (typeof RESTORMEL_STAGES)[number]): CatalogEntry[] {
     if (row.key === 'ingestion_fetch') return [];
     return row.embed ? embeddingModels : chatModels;

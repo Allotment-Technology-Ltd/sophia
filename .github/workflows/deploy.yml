@@ -237,6 +237,9 @@ jobs:
           test -n "$RAILWAY_PROJECT_ID" || { echo "Missing RAILWAY_PROJECT_ID repository variable"; exit 1; }
           test -n "$RAILWAY_SERVICE" || { echo "Missing RAILWAY_SERVICE repository variable"; exit 1; }
 
+      - name: Install Railway CLI
+        run: npm install --global @railway/cli@4.40.0
+
       - name: Deploy to Railway
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
@@ -254,4 +257,4 @@ jobs:
           if [ -n "${RAILWAY_ENVIRONMENT:-}" ]; then
             ARGS+=(--environment "$RAILWAY_ENVIRONMENT")
           fi
-          npx -y @railway/cli@4.40.0 up "${ARGS[@]}"
+          railway up "${ARGS[@]}"
