@@ -1,4 +1,6 @@
-# GCP infrastructure (Sophia production)
+# GCP infrastructure (Sophia production, archived after Railway cutover)
+
+> Status: archival reference only. Production hosting moved to Railway (`usesophia.app`). Keep this file for teardown/history.
 
 Sophia’s production footprint lives in **Google Cloud**. The repo **does not** ship Pulumi, Terraform, or another paid IaC runtime for the **main** app. **Source of truth for app rollout** is [`.github/workflows/deploy.yml`](../../../.github/workflows/deploy.yml): Docker build, push to Artifact Registry, and `gcloud run deploy` with Secret Manager bindings.
 

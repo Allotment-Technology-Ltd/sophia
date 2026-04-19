@@ -25,7 +25,7 @@ COPY . .
 
 # `vite build` / SvelteKit postbuild analyse import server chunks that load `sophiaDocumentsDb.ts`,
 # which requires `DATABASE_URL` when `SOPHIA_DATA_BACKEND=neon`. Runtime gets the real URL from
-# Cloud Run secrets; the builder only needs a syntactically valid placeholder (no connection).
+# Railway env vars; the builder only needs a syntactically valid placeholder (no connection).
 ENV DATABASE_URL=postgresql://sveltekit_build_placeholder@127.0.0.1:5432/postgres?sslmode=disable
 
 # Build the app
@@ -62,7 +62,7 @@ COPY --from=builder /app/jsconfig.json ./jsconfig.json
 # Fail the image build if prod node_modules cannot resolve the ingest.ts import graph
 RUN npx tsx scripts/verify-cloud-run-ingest-modules.ts
 
-# Writable cache for fetched sources (Cloud Run: ensure no read-only root override)
+# Writable cache for fetched sources
 RUN mkdir -p data/sources
 # Repo-tracked sources (often empty except README); batch jobs that reference slugs without a fresh fetch need files present
 COPY --from=builder /app/data/sources ./data/sources
@@ -72,6 +72,7 @@ COPY --from=builder /app/data/sep-topic-presets.json ./data/sep-topic-presets.js
 
 # Set the port
 ENV PORT=8080
+ENV HOST=0.0.0.0
 
 EXPOSE 8080
 
