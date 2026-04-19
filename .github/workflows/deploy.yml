@@ -84,7 +84,7 @@ jobs:
           path: ./
           extra_args: --only-verified
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
         with:
           version: 9
 
@@ -184,7 +184,7 @@ jobs:
           fetch-depth: 1
           clean: true
 
-      - uses: pnpm/action-setup@v5
+      - uses: pnpm/action-setup@v6
         with:
           version: 9
 
