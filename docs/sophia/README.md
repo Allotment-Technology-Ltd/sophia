@@ -26,6 +26,7 @@ It exists to prove the platform in a real product: graph-grounded reasoning, ver
 | Current State | [Current State](current-state.md) |
 | Architecture | [Architecture](architecture.md) |
 | Product Role | [Product Role](product-role.md) |
+| Deployment (Railway) | [Deployment (Railway)](deployment-railway.md) |
 | Roadmap | [Roadmap](roadmap.md) |
 | Domain Expansion | [Domain Expansion](domain-expansion.md) |
 | Changelog | [Changelog](changelog.md) |
@@ -43,6 +44,7 @@ It exists to prove the platform in a real product: graph-grounded reasoning, ver
 | Current State | 2026-03-13 | [Current State](current-state.md) |
 | Domain Expansion | 2026-03-13 | [Domain Expansion](domain-expansion.md) |
 | Product Role | 2026-03-13 | [Product Role](product-role.md) |
+| Deployment (Railway) | 2026-04-19 | [Deployment (Railway)](deployment-railway.md) |
 | Roadmap | 2026-03-26 | [Roadmap](roadmap.md) |
 <!-- GENERATED:active-sophia-docs:end -->
 

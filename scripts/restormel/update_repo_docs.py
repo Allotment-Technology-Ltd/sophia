@@ -324,9 +324,10 @@ def render_root_repo_structure(from_file: Path) -> str:
         # Do not link to gcp-infrastructure.md — it lives only under docs/local/ on maintainer clones
         # and would make this block differ between CI and local checkouts.
         lines.append(
-            "- Maintainer GCP layout (when `docs/local/` is populated): "
-            "`docs/local/operations/gcp-infrastructure.md` — production layout; app deploys via "
-            f"[`deploy.yml`]({relative_link(from_file, deploy_yml)}) (`gcloud run deploy`)."
+            "- Production deployment: Railway (`usesophia.app`) via "
+            f"[`deploy.yml`]({relative_link(from_file, deploy_yml)}). "
+            "Runbook: `docs/sophia/deployment-railway.md`. "
+            "Legacy GCP layout notes remain archival under `docs/local/operations/gcp-infrastructure.md`."
         )
     return "\n".join(lines)
 

@@ -18,7 +18,7 @@ stack:
   styling: Tailwind CSS with custom design tokens
   database: SurrealDB v2
   ai: Claude API (Sonnet 4.5) via @anthropic-ai/sdk
-  hosting: Google Cloud Run via adapter-node
+  hosting: Railway via adapter-node
   auth: Auth.js (Phase 5 only)
   payments: Stripe (Phase 6 only)
   package_manager: pnpm
