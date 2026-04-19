@@ -17,7 +17,7 @@ This is the landing page for the **public** documentation surface shipped with t
 <!-- GENERATED:docs-map:start -->
 | Surface | Status | Docs | Use it for | Entry point |
 | --- | --- | --- | --- | --- |
-| SOPHIA | Public | 8 | Showcase/reference app documentation shipped with the public repo. | [SOPHIA Documentation](sophia/README.md) |
+| SOPHIA | Public | 7 | Showcase/reference app documentation shipped with the public repo. | [SOPHIA Documentation](sophia/README.md) |
 | Maintainer pack | Local only | — | Restormel, operations, reference, and archive material under docs/local/ (not published on public Git). | [Maintainer documentation pack](LOCAL_DOCS.md) |
 <!-- GENERATED:docs-map:end -->
 
@@ -43,7 +43,7 @@ Hand-authored meaning in `docs/sophia/` is what ships on the public default chec
 <!-- GENERATED:active-vs-archive:start -->
 | Class | Current snapshot | Operating rule |
 | --- | --- | --- |
-| Public SOPHIA slice | 8 active-tagged docs under docs/sophia/ | Shipped with the public repository; keep aligned with the product surface. |
+| Public SOPHIA slice | 7 active-tagged docs under docs/sophia/ | Shipped with the public repository; keep aligned with the product surface. |
 | Maintainer-only tree | Restormel platform pack, operations runbooks, reference library, and archive under docs/local/ when populated. | [Maintainer documentation pack](LOCAL_DOCS.md) |
 | Historical / internal | Lives under docs/local/ on maintainer machines; not published on the public default checkout. | Do not treat archived paths as current guidance unless promoted into the public SOPHIA slice. |
 <!-- GENERATED:active-vs-archive:end -->

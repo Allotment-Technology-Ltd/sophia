@@ -41,7 +41,6 @@ It exists to prove the platform in a real product: graph-grounded reasoning, ver
 | Architecture | 2026-03-13 | [Architecture](architecture.md) |
 | Changelog | 2026-03-13 | [Changelog](changelog.md) |
 | Current State | 2026-03-13 | [Current State](current-state.md) |
-| Railway production deployment (usesophia.app) | 2026-04-19 | [Railway production deployment (usesophia.app)](deployment-railway.md) |
 | Domain Expansion | 2026-03-13 | [Domain Expansion](domain-expansion.md) |
 | Product Role | 2026-03-13 | [Product Role](product-role.md) |
 | Roadmap | 2026-03-26 | [Roadmap](roadmap.md) |

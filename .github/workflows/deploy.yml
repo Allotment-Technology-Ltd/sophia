@@ -1,3 +1,96 @@
+# SOPHIA — Unified CI/CD Pipeline
+#
+# Application deployments are driven by this workflow: Docker build → Artifact Registry →
+# `gcloud run deploy` with `--set-secrets` / `--set-env-vars`. There is no Pulumi or other
+# paid IaC runtime in-repo; GCP layout is documented in `docs/local/operations/gcp-infrastructure.md`.
+#
+#   deploy paths (src, scripts, drizzle, Docker, lockfile, …)  →
+#   deploy-neon-migrate + deploy-container-image (parallel) + app-deploy (Cloud Run + poller + health).
+#   Neon migrate also runs when only `drizzle/**` or `scripts/neon-migrate.ts` changes (`neon_migrate` filter),
+#   so SQL migrations are never skipped while a docs-only push skips migrate + image + deploy.
+#   Ingest fixes (scripts/ingest.ts, verify-cloud-run-ingest-modules, runtime COPY in Dockerfile) ship on
+#   the same image as the web app; sophia + sophia-ingestion-job-poller + sophia-ingest-worker all use the pushed commit tag.
+#   docs/**, repomix*.json  →  no image build or Cloud Run deploy (workflow_dispatch --force still works).
+#   .gitignore alone  →  no deploy; but data/*.json baked into the image (SEP catalog) must match deploy paths.
+#   Empty commits (no files under deploy paths) → security only; deploy jobs skip. Retrigger image + Cloud Run
+#   via workflow_dispatch (force_app_deploy) or any commit that touches deploy paths (this file counts).
+#
+# TARGET REGION: europe-west2 (London) — all resources are in this region.
+# Region drift was resolved in March 2026: the live us-central1 service was
+# migrated to europe-west2 (Neon + Surreal targets configured per Secret Manager).
+#
+# Cloud Run `sophia`: 2Gi / 1 vCPU, --concurrency=8, ADMIN_INGEST_MAX_CONCURRENT=3, NODE heap cap via NODE_OPTIONS (aligned with ingest worker; co-located tsx ingest).
+# `sophia-ingest-worker` (same sizing, --concurrency=2): deployed after poller on every main app-deploy; optional skip via
+# workflow_dispatch (deploy_ingest_worker=false). Manual: `pnpm gcp:deploy-ingest-worker-service`.
+# See docs/local/operations/gcp-ingest-worker.md.
+#
+# PREREQUISITES:
+# ─ GCP secrets in Secret Manager: anthropic-api-key, voyage-api-key,
+#   google-ai-api-key, surreal-db-url, surreal-db-user, surreal-db-pass,
+#   surreal-db-namespace, surreal-db-database, admin-uids, owner-uids (maps to env OWNER_UIDS),
+#   neon-database-url → DATABASE_URL (required; ingest + sophia_documents / sophiaDocumentsDb).
+#   deploy-neon-migrate runs `pnpm db:migrate:ci` against this secret in parallel with the Docker
+#   build; app-deploy runs only after both succeed, so schema is ready before new revisions serve.
+#   `drizzle/*.sql` (including ingestion_jobs) are applied. WIF deploy SA needs
+#   secretmanager.versions.access on neon-database-url.
+# ─ Neon ingest persistence: enabled whenever DATABASE_URL is set (Cloud Run mounts neon-database-url).
+#   SOPHIA_DATA_BACKEND=neon is set for sophia_documents; do not deploy without DATABASE_URL if you
+#   rely on durable ingest runs / ingestion jobs.
+# ─ After each deploy, `scripts/gcp/deploy-sophia-ingestion-poller-job.sh` updates Cloud Run Job
+#   `sophia-ingestion-job-poller` (same image as sophia; runs poller --once per execute).
+#   One-time: `bash scripts/gcp/setup-ingestion-poller-scheduler.sh` (scheduler every 2 min) and
+#   `bash scripts/gcp/ensure-wif-neon-secret-access.sh` (WIF → neon-database-url).
+# ─ GitHub secret: NEON_AUTH_BASE_URL (same value for VITE_NEON_AUTH_URL at build + runtime JWT verify)
+# ─ Workload Identity Federation configured for this GitHub repo
+#
+# Secret → Cloud Run binding: app-deploy runs `gcloud run deploy … --set-secrets=…`.
+# RESTORMEL_PROJECT_ID + RESTORMEL_BASE_URL are GCP Secret Manager IDs (same names as env vars);
+# grant the Cloud Run runtime SA `roles/secretmanager.secretAccessor` on both.
+# Rotated GCP secrets with no repo diff: run this workflow via
+# workflow_dispatch with force_app_deploy=true.
+# ─ GitHub repository secrets:
+#     WIF_PROVIDER        projects/{N}/locations/global/workloadIdentityPools/{P}/providers/{ID}
+#     WIF_SERVICE_ACCOUNT github-deploy@sophia-488807.iam.gserviceaccount.com
+#     GCP_PROJECT_ID      sophia-488807
+#
+# AIKIDO: This repo uses the GitHub App for PR checks. Do NOT add AikidoSec/github-actions-workflow
+#   here — Aikido returns 422 if both are enabled. PR scans appear as a separate check from the app.
+#
+# AIKIDO / PR CHECKS (mutually exclusive with the Aikido GitHub Action):
+#   If the repo uses Aikido’s GitHub App for PR checks, do NOT add
+#   AikidoSec/github-actions-workflow — Aikido returns 422. PR scans and status on PRs
+#   come from the installed GitHub App (see user-facing locations below), not from this file.
+#
+# NETWORKING (Surreal):
+#   Cloud Run does not attach a VPC connector when SurrealDB is reachable over the public internet
+#   (e.g. SurrealDB Cloud `wss://…`). Verify `surreal-db-url` before changing this — see
+#   docs/local/operations/gcp-surreal-url-verification.md. After deploy, delete unused sophia-connector in Console if nothing references it.
+#
+# ROLLBACK:
+#   Trigger the "Rollback App" workflow_dispatch with a Cloud Run revision name.
+#   For GCP resource changes, use the Cloud Console or `gcloud` (see docs/local/operations/gcp-infrastructure.md).
+#
+# SPEED (main merge path):
+#   - app-deploy does not wait on CodeQL (security gate still required); CodeQL runs in parallel.
+#   - deploy-neon-migrate and deploy-container-image run in parallel after security (migrate no longer
+#     blocks Docker build; wall clock ≈ max(migrate, image) + Cloud Run deploy + poller + health).
+#   - Docker Buildx + registry cache (Artifact Registry) replaces `docker build --no-cache --pull`.
+#   - Redundant `gcloud run services update-traffic --to-latest` removed (deploy already shifts traffic).
+# PR path:
+#   - pnpm uses --frozen-lockfile for faster, cache-friendly installs (same as deploy + Docker).
+# Main push (deploy paths unchanged):
+#   - CodeQL skips when paths-filter says no deploy-related paths (saves ~1min; deploy does not wait on CodeQL).
+#
+# AIKIDO: https://app.aikido.dev/ — GitHub App posts PR checks; Settings → GitHub Apps → Aikido.
+# AIKIDO: Configure in https://app.aikido.dev/ (PR gating, AutoFix). On GitHub: Settings →
+#   Integrations → GitHub Apps (org or user) → Aikido, or repo Settings → GitHub Apps /
+#   Installed GitHub Apps. The app posts PR checks; add that check name under branch
+#   protection if merges should wait on Aikido.
+# AIKIDO: Dashboard (https://app.aikido.dev/) handles PR gating and AutoFix. Either:
+#   (A) GitHub App — Settings → GitHub Apps → Aikido; the app posts its own PR check name.
+#   (B) Action — the `aikido` job below (needs AIKIDO_SECRET_KEY); add job id `aikido` to
+#       branch protection. Do not enable both the App scan and this Action (422 risk).
+
 name: CI/CD
 
 on:
@@ -7,10 +100,19 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      rollback_revision:
+        description: "Cloud Run revision to roll back to (e.g. sophia-00042-abc)"
+        required: false
+        type: string
       force_app_deploy:
-        description: "Run DB migrate + Railway deploy even without detected deploy-path changes"
+        description: "Run Docker build + gcloud run deploy (e.g. after empty commit or secret-only GCP changes)"
         required: false
         default: false
+        type: boolean
+      deploy_ingest_worker:
+        description: "When running workflow manually: deploy sophia-ingest-worker (default on). Push-to-main deploys the worker automatically unless you turn this off."
+        required: false
+        default: true
         type: boolean
 
 concurrency:
@@ -19,9 +121,17 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write
   security-events: write
 
+env:
+  REGION: europe-west2
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGISTRY: europe-west2-docker.pkg.dev
+  IMAGE_BASE: europe-west2-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/sophia/app
+
 jobs:
+  # ── 1. Detect which paths changed ──────────────────────────────────────────
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -48,7 +158,6 @@ jobs:
               - 'Dockerfile'
               - 'Dockerfile.ingest'
               - 'Dockerfile.ingest-worker'
-              - 'railway.toml'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
@@ -57,10 +166,12 @@ jobs:
               - 'postcss.config.js'
               - 'tailwind.config.js'
               - '.github/workflows/deploy.yml'
+              # Copied into runtime image (see Dockerfile); changing catalog must rebuild the image.
               - 'data/sep-entry-urls.json'
               - 'data/sep-topic-presets.json'
               - 'data/sources/**'
 
+  # ── 2. Security & quality gate (always runs) ───────────────────────────────
   security:
     runs-on: ubuntu-latest
     steps:
@@ -133,15 +244,17 @@ jobs:
       - name: Minimal TS project (ingest CLI)
         run: pnpm exec tsc -p tsconfig.json --noEmit
 
-      - name: Verify prod ingest module graph
+      - name: Verify prod ingest module graph (Cloud Run parity)
         run: bash scripts/verify-prod-ingest-isolated.sh
 
       - name: Build (verify)
         if: github.event_name == 'pull_request'
         env:
+          # Same guard as Dockerfile builder: server modules require DATABASE_URL during vite build.
           DATABASE_URL: postgresql://sveltekit_build_placeholder@127.0.0.1:5432/postgres?sslmode=disable
         run: pnpm build
 
+  # ── 2b. CodeQL scan (in unified pipeline) ──────────────────────────────────
   codeql:
     needs: [changes]
     if: >
@@ -162,6 +275,9 @@ jobs:
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
 
+  # ── 3a. Neon migrations (parallel with container image; must finish before Cloud Run) ──
+  # Applies every pending `drizzle/*.sql` in lexical order via `pnpm db:migrate:ci` → `scripts/neon-migrate.ts`.
+  # Runs on main when deploy-related paths OR migration-only paths (`neon_migrate`) change, or on manual force.
   deploy-neon-migrate:
     if: >
       success() &&
@@ -184,6 +300,14 @@ jobs:
           fetch-depth: 1
           clean: true
 
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+
       - uses: pnpm/action-setup@v5
         with:
           version: 9
@@ -197,17 +321,18 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run Neon database migrations
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL_PRODUCTION }}
         run: |
           set -euo pipefail
-          if [ -z "${DATABASE_URL:-}" ]; then
-            echo "::error::Missing repository secret DATABASE_URL_PRODUCTION (Neon connection string)."
+          DB_URL=$(gcloud secrets versions access latest --secret=neon-database-url --project="${{ env.PROJECT_ID }}")
+          if [ -z "$DB_URL" ]; then
+            echo "::error::Empty neon-database-url secret — cannot migrate or guarantee ingest persistence."
             exit 1
           fi
+          export DATABASE_URL="$DB_URL"
           pnpm db:migrate:ci
 
-  deploy-railway:
+  # ── 3b. Docker build + push (parallel with Neon migrate; no host pnpm — build is in Dockerfile) ──
+  deploy-container-image:
     if: >
       success() &&
       github.ref == 'refs/heads/main' &&
@@ -215,7 +340,7 @@ jobs:
         (github.event_name == 'push' && needs.changes.outputs.deploy == 'true') ||
         (github.event_name == 'workflow_dispatch' && inputs.force_app_deploy == true)
       )
-    needs: [changes, security, deploy-neon-migrate]
+    needs: [changes, security]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -223,38 +348,168 @@ jobs:
           fetch-depth: 1
           clean: true
 
-      - uses: actions/setup-node@v6
+      - id: auth
+        uses: google-github-actions/auth@v3
         with:
-          node-version: 20
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
-      - name: Assert Railway deploy secrets
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Require NEON_AUTH_BASE_URL for Docker build
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
-          RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
+          VITE_NEON_AUTH_URL: ${{ secrets.NEON_AUTH_BASE_URL }}
         run: |
-          test -n "$RAILWAY_TOKEN" || { echo "Missing RAILWAY_TOKEN secret"; exit 1; }
-          test -n "$RAILWAY_PROJECT_ID" || { echo "Missing RAILWAY_PROJECT_ID repository variable"; exit 1; }
-          test -n "$RAILWAY_SERVICE" || { echo "Missing RAILWAY_SERVICE repository variable"; exit 1; }
-
-      - name: Install Railway CLI
-        run: npm install --global @railway/cli@4.40.0
-
-      - name: Deploy to Railway
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
-          RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
-          RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT }}
-        run: |
-          set -euo pipefail
-          ARGS=(
-            --ci
-            --detach
-            --project "$RAILWAY_PROJECT_ID"
-            --service "$RAILWAY_SERVICE"
-          )
-          if [ -n "${RAILWAY_ENVIRONMENT:-}" ]; then
-            ARGS+=(--environment "$RAILWAY_ENVIRONMENT")
+          if [ -z "$VITE_NEON_AUTH_URL" ]; then
+            echo "::error::Repository secret NEON_AUTH_BASE_URL is not set. Add it under Settings → Secrets and variables → Actions (Neon Console → branch → Auth → base_url, ends with /…/auth). Without it, production shows 'Neon Auth is not configured'."
+            exit 1
           fi
-          railway up "${ARGS[@]}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image (BuildKit + registry cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          provenance: false
+          sbom: false
+          tags: |
+            ${{ env.IMAGE_BASE }}:${{ github.sha }}
+            ${{ env.IMAGE_BASE }}:latest
+          build-args: |
+            VITE_NEON_AUTH_URL=${{ secrets.NEON_AUTH_BASE_URL }}
+          cache-from: type=registry,ref=${{ env.IMAGE_BASE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_BASE }}:buildcache,mode=max
+
+  # ── 3c. Cloud Run service + poller + health (after migrate + image) ─────────
+  app-deploy:
+    if: >
+      success() &&
+      github.ref == 'refs/heads/main' &&
+      (
+        (github.event_name == 'push' && needs.changes.outputs.deploy == 'true') ||
+        (github.event_name == 'workflow_dispatch' && inputs.force_app_deploy == true)
+      )
+    needs: [changes, security, deploy-neon-migrate, deploy-container-image]
+    runs-on: ubuntu-latest
+    env:
+      RESTORMEL_GATEWAY_KEY: ${{ secrets.RESTORMEL_GATEWAY_KEY_PRODUCTION || secrets.RESTORMEL_GATEWAY_KEY_STAGING }}
+      RESTORMEL_ENVIRONMENT_ID: ${{ secrets.RESTORMEL_ENVIRONMENT_ID_PRODUCTION || secrets.RESTORMEL_ENVIRONMENT_ID_STAGING }}
+      RESTORMEL_KEYS_BASE: ${{ secrets.RESTORMEL_KEYS_BASE_PRODUCTION || secrets.RESTORMEL_KEYS_BASE_STAGING || 'https://restormel.dev/keys/dashboard' }}
+      RESTORMEL_ANALYSE_ROUTE_ID: ${{ secrets.RESTORMEL_ANALYSE_ROUTE_ID_PRODUCTION || secrets.RESTORMEL_ANALYSE_ROUTE_ID_STAGING }}
+      RESTORMEL_VERIFY_ROUTE_ID: ${{ secrets.RESTORMEL_VERIFY_ROUTE_ID_PRODUCTION || secrets.RESTORMEL_VERIFY_ROUTE_ID_STAGING }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          clean: true
+
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: Deploy to Cloud Run (europe-west2)
+        run: |
+          gcloud run deploy sophia \
+            --image=${{ env.IMAGE_BASE }}:${{ github.sha }} \
+            --project=${{ env.PROJECT_ID }} \
+            --region=${{ env.REGION }} \
+            --allow-unauthenticated \
+            --memory=2Gi \
+            --cpu=1 \
+            --min-instances=0 \
+            --max-instances=3 \
+            --concurrency=8 \
+            --set-env-vars="^|^ADMIN_INGEST_RUN_REAL=1|ADMIN_INGEST_MAX_CONCURRENT=3|INGEST_QUEUE_ENABLED=0|SOPHIA_DATA_BACKEND=neon|USE_NEON_AUTH=1|NEON_AUTH_BASE_URL=${{ secrets.NEON_AUTH_BASE_URL }}|PUBLIC_NEON_AUTH_URL=${{ secrets.NEON_AUTH_BASE_URL }}|GCP_PROJECT_ID=${{ env.PROJECT_ID }}|GCP_LOCATION=${{ env.REGION }}|GOOGLE_VERTEX_LOCATION=us-central1|NODE_OPTIONS=--max-old-space-size=1536|ALLOWED_EMAILS=adam.boon1984@gmail.com,adam.boon1984@googlemail.com,admin@usesophia.app|OWNER_EMAILS=adam.boon1984@gmail.com,adam.boon1984@googlemail.com,admin@usesophia.app|PADDLE_RUNTIME=production|BYOK_DISABLE_CLOUD_KMS_ENCRYPT=1|RESTORMEL_GATEWAY_KEY=${{ env.RESTORMEL_GATEWAY_KEY }}|RESTORMEL_ENVIRONMENT_ID=${{ env.RESTORMEL_ENVIRONMENT_ID }}|RESTORMEL_KEYS_BASE=${{ env.RESTORMEL_KEYS_BASE }}|RESTORMEL_ANALYSE_ROUTE_ID=${{ env.RESTORMEL_ANALYSE_ROUTE_ID }}|RESTORMEL_VERIFY_ROUTE_ID=${{ env.RESTORMEL_VERIFY_ROUTE_ID }}|RESTORMEL_PROJECT_MODEL_REGISTRY_BINDINGS=1|INGEST_NEON_LOG_PERSISTENCE=minimal|INGEST_NEON_ACTIVITY_DEBOUNCE_MS=1500|INGEST_MODEL_TIMEOUT_MS=360000|INGEST_STAGE_EXTRACTION_TIMEOUT_MS=180000|INGEST_WATCHDOG_IDLE_MS=720000" \
+            --set-secrets="ANTHROPIC_API_KEY=anthropic-api-key:latest,SURREAL_URL=surreal-db-url:latest,SURREAL_USER=surreal-db-user:latest,SURREAL_PASS=surreal-db-pass:latest,SURREAL_NAMESPACE=surreal-db-namespace:latest,SURREAL_DATABASE=surreal-db-database:latest,VOYAGE_API_KEY=voyage-api-key:latest,GOOGLE_AI_API_KEY=google-ai-api-key:latest,DATABASE_URL=neon-database-url:latest,ADMIN_UIDS=admin-uids:latest,OWNER_UIDS=owner-uids:latest,PADDLE_API_KEY_PRODUCTION=PADDLE_API_KEY_PRODUCTION:latest,PADDLE_WEBHOOK_SECRET_PRODUCTION=PADDLE_WEBHOOK_SECRET_PRODUCTION:latest,PADDLE_PRICE_PRO_GBP_PRODUCTION=PADDLE_PRICE_PRO_GBP_PRODUCTION:latest,PADDLE_PRICE_PRO_USD_PRODUCTION=PADDLE_PRICE_PRO_USD_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_GBP_PRODUCTION=PADDLE_PRICE_PREMIUM_GBP_PRODUCTION:latest,PADDLE_PRICE_PREMIUM_USD_PRODUCTION=PADDLE_PRICE_PREMIUM_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION=PADDLE_PRICE_TOPUP_SMALL_USD_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_GBP_PRODUCTION:latest,PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION=PADDLE_PRICE_TOPUP_LARGE_USD_PRODUCTION:latest,PUBLIC_PADDLE_CLIENT_TOKEN_PRODUCTION=PADDLE_CLIENT_TOKEN:latest,INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM=INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM:latest,EXTRACTION_BASE_URL=EXTRACTION_BASE_URL:latest,EXTRACTION_MODEL=EXTRACTION_MODEL:latest,FIREWORKS_API_KEY=FIREWORKS_API_KEY:latest,RESTORMEL_PROJECT_ID=RESTORMEL_PROJECT_ID:latest,RESTORMEL_BASE_URL=RESTORMEL_BASE_URL:latest"
+
+      - name: Deploy ingestion poller Cloud Run Job (same image)
+        env:
+          IMAGE_REF: ${{ env.IMAGE_BASE }}:${{ github.sha }}
+          GCP_PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          NEON_AUTH_BASE_URL: ${{ secrets.NEON_AUTH_BASE_URL }}
+          RESTORMEL_GATEWAY_KEY: ${{ env.RESTORMEL_GATEWAY_KEY }}
+          RESTORMEL_ENVIRONMENT_ID: ${{ env.RESTORMEL_ENVIRONMENT_ID }}
+          RESTORMEL_KEYS_BASE: ${{ env.RESTORMEL_KEYS_BASE }}
+          RESTORMEL_ANALYSE_ROUTE_ID: ${{ env.RESTORMEL_ANALYSE_ROUTE_ID }}
+          RESTORMEL_VERIFY_ROUTE_ID: ${{ env.RESTORMEL_VERIFY_ROUTE_ID }}
+        run: bash scripts/gcp/deploy-sophia-ingestion-poller-job.sh
+
+      - name: Deploy ingest worker Cloud Run service (same image + sizing as sophia; lower concurrency for ingest isolation)
+        if: github.event_name != 'workflow_dispatch' || inputs.deploy_ingest_worker
+        env:
+          IMAGE_REF: ${{ env.IMAGE_BASE }}:${{ github.sha }}
+          GCP_PROJECT_ID: ${{ env.PROJECT_ID }}
+          REGION: ${{ env.REGION }}
+          NEON_AUTH_BASE_URL: ${{ secrets.NEON_AUTH_BASE_URL }}
+          RESTORMEL_GATEWAY_KEY: ${{ env.RESTORMEL_GATEWAY_KEY }}
+          RESTORMEL_ENVIRONMENT_ID: ${{ env.RESTORMEL_ENVIRONMENT_ID }}
+          RESTORMEL_KEYS_BASE: ${{ env.RESTORMEL_KEYS_BASE }}
+          RESTORMEL_ANALYSE_ROUTE_ID: ${{ env.RESTORMEL_ANALYSE_ROUTE_ID }}
+          RESTORMEL_VERIFY_ROUTE_ID: ${{ env.RESTORMEL_VERIFY_ROUTE_ID }}
+        run: bash scripts/gcp/deploy-sophia-ingest-worker-service.sh
+
+      - name: Health check
+        run: |
+          URL=$(gcloud run services describe sophia \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format='value(status.url)')
+          echo "Service URL: $URL"
+          # Wait up to 60s for the new revision to become healthy
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL/api/health" || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "✓ Health check passed"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "✗ Health check failed after 60s — rolling back"
+          PREV=$(gcloud run revisions list \
+            --service=sophia \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format='value(metadata.name)' \
+            --sort-by=~metadata.creationTimestamp \
+            --limit=2 | tail -1)
+          gcloud run services update-traffic sophia \
+            --to-revisions="$PREV=100" \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }}
+          echo "Rolled back to $PREV"
+          exit 1
+
+  # ── 4. Manual rollback ─────────────────────────────────────────────────────
+  rollback:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.rollback_revision != ''
+    runs-on: ubuntu-latest
+    steps:
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: Roll back to specified revision
+        run: |
+          REVISION="${{ github.event.inputs.rollback_revision }}"
+          echo "Rolling back to: $REVISION"
+          gcloud run services update-traffic sophia \
+            --to-revisions="$REVISION=100" \
+            --region=europe-west2 \
+            --project=${{ secrets.GCP_PROJECT_ID }}
+          echo "✓ Traffic shifted to $REVISION"

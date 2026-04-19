@@ -321,14 +321,12 @@ def render_root_repo_structure(from_file: Path) -> str:
             lines.append(f"- [`{directory}/`]({link}) {description}")
     deploy_yml = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
     if deploy_yml.is_file():
-        deployment_runbook = REPO_ROOT / "docs" / "sophia" / "deployment-railway.md"
         # Do not link to gcp-infrastructure.md — it lives only under docs/local/ on maintainer clones
         # and would make this block differ between CI and local checkouts.
         lines.append(
-            "- Production deployment: Railway (`usesophia.app`) via "
-            f"[`deploy.yml`]({relative_link(from_file, deploy_yml)}). "
-            f"Runbook: [`docs/sophia/deployment-railway.md`]({relative_link(from_file, deployment_runbook)}). "
-            "Legacy GCP layout notes remain archival under `docs/local/operations/gcp-infrastructure.md`."
+            "- Maintainer GCP layout (when `docs/local/` is populated): "
+            "`docs/local/operations/gcp-infrastructure.md` — production layout; app deploys via "
+            f"[`deploy.yml`]({relative_link(from_file, deploy_yml)}) (`gcloud run deploy`)."
         )
     return "\n".join(lines)
 
