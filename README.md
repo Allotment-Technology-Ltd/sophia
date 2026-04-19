@@ -64,7 +64,7 @@ The codebase still contains both product implementation and platform extraction 
 - [`scripts/`](scripts) Operational tooling, ingestion utilities, and docs automation.
 - [`tests/`](tests) Playwright end-to-end coverage.
 - [`data/`](data) Source data and ingestion inputs.
-- Production deployment: Railway (`usesophia.app`) via [`deploy.yml`](.github/workflows/deploy.yml). Runbook: `docs/sophia/deployment-railway.md`. Legacy GCP layout notes remain archival under `docs/local/operations/gcp-infrastructure.md`.
+- Production deployment: Railway (`usesophia.app`) via [`deploy.yml`](.github/workflows/deploy.yml). Runbook: [`docs/sophia/deployment-railway.md`](docs/sophia/deployment-railway.md). Legacy GCP layout notes remain archival under `docs/local/operations/gcp-infrastructure.md`.
 <!-- GENERATED:repo-structure:end -->
 
 ## Active vs maintainer-only
