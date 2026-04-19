@@ -223,14 +223,35 @@ jobs:
           fetch-depth: 1
           clean: true
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
       - name: Assert Railway deploy secrets
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+          RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
         run: |
           test -n "$RAILWAY_TOKEN" || { echo "Missing RAILWAY_TOKEN secret"; exit 1; }
+          test -n "$RAILWAY_PROJECT_ID" || { echo "Missing RAILWAY_PROJECT_ID repository variable"; exit 1; }
+          test -n "$RAILWAY_SERVICE" || { echo "Missing RAILWAY_SERVICE repository variable"; exit 1; }
 
       - name: Deploy to Railway
-        uses: railwayapp/railway-deploy@v1
-        with:
-          railway-token: ${{ secrets.RAILWAY_TOKEN }}
-          service: ${{ vars.RAILWAY_SERVICE != '' && vars.RAILWAY_SERVICE || 'sophia' }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+          RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
+          RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT }}
+        run: |
+          set -euo pipefail
+          ARGS=(
+            --ci
+            --detach
+            --project "$RAILWAY_PROJECT_ID"
+            --service "$RAILWAY_SERVICE"
+          )
+          if [ -n "${RAILWAY_ENVIRONMENT:-}" ]; then
+            ARGS+=(--environment "$RAILWAY_ENVIRONMENT")
+          fi
+          npx -y @railway/cli@4.40.0 up "${ARGS[@]}"

@@ -70,7 +70,11 @@ If you are cutting over from previous Cloud Run Secret Manager bindings, migrate
 
 - security + quality checks
 - `pnpm db:migrate:ci` using `DATABASE_URL_PRODUCTION` (GitHub secret)
-- Railway deploy using `RAILWAY_TOKEN` (GitHub secret) and `RAILWAY_SERVICE` (repo variable, optional; defaults to `sophia`)
+- Railway deploy using pinned Railway CLI (`@railway/cli@4.40.0`) with:
+  - `RAILWAY_TOKEN` (GitHub secret)
+  - `RAILWAY_PROJECT_ID` (repo variable, required)
+  - `RAILWAY_SERVICE` (repo variable, required)
+  - `RAILWAY_ENVIRONMENT` (repo variable, optional)
 
 ## 4) Custom domain cutover (`usesophia.app`)
 

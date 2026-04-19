@@ -34,7 +34,7 @@ Use the active docs surfaces below before reaching for older repo notes or archi
 <!-- GENERATED:repo-doc-map:start -->
 | Status | Surface | Docs | Scope | Entry point |
 | --- | --- | --- | --- | --- |
-| Public | SOPHIA | 7 | Showcase app identity, architecture, roadmap, domains, and changelog. | [SOPHIA Documentation](docs/sophia/README.md) |
+| Public | SOPHIA | 8 | Showcase app identity, architecture, roadmap, domains, and changelog. | [SOPHIA Documentation](docs/sophia/README.md) |
 | Maintainer | Full doc tree | — | Restormel platform pack, operations runbooks, reference library, and archive (not on public Git; see LOCAL_DOCS). | [Maintainer documentation pack](docs/LOCAL_DOCS.md) |
 <!-- GENERATED:repo-doc-map:end -->
 
@@ -64,7 +64,7 @@ The codebase still contains both product implementation and platform extraction 
 - [`scripts/`](scripts) Operational tooling, ingestion utilities, and docs automation.
 - [`tests/`](tests) Playwright end-to-end coverage.
 - [`data/`](data) Source data and ingestion inputs.
-- Production deployment: Railway (`usesophia.app`) via [`deploy.yml`](.github/workflows/deploy.yml). Runbook: [`docs/sophia/deployment-railway.md`](docs/sophia/deployment-railway.md). Legacy GCP layout notes remain archival under `docs/local/operations/gcp-infrastructure.md`.
+- Production deployment: Railway (`usesophia.app`) via [`deploy.yml`](.github/workflows/deploy.yml). Runbook: `docs/sophia/deployment-railway.md`. Legacy GCP layout notes remain archival under `docs/local/operations/gcp-infrastructure.md`.
 <!-- GENERATED:repo-structure:end -->
 
 ## Active vs maintainer-only
