@@ -3,7 +3,10 @@
   import { goto } from '$app/navigation';
   import { getIdToken } from '$lib/authClient';
   import { isEmbeddingModelEntry } from '$lib/ingestionModelCatalogMerge';
-  import { INGESTION_SOURCE_MODEL_HINTS } from '$lib/ingestionModelCatalog';
+  import {
+    INGESTION_SOURCE_MODEL_HINTS,
+    type IngestionSourceTypeId
+  } from '$lib/ingestionModelCatalog';
   import {
     entryMeetsPresetStageMinimum,
     INGESTION_PIPELINE_PRESET
@@ -674,6 +677,33 @@
     return preScanEstimateForRow(row.key)?.totalTokens ?? 0;
   }
 
+  function sourceTypeForHints(): IngestionSourceTypeId {
+    if (sourceType === 'sep_entry') return 'sep_entry';
+    if (sourceType === 'iep_entry') return 'iep_entry';
+    if (sourceType === 'journal_article') return 'journal_article';
+    if (sourceType === 'book') return 'gutenberg_text';
+    return 'web_article';
+  }
+
+  function parseHintLabel(label: string): { provider: string; modelId: string } | null {
+    const [provider, modelId] = label.split('·').map((part) => part.trim());
+    if (!provider || !modelId) return null;
+    return { provider, modelId };
+  }
+
+  function averageCostPerMillion(entry: CatalogEntry): number {
+    const inCost = entry.pricing?.inputPerMillion;
+    const outCost = entry.pricing?.outputPerMillion;
+    const hasIn = typeof inCost === 'number' && Number.isFinite(inCost) && inCost >= 0;
+    const hasOut = typeof outCost === 'number' && Number.isFinite(outCost) && outCost >= 0;
+    if (hasIn && hasOut) return (inCost + outCost) / 2;
+    if (hasIn) return inCost;
+    if (hasOut) return outCost;
+    if (entry.costTier === 'low') return 0.8;
+    if (entry.costTier === 'high') return 6;
+    return 2.5;
+  }
+
   /** Production quality floors (see `ingestionPipelineModelRequirements.ts`). */
   function isStageMinimumViableModel(
     row: (typeof RESTORMEL_STAGES)[number],
@@ -807,6 +837,41 @@
       }
     }
     return best;
+  }
+
+  function applyPipelinePreset(preset: PipelinePreset): void {
+    if (catalogEntries.length === 0) return;
+    const nextModelIds = { ...stageModelIds };
+    const nextProviders = { ...stageProviders };
+    const nextFallbackModelIds = { ...stageFallbackModelIds };
+    const nextFallbackProviders = { ...stageFallbackProviders };
+    for (const row of RESTORMEL_STAGES) {
+      if (row.key === 'ingestion_fetch') continue;
+      if (row.key === 'ingestion_validation' && !runValidate) continue;
+      const primary = choosePresetModelForStage(row, preset, nextModelIds);
+      if (!primary) continue;
+      const primarySid = stableModelId(primary);
+      nextModelIds[row.key] = primarySid;
+      nextProviders[row.key] = primary.provider;
+      const fallbackPool = modelsForStage(row).filter((entry) => stableModelId(entry) !== primarySid);
+      const fallbackCandidates =
+        row.key === 'ingestion_validation'
+          ? fallbackPool.filter((entry) => !validationModelConflictsWithMap(entry, nextModelIds))
+          : fallbackPool;
+      const fallback =
+        fallbackCandidates.find((entry) => isStageRecommendedModel(row, entry, nextModelIds)) ??
+        fallbackCandidates[0] ??
+        null;
+      nextFallbackModelIds[row.key] = fallback ? stableModelId(fallback) : '';
+      nextFallbackProviders[row.key] = fallback?.provider ?? '';
+    }
+    stageModelIds = nextModelIds;
+    stageProviders = nextProviders;
+    stageFallbackModelIds = nextFallbackModelIds;
+    stageFallbackProviders = nextFallbackProviders;
+    selectedPreset = preset;
+    presetMessage = `Applied ${preset} pipeline recommendations.`;
+    ensureValidationModelIsIndependent();
   }
 
   function stageTokenPressure(row: (typeof RESTORMEL_STAGES)[number]): 'low' | 'medium' | 'high' {
@@ -1865,6 +1930,14 @@
     const fallback = stageSuitabilityLabel(row);
     if (fallback.includes('high')) return 'high';
     if (fallback.includes('low')) return 'low';
+    return 'medium';
+  }
+
+  function stageSuitabilityLabel(row: (typeof RESTORMEL_STAGES)[number]): string {
+    if (row.key === 'ingestion_fetch') return 'low';
+    const pressure = stageTokenPressure(row);
+    if (pressure === 'high') return 'high';
+    if (pressure === 'low') return 'low';
     return 'medium';
   }
 
@@ -3402,26 +3475,6 @@
     gap: 8px;
     margin-bottom: 12px;
   }
-  .step-tabs button {
-    border: 1px solid var(--color-border);
-    border-radius: 6px;
-    background: transparent;
-    color: var(--color-muted);
-    padding: 10px;
-    text-align: left;
-    font-family: var(--font-ui);
-    font-size: var(--text-ui);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    transition: all 0.2s ease;
-  }
-  .step-tabs button:hover { background: var(--color-surface-raised); }
-  .step-tabs button.active {
-    border-color: var(--color-blue-border);
-    background: var(--color-blue-bg);
-    color: var(--color-text);
-  }
-  .step-tabs button.done::after { content: ' ✓'; color: var(--color-sage); }
   .step-pane { animation: fadein 0.2s ease; }
   .pipeline-cost-sticky {
     position: sticky;
@@ -3464,28 +3517,11 @@
     pointer-events: none;
     transition: opacity 0.15s ease;
   }
-  .pipeline-node .name {
-    display: block;
-    font-family: var(--font-ui);
-    font-size: var(--text-ui);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    line-height: 1.25;
-  }
   .pipeline-node-mid {
     display: flex;
     flex-direction: column;
     align-items: stretch;
     gap: 6px;
-  }
-  .pipeline-node-mid .pill {
-    display: block;
-    width: 100%;
-    box-sizing: border-box;
-    text-align: center;
-  }
-  #pipeline-stage-detail {
-    scroll-margin-top: 96px;
   }
   .pill {
     border: 1px solid var(--color-border);
