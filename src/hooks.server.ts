@@ -1,4 +1,4 @@
-import { hasOwnerRole, isSeedOwnerEmail, syncAuthenticatedUserRole, type UserRoleRecord } from '$lib/server/authRoles';
+import { hasOwnerRole, syncAuthenticatedUserRole, type UserRoleRecord } from '$lib/server/authRoles';
 import { verifyBearerTokenForApi } from '$lib/server/bearerAuthVerification';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
 import type { Handle, RequestEvent } from '@sveltejs/kit';
