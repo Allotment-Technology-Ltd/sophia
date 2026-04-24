@@ -26,21 +26,7 @@ function normalizeEmail(email: string | null | undefined): string | null {
   return normalized ? normalized : null;
 }
 
-function getSeedOwnerEmails(): Set<string> {
-  const configured = process.env.OWNER_EMAILS?.trim();
-  const emails = configured
-    ? configured.split(',').map((value) => value.trim().toLowerCase()).filter(Boolean)
-    : [];
-  return new Set(emails);
-}
 
-const SEEDED_OWNER_EMAILS = getSeedOwnerEmails();
-
-export function isSeedOwnerEmail(email: string | null | undefined): boolean {
-  const normalized = normalizeEmail(email);
-  if (!normalized) return false;
-  return SEEDED_OWNER_EMAILS.has(normalized);
-}
 
 /** Legacy Firestore / JWT fallback may still contain admin aliases; treat as owner. */
 export function migrateLegacyRoleToken(role: unknown): AppUserRole | null {
@@ -58,9 +44,6 @@ function normalizeRoles(input: unknown, fallback: AppUserRole): AppUserRole[] {
 }
 
 function resolvePrimaryRole(data: Record<string, unknown> | undefined, email: string | null): AppUserRole {
-  if (email && SEEDED_OWNER_EMAILS.has(email)) {
-    return 'owner';
-  }
   const migrated = migrateLegacyRoleToken(data?.role);
   if (migrated) return migrated;
   return 'user';
@@ -68,8 +51,6 @@ function resolvePrimaryRole(data: Record<string, unknown> | undefined, email: st
 
 export function hasOwnerRole(user: { uid?: string; role?: string | null; roles?: string[] | null } | null | undefined): boolean {
   if (!user) return false;
-  const uid = user.uid?.trim();
-  if (uid && getConfiguredOwnerUids().includes(uid)) return true;
   if (migrateLegacyRoleToken(user.role) === 'owner') return true;
   return (
     Array.isArray(user.roles) && user.roles.some((r) => migrateLegacyRoleToken(r) === 'owner')
@@ -123,8 +104,7 @@ export async function syncAuthenticatedUserRole(
     new Set<AppUserRole>([
       ...existingRoles,
       primaryRole,
-      ...legacyFromFirebaseUid,
-      ...(email && SEEDED_OWNER_EMAILS.has(email) ? (['owner'] as AppUserRole[]) : [])
+      ...legacyFromFirebaseUid
     ])
   );
   const role: AppUserRole = roles.includes('owner') ? 'owner' : 'user';

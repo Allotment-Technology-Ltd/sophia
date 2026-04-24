@@ -119,3 +119,4 @@ scripts/revert-org-policies.sh
 scripts/setup-wif.sh
 scripts/transfer-project.sh
 scripts/verify-migration.sh
+.vibe/

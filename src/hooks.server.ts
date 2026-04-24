@@ -1,4 +1,4 @@
-import { hasOwnerRole, isSeedOwnerEmail, syncAuthenticatedUserRole, type UserRoleRecord } from '$lib/server/authRoles';
+import { hasOwnerRole, syncAuthenticatedUserRole, type UserRoleRecord } from '$lib/server/authRoles';
 import { verifyBearerTokenForApi } from '$lib/server/bearerAuthVerification';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
 import type { Handle, RequestEvent } from '@sveltejs/kit';
@@ -40,10 +40,9 @@ export const handle: Handle = async ({ event, resolve }) => {
     try {
       const token = authHeader.slice(7);
       const profile = await verifyBearerTokenForApi(token);
-      const fallbackRole = isSeedOwnerEmail(profile.email) ? 'owner' : 'user';
       let roleRecord: UserRoleRecord = {
-        role: fallbackRole,
-        roles: [fallbackRole]
+        role: 'user',
+        roles: ['user']
       };
 
       try {
