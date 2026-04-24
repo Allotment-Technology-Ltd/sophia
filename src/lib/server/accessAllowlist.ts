@@ -28,11 +28,6 @@ function migrateLegacyRoleToken(role: unknown): 'owner' | 'user' | null {
 function userHasOwnerPrivileges(
   user: { uid?: string; role?: string | null; roles?: string[] | null }
 ): boolean {
-  const uid = user.uid?.trim();
-  if (uid) {
-    const ownerUids = parseCommaEnv('OWNER_UIDS');
-    if (ownerUids.includes(uid)) return true;
-  }
   if (migrateLegacyRoleToken(user.role) === 'owner') return true;
   if (Array.isArray(user.roles) && user.roles.some((r) => migrateLegacyRoleToken(r) === 'owner')) {
     return true;
@@ -40,17 +35,9 @@ function userHasOwnerPrivileges(
   return false;
 }
 
-/** Mirrors `isSeedOwnerEmail` (OWNER_EMAILS env). */
-function emailIsSeededOperator(email: string | null | undefined): boolean {
-  const normalized = email?.trim().toLowerCase();
-  if (!normalized) return false;
-  const emails = parseCommaEnv('OWNER_EMAILS').map((e) => e.toLowerCase());
-  return emails.includes(normalized);
-}
-
 /**
  * When `ALLOWED_EMAILS` is non-empty, only those addresses may use the app unless the user
- * is an owner (role / OWNER_UIDS) or matches `OWNER_EMAILS` (seed operator).
+ * is an owner (role).
  * Requires an authenticated user (`uid`) for non-allowlist paths.
  */
 export function passesEarlyAccessAllowlist(params: {
@@ -66,7 +53,7 @@ export function passesEarlyAccessAllowlist(params: {
 
   const u = params.user;
   if (!u?.uid) return false;
-  if (userHasOwnerPrivileges(u) || emailIsSeededOperator(email)) return true;
+  if (userHasOwnerPrivileges(u)) return true;
 
   return false;
 }

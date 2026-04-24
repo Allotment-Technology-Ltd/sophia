@@ -40,10 +40,9 @@ export const handle: Handle = async ({ event, resolve }) => {
     try {
       const token = authHeader.slice(7);
       const profile = await verifyBearerTokenForApi(token);
-      const fallbackRole = isSeedOwnerEmail(profile.email) ? 'owner' : 'user';
       let roleRecord: UserRoleRecord = {
-        role: fallbackRole,
-        roles: [fallbackRole]
+        role: 'user',
+        roles: ['user']
       };
 
       try {
