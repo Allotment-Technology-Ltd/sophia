@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { checkDatabaseHealth, getDatabaseRuntimeConfig, query } from '$lib/server/db';
+import { resolveRuntimeBuildLabel } from '$lib/server/runtimeBuild';
 
 const RELATION_TABLES = [
 	'supports',
@@ -90,11 +91,17 @@ export const GET: RequestHandler = async (event) => {
 
 	const healthy = !includeDb || dbStatus.status === 'connected';
 
+	const build = resolveRuntimeBuildLabel();
 	return json(
 		{
 			status: healthy ? 'healthy' : 'degraded',
 			readiness: healthy ? 'ready' : 'degraded',
-			app: { status: 'up' },
+			app: {
+				status: 'up',
+				version: build.app_version,
+				/** `null` = env did not provide a commit (set on Railway for Git deploys, or add COMMIT_SHA) */
+				git_sha: build.git_sha
+			},
 			database: dbStatus,
 			timestamp: new Date().toISOString()
 		},

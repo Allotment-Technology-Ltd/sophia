@@ -12,6 +12,18 @@ function withApiCacheHeaders(event: RequestEvent, response: Response): Response 
   return response;
 }
 
+/** Admin HTML must not be cached; mobile bfcache/CDN can otherwise serve an old shell after deploy. */
+function withAdminHtmlNoStore(event: RequestEvent, response: Response): Response {
+  if (
+    event.request.method === 'GET' &&
+    event.url.pathname.startsWith('/admin') &&
+    (response.headers.get('content-type') ?? '').includes('text/html')
+  ) {
+    response.headers.set('Cache-Control', 'private, no-store, max-age=0, must-revalidate');
+  }
+  return response;
+}
+
 function isBrowserNavigation(event: RequestEvent): boolean {
   const accept = event.request.headers.get('accept') ?? '';
   const mode = event.request.headers.get('sec-fetch-mode') ?? '';
@@ -141,5 +153,5 @@ export const handle: Handle = async ({ event, resolve }) => {
     }
   }
 
-  return withApiCacheHeaders(event, await resolve(event));
+  return withAdminHtmlNoStore(event, withApiCacheHeaders(event, await resolve(event)));
 };
