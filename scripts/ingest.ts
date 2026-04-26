@@ -69,10 +69,8 @@ import {
 	type IngestProviderPreference,
 	type IngestionPlanningContext
 } from '../src/lib/server/aaif/ingestion-plan.js';
-import {
-	canonicalModelChainForStage,
-	type IngestionLlmStageKey
-} from '../src/lib/ingestionCanonicalPipeline.js';
+import { type IngestionLlmStageKey } from '../src/lib/ingestionCanonicalPipeline.js';
+import type { RestormelStepChainEntry } from '../src/lib/server/restormel.js';
 import {
 	filterModelTiersForFinetunePolicy,
 	ingestFinetuneLabelerStrictEnabled,
@@ -744,12 +742,61 @@ function tierFitsEstimatedContext(
 	else if (m.includes('claude')) maxIn = 190_000;
 	else if (m.includes('mistral') || m.includes('ministral')) maxIn = 120_000;
 	else if (m.includes('deepseek')) maxIn = 120_000;
-	return estIn <= maxIn;
+		return estIn <= maxIn;
+	}
+
+function modelProviderTypeToIngestProvider(pt: string | null | undefined): string {
+	const p = (pt ?? '').trim().toLowerCase();
+	if (p === 'google') return 'vertex';
+	if (!p) return 'auto';
+	return p;
+}
+
+function sameIngestModelTier(
+	a: { provider: string; modelId: string },
+	b: { provider: string; modelId: string }
+): boolean {
+	const pa = a.provider.trim().toLowerCase();
+	const pb = b.provider.trim().toLowerCase();
+	const pMatch =
+		pa === pb ||
+		(pa === 'vertex' && pb === 'google') ||
+		(pb === 'vertex' && pa === 'google');
+	return pMatch && a.modelId.trim() === b.modelId.trim();
 }
 
 /**
- * Ordered fallback chain: catalog (cheapest suitable first, failure-deprioritized) ∪ canonical defaults, deduped.
+ * Remaining enabled steps on the Restormel route after the tier that matches this stage's primary plan
+ * (stepChain order from /resolve). No static LLM list — only what is configured in Restormel Keys.
  */
+function buildAdditionalFallbackTiersFromStepChain(
+	plan: IngestionStagePlan
+): { provider: string; modelId: string }[] {
+	const chain = plan.route?.resolvedStepChain;
+	if (!Array.isArray(chain) || chain.length < 2) return [];
+
+	const primary = { provider: plan.provider, modelId: plan.model };
+	const entries: { provider: string; modelId: string }[] = [];
+	for (const e of chain) {
+		if (!e || (e as RestormelStepChainEntry).enabled === false) continue;
+		const r = e as RestormelStepChainEntry;
+		const mid = r.modelId?.trim() ?? '';
+		if (!mid) continue;
+		entries.push({ provider: modelProviderTypeToIngestProvider(r.providerType), modelId: mid });
+	}
+	if (entries.length < 2) return [];
+
+	const idx = entries.findIndex((t) => sameIngestModelTier(t, primary));
+	if (idx < 0) {
+		/** Primary not found in step chain (degraded / pin mismatch) — do not double-add unknown tiers */
+		return [];
+	}
+	return entries.slice(idx + 1);
+}
+
+	/**
+	 * Ordered fallback chain: primary from Restormel plan + model catalog (optional) + Restormel route step chain.
+	 */
 function buildEffectiveModelChainForStage(
 	stage: StageKey,
 	plan: IngestionStagePlan,
@@ -757,25 +804,30 @@ function buildEffectiveModelChainForStage(
 	catalogRouting: IngestCatalogRoutingJson | null
 ): { provider: string; modelId: string }[] {
 	const llmStage = stage as IngestionLlmStageKey;
-	const canonical = canonicalModelChainForStage(llmStage);
 	const out: { provider: string; modelId: string }[] = [];
 	const seen = new Set<string>();
 
 	const pushTier = (t: { provider: string; modelId: string }, front = false) => {
 		const prov = t.provider.trim().toLowerCase();
 		const mid = t.modelId.trim();
-		if (!prov || !mid) return;
+		if (!mid) return;
+		if (!front) {
+			if (!prov || prov === 'auto') return;
+			if (!tierFitsEstimatedContext(stage as IngestionStage, { provider: prov, modelId: mid }, ctx)) {
+				return;
+			}
+		}
 		const k = `${prov}::${mid}`;
 		if (seen.has(k)) return;
-		if (!tierFitsEstimatedContext(stage as IngestionStage, { provider: prov, modelId: mid }, ctx)) return;
 		seen.add(k);
 		if (front) out.unshift({ provider: prov, modelId: mid });
 		else out.push({ provider: prov, modelId: mid });
 	};
 
-	// 1) Restormel primary (may differ from canonical)
+	// 1) Primary from this stage plan (Restormel resolve / operator pins)
 	pushTier({ provider: plan.provider, modelId: plan.model }, true);
 
+	// 2) Optional: catalog-ordered extra candidates (Admin → Model availability → routing JSON)
 	const catList = catalogRouting?.[llmStage];
 	if (Array.isArray(catList) && catList.length > 0) {
 		const scored = catList
@@ -801,8 +853,9 @@ function buildEffectiveModelChainForStage(
 		}
 	}
 
-	for (const t of canonical) {
-		pushTier({ provider: t.provider, modelId: t.modelId });
+	// 3) Remaining enabled steps on the same Restormel route (order preserved)
+	for (const t of buildAdditionalFallbackTiersFromStepChain(plan)) {
+		pushTier(t);
 	}
 
 	const filtered = filterModelTiersForFinetunePolicy(stage, out, process.env);

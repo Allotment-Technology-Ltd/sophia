@@ -159,9 +159,8 @@ function readEnvPinnedModel(
 
 /**
  * Explicit pins only: `INGEST_PIN_PROVIDER_*` + `INGEST_PIN_MODEL_*` (and embedding is handled elsewhere).
- * Do **not** inject canonical primary models from `ingestionCanonicalPipeline` here — those defaults are for fallback tiers
- * and degraded resolve paths. Feeding them as `requestedProvider` made `resolveProviderDecision` treat every
- * `auto` ingest as a non-auto provider and **skip Restormel** (`source=requested`, empty step metadata).
+ * Do **not** hardcode a default provider for `auto` when pins are empty — that made `resolveProviderDecision`
+ * treat the stage as a non-Restormel **requested** path and **skip** Keys selection (`source=requested`).
  */
 function readPinnedModel(stage: IngestionStage): { provider?: ModelProvider; modelId?: string } {
   if (stage === 'embedding') return {};
@@ -514,7 +513,7 @@ export async function planIngestionStage(
 
 /**
  * Build a plan for an explicit provider/model (used after transient failures to try the next tier
- * in {@link CANONICAL_INGESTION_MODEL_FALLBACKS}). Fails hard if credentials are missing.
+ * when the explicit tier cannot be planned. Fails hard if credentials are missing.
  */
 export async function planIngestionStageWithExplicitModel(
   stage: IngestionStage,

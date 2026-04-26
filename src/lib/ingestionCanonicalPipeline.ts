@@ -1,19 +1,10 @@
 /**
- * Single production ingestion profile: default models per stage and ordered fallbacks
- * when the primary model fails after retries (see scripts/ingest.ts `callStageModel`).
+ * Ingestion **embedding** defaults (Voyage 1024-dim corpus contract) and shared stage key types.
  *
- * Env pins (`INGEST_PIN_*`) still override these defaults for the **first** resolve tier.
- * `scripts/ingest.ts` may still filter cross-tier fallbacks via `INGEST_FINETUNE_LABELER_*` on
- * sensitive stages. With ingest-provider `auto` and no env pins, `planIngestionStage` calls Restormel first;
- * these primaries apply to fallback chains and degraded resolve, not as fake “requested” providers.
- *
- * **Durable Neon jobs** force {@link CANONICAL_VOYAGE_EMBEDDING_MODEL_LABEL} on each child so the corpus
- * stays on **1024-dim Voyage** embeddings (Vertex text-embedding-005 is 768-dim and must not mix in).
- *
- * Vertex Gemini IDs must stay aligned with current Vertex model pages (including preview ids):
- * https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-flash
- * https://cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-1-pro
- * https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions
+ * **LLM** extraction → json_repair stages are **not** configured here. They come from
+ * **Restormel Keys** routes (per-stage `ingestion_*` and optional Neon route bindings) and optional
+ * `INGEST_CATALOG_ROUTING_JSON` for catalog ordering. See `callStageModel` in `scripts/ingest.ts` and
+ * the Admin → Operator → Restormel routing screen.
  */
 import type { ModelProvider } from '@restormel/contracts/providers';
 
@@ -47,89 +38,3 @@ export const CANONICAL_VOYAGE_EMBEDDING_MODEL_LABEL = 'voyage__voyage-4-lite';
 
 /** Recorded on `ingestion_jobs.embedding_fingerprint` to match the forced child embedding profile. */
 export const CANONICAL_VOYAGE_EMBEDDING_FINGERPRINT = 'voyage:voyage-4-lite:1024d';
-
-/**
- * Production profile: **Vertex Gemini** for extraction, relations, grouping, remediation, **validation**,
- * and **json_repair** primaries (long structured JSON + high `maxOutputTokens` without the frequent
- * `finish_reason: length` truncation seen on `deepseek-chat` for large validation payloads). **DeepSeek**
- * and **OpenAI** remain in fallback chains when keys exist. **`deepseek-reasoner` is intentionally omitted**
- * from default validation (slow / long outputs). Optional **Groq** tiers suit json_repair / light repair
- * when `GROQ_API_KEY` is set; use `INGEST_GROQ_*` pacing and `INGEST_PROVIDER_TPM_BUDGET=groq:…` on free tiers
- * (see Groq rate-limit docs).
- *
- * Allowlist in `ingestionFinetuneLabelerPolicy` includes `deepseek` alongside `mistral` + `vertex` so
- * DeepSeek can serve sensitive training-lineage stages when strict mode is on (operators remain
- * responsible for provider ToS / fine-tuning eligibility for their keys).
- */
-export const CANONICAL_INGESTION_PRIMARY_MODELS: Record<IngestionLlmStageKey, CanonicalModelRef> = {
-	extraction: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
-	relations: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
-	grouping: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
-	validation: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
-	remediation: { provider: 'vertex', modelId: 'gemini-3-flash-preview' },
-	json_repair: { provider: 'vertex', modelId: 'gemini-3-flash-preview' }
-};
-
-/**
- * Ordered fallbacks after primary exhausts transient retries (429/5xx/timeout).
- * Heavy stages: deeper Gemini then Mistral sizes. json_repair: Gemini flash then larger Mistral tiers.
- */
-export const CANONICAL_INGESTION_MODEL_FALLBACKS: Record<IngestionLlmStageKey, CanonicalModelRef[]> = {
-	extraction: [
-		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
-		{ provider: 'deepseek', modelId: 'deepseek-chat' },
-		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
-		{ provider: 'mistral', modelId: 'mistral-large-latest' },
-		{ provider: 'mistral', modelId: 'mistral-small-latest' }
-	],
-	relations: [
-		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
-		{ provider: 'deepseek', modelId: 'deepseek-chat' },
-		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
-		{ provider: 'mistral', modelId: 'mistral-large-latest' },
-		{ provider: 'mistral', modelId: 'mistral-small-latest' }
-	],
-	grouping: [
-		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
-		{ provider: 'deepseek', modelId: 'deepseek-chat' },
-		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
-		{ provider: 'mistral', modelId: 'mistral-large-latest' },
-		{ provider: 'mistral', modelId: 'mistral-small-latest' }
-	],
-	validation: [
-		{ provider: 'openai', modelId: 'gpt-4o-mini' },
-		{ provider: 'openai', modelId: 'gpt-4o' },
-		{ provider: 'deepseek', modelId: 'deepseek-chat' },
-		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
-		{ provider: 'mistral', modelId: 'mistral-large-latest' },
-		{ provider: 'mistral', modelId: 'mistral-medium-latest' }
-	],
-	remediation: [
-		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
-		{ provider: 'deepseek', modelId: 'deepseek-chat' },
-		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
-		{ provider: 'mistral', modelId: 'mistral-large-latest' },
-		{ provider: 'mistral', modelId: 'mistral-small-latest' }
-	],
-	json_repair: [
-		{ provider: 'groq', modelId: 'llama-3.1-8b-instant' },
-		{ provider: 'mistral', modelId: 'mistral-medium-latest' },
-		{ provider: 'deepseek', modelId: 'deepseek-chat' },
-		{ provider: 'vertex', modelId: 'gemini-3.1-pro-preview' },
-		{ provider: 'mistral', modelId: 'mistral-large-latest' },
-		{ provider: 'mistral', modelId: 'mistral-small-latest' }
-	]
-};
-
-/** Full chain primary-first for a stage (for ingest worker). */
-export function canonicalModelChainForStage(stage: IngestionLlmStageKey): CanonicalModelRef[] {
-	const primary = CANONICAL_INGESTION_PRIMARY_MODELS[stage];
-	const rest = CANONICAL_INGESTION_MODEL_FALLBACKS[stage] ?? [];
-	const out: CanonicalModelRef[] = [primary];
-	for (const tier of rest) {
-		if (tier.provider === primary.provider && tier.modelId === primary.modelId) continue;
-		if (out.some((x) => x.provider === tier.provider && x.modelId === tier.modelId)) continue;
-		out.push(tier);
-	}
-	return out;
-}
