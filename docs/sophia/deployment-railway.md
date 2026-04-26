@@ -46,6 +46,8 @@ Set these in Railway service variables (Production environment):
 
 **Neon Auth must match the browser and the server.** The client uses `PUBLIC_NEON_AUTH_URL` (same as `NEON_AUTH_BASE_URL`). If those drift from the Neon Auth `base_url` in the [Neon API or Console](https://neon.com/docs/auth), JWT verification fails and API calls return 401 (invalid or expired session). The app’s **owner role** is stored in Postgres `sophia_documents` (collection `users` keyed by JWT `sub`), not in a separate SQL `user` table—set owner via **Admin → User management** or by updating that document for your Neon `sub`.
 
+**Check deployment:** `GET /api/health/auth-config` (no `Authorization` header) returns `use_neon_auth`, JWKS host, and how many issuers/audiences the process trusts. Optional: `NEON_AUTH_TRUSTED_ISSUERS`, `NEON_AUTH_TRUSTED_AUDIENCES`, `NEON_AUTH_JWT_CLOCK_TOLERANCE` in `.env.example`.
+
 Keep secrets in Railway/GitHub secrets only; do not commit them.
 
 ### Existing GCP secret name → Railway variable mapping
