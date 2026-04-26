@@ -108,6 +108,20 @@ After deploy and DNS propagation:
 - DNS rollback: temporarily point `usesophia.app` back to prior target if needed.
 - DB safety: migrations run before deploy in CI; if rollback is required, keep schema backward-compatible or ship follow-up migration.
 
-## 7) Google Cloud decommission note
+## 7) Durable ingestion jobs (replaces Cloud Run `sophia-ingestion-job-poller`)
+
+Durable **multi-URL** jobs and **re-embed** corpus jobs are advanced in Neon by `tickAllRunningIngestionJobs` / `tickAllRunningReembedJobs` (same as `pnpm ingestion:job-poller`, which runs `scripts/ingestion-job-poller.ts`). On Google Cloud that ran as a **separate** Cloud Run Job on a schedule; the main web service does not tick queues on its own.
+
+**Pick one of these for production on Railway:**
+
+1. **HTTP tick (lightweight).** Set `INGESTION_JOB_TICK_SECRET` on the app service to a long random value. A scheduler (Railway [cron](https://docs.railway.com/reference/cron-jobs) if available on your plan, or GitHub Actions `on: schedule` + `curl --fail` with `Authorization: Bearer …`) can `POST https://<host>/api/internal/ingest/jobs/tick` on an interval (for example every one to two minutes). That endpoint runs the same ticks as the old poller job. Keep the secret in Railway/Actions secrets only.
+
+2. **Dedicated worker process.** Add a second Railway service using the same image and env as the web app, with start command e.g. `npx --yes tsx scripts/ingestion-job-poller.ts --interval 5` (or use `Dockerfile.ingest-worker` which runs the poller). Size memory for concurrent `ingest.ts` children if the web app also spawns admin runs; in practice a separate worker avoids starving HTTP requests. Copy every secret the poller and ingest children need (same as `scripts/gcp/deploy-sophia-ingestion-poller-job.sh` on GCP: `DATABASE_URL`, Surreal, model keys, Restormel, etc.).
+
+3. **Manual** — Admin can use **Advance all queues** in the jobs UI, but that is not suitable for unattended operation.
+
+Nightly or other batch scripts (for example `scripts/ingest-nightly-links.ts`) are separate: schedule them the same way if you still run those flows.
+
+## 8) Google Cloud decommission note
 
 Legacy GCP deployment scripts/docs are retained only as archival/teardown references. Production deploy is Railway-first.
