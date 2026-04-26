@@ -174,7 +174,7 @@
     "firebase-admin": "^13.7.0",
     "pg": "^8.20.0",
     "postcss": "^8.5.6",
-    "svelte": "^5.55.4",
+    "svelte": "^5.55.5",
     "svelte-check": "^4.4.4",
     "tailwindcss": "^4.2.1",
     "typescript": "^5.9.3",
