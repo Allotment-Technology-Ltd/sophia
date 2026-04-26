@@ -20,4 +20,9 @@ describe('verifyIngestionJobTickSecret', () => {
 		vi.stubEnv('INGESTION_JOB_TICK_SECRET', '');
 		expect(verifyIngestionJobTickSecret('Bearer any')).toBe(false);
 	});
+
+	it('accepts match when env has trailing newline (UI paste) and token does not', () => {
+		vi.stubEnv('INGESTION_JOB_TICK_SECRET', 'abc\n');
+		expect(verifyIngestionJobTickSecret('Bearer abc')).toBe(true);
+	});
 });

@@ -14,11 +14,7 @@
     saveOperatorPhasePinsToStorage
   } from '$lib/ingestion/operatorPhasePins';
   import { resolveRouteForStage, type IngestionRouteLike } from '$lib/utils/ingestionRouting';
-  import {
-    INGESTION_PIPELINE_PRESET,
-    canonicalModelChainForStage,
-    type IngestionLlmStageKey
-  } from '$lib/ingestionCanonicalPipeline';
+  import { INGESTION_PIPELINE_PRESET, type IngestionLlmStageKey } from '$lib/ingestionCanonicalPipeline';
 
   let { data } = $props();
   const restormelEnvironmentId = $derived(data.restormelEnvironmentId ?? 'production');
@@ -671,7 +667,7 @@
         <span class="rt-snapshot-k">Preset</span>
         <span class="rt-snapshot-v"
           >Pipeline <code class="rt-code">{INGESTION_PIPELINE_PRESET}</code> ·
-          <a class="rt-link" href="#rt-preset-details">view fallback chain</a></span
+          <a class="rt-link" href="#rt-preset-details">LLM routing (Restormel)</a></span
         >
       </li>
     </ul>
@@ -876,43 +872,24 @@
 
   <details class="rt-details" id="rt-preset-details">
     <summary class="rt-details-sum"
-      >Production worker fallback chain (<code class="rt-code">{INGESTION_PIPELINE_PRESET}</code>)</summary
+      >LLM routing (<code class="rt-code">{INGESTION_PIPELINE_PRESET}</code> profile)</summary
     >
     <p class="rt-p rt-p-tight">
-      When pins / Restormel resolve do not supply a model, the ingest worker walks this
-      <strong>primary + ordered fallback</strong> chain per stage (transient errors only — see
-      <code class="rt-code">ingestionCanonicalPipeline.ts</code>).
+      <strong>Extraction through json_repair</strong> are chosen by <strong>Restormel Keys</strong> routes
+      (per stage below) and optional <strong>Neon route bindings</strong>. The ingest script uses the resolved
+      primary, then the <strong>remaining published steps</strong> on the same route as <strong>fallback</strong> tiers
+      (plus optional <code class="rt-code">INGEST_CATALOG_ROUTING_JSON</code> from Model availability). There is no
+      static model list in the app.
     </p>
-    <div class="rt-preset-table-wrap">
-      <table class="rt-table rt-preset-table">
-        <thead>
-          <tr>
-            <th>Stage</th>
-            <th>Chain (primary first)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each PRESET_LLM_ORDER as sk (sk)}
-            <tr>
-              <td class="rt-phase"
-                ><span class="rt-phase-label">{PRESET_LLM_LABEL[sk]}</span><code class="rt-code rt-small">{sk}</code></td
-              >
-              <td>
-                <ol class="rt-preset-chain">
-                  {#each canonicalModelChainForStage(sk) as tier, i (i)}
-                    <li>
-                      <span class="rt-preset-idx">{i + 1}.</span>
-                      <strong>{tier.provider}</strong>
-                      · <code class="rt-code">{tier.modelId}</code>
-                    </li>
-                  {/each}
-                </ol>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
+    <p class="rt-p rt-p-tight">Stages:</p>
+    <ul class="rt-preset-chain rt-p">
+      {#each PRESET_LLM_ORDER as sk (sk)}
+        <li>
+          <span class="rt-phase-label">{PRESET_LLM_LABEL[sk]}</span>
+          <code class="rt-code rt-small">{sk}</code>
+        </li>
+      {/each}
+    </ul>
   </details>
 
   <details class="rt-details">
@@ -1590,21 +1567,10 @@
     font-weight: 600;
     margin: 0 0 6px;
   }
-  .rt-preset-table-wrap {
-    overflow: auto;
-  }
-  .rt-preset-table th,
-  .rt-preset-table td {
-    vertical-align: top;
-  }
   .rt-preset-chain {
     margin: 0;
     padding-left: 1.1rem;
     font-size: 0.84rem;
-  }
-  .rt-preset-idx {
-    opacity: 0.65;
-    margin-right: 4px;
   }
   .rt-chain-d {
     font-size: 0.86rem;

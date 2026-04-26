@@ -25,12 +25,18 @@ jobs:
             echo "::error::Repository secret INGESTION_JOB_TICK_SECRET is not set. Add it in Settings → Secrets and variables → Actions (same value as Railway INGESTION_JOB_TICK_SECRET). See docs/sophia/deployment-railway.md."
             exit 1
           fi
+          # Strip CR; strip trailing LFs (paste into GitHub secrets often adds a final newline; server normalizes too)
+          SECRET_USE="${INGESTION_JOB_TICK_SECRET//$'\r'/}"
+          while [[ "$SECRET_USE" == *$'\n' ]]; do
+            SECRET_USE="${SECRET_USE%$'\n'}"
+          done
           URL="${INGESTION_JOB_TICK_URL:-https://usesophia.app/api/internal/ingest/jobs/tick}"
           echo "POST $URL"
+          RESP_FILE="$(mktemp)"
           HTTP_CODE=$(
-            curl -sS -o /dev/null -w '%{http_code}' --max-time 120 \
+            curl -sS -o "$RESP_FILE" -w '%{http_code}' --max-time 120 \
               -X POST \
-              -H "Authorization: Bearer ${INGESTION_JOB_TICK_SECRET}" \
+              -H "Authorization: Bearer $SECRET_USE" \
               -H "Content-Type: application/json" \
               -H "Accept: application/json" \
               --retry 2 --retry-delay 5 \
@@ -38,6 +44,16 @@ jobs:
           )
           echo "HTTP $HTTP_CODE"
           if [ "$HTTP_CODE" != 200 ]; then
-            echo "::error::expected HTTP 200, got $HTTP_CODE (is INGESTION_JOB_TICK_SECRET the same in Railway and GitHub?)"
+            echo "Response body:"
+            cat "$RESP_FILE" || true
+            echo
+            if [ "$HTTP_CODE" = "503" ]; then
+              echo "::error::HTTP 503 — production may not have INGESTION_JOB_TICK_SECRET set, or the tick route is not deployed. Set the var on the Railway app service, redeploy, then re-run. Body above may include hint."
+            elif [ "$HTTP_CODE" = "401" ]; then
+              echo "::error::HTTP 401 — token mismatch. Ensure the GitHub Actions secret matches Railway (regenerate, paste the same 64-hex in both, redeploy Railway if you change it there)."
+            else
+              echo "::error::expected HTTP 200, got $HTTP_CODE"
+            fi
             exit 1
           fi
+          rm -f "$RESP_FILE"

@@ -174,7 +174,7 @@ async function main(): Promise<void> {
 
 	console.log(`Ingest extraction model audit — done runs, last ${days}d (completed_at)\n`);
 	console.log(
-		'Canonical extraction primary (code): `CANONICAL_INGESTION_PRIMARY_MODELS.extraction` in `src/lib/ingestionCanonicalPipeline.ts` (Gemini-on-Vertex first, Mistral fallbacks; worker also applies `INGEST_FINETUNE_LABELER_*`).\n'
+		'Extraction routing: Restormel Keys `ingestion_extraction` route + optional catalog `INGEST_CATALOG_ROUTING_JSON` (no static primary in repo; see Admin → Operator → Restormel routing).\n'
 	);
 
 	printSorted('report_envelope.timingTelemetry.stage_models.extraction (counts by run)', fromEnvelope);
