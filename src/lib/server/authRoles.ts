@@ -1,10 +1,6 @@
 import { FieldValue, Timestamp } from '$lib/server/fsCompat';
 import { sophiaDocumentsDb } from '$lib/server/sophiaDocumentsDb';
 
-function getConfiguredOwnerUids(): string[] {
-  return process.env.OWNER_UIDS?.split(',').map((value) => value.trim()).filter(Boolean) ?? [];
-}
-
 export const APP_USER_ROLE_VALUES = ['user', 'owner'] as const;
 export type AppUserRole = (typeof APP_USER_ROLE_VALUES)[number];
 
