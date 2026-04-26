@@ -1136,6 +1136,11 @@ function parseIngestProvider(value: string | undefined): IngestProvider {
 	return 'auto';
 }
 
+function validationRouteRequiresVertexProject(validationPlan: { provider: string; route?: { provider?: string } }): boolean {
+	const p = (validationPlan.route?.provider ?? validationPlan.provider).trim().toLowerCase();
+	return p === 'vertex' || p === 'google';
+}
+
 function parsePositiveInt(value: string | undefined): number | undefined {
 	if (!value) return undefined;
 	const parsed = Number(value);
@@ -4441,10 +4446,8 @@ async function main() {
 		);
 		process.exit(1);
 	}
-	if (shouldValidate && !GOOGLE_VERTEX_PROJECT) {
-		console.error('[ERROR] --validate flag requires GOOGLE_VERTEX_PROJECT (or GCP_PROJECT_ID) — uses Vertex AI ADC');
-		process.exit(1);
-	}
+	// Validation may use any Restormel-resolved provider (Mistral, aizolo, etc.). Do not require
+	// GOOGLE_VERTEX_PROJECT for --validate; check only after `planIngestionStage` when the route is Vertex.
 
 	// Load source files (or full text from Neon when the worker has no local data/sources copy)
 	const { txtPath, sourceText, sourceMeta, slug } = await loadSourceTextAndMeta(filePath, {
@@ -4842,6 +4845,17 @@ async function main() {
 		console.log(
 			`  [INFO] Google/Vertex extraction throughput: parallel single-passage concurrency ${extractionParallelConcurrency} (env INGEST_EXTRACTION_CONCURRENCY=${INGEST_EXTRACTION_CONCURRENCY}; floor INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR=${process.env.INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR ?? '6'})`
 		);
+	}
+	if (
+		shouldValidate &&
+		validationRouteRequiresVertexProject(validationPlan) &&
+		!GOOGLE_VERTEX_PROJECT
+	) {
+		console.error(
+			'[ERROR] Validation is routed to Vertex, but GOOGLE_VERTEX_PROJECT (or GCP_PROJECT_ID) is not set. Set a GCP project, or reconfigure the ingestion_validation Restormel route to a non-Vertex model.'
+		);
+		await closeSurrealIfOpen(db);
+		process.exit(1);
 	}
 	console.log('');
 
