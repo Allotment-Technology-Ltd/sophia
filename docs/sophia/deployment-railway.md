@@ -80,6 +80,12 @@ If you are cutting over from previous Cloud Run Secret Manager bindings, migrate
   - `RAILWAY_SERVICE` (repo variable, required)
   - `RAILWAY_ENVIRONMENT` (repo variable, optional)
 
+### If a push to `main` did not reach production (e.g. CI failed on an early PR)
+
+1. **Fix or merge** the follow-up on `main` (typecheck / build must be green), then **push to `main`** so the workflow runs again.
+2. Or: **Actions** → **CI/CD** → **Run workflow** → branch `main` → enable **“Run DB migrate + Railway deploy even without detected deploy-path changes”** (`force_app_deploy`). This runs **Neon migrate** and **`railway up`** even when the path filter would skip deploy (e.g. docs-only or a missed filter).
+3. **Confirm the live revision:** `curl -sS https://usesophia.app/api/health | jq .app` — the JSON includes `version` and `git_sha` when the runtime can resolve a commit (commonly from Railway’s `RAILWAY_GIT_COMMIT_SHA` for Git-integrated services). If `git_sha` is `null`, you still have `version`; compare to `package.json` in the tag you expect, or set a deploy-time env per [Railway variables](https://docs.railway.com/reference/variables).
+
 ## 4) Custom domain cutover (`usesophia.app`)
 
 1. In Railway service settings, add custom domain: `usesophia.app`.
