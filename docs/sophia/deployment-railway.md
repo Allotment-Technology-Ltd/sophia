@@ -26,8 +26,8 @@ Set these in Railway service variables (Production environment):
 
 - `DATABASE_URL`
 - `USE_NEON_AUTH=1`
-- `NEON_AUTH_BASE_URL`
-- `PUBLIC_NEON_AUTH_URL` (same value as `NEON_AUTH_BASE_URL`)
+- `NEON_AUTH_BASE_URL` (or **`NEON_AUTH_URL`** as an alias — the app now accepts either name)
+- `PUBLIC_NEON_AUTH_URL` (same value as the auth `base_url` above; required for the browser to match the server)
 - `ANTHROPIC_API_KEY`
 - `GOOGLE_AI_API_KEY`
 - `VOYAGE_API_KEY`
