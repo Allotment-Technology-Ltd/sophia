@@ -163,18 +163,16 @@ jobs:
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
 
+  # Run on every green push to `main` (migrations are idempotent). This must not be gated on the
+  # path filter for `changes.outputs.deploy` alone: a skipped `needs` job (e.g. doc-only) would
+  # otherwise block `deploy-railway` because GitHub skips all dependents. Use `force_app_deploy`
+  # in workflow_dispatch to re-run migrate + deploy without a new commit.
   deploy-neon-migrate:
     if: >
       success() &&
       github.ref == 'refs/heads/main' &&
       (
-        (
-          github.event_name == 'push' &&
-          (
-            needs.changes.outputs.deploy == 'true' ||
-            needs.changes.outputs.neon_migrate == 'true'
-          )
-        ) ||
+        github.event_name == 'push' ||
         (github.event_name == 'workflow_dispatch' && inputs.force_app_deploy == true)
       )
     needs: [changes, security]
@@ -213,7 +211,7 @@ jobs:
       success() &&
       github.ref == 'refs/heads/main' &&
       (
-        (github.event_name == 'push' && needs.changes.outputs.deploy == 'true') ||
+        github.event_name == 'push' ||
         (github.event_name == 'workflow_dispatch' && inputs.force_app_deploy == true)
       )
     needs: [changes, security, deploy-neon-migrate]
