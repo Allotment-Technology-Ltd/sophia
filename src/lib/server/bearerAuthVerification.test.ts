@@ -17,7 +17,7 @@ describe('verifyBearerTokenForApi', () => {
 
   it('throws when Neon auth is disabled', async () => {
     mockNeonEnabled.mockReturnValue(false);
-    await expect(verifyBearerTokenForApi('tok')).rejects.toThrow(/USE_NEON_AUTH/);
+    await expect(verifyBearerTokenForApi('tok')).rejects.toThrow(/Neon Auth is not enabled/);
     expect(mockVerifyNeon).not.toHaveBeenCalled();
   });
 

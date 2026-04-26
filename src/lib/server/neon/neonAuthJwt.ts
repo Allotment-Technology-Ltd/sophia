@@ -1,7 +1,8 @@
 /**
  * Neon Auth (Better Auth) JWT verification for protected API routes.
  *
- * - **Default:** `USE_NEON_AUTH=1` + `NEON_AUTH_BASE_URL` or `NEON_AUTH_URL` (Neon `base_url` ending in `/.../auth`).
+ * - **Default:** set `NEON_AUTH_BASE_URL` or `NEON_AUTH_URL` (Neon `base_url` ending in `/.../auth`) — Neon auth is
+ *   then **enabled** even if `USE_NEON_AUTH` is unset. Set `USE_NEON_AUTH=0` to disable.
  *   The server verifies the JWS with JWKS, then checks `iss` (and `aud` when present) against a **trust set**
  *   that includes the auth host **origin** and the full **base URL** so minor issuer/audience differences
  *   between Neon and Better Auth are tolerated.
@@ -39,17 +40,39 @@ function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values));
 }
 
-export function isNeonAuthEnabled(): boolean {
-  const v = (process.env.USE_NEON_AUTH ?? '').trim().toLowerCase();
-  return v === '1' || v === 'true' || v === 'yes';
-}
-
 function neonAuthBaseFromEnv(): string | undefined {
   return (
     process.env.NEON_AUTH_BASE_URL?.trim() ||
     process.env.NEON_AUTH_URL?.trim() ||
     undefined
   );
+}
+
+/**
+ * True when auth env is present: base URL, or explicit iss+jwks.
+ * @internal
+ */
+export function isNeonAuthConfigPresent(): boolean {
+  if (neonAuthBaseFromEnv()) return true;
+  const iss = process.env.NEON_AUTH_ISSUER?.trim();
+  const jwks = process.env.NEON_AUTH_JWKS_URL?.trim();
+  return Boolean(iss && jwks);
+}
+
+/**
+ * True when the process should verify Bearer JWTs as Neon Auth.
+ * - `USE_NEON_AUTH=0|false|no|off|disabled` — disable even if `NEON_AUTH_BASE_URL` is set.
+ * - If `USE_NEON_AUTH` is unset, **enabled when** `NEON_AUTH_BASE_URL` / `NEON_AUTH_URL` (or iss+jwks) is set, so Railway can omit the flag.
+ */
+export function isNeonAuthEnabled(): boolean {
+  const v = (process.env.USE_NEON_AUTH ?? '').trim().toLowerCase();
+  if (v === '0' || v === 'false' || v === 'no' || v === 'off' || v === 'disabled') {
+    return false;
+  }
+  if (v === '1' || v === 'true' || v === 'yes') {
+    return true;
+  }
+  return isNeonAuthConfigPresent();
 }
 
 function readClockTolerance(): string | number {

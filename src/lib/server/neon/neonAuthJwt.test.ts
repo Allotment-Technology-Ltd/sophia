@@ -1,5 +1,34 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { resolveNeonAuthVerificationConfig } from './neonAuthJwt';
+import { isNeonAuthEnabled, resolveNeonAuthVerificationConfig } from './neonAuthJwt';
+
+describe('isNeonAuthEnabled', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    delete process.env.USE_NEON_AUTH;
+    delete process.env.NEON_AUTH_BASE_URL;
+    delete process.env.NEON_AUTH_URL;
+    delete process.env.NEON_AUTH_ISSUER;
+    delete process.env.NEON_AUTH_JWKS_URL;
+  });
+
+  it('is true when USE_NEON_AUTH is unset but NEON_AUTH_URL is set', () => {
+    vi.stubEnv('NEON_AUTH_URL', 'https://x.neonauth.aws.neon.tech/db/auth');
+    expect(isNeonAuthEnabled()).toBe(true);
+  });
+
+  it('is false when USE_NEON_AUTH=0 even if NEON_AUTH_BASE_URL is set', () => {
+    vi.stubEnv('USE_NEON_AUTH', '0');
+    vi.stubEnv('NEON_AUTH_BASE_URL', 'https://x.neonauth.aws.neon.tech/db/auth');
+    expect(isNeonAuthEnabled()).toBe(false);
+  });
+
+  it('is true when USE_NEON_AUTH=1 and explicit iss+jwks', () => {
+    vi.stubEnv('USE_NEON_AUTH', '1');
+    vi.stubEnv('NEON_AUTH_JWKS_URL', 'https://j.example/wks');
+    vi.stubEnv('NEON_AUTH_ISSUER', 'https://iss.example');
+    expect(isNeonAuthEnabled()).toBe(true);
+  });
+});
 
 describe('resolveNeonAuthVerificationConfig', () => {
   afterEach(() => {
