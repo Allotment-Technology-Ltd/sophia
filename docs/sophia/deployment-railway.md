@@ -127,6 +127,8 @@ Durable **multi-URL** jobs and **re-embed** corpus jobs are advanced in Neon by 
 
 Nightly or other batch scripts (for example `scripts/ingest-nightly-links.ts`) are separate: schedule them the same way if you still run those flows.
 
+**Durable job children** are always run with real `fetch-source` + `ingest.ts` (they carry `ingestion_job_id` in the payload) even if `ADMIN_INGEST_RUN_REAL` is unset. For **ad-hoc** admin runs from the ingest console, set `ADMIN_INGEST_RUN_REAL=1` on the Railway service, or the UI will simulate the pipeline (fast fake progress).
+
 ## 8) Google Cloud decommission note
 
 Legacy GCP deployment scripts/docs are retained only as archival/teardown references. Production deploy is Railway-first.
