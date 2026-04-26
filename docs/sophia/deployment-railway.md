@@ -44,6 +44,8 @@ Set these in Railway service variables (Production environment):
 - `ADMIN_UIDS`
 - `OWNER_UIDS`
 
+**Neon Auth must match the browser and the server.** The client uses `PUBLIC_NEON_AUTH_URL` (same as `NEON_AUTH_BASE_URL`). If those drift from the Neon Auth `base_url` in the [Neon API or Console](https://neon.com/docs/auth), JWT verification fails and API calls return 401 (invalid or expired session). The app’s **owner role** is stored in Postgres `sophia_documents` (collection `users` keyed by JWT `sub`), not in a separate SQL `user` table—set owner via **Admin → User management** or by updating that document for your Neon `sub`.
+
 Keep secrets in Railway/GitHub secrets only; do not commit them.
 
 ### Existing GCP secret name → Railway variable mapping
