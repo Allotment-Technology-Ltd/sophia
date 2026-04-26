@@ -40,7 +40,7 @@ Set these in Railway service variables (Production environment):
 - `RESTORMEL_PROJECT_ID`
 - `RESTORMEL_ENVIRONMENT_ID`
 - `RESTORMEL_KEYS_BASE`
-- `RESTORMEL_BASE_URL`
+- `RESTORMEL_EVALUATE_URL`
 - `ADMIN_UIDS`
 - `OWNER_UIDS`
 

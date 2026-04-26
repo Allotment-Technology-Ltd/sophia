@@ -8,16 +8,12 @@
  * Requires:
  *   RESTORMEL_GATEWAY_KEY, RESTORMEL_PROJECT_ID
  *   RESTORMEL_ENVIRONMENT_ID (default: production)
- *   RESTORMEL_KEYS_BASE / RESTORMEL_BASE_URL (optional)
+ *   RESTORMEL_KEYS_BASE (optional; defaults to https://restormel.dev)
  *
  * **Default published steps** match `canonicalModelChainForStage()` in
  * `src/lib/ingestionCanonicalPipeline.ts` (same primary + fallback ordering as durable Neon jobs when
  * `INGEST_PIN_*` is unset). **Extraction** starts with **Vertex `gemini-3-flash-preview`** — not an OpenAI-compatible
  * fine-tune (FT belongs in `EXTRACTION_*` env / operator pins, not as Restormel step 0).
- *
- * Optional: set `RESTORMEL_BOOTSTRAP_LEGACY_CHAIN=1` to use the old three-step env-based chain from
- * `RESTORMEL_BOOTSTRAP_PRIMARY_*` / `FALLBACK*` instead of the canonical pipeline.
- *
  * Usage:
  *   pnpm restormel:ingestion-bootstrap plan
  *   pnpm restormel:ingestion-bootstrap apply
@@ -94,66 +90,6 @@ function providerPreferenceForRouteStep(provider: string): string {
   return p;
 }
 
-/** Legacy three-tier chain from env (opt-in via `RESTORMEL_BOOTSTRAP_LEGACY_CHAIN=1`). */
-function buildLegacyEnvSteps(): RestormelStepRecord[] {
-  const primaryProvider = process.env.RESTORMEL_BOOTSTRAP_PRIMARY_PROVIDER?.trim() || 'vertex';
-  const primaryModel =
-    process.env.RESTORMEL_BOOTSTRAP_PRIMARY_MODEL?.trim() || 'gemini-3-flash-preview';
-  const fb1Provider = process.env.RESTORMEL_BOOTSTRAP_FALLBACK_PROVIDER?.trim() || 'anthropic';
-  const fb1Model =
-    process.env.RESTORMEL_BOOTSTRAP_FALLBACK_MODEL?.trim() || 'claude-haiku-4-5-20251001';
-  const fb2Provider = process.env.RESTORMEL_BOOTSTRAP_FALLBACK2_PROVIDER?.trim() || 'vertex';
-  const fb2Model =
-    process.env.RESTORMEL_BOOTSTRAP_FALLBACK2_MODEL?.trim() || 'gemini-3.1-pro-preview';
-
-  const switchCriteria = {
-    onFailureKinds: [
-      'timeout',
-      'rate_limit',
-      'provider_unhealthy',
-      'quota_exceeded',
-      'unknown_error'
-    ],
-    requiresHealthyProvider: true
-  };
-
-  return [
-    {
-      id: 'step_primary',
-      orderIndex: 0,
-      enabled: true,
-      providerPreference: primaryProvider,
-      modelId: primaryModel,
-      switchCriteria,
-      retryPolicy: {
-        maxRetries: 1,
-        backoffMs: 1000,
-        retryOnFailureKinds: ['timeout']
-      }
-    },
-    {
-      id: 'step_fallback_1',
-      orderIndex: 1,
-      enabled: true,
-      providerPreference: fb1Provider,
-      modelId: fb1Model,
-      switchCriteria,
-      retryPolicy: {
-        maxRetries: 1,
-        backoffMs: 1500,
-        retryOnFailureKinds: ['timeout']
-      }
-    },
-    {
-      id: 'step_fallback_2',
-      orderIndex: 2,
-      enabled: true,
-      providerPreference: fb2Provider,
-      modelId: fb2Model
-    }
-  ];
-}
-
 const MAX_ROUTE_STEPS = 10;
 
 /**
@@ -161,9 +97,6 @@ const MAX_ROUTE_STEPS = 10;
  * Extraction step 0 is always Vertex Gemini flash in canonical profile — not a fine-tuned OpenAI deployment.
  */
 function buildCanonicalRestormelSteps(routeStage: string): RestormelStepRecord[] {
-  if (['1', 'true', 'yes'].includes((process.env.RESTORMEL_BOOTSTRAP_LEGACY_CHAIN ?? '').trim().toLowerCase())) {
-    return buildLegacyEnvSteps();
-  }
   const llm = ROUTE_STAGE_TO_LLM[routeStage] ?? 'extraction';
   const chain = canonicalModelChainForStage(llm).slice(0, MAX_ROUTE_STEPS);
 
@@ -208,7 +141,6 @@ Commands:
   verify            POST /resolve for each ingestion_* stage (smoke test)
 
 Environment: RESTORMEL_GATEWAY_KEY, RESTORMEL_PROJECT_ID, RESTORMEL_ENVIRONMENT_ID
-Optional: RESTORMEL_BOOTSTRAP_LEGACY_CHAIN=1 + RESTORMEL_BOOTSTRAP_* for the old 3-step env chain.
 `);
 }
 
@@ -326,7 +258,7 @@ async function cmdPlan(includeShared: boolean): Promise<void> {
     );
   }
 
-  console.log('\nCanonical step chains per stage (apply publishes these unless RESTORMEL_BOOTSTRAP_LEGACY_CHAIN=1):');
+  console.log('\nCanonical step chains per stage (apply publishes these):');
   for (const s of DEDICATED_STAGES) {
     console.log(`\n--- ${s.routeStage} ---`);
     console.log(JSON.stringify(buildCanonicalRestormelSteps(s.routeStage), null, 2));

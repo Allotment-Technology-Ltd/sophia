@@ -229,7 +229,7 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 			{
 				error: 'restormel_keys_bindable_models_empty',
 				detail:
-					'Restormel returned no bindable models from GET /models and the project model index; cannot validate PUT. Enable RESTORMEL_PROJECT_MODEL_REGISTRY_BINDINGS after Keys migration 021 to sync with registry rows only.'
+					'Restormel returned no bindable models from GET /models and the project model index; cannot validate PUT.'
 			},
 			{ status: 502 }
 		);
@@ -252,7 +252,7 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
 				error: 'empty_operations_selection',
 				detail: registryBindings
 					? 'No models are assigned to ingestion, embeddings, or ingestion+inquiries for the Restormel project index. Adjust surface roles; refusing to clear the index.'
-					: 'No non-embedding chat bindings remain that Keys accepts for the project model index (surface selections ∩ GET /models + project index bindable set; embedding models are not sent on PUT unless RESTORMEL_PROJECT_MODEL_REGISTRY_BINDINGS is enabled after Keys migration 021). Adjust assignments upstream; refusing to clear the index.'
+					: 'No non-embedding chat bindings remain that Keys accepts for the project model index (surface selections ∩ GET /models + project index bindable set). Adjust assignments upstream; refusing to clear the index.'
 			},
 			{ status: 400 }
 		);

@@ -41,8 +41,7 @@ function toEffectiveProviderKeys(
 function getRouteId(url: URL): string | undefined {
   const fromQuery = url.searchParams.get('route_id')?.trim();
   if (fromQuery) return fromQuery;
-  const fromEnv = process.env.RESTORMEL_ANALYSE_ROUTE_ID?.trim();
-  return fromEnv || undefined;
+  return undefined;
 }
 
 export const GET: RequestHandler = async ({ locals, url }) => {

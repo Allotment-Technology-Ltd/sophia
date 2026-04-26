@@ -445,3 +445,16 @@ export const adminIngestionRestormelRouteBindings = pgTable('admin_ingestion_res
   updatedByUid: text('updated_by_uid')
 });
 
+/** App-wide AI defaults: shared Restormel route, degraded model overrides, optional encrypted default OpenAI key. */
+export const adminAppAiDefaults = pgTable('admin_app_ai_defaults', {
+  id: text('id').primaryKey(),
+  defaultRestormelSharedRouteId: text('default_restormel_shared_route_id'),
+  degradedPrimaryProvider: text('degraded_primary_provider'),
+  degradedReasoningModelStandard: text('degraded_reasoning_model_standard'),
+  degradedReasoningModelDeep: text('degraded_reasoning_model_deep'),
+  degradedExtractionModel: text('degraded_extraction_model'),
+  defaultOpenaiApiKeyEncrypted: jsonb('default_openai_api_key_encrypted').$type<Record<string, unknown> | null>(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedByUid: text('updated_by_uid')
+});
+

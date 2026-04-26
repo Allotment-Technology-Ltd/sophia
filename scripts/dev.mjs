@@ -13,7 +13,20 @@ import dotenv from 'dotenv';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 dotenv.config({ path: resolve(root, '.env') });
-dotenv.config({ path: resolve(root, '.env.local') });
+dotenv.config({ path: resolve(root, '.env.local'), override: true });
+
+if (!(process.env.DATABASE_URL || '').trim()) {
+  const envFile = existsSync(resolve(root, '.env.local')) ? '.env.local' : '.env';
+  const hasFile = existsSync(resolve(root, '.env')) || existsSync(resolve(root, '.env.local'));
+  console.warn(
+    '[dev] DATABASE_URL is not set. Copy `.env.example` to `.env` and set DATABASE_URL to your Neon connection string, ' +
+      "or add it to `.env.local` (it overrides `.env`). " +
+      (hasFile
+        ? `The file \`${envFile}\` was loaded but is missing a non-empty DATABASE_URL.`
+        : 'No `.env` or `.env.local` found in the project root — create one from `.env.example`.') +
+      ' The dev server can start, but any route that touches `sophiaDocumentsDb` (auth, admin, most APIs) will fail until it is set.'
+  );
+}
 
 /** If `SURREAL_URL` is unset, build it from `SURREAL_INSTANCE` + `SURREAL_HOSTNAME` (keep in sync with `src/lib/server/surrealEnv.ts`). */
 function materializeSurrealUrlFromParts() {

@@ -1,4 +1,4 @@
--- Operator UI: which Restormel route UUID applies to each ingestion phase (overrides RESTORMEL_INGEST_*_ROUTE_ID when set).
+-- Operator UI: which Restormel route UUID applies to each ingestion phase.
 
 CREATE TABLE IF NOT EXISTS admin_ingestion_restormel_route_bindings (
   id text PRIMARY KEY CHECK (id = 'default'),

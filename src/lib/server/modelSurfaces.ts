@@ -348,7 +348,9 @@ export const RESTORMEL_PROJECT_MODEL_PUT_PROVIDER_IDS = new Set([
 	'voyage',
 	'mistral',
 	'deepseek',
-	'together'
+	'together',
+	/** OpenAI-compatible AiZolo gateway (Restormel Keys / dashboard catalog). @see `aizolo` route steps */
+	'aizolo'
 ]);
 
 export function isRestormelProjectModelPutProvider(providerTypeNormalized: string): boolean {
@@ -411,14 +413,12 @@ function keysSeededExecutionModelForIntegration(providerType: string, modelId: s
 }
 
 /**
- * When true, Model availability sync may send `bindingKind: "registry"` for rows that are not
- * execution-catalog-backed (Restormel Keys OpenAPI 1.3.2+, migration 021). Registry rows are
- * metadata for merge/pickers; they do not imply Keys resolve or routing understands those providers.
- * Default off for older hosts.
+ * Model availability sync may send `bindingKind: "registry"` for rows that are not
+ * execution-catalog-backed. Registry rows are metadata for merge/pickers; they do not imply
+ * Keys resolve or routing understands those providers.
  */
 export function isRestormelProjectModelRegistryBindingsEnabled(): boolean {
-	const v = process.env.RESTORMEL_PROJECT_MODEL_REGISTRY_BINDINGS?.trim().toLowerCase();
-	return v === '1' || v === 'true' || v === 'yes';
+	return true;
 }
 
 /**
@@ -468,9 +468,7 @@ export async function fetchKeysBindableModelKeySet(): Promise<Set<string>> {
 /**
  * Keys `GET /models` often omits Vertex (Google) embedding ids that the v5 catalog still lists and that ingestion uses.
  * Use this only to **widen which rows appear** in Model availability. When
- * `RESTORMEL_PROJECT_MODEL_REGISTRY_BINDINGS` is off, do not use for `computeEffectiveOperationsBindings` /
- * PUT (execution-only hosts reject unknown embedding ids). When registry bindings are enabled, PUT may send
- * `bindingKind: registry` for those rows instead.
+ * PUT can send `bindingKind: registry` for those rows instead.
  */
 export function supplementBindableKeysWithCatalogVertexEmbeddings(
 	base: Set<string>,

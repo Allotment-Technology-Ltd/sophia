@@ -71,6 +71,9 @@ importers:
       '@restormel/graph-reasoning-extensions':
         specifier: ^0.1.1
         version: 0.1.1
+      '@restormel/graphrag-core':
+        specifier: workspace:*
+        version: link:packages/graphrag-core
       '@restormel/keys':
         specifier: ^0.2.20
         version: 0.2.20
@@ -80,6 +83,12 @@ importers:
       '@restormel/observability':
         specifier: ^0.1.2
         version: 0.1.2
+      '@restormel/providers':
+        specifier: workspace:*
+        version: link:packages/providers
+      '@restormel/reasoning-core':
+        specifier: workspace:*
+        version: link:packages/reasoning-core
       '@restormel/state':
         specifier: ^0.2.1
         version: 0.2.1(@restormel/context-packs@0.1.2)
@@ -147,6 +156,9 @@ importers:
       '@playwright/test':
         specifier: ^1.58.2
         version: 1.58.2
+      '@restormel/validate':
+        specifier: ^0.1.16
+        version: 0.1.16
       '@sveltejs/adapter-node':
         specifier: ^5.0.0
         version: 5.5.4(@sveltejs/kit@2.57.1(@opentelemetry/api@1.9.0)(@sveltejs/vite-plugin-svelte@5.1.1(svelte@5.53.6)(vite@6.4.2(@types/node@20.19.37)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0)(yaml@2.8.3)))(svelte@5.53.6)(typescript@5.9.3)(vite@6.4.2(@types/node@20.19.37)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0)(yaml@2.8.3)))
@@ -222,11 +234,23 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
-  packages/graphrag-core: {}
+  packages/graphrag-core:
+    dependencies:
+      '@restormel/graph-core':
+        specifier: ^0.1.1
+        version: 0.1.1
 
-  packages/providers: {}
+  packages/providers:
+    dependencies:
+      '@restormel/contracts':
+        specifier: ^0.1.1
+        version: 0.1.1
 
-  packages/reasoning-core: {}
+  packages/reasoning-core:
+    dependencies:
+      '@restormel/contracts':
+        specifier: ^0.1.1
+        version: 0.1.1
 
 packages:
 
@@ -1797,6 +1821,11 @@ packages:
     peerDependencies:
       svelte: ^5.0.0
 
+  '@restormel/validate@0.1.16':
+    resolution: {integrity: sha512-XWHWaAEbCz62xoXcNqC3TrTA0ErWU7/mkZzHBa1NbXXqBFJSr4MYayEQ9g+7mAUq3zx0CHiPDRZfQeaWowVANA==}
+    engines: {node: '>=18'}
+    hasBin: true
+
   '@rollup/plugin-commonjs@29.0.0':
     resolution: {integrity: sha512-U2YHaxR2cU/yAiwKJtJRhnyLk7cifnQw0zUpISsocBDoHDJn+HTV74ABqnwr5bEgWUwFZC9oFL6wLe21lHu5eQ==}
     engines: {node: '>=16.0.0 || 14 >= 14.17'}
@@ -2696,6 +2725,10 @@ packages:
     resolution: {integrity: sha512-NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg==}
     engines: {node: '>=18'}
 
+  chalk@5.6.2:
+    resolution: {integrity: sha512-7NzBL0rN6fMUW+f7A6Io4h40qQlG+xGmtMxfbnH/K7TAtt8JQWVQK+6g0UXKMeVJoyV5EkkNsErQ8pVD3bLHbA==}
+    engines: {node: ^12.17.0 || ^14.13 || >=16.0.0}
+
   chokidar@4.0.3:
     resolution: {integrity: sha512-Qgzu8kfBvo+cA4962jnP1KkS6Dop5NS6g7R5LFYJr4b8Ub94PPQXUksCw9PvXoeXPRRddRNC5C1JQUR2SMGtnA==}
     engines: {node: '>= 14.16.0'}
@@ -2730,6 +2763,10 @@ packages:
 
   comlink@4.4.2:
     resolution: {integrity: sha512-OxGdvBmJuNKSCMO4NTl1L47VRp6xn2wG4F/2hYzB6tiCb709otOxtEYCSvK80PtjODfXXZu8ds+Nw5kVCjqd2g==}
+
+  commander@12.1.0:
+    resolution: {integrity: sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA==}
+    engines: {node: '>=18'}
 
   commander@2.20.3:
     resolution: {integrity: sha512-GpVkmM8vF2vQUkj2LvZmD35JxeJOLCwJ9cUkugyk2nuhbv3+mJvpLYYt+0+USMxE+oj+ey/lJEnhZw75x/OMcQ==}
@@ -6307,6 +6344,12 @@ snapshots:
       '@restormel/graph-core': 0.1.1
       svelte: 5.53.6
 
+  '@restormel/validate@0.1.16':
+    dependencies:
+      '@restormel/keys': 0.2.20
+      chalk: 5.6.2
+      commander: 12.1.0
+
   '@rollup/plugin-commonjs@29.0.0(rollup@4.59.0)':
     dependencies:
       '@rollup/pluginutils': 5.3.0(rollup@4.59.0)
@@ -7157,6 +7200,8 @@ snapshots:
 
   chai@6.2.2: {}
 
+  chalk@5.6.2: {}
+
   chokidar@4.0.3:
     dependencies:
       readdirp: 4.1.2
@@ -7188,6 +7233,8 @@ snapshots:
       delayed-stream: 1.0.0
 
   comlink@4.4.2: {}
+
+  commander@12.1.0: {}
 
   commander@2.20.3: {}
 

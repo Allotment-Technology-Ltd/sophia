@@ -28,7 +28,7 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
     return json(
       {
         error:
-          'DATABASE_URL is not configured; set per-phase routes via RESTORMEL_INGEST_*_ROUTE_ID in deployment env.'
+          'DATABASE_URL is not configured; per-phase route bindings are stored in Neon.'
       },
       { status: 503 }
     );

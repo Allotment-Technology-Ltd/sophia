@@ -549,11 +549,6 @@ async function executeIngestImportOperation(
   let nextLog = logText;
   let sourceFile = payload.source_file ? normalizeTextFilePath(payload.source_file) : null;
 
-  if (payload.restormel_ingest_route_id) {
-    env.RESTORMEL_INGEST_ROUTE_ID = payload.restormel_ingest_route_id;
-    nextLog = `${nextLog}[INGEST] Using shared Restormel route ${payload.restormel_ingest_route_id}\n`;
-  }
-
   if (payload.source_url) {
     nextLog = `${nextLog}[INGEST] Fetching ${payload.source_url}\n`;
     await updateOperationDoc(id, { log_text: nextLog });

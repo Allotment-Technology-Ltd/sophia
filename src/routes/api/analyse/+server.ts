@@ -1006,7 +1006,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       try {
         const policyResult = await restormelEvaluatePolicies({
           environmentId: process.env.RESTORMEL_ENVIRONMENT_ID?.trim() || 'production',
-          routeId: process.env.RESTORMEL_ANALYSE_ROUTE_ID?.trim() || undefined,
           modelId,
           providerType: toRestormelPolicyProvider(effectiveModelProvider)
         });
@@ -1468,7 +1467,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
             sendEventWithCapture({ type: 'error', message: error });
           }
         }, {
-          routeId: process.env.RESTORMEL_ANALYSE_ROUTE_ID?.trim() || undefined,
           lens,
           depthMode,
           modelProvider: effectiveModelProvider,

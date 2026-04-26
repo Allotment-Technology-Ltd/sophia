@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   mockResolveExtractionModelRoute,
   mockResolveReasoningModelRoute,
-  mockBuildExtractionOpenAiCompatibleRoute
+  mockBuildExtractionOpenAiCompatibleRoute,
+  mockGetAppAiDefaults
 } = vi.hoisted(() => ({
   mockResolveExtractionModelRoute: vi.fn(),
   mockResolveReasoningModelRoute: vi.fn(),
-  mockBuildExtractionOpenAiCompatibleRoute: vi.fn()
+  mockBuildExtractionOpenAiCompatibleRoute: vi.fn(),
+  mockGetAppAiDefaults: vi.fn()
 }));
 
 vi.mock('$lib/server/embeddings', () => ({
@@ -25,15 +27,26 @@ vi.mock('$lib/server/ingestionRouteBindings', () => ({
   getStoredRouteIdForIngestionStage: vi.fn().mockResolvedValue(undefined)
 }));
 
+vi.mock('$lib/server/appAiDefaults', () => ({
+  getAppAiDefaults: mockGetAppAiDefaults
+}));
+
+const emptyAppAiDefaults = {
+  defaultRestormelSharedRouteId: null as string | null,
+  degradedPrimaryProvider: null as const,
+  degradedReasoningModelStandard: null as string | null,
+  degradedReasoningModelDeep: null as string | null,
+  degradedExtractionModel: null as string | null,
+  defaultOpenaiApiKey: null as string | null,
+  hasOpenaiCiphertext: false
+};
+
 describe('planIngestionStage', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
     mockBuildExtractionOpenAiCompatibleRoute.mockReturnValue(null);
-    delete process.env.RESTORMEL_INGEST_ROUTE_ID;
-    delete process.env.RESTORMEL_INGEST_VALIDATION_ROUTE_ID;
-    delete process.env.RESTORMEL_ANALYSE_ROUTE_ID;
-    delete process.env.RESTORMEL_VERIFY_ROUTE_ID;
+    mockGetAppAiDefaults.mockResolvedValue({ ...emptyAppAiDefaults });
     delete process.env.INGEST_JSON_REPAIR_USE_EXTRACTION_ENDPOINT;
     delete process.env.INGEST_PIN_PROVIDER_JSON_REPAIR;
     delete process.env.INGEST_PIN_MODEL_JSON_REPAIR;
@@ -160,6 +173,36 @@ describe('planIngestionStage', () => {
     expect(plan.model).toBe('gemini-3-flash-preview');
   });
 
+  it('uses Neon app AI default shared route when per-stage binding is absent', async () => {
+    mockGetAppAiDefaults.mockResolvedValue({
+      ...emptyAppAiDefaults,
+      defaultRestormelSharedRouteId: 'app-default-shared-route'
+    });
+    mockResolveReasoningModelRoute.mockResolvedValue({
+      model: Symbol('rel'),
+      provider: 'vertex',
+      modelId: 'gemini-3-flash-preview',
+      credentialSource: 'platform',
+      supportsGrounding: false,
+      routingSource: 'restormel',
+      resolvedExplanation: 'relations via app default route'
+    });
+
+    const { planIngestionStage } = await import('./ingestion-plan');
+    const plan = await planIngestionStage('relations', {
+      sourceTitle: 'Test',
+      sourceType: 'sep_entry',
+      estimatedTokens: 5_000,
+      preferredProvider: 'auto'
+    });
+
+    expect(mockResolveReasoningModelRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ routeId: 'app-default-shared-route' })
+    );
+    expect(plan.provider).toBe('vertex');
+    expect(plan.routingSource).toBe('restormel');
+  });
+
   it('builds a Restormel-backed extraction plan', async () => {
     mockResolveExtractionModelRoute.mockResolvedValue({
       model: Symbol('model'),
@@ -170,7 +213,6 @@ describe('planIngestionStage', () => {
       routingSource: 'restormel',
       resolvedExplanation: 'route=ingest-extraction step=0 provider=vertex'
     });
-    process.env.RESTORMEL_ANALYSE_ROUTE_ID = 'interactive';
 
     const { planIngestionStage } = await import('./ingestion-plan');
     const plan = await planIngestionStage('extraction', {
@@ -183,7 +225,7 @@ describe('planIngestionStage', () => {
     expect(mockResolveExtractionModelRoute).toHaveBeenCalledWith({
       requestedProvider: 'auto',
       requestedModelId: undefined,
-      routeId: 'interactive',
+      routeId: undefined,
       failureMode: 'degraded_default',
       restormelContext: {
         workload: 'ingestion',
@@ -206,7 +248,7 @@ describe('planIngestionStage', () => {
     expect(plan.request.constraints?.latency).toBe('low');
   });
 
-  it('uses the verification route for validation planning', async () => {
+  it('lets Restormel resolve validation by workload and stage metadata', async () => {
     mockResolveReasoningModelRoute.mockResolvedValue({
       model: Symbol('model'),
       provider: 'anthropic',
@@ -216,7 +258,6 @@ describe('planIngestionStage', () => {
       routingSource: 'requested',
       resolvedExplanation: 'operator override'
     });
-    process.env.RESTORMEL_VERIFY_ROUTE_ID = 'verification';
 
     const { planIngestionStage } = await import('./ingestion-plan');
     const plan = await planIngestionStage('validation', {
@@ -231,7 +272,7 @@ describe('planIngestionStage', () => {
     expect(mockResolveReasoningModelRoute).toHaveBeenCalledWith({
       pass: 'verification',
       depthMode: 'deep',
-      routeId: 'verification',
+      routeId: undefined,
       requestedProvider: 'anthropic',
       failureMode: 'degraded_default',
       restormelContext: {

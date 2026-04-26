@@ -20,6 +20,11 @@ import {
   type RestormelStepChainEntry
 } from './restormel';
 import { resolveProviderDecision, type ResolveFailureKind } from './resolve-provider';
+import {
+  getDegradedModelOverride,
+  getDegradedPrimaryProviderOverride,
+  getNeonDefaultOpenAiApiKeySync
+} from './appAiDefaults.js';
 
 let anthropicInstance: ReturnType<typeof createAnthropic> | null = null;
 const anthropicByApiKey = new Map<string, ReturnType<typeof createAnthropic>>();
@@ -48,7 +53,12 @@ function getAnthropicForApiKey(apiKey?: string) {
 function getPlatformApiKey(provider: ReasoningProvider): string | undefined {
   const envName = REASONING_PROVIDER_PLATFORM_API_KEY_ENV[provider];
   if (!envName) return undefined;
-  return process.env[envName]?.trim() || undefined;
+  const fromEnv = process.env[envName]?.trim() || undefined;
+  if (provider === 'openai') {
+    const fromNeon = getNeonDefaultOpenAiApiKeySync()?.trim();
+    if (fromNeon) return fromNeon;
+  }
+  return fromEnv || undefined;
 }
 
 function getProviderBaseUrl(provider: Exclude<ReasoningProvider, 'vertex' | 'anthropic'>): string | undefined {
@@ -676,12 +686,22 @@ function buildSafeDefaultDecision(
   pass: RoutingPass,
   providerApiKeys?: ProviderApiKeys
 ): { provider: ReasoningProvider; model: string; explanation: string } {
-  for (const provider of DEGRADED_DEFAULT_PROVIDER_ORDER) {
+  const primaryOverride = getDegradedPrimaryProviderOverride();
+  const providerOrder: ReasoningProvider[] = primaryOverride
+    ? [primaryOverride, ...DEGRADED_DEFAULT_PROVIDER_ORDER.filter((p) => p !== primaryOverride)]
+    : [...DEGRADED_DEFAULT_PROVIDER_ORDER];
+
+  for (const provider of providerOrder) {
     if (!hasProviderAccess(provider, providerApiKeys)) continue;
+    const extOverride = getDegradedModelOverride('extraction');
+    const stdOverride = getDegradedModelOverride('reasoning_standard');
+    const deepOverride = getDegradedModelOverride('reasoning_deep');
     const model =
       type === 'extraction'
-        ? getDefaultExtractionModelId(provider)
-        : getDefaultReasoningModelId(provider, depthMode, pass);
+        ? extOverride ?? getDefaultExtractionModelId(provider)
+        : depthMode === 'deep' || pass === 'verification'
+          ? deepOverride ?? getDefaultReasoningModelId(provider, depthMode, pass)
+          : stdOverride ?? getDefaultReasoningModelId(provider, depthMode, pass);
     return {
       provider,
       model,

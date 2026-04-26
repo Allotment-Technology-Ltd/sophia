@@ -56,7 +56,7 @@
 	let mergeIntoRunningJob = $state(false);
 	/**
 	 * When false (default), durable jobs do not send `model_chain` from Operator “per-phase worker model overrides”
-	 * (localStorage). Workers use Restormel resolve + Neon route bindings / env (`RESTORMEL_INGEST_*_ROUTE_ID`) instead.
+	 * (localStorage). Workers use Restormel resolve + Neon route bindings instead.
 	 */
 	let applyOperatorPhaseModelPins = $state(false);
 

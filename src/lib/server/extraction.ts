@@ -37,7 +37,6 @@ export async function extractClaims(
     try {
       const extractionRoute = await resolveExtractionModelRoute({
         providerApiKeys: options?.providerApiKeys,
-        routeId: process.env.RESTORMEL_VERIFY_ROUTE_ID?.trim() || undefined,
         failureMode: 'error'
       });
       const result = await generateText({

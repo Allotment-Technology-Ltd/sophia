@@ -14,6 +14,11 @@
     saveOperatorPhasePinsToStorage
   } from '$lib/ingestion/operatorPhasePins';
   import { resolveRouteForStage, type IngestionRouteLike } from '$lib/utils/ingestionRouting';
+  import {
+    INGESTION_PIPELINE_PRESET,
+    canonicalModelChainForStage,
+    type IngestionLlmStageKey
+  } from '$lib/ingestionCanonicalPipeline';
 
   let { data } = $props();
   const restormelEnvironmentId = $derived(data.restormelEnvironmentId ?? 'production');
@@ -59,6 +64,23 @@
     })),
     { key: 'ingestion_remediation', label: 'Remediate' }
   ];
+
+  const PRESET_LLM_ORDER: IngestionLlmStageKey[] = [
+    'extraction',
+    'relations',
+    'grouping',
+    'validation',
+    'remediation',
+    'json_repair'
+  ];
+  const PRESET_LLM_LABEL: Record<IngestionLlmStageKey, string> = {
+    extraction: 'Extract',
+    relations: 'Relate',
+    grouping: 'Group',
+    validation: 'Validate',
+    remediation: 'Remediate',
+    json_repair: 'JSON repair'
+  };
 
   let loading = $state(true);
   let err = $state('');
@@ -110,12 +132,46 @@
     last4: string | null;
     configured: boolean;
     hasDatabaseRow: boolean;
+    storageDecryptFailed?: boolean;
+    storageDecryptError?: string | null;
+    databaseReadFailed?: boolean;
+    ignoredEnvironmentKeyLast4?: string | null;
   };
   let gatewaySummary = $state<GatewaySummary | null>(null);
-  let gatewayDbAvailable = $state(true);
-  let gatewayKeyInput = $state('');
-  let gatewayBusy = $state(false);
-  let gatewayMessage = $state('');
+  /** Pinned / resolved route UUIDs not in the last routes list (wrong project or stale bindings). */
+  let routeAlignmentWarning = $state('');
+  type OrphanRouteBinding = { stageKey: string; label: string; routeId: string };
+  let orphanRouteBindings = $state<OrphanRouteBinding[]>([]);
+
+  type AppAiDefaultsSummary = {
+    databaseAvailable: boolean;
+    defaultRestormelSharedRouteId: string | null;
+    degradedPrimaryProvider: string | null;
+    degradedReasoningModelStandard: string | null;
+    degradedReasoningModelDeep: string | null;
+    degradedExtractionModel: string | null;
+    defaultOpenaiKeyConfigured: boolean;
+    defaultOpenaiKeyLast4: string | null;
+    openaiDecryptFailed: boolean;
+  };
+  let appAiSummary = $state<AppAiDefaultsSummary | null>(null);
+  let appDefaultSharedRouteInput = $state('');
+  let appDegPrimaryInput = $state('');
+  let appDegReasonStdInput = $state('');
+  let appDegReasonDeepInput = $state('');
+  let appDegExtInput = $state('');
+  let appOpenaiKeyInput = $state('');
+  let appAiBusy = $state(false);
+  let appAiMessage = $state('');
+
+  function hydrateAppAiFormFromSummary(s: AppAiDefaultsSummary) {
+    appDefaultSharedRouteInput = s.defaultRestormelSharedRouteId ?? '';
+    appDegPrimaryInput = s.degradedPrimaryProvider ?? '';
+    appDegReasonStdInput = s.degradedReasoningModelStandard ?? '';
+    appDegReasonDeepInput = s.degradedReasoningModelDeep ?? '';
+    appDegExtInput = s.degradedExtractionModel ?? '';
+    appOpenaiKeyInput = '';
+  }
 
   const ingestionRoutes = $derived(
     routes.filter((r) => (r.workload ?? '').trim().toLowerCase() === 'ingestion')
@@ -125,6 +181,56 @@
     const token = await getIdToken();
     if (!token) throw new Error('Authentication required.');
     return { Authorization: `Bearer ${token}` };
+  }
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
+  }
+
+  function responseErrorMessage(label: string, res: Response, body: unknown): string {
+    if (isRecord(body)) {
+      const restormel = body.restormel;
+      if (isRecord(restormel)) {
+        const code = typeof restormel.code === 'string' ? restormel.code : '';
+        const detail = typeof restormel.detail === 'string' ? restormel.detail : '';
+        const userMessage = typeof restormel.userMessage === 'string' ? restormel.userMessage : '';
+        const endpoint = typeof restormel.endpoint === 'string' ? restormel.endpoint : '';
+        const parts = [
+          code && `${label}: ${code}`,
+          userMessage || detail,
+          endpoint && `Endpoint: ${endpoint}`
+        ].filter(Boolean);
+        if (parts.length) return parts.join(' — ');
+      }
+      if (typeof body.error === 'string') return `${label}: ${body.error}`;
+    }
+    return `${label}: HTTP ${String(res.status)}`;
+  }
+
+  const defaultSharedRouteId = $derived(appDefaultSharedRouteInput.trim());
+  const defaultSharedRouteSteps = $derived(
+    defaultSharedRouteId ? (stepsByRouteId[defaultSharedRouteId] ?? []) : []
+  );
+
+  function enabledStepsForDisplay(st: StepRow[] | undefined | null): StepRow[] {
+    if (!st?.length) return [];
+    return st.filter((s) => s.enabled !== false);
+  }
+
+  function stepChainSummary(st: StepRow[]): { count: number; oneLine: string } {
+    const e = enabledStepsForDisplay(st);
+    if (!e.length) return { count: 0, oneLine: 'No published steps' };
+    const first = e[0];
+    const p = (first.providerPreference ?? '?').trim();
+    const m = (first.modelId ?? '?').trim();
+    const more = e.length > 1 ? ` (+${e.length - 1} more)` : '';
+    return { count: e.length, oneLine: `${p} · ${m}${more}` };
+  }
+
+  async function refreshStepsForDefaultSharedRoute() {
+    const id = appDefaultSharedRouteInput.trim();
+    if (!id || !routes.some((r) => r.id === id)) return;
+    await loadStepsForRoutes([id]);
   }
 
   function priceHint(provider: string, modelId: string): string {
@@ -172,33 +278,46 @@
   async function load() {
     loading = true;
     err = '';
+    routeAlignmentWarning = '';
+    orphanRouteBindings = [];
     try {
       const h = await authHeaders();
-      const [rRes, cRes, gRes, bRes] = await Promise.all([
+      const [rRes, cRes, gRes, bRes, aRes] = await Promise.all([
         fetch('/api/admin/ingestion-routing/routes', { headers: h }),
         fetch('/api/admin/ingestion-routing/model-catalog', { headers: h }),
         fetch('/api/admin/ingestion-routing/gateway', { headers: h }),
-        fetch('/api/admin/ingestion-routing/route-bindings', { headers: h })
+        fetch('/api/admin/ingestion-routing/route-bindings', { headers: h }),
+        fetch('/api/admin/app-ai-defaults', { headers: h })
       ]);
       const rBody = await rRes.json().catch(() => ({}));
       const cBody = await cRes.json().catch(() => ({}));
       const gBody = await gRes.json().catch(() => ({}));
       const bBody = await bRes.json().catch(() => ({}));
-      if (!rRes.ok) throw new Error(typeof rBody.error === 'string' ? rBody.error : 'Routes failed');
-      if (!cRes.ok) throw new Error(typeof cBody.error === 'string' ? cBody.error : 'Catalog failed');
+      const aBody = await aRes.json().catch(() => ({}));
       if (gRes.ok && gBody.summary && typeof gBody.summary === 'object') {
         gatewaySummary = gBody.summary as GatewaySummary;
-        gatewayDbAvailable = gBody.databaseAvailable !== false;
       } else {
         gatewaySummary = null;
+      }
+      if (aRes.ok && aBody.summary && typeof aBody.summary === 'object') {
+        appAiSummary = aBody.summary as AppAiDefaultsSummary;
+        hydrateAppAiFormFromSummary(appAiSummary);
+      } else {
+        appAiSummary = null;
       }
       routeBindingsDbAvailable = bRes.ok && bBody.databaseAvailable !== false;
       const serverBindings =
         bRes.ok && bBody.bindings && typeof bBody.bindings === 'object'
           ? (bBody.bindings as Record<string, string>)
           : {};
-      routes = Array.isArray(rBody.routes) ? (rBody.routes as RouteRow[]) : [];
-      catalog = Array.isArray(cBody.entries) ? (cBody.entries as CatalogEntry[]) : [];
+      const failures: string[] = [];
+      if (!rRes.ok) failures.push(responseErrorMessage('Routes', rRes, rBody));
+      if (!cRes.ok) failures.push(responseErrorMessage('Catalog', cRes, cBody));
+      if (!bRes.ok) failures.push(responseErrorMessage('Route bindings', bRes, bBody));
+      if (!aRes.ok) failures.push(responseErrorMessage('App defaults', aRes, aBody));
+
+      routes = rRes.ok && Array.isArray(rBody.routes) ? (rBody.routes as RouteRow[]) : [];
+      catalog = cRes.ok && Array.isArray(cBody.entries) ? (cBody.entries as CatalogEntry[]) : [];
 
       const ingestOnly = routes.filter(
         (r) => (r.workload ?? '').trim().toLowerCase() === 'ingestion'
@@ -218,7 +337,37 @@
             : resolveRouteForStage(ingestOnly, row.key, null)?.id ?? '';
         if (eff) needSteps.push(eff);
       }
-      await loadStepsForRoutes([...new Set(needSteps)]);
+      const sharedFallback = (appAiSummary?.defaultRestormelSharedRouteId ?? '').trim();
+      if (sharedFallback) needSteps.push(sharedFallback);
+      const uniqueStepTargets = [...new Set(needSteps.filter(Boolean))];
+      const allRouteIds = new Set(
+        (routes as RouteRow[])
+          .map((r) => (typeof r.id === 'string' ? r.id.trim() : ''))
+          .filter(Boolean)
+      );
+      const orphanRows = pipelineStages
+        .map((row) => {
+          const routeId = nextOverride[row.key]?.trim();
+          return routeId ? { stageKey: row.key, label: row.label, routeId } : null;
+        })
+        .filter(
+          (row): row is OrphanRouteBinding =>
+            row != null && !allRouteIds.has(row.routeId)
+        );
+      orphanRouteBindings = orphanRows;
+      if (orphanRows.length) {
+        routeAlignmentWarning = `One or more phase route bindings saved in Neon are not in the list returned for this Restormel project and key — step details would 404 in Keys. ` +
+          `Check \`RESTORMEL_PROJECT_ID\` matches the project where the routes were created, fix the gateway key (Neon or env) so the same workspace is used, or clear the stale phase bindings. ` +
+          `Missing from list: ${orphanRows
+            .slice(0, 5)
+            .map((row) => `${row.label}: ${row.routeId.slice(0, 8)}…`)
+            .join(', ')}${orphanRows.length > 5 ? ` and ${String(orphanRows.length - 5)} more` : ''}.`;
+      }
+      const toFetch = uniqueStepTargets.filter((id) => allRouteIds.has(id));
+      await loadStepsForRoutes(toFetch);
+      if (failures.length) {
+        err = failures.join('\n');
+      }
     } catch (e) {
       err = e instanceof Error ? e.message : String(e);
     } finally {
@@ -254,7 +403,7 @@
     const eff = effectiveRouteIdForStage(stageKey);
     if (!routeBindingsDbAvailable) {
       routeBindingsMessage =
-        'DATABASE_URL unavailable here — route pins are not saved; set RESTORMEL_INGEST_*_ROUTE_ID on the worker or run where Neon is configured.';
+        'DATABASE_URL unavailable here — route bindings are stored in Neon, so this change was not saved.';
       await loadStepsForRoutes([eff].filter(Boolean));
       return;
     }
@@ -279,6 +428,31 @@
         routeBindingOverrideByStage = next;
       }
       await loadStepsForRoutes([effectiveRouteIdForStage(stageKey)].filter(Boolean));
+    } catch (e) {
+      routeBindingsMessage = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function clearStaleRouteBindings() {
+    if (!orphanRouteBindings.length) return;
+    routeBindingsMessage = '';
+    try {
+      const h = await authHeaders();
+      const patch: Record<string, null> = {};
+      for (const row of orphanRouteBindings) {
+        patch[row.stageKey] = null;
+      }
+      const res = await fetch('/api/admin/ingestion-routing/route-bindings', {
+        method: 'PUT',
+        headers: { ...h, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bindings: patch })
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof payload.error === 'string' ? payload.error : `HTTP ${res.status}`);
+      }
+      routeBindingsMessage = `Cleared ${String(Object.keys(patch).length)} stale route binding(s).`;
+      await load();
     } catch (e) {
       routeBindingsMessage = e instanceof Error ? e.message : String(e);
     }
@@ -384,55 +558,63 @@
     return 'Not configured';
   }
 
-  async function saveGatewayKey() {
-    gatewayMessage = '';
-    const key = gatewayKeyInput.trim();
-    if (!key) {
-      gatewayMessage = 'Paste the Restormel gateway API key (rk_…).';
-      return;
-    }
-    gatewayBusy = true;
+  async function saveAppAiDefaults() {
+    appAiMessage = '';
+    appAiBusy = true;
     try {
       const h = await authHeaders();
-      const res = await fetch('/api/admin/ingestion-routing/gateway', {
+      const body: Record<string, unknown> = {
+        defaultRestormelSharedRouteId: appDefaultSharedRouteInput.trim() || null,
+        degradedPrimaryProvider: appDegPrimaryInput.trim() || null,
+        degradedReasoningModelStandard: appDegReasonStdInput.trim() || null,
+        degradedReasoningModelDeep: appDegReasonDeepInput.trim() || null,
+        degradedExtractionModel: appDegExtInput.trim() || null
+      };
+      if (appOpenaiKeyInput.trim()) body.defaultOpenaiApiKey = appOpenaiKeyInput.trim();
+      const res = await fetch('/api/admin/app-ai-defaults', {
         method: 'PUT',
         headers: { ...h, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gatewayKey: key })
+        body: JSON.stringify(body)
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(typeof payload.error === 'string' ? payload.error : `HTTP ${res.status}`);
       }
-      gatewayKeyInput = '';
-      gatewaySummary = payload.summary ?? gatewaySummary;
-      gatewayMessage = 'Saved. Sophia admin routes to Keys will use this bearer until you clear it.';
+      if (payload.summary && typeof payload.summary === 'object') {
+        appAiSummary = payload.summary as AppAiDefaultsSummary;
+        hydrateAppAiFormFromSummary(appAiSummary);
+      }
+      appAiMessage = 'Saved app-wide AI defaults.';
     } catch (e) {
-      gatewayMessage = e instanceof Error ? e.message : String(e);
+      appAiMessage = e instanceof Error ? e.message : String(e);
     } finally {
-      gatewayBusy = false;
+      appAiBusy = false;
     }
   }
 
-  async function clearGatewayOverride() {
-    gatewayMessage = '';
-    gatewayBusy = true;
+  async function clearAppOpenaiDefaultKey() {
+    appAiMessage = '';
+    appAiBusy = true;
     try {
       const h = await authHeaders();
-      const res = await fetch('/api/admin/ingestion-routing/gateway', {
+      const res = await fetch('/api/admin/app-ai-defaults', {
         method: 'PUT',
         headers: { ...h, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clear: true })
+        body: JSON.stringify({ clearDefaultOpenaiApiKey: true })
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(typeof payload.error === 'string' ? payload.error : `HTTP ${res.status}`);
       }
-      gatewaySummary = payload.summary ?? gatewaySummary;
-      gatewayMessage = 'Cleared stored key. Effective bearer falls back to RESTORMEL_GATEWAY_KEY when set.';
+      if (payload.summary && typeof payload.summary === 'object') {
+        appAiSummary = payload.summary as AppAiDefaultsSummary;
+        hydrateAppAiFormFromSummary(appAiSummary);
+      }
+      appAiMessage = 'Cleared default OpenAI API key from Neon.';
     } catch (e) {
-      gatewayMessage = e instanceof Error ? e.message : String(e);
+      appAiMessage = e instanceof Error ? e.message : String(e);
     } finally {
-      gatewayBusy = false;
+      appAiBusy = false;
     }
   }
 
@@ -451,74 +633,49 @@
 
   <h1 class="rt-h1">Ingestion routing (Restormel)</h1>
   <p class="rt-lead">
-    Before you run ingestion, each phase resolves a <strong>Restormel route</strong> (workload
-    <code class="rt-code">ingestion</code>, stage <code class="rt-code">ingestion_*</code>) or a shared ingestion fallback.
-    <strong>Phases → routes → models</strong> below saves per-phase route UUIDs to <strong>Neon</strong> (workers read them
-    with <code class="rt-code">DATABASE_URL</code>; they override <code class="rt-code">RESTORMEL_INGEST_*_ROUTE_ID</code>
-    when set). You can <strong>create</strong> routes here (proxied to Keys) or in the Keys dashboard; then add steps,
-    publish, and run resolve. Use <strong>Per-phase worker model overrides</strong> for fine-tuned or custom models when
-    you start runs from durable jobs or resume from the live run console.
+    Map each <strong>ingestion phase</strong> to a Restormel route (Neon) or <strong>Auto</strong> for env + Keys discovery. Optional app defaults provide a
+    <strong>fallback shared route</strong> when no phase binding matches. Expand sections below for gateway policy, app-wide keys, and the
+    <strong>production</strong> worker model chain used when Restormel resolve does not run.
   </p>
 
-  <section class="rt-sec" aria-labelledby="rt-gateway">
-    <h2 id="rt-gateway" class="rt-h2">Restormel Gateway API key</h2>
-    <p class="rt-p">
-      Admin APIs on this server call Restormel Keys with a <strong>bearer token</strong> (gateway key, typically
-      <code class="rt-code">rk_…</code>). You can set it here (encrypted in Neon) or via
-      <code class="rt-code">RESTORMEL_GATEWAY_KEY</code> in deployment env. When both exist, the <strong>stored</strong> key
-      wins. Ingest workers and CLI scripts still use env unless they read the same database.
-    </p>
-    {#if gatewaySummary}
-      <p class="rt-p rt-gateway-status">
-        <strong>Effective bearer:</strong>
-        {gatewaySourceLabel(gatewaySummary.source)}
-        {#if gatewaySummary.last4}
-          <span class="rt-muted">· ends with <code class="rt-code">{gatewaySummary.last4}</code></span>
-        {/if}
-      </p>
-    {:else}
-      <p class="rt-muted rt-p">Gateway status not loaded yet.</p>
-    {/if}
-    {#if !gatewayDbAvailable}
-      <p class="rt-err" role="status">
-        <code class="rt-code">DATABASE_URL</code> is not set on this deployment — keys can only be supplied via env.
-      </p>
-    {:else}
-      <div class="rt-gateway-form">
-        <label class="rt-label">
-          New gateway key
-          <input
-            class="rt-input"
-            type="password"
-            autocomplete="off"
-            placeholder="rk_…"
-            bind:value={gatewayKeyInput}
-          />
-        </label>
-        <div class="rt-gateway-actions">
-          <button type="button" class="rt-btn" disabled={gatewayBusy} onclick={() => void saveGatewayKey()}>
-            {gatewayBusy ? 'Saving…' : 'Save to Neon'}
-          </button>
-          <button
-            type="button"
-            class="rt-btn rt-btn-ghost"
-            disabled={gatewayBusy}
-            onclick={() => void clearGatewayOverride()}
+  <div class="rt-snapshot" aria-label="At a glance">
+    <ul class="rt-snapshot-list">
+      <li>
+        <span class="rt-snapshot-k">Gateway</span>
+        {#if gatewaySummary}
+          <span class="rt-snapshot-v"
+            >{gatewaySourceLabel(gatewaySummary.source)}{#if gatewaySummary.last4}
+              <span class="rt-muted"> · <code class="rt-code">…{gatewaySummary.last4}</code></span>{/if}</span
           >
-            Clear stored key
-          </button>
-        </div>
-      </div>
-    {/if}
-    {#if gatewayMessage}
-      <p
-        class={gatewayMessage.includes('Saved') || gatewayMessage.includes('Cleared') ? 'rt-ok' : 'rt-err'}
-        role="status"
-      >
-        {gatewayMessage}
-      </p>
-    {/if}
-  </section>
+        {:else}
+          <span class="rt-muted">Not loaded</span>
+        {/if}
+      </li>
+      <li>
+        <span class="rt-snapshot-k">App defaults</span>
+        {#if appAiSummary}
+          <span class="rt-snapshot-v"
+            >{appAiSummary.databaseAvailable ? 'Neon OK' : 'No DATABASE_URL'}{#if defaultSharedRouteId}
+              <span class="rt-muted"> · shared route <code class="rt-code"
+                  >{defaultSharedRouteId.length > 12
+                    ? `${defaultSharedRouteId.slice(0, 8)}…`
+                    : defaultSharedRouteId}</code
+                ></span
+              >{/if}</span
+          >
+        {:else}
+          <span class="rt-muted">Not loaded</span>
+        {/if}
+      </li>
+      <li>
+        <span class="rt-snapshot-k">Preset</span>
+        <span class="rt-snapshot-v"
+          >Pipeline <code class="rt-code">{INGESTION_PIPELINE_PRESET}</code> ·
+          <a class="rt-link" href="#rt-preset-details">view fallback chain</a></span
+        >
+      </li>
+    </ul>
+  </div>
 
   <div class="rt-actions">
     <button type="button" class="rt-btn" disabled={loading} onclick={() => void load()}
@@ -534,7 +691,411 @@
   {#if err}
     <p class="rt-err" role="alert">{err}</p>
   {/if}
+  {#if routeAlignmentWarning}
+    <div class="rt-err rt-warn-block" role="status">
+      <p>{routeAlignmentWarning}</p>
+      {#if orphanRouteBindings.length}
+        <ul class="rt-mini-list">
+          {#each orphanRouteBindings as row (`${row.stageKey}:${row.routeId}`)}
+            <li>
+              <strong>{row.label}</strong>: <code class="rt-code">{row.routeId}</code>
+            </li>
+          {/each}
+        </ul>
+        <button
+          type="button"
+          class="rt-btn rt-btn-ghost"
+          disabled={!routeBindingsDbAvailable || loading}
+          onclick={() => void clearStaleRouteBindings()}
+        >
+          Clear stale Neon route bindings
+        </button>
+      {/if}
+    </div>
+  {/if}
 
+  <section class="rt-sec rt-hero" aria-labelledby="rt-table">
+    <h2 id="rt-table" class="rt-h2">Phases → Restormel routes (Neon)</h2>
+    <p class="rt-p">
+      Per-phase route UUIDs are written to Neon for workers calling <code class="rt-code">POST /resolve</code>.
+      <strong>Auto</strong> leaves discovery to env + Keys. <span class="rt-muted"
+        >Expand a row’s resolve chain to see provider/model steps after publish.</span
+      >
+    </p>
+    {#if routeBindingsMessage}
+      <p class={routeBindingsMessage.includes('DATABASE_URL') ? 'rt-muted rt-p' : 'rt-err rt-p'} role="status">
+        {routeBindingsMessage}
+      </p>
+    {/if}
+    {#if embeddingRuntime}
+      <p class="rt-p rt-embed-note">
+        <strong>Embed (vectors):</strong> the worker still uses
+        <code class="rt-code">{embeddingRuntime.providerName}</code> ·
+        <code class="rt-code">{embeddingRuntime.documentModel}</code> ({embeddingRuntime.dimensions}-dim); the Keys
+        <code class="rt-code">ingestion_embedding</code> route here is for catalog/health, not the vector pass.
+      </p>
+    {/if}
+    {#if loading && !err}
+      <p class="rt-muted">Loading routes and catalog…</p>
+    {:else}
+      <div class="rt-scroll">
+        <table class="rt-table">
+          <thead>
+            <tr>
+              <th>Phase</th>
+              <th>Route</th>
+              <th>Resolve chain</th>
+              <th>Pin env</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each pipelineStages as row (row.key)}
+              {@const effId = effectiveRouteIdForStage(row.key)}
+              {@const route = effId ? ingestionRoutes.find((r) => r.id === effId) ?? null : null}
+              {@const steps = effId ? (stepsByRouteId[effId] ?? []) : []}
+              {@const en = enabledStepsForDisplay(steps)}
+              {@const pin = PIN_SUFFIX[row.key]}
+              <tr>
+                <td class="rt-phase">
+                  <span class="rt-phase-label">{row.label}</span>
+                  <code class="rt-code rt-small">{row.key}</code>
+                </td>
+                <td class="rt-route">
+                  {#if ingestionRoutes.length === 0}
+                    <span class="rt-warn">No ingestion routes</span>
+                  {:else if route || effId}
+                    <label class="rt-route-label" for="rt-route-{row.key}">Route</label>
+                    <select
+                      id="rt-route-{row.key}"
+                      class="rt-input rt-route-select"
+                      value={bindingSelectValue(row.key)}
+                      onchange={(e) =>
+                        void onPickRouteForStage(row.key, (e.currentTarget as HTMLSelectElement).value)}
+                    >
+                      <option value={ROUTE_AUTO}>Auto (env + Keys discover)</option>
+                      {#each sortedIngestionRoutesForPicker(ingestionRoutes) as opt (opt.id)}
+                        <option value={opt.id}>
+                          {opt.name?.trim() || opt.id}
+                          {(opt.stage ?? '').trim() ? ` · ${opt.stage}` : ' · (shared)'}
+                        </option>
+                      {/each}
+                    </select>
+                    {#if route?.isPublished === false}
+                      <span class="rt-badge">draft</span>
+                    {/if}
+                  {:else}
+                    <span class="rt-warn">No matching route</span>
+                  {/if}
+                </td>
+                <td class="rt-models">
+                  {#if !effId}
+                    {#if row.key === 'ingestion_embedding' && embeddingRuntime}
+                      <details class="rt-chain-d">
+                        <summary>Vectors (worker) · {embeddingRuntime.documentModel}</summary>
+                        <p class="rt-embed-runtime">
+                          <code class="rt-code">{embeddingRuntime.providerName}</code> ·
+                          {embeddingRuntime.dimensions}-dim. Keys embedding route is optional; worker path is the source
+                          of truth.
+                        </p>
+                      </details>
+                    {:else}
+                      <span class="rt-muted">—</span>
+                    {/if}
+                  {:else if row.key === 'ingestion_embedding' && embeddingRuntime}
+                    <details class="rt-chain-d">
+                      <summary>Vectors (worker) · {embeddingRuntime.documentModel}</summary>
+                      <p class="rt-embed-runtime">
+                        <code class="rt-code">{embeddingRuntime.providerName}</code> ·
+                        {embeddingRuntime.dimensions}-dim. Route chain below is catalog/AAIF only.
+                      </p>
+                    </details>
+                    {#if en.length === 0}
+                      <span class="rt-muted">No Keys steps</span>
+                    {:else}
+                      <details class="rt-chain-d" open={false}>
+                        <summary
+                          >{stepChainSummary(steps).oneLine}
+                          <span class="rt-muted"
+                            > · {en.length} step{en.length !== 1 ? 's' : ''} ·
+                            <span class="rt-peek">open</span></span
+                          >
+                        </summary>
+                        <ol class="rt-step-list">
+                          {#each en as st, i (i)}
+                            <li>
+                              <span class="rt-step-idx">{i + 1}.</span>
+                              <strong>{st.providerPreference ?? '?'}</strong>
+                              · <code class="rt-code">{st.modelId ?? '?'}</code>
+                              <span class="rt-price"
+                                >{priceHint(st.providerPreference ?? '', st.modelId ?? '')}</span
+                              >
+                            </li>
+                          {/each}
+                        </ol>
+                      </details>
+                    {/if}
+                  {:else if en.length === 0}
+                    <span class="rt-muted">No steps in Keys (publish) or 404 — Refresh.</span>
+                  {:else}
+                    <details class="rt-chain-d" open={false}>
+                      <summary
+                        >{stepChainSummary(steps).oneLine}
+                        <span class="rt-muted"
+                          > · {en.length} step{en.length !== 1 ? 's' : ''} ·
+                          <span class="rt-peek">open</span></span
+                        >
+                      </summary>
+                      <ol class="rt-step-list">
+                        {#each en as st, i (i)}
+                          <li>
+                            <span class="rt-step-idx">{i + 1}.</span>
+                            <strong>{st.providerPreference ?? '?'}</strong>
+                            · <code class="rt-code">{st.modelId ?? '?'}</code>
+                            <span class="rt-price">{priceHint(st.providerPreference ?? '', st.modelId ?? '')}</span>
+                          </li>
+                        {/each}
+                      </ol>
+                    </details>
+                  {/if}
+                </td>
+                <td class="rt-pin">
+                  {#if pin}
+                    <code class="rt-code rt-small">INGEST_PIN_PROVIDER_{pin}</code><br />
+                    <code class="rt-code rt-small">INGEST_PIN_MODEL_{pin}</code>
+                  {:else}
+                    <span class="rt-muted">—</span>
+                  {/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </section>
+
+  <details class="rt-details" id="rt-preset-details">
+    <summary class="rt-details-sum"
+      >Production worker fallback chain (<code class="rt-code">{INGESTION_PIPELINE_PRESET}</code>)</summary
+    >
+    <p class="rt-p rt-p-tight">
+      When pins / Restormel resolve do not supply a model, the ingest worker walks this
+      <strong>primary + ordered fallback</strong> chain per stage (transient errors only — see
+      <code class="rt-code">ingestionCanonicalPipeline.ts</code>).
+    </p>
+    <div class="rt-preset-table-wrap">
+      <table class="rt-table rt-preset-table">
+        <thead>
+          <tr>
+            <th>Stage</th>
+            <th>Chain (primary first)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each PRESET_LLM_ORDER as sk (sk)}
+            <tr>
+              <td class="rt-phase"
+                ><span class="rt-phase-label">{PRESET_LLM_LABEL[sk]}</span><code class="rt-code rt-small">{sk}</code></td
+              >
+              <td>
+                <ol class="rt-preset-chain">
+                  {#each canonicalModelChainForStage(sk) as tier, i (i)}
+                    <li>
+                      <span class="rt-preset-idx">{i + 1}.</span>
+                      <strong>{tier.provider}</strong>
+                      · <code class="rt-code">{tier.modelId}</code>
+                    </li>
+                  {/each}
+                </ol>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  </details>
+
+  <details class="rt-details">
+    <summary class="rt-details-sum">Restormel gateway (read-only)</summary>
+    <p class="rt-p">
+      Admin APIs call Restormel Keys with a <strong>bearer</strong> gateway key (<code class="rt-code"
+        >RESTORMEL_GATEWAY_KEY</code>).
+    </p>
+    {#if gatewaySummary}
+      <p class="rt-p rt-gateway-status">
+        <strong>Effective bearer:</strong>
+        {gatewaySourceLabel(gatewaySummary.source)}
+        {#if gatewaySummary.last4}
+          <span class="rt-muted">· ends with <code class="rt-code">{gatewaySummary.last4}</code></span>
+        {/if}
+      </p>
+    {:else}
+      <p class="rt-muted rt-p">Gateway status not loaded yet.</p>
+    {/if}
+    {#if gatewaySummary && !gatewaySummary.configured}
+      <p class="rt-err" role="status">
+        <code class="rt-code">RESTORMEL_GATEWAY_KEY</code> is not set for this server.
+      </p>
+    {/if}
+  </details>
+
+  <details class="rt-details">
+    <summary class="rt-details-sum">App-wide AI defaults (Neon) — shared route, keys, degraded</summary>
+    <p class="rt-p">
+      <strong>Fallback shared route UUID</strong> applies when no per-phase Neon binding matches. A
+      <strong>default OpenAI</strong> key in Neon is used when env/BYOK does not set
+      <code class="rt-code">OPENAI_API_KEY</code>.
+    </p>
+    {#if appAiSummary}
+      <p class="rt-p rt-gateway-status">
+        <strong>Database:</strong>
+        {appAiSummary.databaseAvailable ? 'Neon available' : 'No DATABASE_URL'}
+        {#if appAiSummary.defaultOpenaiKeyConfigured}
+          <span class="rt-muted">
+            · OpenAI default
+            {#if appAiSummary.defaultOpenaiKeyLast4}
+              ends <code class="rt-code">…{appAiSummary.defaultOpenaiKeyLast4}</code>
+            {/if}
+          </span>
+        {:else}
+          <span class="rt-muted">· No default OpenAI key in Neon</span>
+        {/if}
+      </p>
+    {:else}
+      <p class="rt-muted rt-p">App defaults not loaded yet.</p>
+    {/if}
+    {#if appAiSummary?.openaiDecryptFailed}
+      <p class="rt-err" role="status">
+        Stored default OpenAI key exists but could not be decrypted. Re-save a key or clear it; fix
+        <code class="rt-code">BYOK_ENCRYPTION_KEY</code> if keys were rotated.
+      </p>
+    {/if}
+    {#if defaultSharedRouteId}
+      <div
+        class="rt-shared-preview"
+        role="region"
+        aria-label="Models on the default shared Restormel route"
+      >
+        <h3 class="rt-h3">Route step chain (default shared)</h3>
+        <p class="rt-p rt-p-tight rt-muted">
+          Restormel route <code class="rt-code">{defaultSharedRouteId}</code> — providers and models configured in
+          Keys for this route’s resolve chain.
+        </p>
+        {#if !routes.some((r) => r.id === defaultSharedRouteId)}
+          <p class="rt-warn" role="status">This UUID is not in the project’s route list — check project id / key.</p>
+        {:else if loading}
+          <p class="rt-muted">Loading…</p>
+        {:else if !enabledStepsForDisplay(defaultSharedRouteSteps).length}
+          <p class="rt-muted">
+            No step rows loaded (unpublished route, or fetch failed). Use Refresh after publishing in Keys.
+          </p>
+        {:else}
+          <p class="rt-snapshot-v">{stepChainSummary(defaultSharedRouteSteps).oneLine}</p>
+          <ol class="rt-step-list">
+            {#each enabledStepsForDisplay(defaultSharedRouteSteps) as st, i (i)}
+              <li>
+                <span class="rt-step-idx">{i + 1}.</span>
+                <strong>{st.providerPreference ?? '?'}</strong>
+                · <code class="rt-code">{st.modelId ?? '?'}</code>
+                <span class="rt-price"
+                  >{priceHint(st.providerPreference ?? '', st.modelId ?? '')}</span
+                >
+              </li>
+            {/each}
+          </ol>
+        {/if}
+      </div>
+    {/if}
+    {#if appAiSummary && !appAiSummary.databaseAvailable}
+      <p class="rt-err" role="status">
+        <code class="rt-code">DATABASE_URL</code> is not set — defaults cannot be persisted here.
+      </p>
+    {:else if appAiSummary?.databaseAvailable}
+      <div class="rt-gateway-form">
+        <label class="rt-label">
+          Default shared Restormel route (UUID)
+          <input
+            class="rt-input"
+            type="text"
+            autocomplete="off"
+            placeholder="e.g. published shared ingestion route"
+            bind:value={appDefaultSharedRouteInput}
+            onblur={() => void refreshStepsForDefaultSharedRoute()}
+          />
+        </label>
+        <label class="rt-label">
+          Quick pick (ingestion routes)
+          <select
+            class="rt-input"
+            aria-label="Insert route id from list"
+            onchange={(e) => {
+              const v = (e.currentTarget as HTMLSelectElement).value;
+              if (v) {
+                appDefaultSharedRouteInput = v;
+                void loadStepsForRoutes([v]);
+              }
+              (e.currentTarget as HTMLSelectElement).value = '';
+            }}
+          >
+            <option value="">— choose route —</option>
+            {#each sortedIngestionRoutesForPicker(ingestionRoutes) as pick (pick.id)}
+              <option value={pick.id}>{pick.name ?? pick.id}</option>
+            {/each}
+          </select>
+        </label>
+        <details class="rt-nested">
+          <summary class="rt-nested-sum">Degraded + OpenAI key</summary>
+          <div class="rt-nested-body">
+            <label class="rt-label">
+              Degraded primary provider override <span class="rt-muted">(optional, e.g. openai, vertex)</span>
+              <input class="rt-input" type="text" autocomplete="off" bind:value={appDegPrimaryInput} />
+            </label>
+            <label class="rt-label">
+              Degraded reasoning model (standard)
+              <input class="rt-input" type="text" autocomplete="off" bind:value={appDegReasonStdInput} />
+            </label>
+            <label class="rt-label">
+              Degraded reasoning model (deep)
+              <input class="rt-input" type="text" autocomplete="off" bind:value={appDegReasonDeepInput} />
+            </label>
+            <label class="rt-label">
+              Degraded extraction model
+              <input class="rt-input" type="text" autocomplete="off" bind:value={appDegExtInput} />
+            </label>
+            <label class="rt-label">
+              Default OpenAI API key <span class="rt-muted">(leave blank to keep existing)</span>
+              <input class="rt-input" type="password" autocomplete="off" bind:value={appOpenaiKeyInput} />
+            </label>
+          </div>
+        </details>
+        <div class="rt-gateway-actions">
+          <button type="button" class="rt-btn" disabled={appAiBusy} onclick={() => void saveAppAiDefaults()}>
+            {appAiBusy ? 'Saving…' : 'Save defaults'}
+          </button>
+          <button
+            type="button"
+            class="rt-btn rt-btn-ghost"
+            disabled={appAiBusy}
+            onclick={() => void clearAppOpenaiDefaultKey()}
+          >
+            Clear OpenAI key only
+          </button>
+        </div>
+      </div>
+    {/if}
+    {#if appAiMessage}
+      <p
+        class={appAiMessage.startsWith('Saved') || appAiMessage.startsWith('Cleared') ? 'rt-ok' : 'rt-err'}
+        role="status"
+      >
+        {appAiMessage}
+      </p>
+    {/if}
+  </details>
+
+  <details class="rt-details">
+    <summary class="rt-details-sum">Create route in Restormel Keys (proxied API)</summary>
+  <div class="rt-details-inset">
   <section class="rt-sec" aria-labelledby="rt-create">
     <h2 id="rt-create" class="rt-h2">Create route in Restormel Keys</h2>
     <p class="rt-p">
@@ -573,7 +1134,12 @@
       <p class={createFeedback.startsWith('Created') ? 'rt-ok' : 'rt-err'} role="status">{createFeedback}</p>
     {/if}
   </section>
+  </div>
+  </details>
 
+  <details class="rt-details">
+    <summary class="rt-details-sum">Per-phase worker model overrides (browser + durable jobs)</summary>
+  <div class="rt-details-inset">
   <section class="rt-sec" aria-labelledby="rt-pins">
     <h2 id="rt-pins" class="rt-h2">Per-phase worker model overrides</h2>
     <p class="rt-p">
@@ -664,7 +1230,12 @@
       <code class="rt-code">vertex</code>, <code class="rt-code">aizolo</code>).
     </p>
   </section>
+  </div>
+  </details>
 
+  <details class="rt-details">
+    <summary class="rt-details-sum">Bootstrap, tools &amp; server / CLI env</summary>
+  <div class="rt-details-inset">
   <section class="rt-sec" aria-labelledby="rt-cli">
     <h2 id="rt-cli" class="rt-h2">Bootstrap &amp; tools</h2>
     <ul class="rt-ul">
@@ -710,127 +1281,9 @@
       </li>
     </ul>
   </section>
+  </div>
+  </details>
 
-  <section class="rt-sec" aria-labelledby="rt-table">
-    <h2 id="rt-table" class="rt-h2">Phases → routes → models</h2>
-    <p class="rt-p">
-      Pick a <strong>Restormel route</strong> per phase to pin which UUID is passed to
-      <code class="rt-code">POST /resolve</code> on workers (saved in <strong>Neon</strong>, overrides
-      <code class="rt-code">RESTORMEL_INGEST_*_ROUTE_ID</code> when set). Choose
-      <strong>Auto</strong> to clear the Neon override and fall back to env + Keys discovery. When
-      <code class="rt-code">EXTRACTION_BASE_URL</code> is set on the worker but no extraction route is pinned here or
-      in env, extraction uses that OpenAI-compatible endpoint first — unless a Neon or env route id is set for
-      extraction, which takes precedence.
-    </p>
-    {#if routeBindingsMessage}
-      <p class={routeBindingsMessage.includes('DATABASE_URL') ? 'rt-muted rt-p' : 'rt-err rt-p'} role="status">
-        {routeBindingsMessage}
-      </p>
-    {/if}
-    {#if embeddingRuntime}
-      <p class="rt-p rt-embed-note">
-        <strong>Embed (vectors):</strong> claim embeddings run in
-        <code class="rt-code">scripts/ingest.ts</code> via
-        <code class="rt-code">{embeddingRuntime.providerName}</code> ·
-        <code class="rt-code">{embeddingRuntime.documentModel}</code> ({embeddingRuntime.dimensions}-dim). That keeps
-        corpus dimensions consistent; it does not use Restormel AAIF resolve today. A Keys route with
-        <code class="rt-code">stage=ingestion_embedding</code> is optional (catalog / health checks); the chain shown
-        here does not change vector generation unless we add a future Restormel embedding executor.
-      </p>
-    {/if}
-    {#if loading && !err}
-      <p class="rt-muted">Loading routes and catalog…</p>
-    {:else}
-      <div class="rt-scroll">
-        <table class="rt-table">
-          <thead>
-            <tr>
-              <th>Phase</th>
-              <th>Route</th>
-              <th>Models (ordered)</th>
-              <th>Pin override env</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each pipelineStages as row (row.key)}
-              {@const effId = effectiveRouteIdForStage(row.key)}
-              {@const route = effId ? ingestionRoutes.find((r) => r.id === effId) ?? null : null}
-              {@const steps = route?.id ? stepsByRouteId[route.id] ?? [] : []}
-              {@const pin = PIN_SUFFIX[row.key]}
-              <tr>
-                <td class="rt-phase">
-                  <span class="rt-phase-label">{row.label}</span>
-                  <code class="rt-code rt-small">{row.key}</code>
-                </td>
-                <td class="rt-route">
-                  {#if ingestionRoutes.length === 0}
-                    <span class="rt-warn">No ingestion routes</span>
-                  {:else if route || effId}
-                    <label class="rt-route-label" for="rt-route-{row.key}">Route</label>
-                    <select
-                      id="rt-route-{row.key}"
-                      class="rt-input rt-route-select"
-                      value={bindingSelectValue(row.key)}
-                      onchange={(e) =>
-                        void onPickRouteForStage(row.key, (e.currentTarget as HTMLSelectElement).value)}
-                    >
-                      <option value={ROUTE_AUTO}>Auto (env + Keys discover)</option>
-                      {#each sortedIngestionRoutesForPicker(ingestionRoutes) as opt (opt.id)}
-                        <option value={opt.id}>
-                          {opt.name?.trim() || opt.id}
-                          {(opt.stage ?? '').trim() ? ` · ${opt.stage}` : ' · (shared)'}
-                        </option>
-                      {/each}
-                    </select>
-                    {#if route?.isPublished === false}
-                      <span class="rt-badge">draft</span>
-                    {/if}
-                  {:else}
-                    <span class="rt-warn">No matching route</span>
-                  {/if}
-                </td>
-                <td class="rt-models">
-                  {#if row.key === 'ingestion_embedding' && embeddingRuntime}
-                    <p class="rt-embed-runtime">
-                      <strong>Worker (actual):</strong>
-                      {embeddingRuntime.providerName} · {embeddingRuntime.documentModel}
-                      <span class="rt-muted">({embeddingRuntime.dimensions}-dim)</span>
-                    </p>
-                  {/if}
-                  {#if route && steps.length === 0}
-                    <span class="rt-muted">No steps loaded (save/publish route in Keys).</span>
-                  {:else if steps.length > 0}
-                    <ol class="rt-step-list">
-                      {#each steps as st, i (i)}
-                        {#if st.enabled !== false}
-                          <li>
-                            <span class="rt-step-idx">{i + 1}.</span>
-                            <strong>{st.providerPreference ?? '?'}</strong>
-                            · <code class="rt-code">{st.modelId ?? '?'}</code>
-                            <span class="rt-price">{priceHint(st.providerPreference ?? '', st.modelId ?? '')}</span>
-                          </li>
-                        {/if}
-                      {/each}
-                    </ol>
-                  {:else}
-                    —
-                  {/if}
-                </td>
-                <td class="rt-pin">
-                  {#if pin}
-                    <code class="rt-code rt-small">INGEST_PIN_PROVIDER_{pin}</code><br />
-                    <code class="rt-code rt-small">INGEST_PIN_MODEL_{pin}</code>
-                  {:else}
-                    <span class="rt-muted">—</span>
-                  {/if}
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
-    {/if}
-  </section>
 </main>
 
 <style>
@@ -895,17 +1348,21 @@
   .rt-btn-ghost {
     background: transparent;
   }
-  .rt-gateway-status {
+  .rt-details-inset {
+    padding-top: 2px;
+  }
+  /* :global: classes appear inside {#if} / nested <details> branches Svelte can miss for unused-CSS. */
+  .rt-details :global(.rt-gateway-status) {
     margin-top: 4px;
   }
-  .rt-gateway-form {
+  .rt-details :global(.rt-gateway-form) {
     display: flex;
     flex-direction: column;
     gap: 12px;
     max-width: 36rem;
     margin-top: 8px;
   }
-  .rt-gateway-actions {
+  .rt-details :global(.rt-gateway-actions) {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
@@ -1066,5 +1523,127 @@
   .rt-warn {
     color: #fbbf24;
     font-size: 0.86rem;
+  }
+  .rt-snapshot {
+    border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+    border-radius: 10px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    background: color-mix(in srgb, var(--color-surface) 95%, var(--color-border));
+  }
+  .rt-snapshot-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 28px;
+    font-size: 0.86rem;
+    line-height: 1.4;
+  }
+  .rt-snapshot-k {
+    color: var(--color-text);
+    opacity: 0.75;
+    font-weight: 500;
+    margin-right: 6px;
+  }
+  .rt-snapshot-v {
+    color: var(--color-text);
+  }
+  .rt-hero {
+    border-left: 3px solid color-mix(in srgb, var(--color-blue, #3b82f6) 55%, transparent);
+    padding-left: 12px;
+  }
+  .rt-details {
+    border: 1px solid color-mix(in srgb, var(--color-border) 85%, transparent);
+    border-radius: 10px;
+    padding: 0 14px 12px;
+    margin-bottom: 14px;
+    background: color-mix(in srgb, var(--color-surface) 98%, transparent);
+  }
+  .rt-details-inset .rt-sec {
+    margin-bottom: 12px;
+  }
+  .rt-details-inset .rt-sec:last-child {
+    margin-bottom: 0;
+  }
+  .rt-details-sum {
+    font-weight: 600;
+    font-size: 0.95rem;
+    padding: 10px 0 8px;
+    cursor: pointer;
+    list-style: none;
+  }
+  .rt-details-sum::-webkit-details-marker {
+    display: none;
+  }
+  .rt-details[open] > .rt-details-sum {
+    border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+    margin-bottom: 8px;
+  }
+  .rt-p-tight {
+    margin: 0 0 8px;
+    max-width: 50rem;
+  }
+  .rt-h3 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin: 0 0 6px;
+  }
+  .rt-preset-table-wrap {
+    overflow: auto;
+  }
+  .rt-preset-table th,
+  .rt-preset-table td {
+    vertical-align: top;
+  }
+  .rt-preset-chain {
+    margin: 0;
+    padding-left: 1.1rem;
+    font-size: 0.84rem;
+  }
+  .rt-preset-idx {
+    opacity: 0.65;
+    margin-right: 4px;
+  }
+  .rt-chain-d {
+    font-size: 0.86rem;
+  }
+  .rt-chain-d[open] .rt-peek {
+    display: none;
+  }
+  .rt-chain-d > summary {
+    cursor: pointer;
+    list-style: none;
+  }
+  .rt-chain-d > summary::-webkit-details-marker {
+    display: none;
+  }
+  .rt-peek {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .rt-shared-preview {
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
+    background: color-mix(in srgb, var(--color-surface) 95%, var(--color-border));
+    margin-bottom: 12px;
+  }
+  .rt-nested {
+    border: 1px dashed color-mix(in srgb, var(--color-border) 80%, transparent);
+    border-radius: 8px;
+    padding: 0 10px 8px;
+  }
+  .rt-nested-sum {
+    font-weight: 500;
+    font-size: 0.88rem;
+    padding: 8px 0;
+    cursor: pointer;
+  }
+  .rt-nested-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
 </style>

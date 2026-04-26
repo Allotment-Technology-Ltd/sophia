@@ -153,6 +153,7 @@ function inferProviderFromModelId(modelId: string): string {
 	}
 	if (low.startsWith('voyage')) return 'voyage';
 	if (low.startsWith('deepseek')) return 'deepseek';
+	if (low.startsWith('aizolo-') || low === 'aizolo') return 'aizolo';
 	if (
 		low.startsWith('mistral') ||
 		low.startsWith('ministral') ||
