@@ -4,7 +4,7 @@ import { passesEarlyAccessAllowlist } from '$lib/server/accessAllowlist';
 
 /**
  * Bearer-authenticated check for the early-access allowlist (`ALLOWED_EMAILS`).
- * Used by the root layout after sign-in; owners / OWNER_EMAILS bypass.
+ * Used by the root layout after sign-in; users with the owner role bypass the email list.
  */
 export const GET: RequestHandler = async ({ locals }) => {
   const user = locals.user;

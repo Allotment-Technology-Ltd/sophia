@@ -21,7 +21,7 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
     return {};
   }
 
-  // Early access (ALLOWED_EMAILS): owners / OWNER_EMAILS bypass — see accessAllowlist.ts + /api/access/allow
+  // Early access (ALLOWED_EMAILS): owner role bypasses — see accessAllowlist.ts + /api/access/allow
   if (locals.user?.email && !passesEarlyAccessAllowlist({ email: locals.user.email, user: locals.user })) {
     throw redirect(302, '/access-denied');
   }
