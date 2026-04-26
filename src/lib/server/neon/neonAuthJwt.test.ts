@@ -6,6 +6,15 @@ describe('resolveNeonAuthVerificationConfig', () => {
     vi.unstubAllEnvs();
   });
 
+  it('derives JWKS, issuer, and audience from NEON_AUTH_URL when BASE_URL is unset', () => {
+    vi.stubEnv('NEON_AUTH_URL', 'https://ep-x.neonauth.us-east-1.aws.neon.tech/neondb/auth');
+
+    const c = resolveNeonAuthVerificationConfig();
+    expect(c.jwksUrl).toBe(
+      'https://ep-x.neonauth.us-east-1.aws.neon.tech/neondb/auth/.well-known/jwks.json'
+    );
+  });
+
   it('derives JWKS, issuer, and audience from NEON_AUTH_BASE_URL', () => {
     vi.stubEnv('NEON_AUTH_BASE_URL', 'https://ep-x.neonauth.us-east-1.aws.neon.tech/neondb/auth');
 
@@ -58,7 +67,10 @@ describe('resolveNeonAuthVerificationConfig', () => {
     vi.stubEnv('NEON_AUTH_ISSUER', 'https://x');
     delete process.env.NEON_AUTH_JWKS_URL;
     delete process.env.NEON_AUTH_BASE_URL;
+    delete process.env.NEON_AUTH_URL;
 
-    expect(() => resolveNeonAuthVerificationConfig()).toThrow(/NEON_AUTH_BASE_URL/);
+    expect(() => resolveNeonAuthVerificationConfig()).toThrow(
+      /NEON_AUTH_BASE_URL or NEON_AUTH_URL|not configured/
+    );
   });
 });

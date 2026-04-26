@@ -2,7 +2,7 @@
  * Neon Auth (Better Auth) JWT verification for protected API routes.
  *
  * Configure one of:
- * - **Simple:** `USE_NEON_AUTH=1` and `NEON_AUTH_BASE_URL` (value from Neon Console / API `base_url`, e.g. `https://….neonauth….neon.tech/neondb/auth`).
+ * - **Simple:** `USE_NEON_AUTH=1` and `NEON_AUTH_BASE_URL` (or alias `NEON_AUTH_URL`) — value from Neon Console / API `base_url`, e.g. `https://….neonauth….neon.tech/neondb/auth`.
  *   JWKS URL and issuer/audience are derived per [Neon JWT docs](https://neon.com/docs/auth/guides/plugins/jwt).
  * - **Explicit:** `NEON_AUTH_ISSUER` (JWT `iss` — the **origin** of the auth host, e.g. `https://ep-….aws.neon.tech`) +
  *   `NEON_AUTH_JWKS_URL` + optional `NEON_AUTH_AUDIENCE`.
@@ -39,8 +39,16 @@ export interface NeonAuthVerificationConfig {
  * Resolves JWKS URL, issuer, and optional audience from env.
  * @throws If Neon auth is enabled but configuration is incomplete.
  */
+function neonAuthBaseFromEnv(): string | undefined {
+  return (
+    process.env.NEON_AUTH_BASE_URL?.trim() ||
+    process.env.NEON_AUTH_URL?.trim() ||
+    undefined
+  );
+}
+
 export function resolveNeonAuthVerificationConfig(): NeonAuthVerificationConfig {
-  const base = process.env.NEON_AUTH_BASE_URL?.trim();
+  const base = neonAuthBaseFromEnv();
   const explicitIssuer = process.env.NEON_AUTH_ISSUER?.trim();
   const explicitJwks = process.env.NEON_AUTH_JWKS_URL?.trim();
   const explicitAudience = process.env.NEON_AUTH_AUDIENCE?.trim();
@@ -51,7 +59,7 @@ export function resolveNeonAuthVerificationConfig(): NeonAuthVerificationConfig 
     try {
       origin = new URL(trimmed).origin;
     } catch {
-      throw new Error('NEON_AUTH_BASE_URL is not a valid URL');
+      throw new Error('NEON_AUTH_BASE_URL (or NEON_AUTH_URL) is not a valid URL');
     }
     const jwksUrl = explicitJwks || `${trimmed}/.well-known/jwks.json`;
     const issuer = explicitIssuer || origin;
@@ -69,7 +77,7 @@ export function resolveNeonAuthVerificationConfig(): NeonAuthVerificationConfig 
   }
 
   throw new Error(
-    'USE_NEON_AUTH is set but auth is not configured: set NEON_AUTH_BASE_URL (from Neon API `base_url`) or both NEON_AUTH_ISSUER and NEON_AUTH_JWKS_URL'
+    'USE_NEON_AUTH is set but auth is not configured: set NEON_AUTH_BASE_URL or NEON_AUTH_URL (from Neon API `base_url`) or both NEON_AUTH_ISSUER and NEON_AUTH_JWKS_URL'
   );
 }
 
