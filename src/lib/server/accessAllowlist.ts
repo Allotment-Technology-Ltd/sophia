@@ -10,21 +10,13 @@ export function parseAllowedEmailsEnv(raw: string | undefined): string[] {
     .filter((e) => e.length > 0);
 }
 
-function parseCommaEnv(key: string): string[] {
-  const raw = process.env[key];
-  return (typeof raw === 'string' ? raw : '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
 function migrateLegacyRoleToken(role: unknown): 'owner' | 'user' | null {
   if (role === 'owner' || role === 'administrator' || role === 'admin') return 'owner';
   if (role === 'user') return 'user';
   return null;
 }
 
-/** Mirrors `hasOwnerRole` in authRoles.ts (env + JWT-backed fields only). */
+/** Mirrors `hasOwnerRole` in authRoles.ts (role fields only; no env grants). */
 function userHasOwnerPrivileges(
   user: { uid?: string; role?: string | null; roles?: string[] | null }
 ): boolean {

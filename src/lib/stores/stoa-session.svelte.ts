@@ -8,9 +8,7 @@ function createInitialState(): StoaSessionState {
     zone: 'colonnade',
     stance: 'hold',
     isLoading: false,
-    isStreaming: false,
-    audioInitialized: false,
-    sceneReady: false
+    isStreaming: false
   };
 }
 
@@ -54,14 +52,6 @@ function createStoaSessionStore() {
     state = { ...state, isStreaming };
   }
 
-  function setAudioInitialized(audioInitialized: boolean): void {
-    state = { ...state, audioInitialized };
-  }
-
-  function setSceneReady(sceneReady: boolean): void {
-    state = { ...state, sceneReady };
-  }
-
   function reset(nextSessionId = `stoa-${crypto.randomUUID()}`): void {
     state = {
       ...createInitialState(),
@@ -73,9 +63,7 @@ function createStoaSessionStore() {
   return {
     hydrate,
     reset,
-    setAudioInitialized,
     setLoading,
-    setSceneReady,
     setSessionId,
     setStance,
     setStreaming,
@@ -97,12 +85,6 @@ function createStoaSessionStore() {
     },
     get isStreaming() {
       return state.isStreaming;
-    },
-    get audioInitialized() {
-      return state.audioInitialized;
-    },
-    get sceneReady() {
-      return state.sceneReady;
     }
   };
 }

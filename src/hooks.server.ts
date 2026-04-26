@@ -99,17 +99,29 @@ export const handle: Handle = async ({ event, resolve }) => {
         roles: roleRecord.roles
       };
     } catch (err) {
-      console.warn(
-        '[AUTH] bearer verification failed:',
-        err instanceof Error ? err.message : String(err)
-      );
+      const errMessage = err instanceof Error ? err.message : String(err);
+      console.warn('[AUTH] bearer verification failed:', errMessage);
+      const isProd = (process.env.NODE_ENV ?? '').toLowerCase() === 'production';
+      const clientHint = isProd
+        ? 'The access token is invalid, expired, or the server’s Neon Auth configuration (NEON_AUTH_BASE_URL / iss / aud / JWKS) does not match the Neon Auth project used by the browser (PUBLIC_NEON_AUTH_URL). Try signing out and back in. If it still fails, align service env with Neon’s Auth `base_url` in the API or in Neon Console.'
+        : 'The access token is invalid, expired, or the server’s Neon Auth JWKS/issuer/audience do not match this environment’s PUBLIC_NEON_AUTH_URL.';
+      const detail = isProd
+        ? `${clientHint} Include the request_id from this response when debugging.`
+        : `${clientHint} ${errMessage}`;
       return withApiCacheHeaders(
         event,
         problemJson({
           status: 401,
           title: 'Authentication failed',
-          detail: 'The provided bearer token is invalid or expired.',
-          requestId
+          detail,
+          requestId,
+          ...(!isProd
+            ? {
+                extensions: {
+                  auth_error: errMessage
+                }
+              }
+            : {})
         })
       );
     }

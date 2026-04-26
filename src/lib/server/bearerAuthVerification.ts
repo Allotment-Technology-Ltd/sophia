@@ -33,7 +33,7 @@ function claimsFromJwtPayload(raw: JWTPayload): { displayName: string | null; ph
 export async function verifyBearerTokenForApi(token: string): Promise<ResolvedBearerProfile> {
   if (!isNeonAuthEnabled()) {
     throw new Error(
-      'Authentication requires USE_NEON_AUTH=1 and NEON_AUTH_BASE_URL (or NEON_AUTH_ISSUER + NEON_AUTH_JWKS_URL).'
+      'Authentication requires USE_NEON_AUTH=1 and NEON_AUTH_BASE_URL or NEON_AUTH_URL (or NEON_AUTH_ISSUER + NEON_AUTH_JWKS_URL).'
     );
   }
 

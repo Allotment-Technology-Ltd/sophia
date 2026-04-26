@@ -46,7 +46,7 @@
       href: '/admin/users',
       title: 'User management',
       description:
-        'List registered users and set each account to owner or user. At least one owner must remain. Emails in OWNER_EMAILS are re-promoted to owner on their next API-authenticated request.',
+        'List registered users and set each account to owner or user. At least one owner must remain. Roles are stored on user documents.',
       emphasis: false
     }
   ] as const;

@@ -133,8 +133,7 @@
     <h1 class="mt-2 font-serif text-2xl text-sophia-dark-text sm:text-3xl">User management</h1>
     <p class="mt-2 max-w-3xl text-sm leading-6 text-sophia-dark-muted">
       Owners can promote users to owner or demote owners to user. The service must always keep at least one owner.
-      If an email is listed in <span class="font-mono">OWNER_EMAILS</span>, that account is merged back to owner on the
-      next authenticated API request.
+      Owner status is stored on the user document in the database (not from environment variables).
     </p>
     <div class="mt-4 flex flex-wrap gap-3">
       <a href="/admin" class="admin-hub-action">Admin home</a>
