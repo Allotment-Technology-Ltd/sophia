@@ -1,14 +1,8 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onMount } from 'svelte';
 
-  import { getAudioEngine } from '$lib/stoa-audio';
-  import type { StanceType, StoaZone } from '$lib/types/stoa';
   import { stoaSessionStore } from '$lib/stores/stoa-session.svelte';
-
-  import AudioControls from './AudioControls.svelte';
-  import DialogueOverlay from './DialogueOverlay.svelte';
-  import SceneCanvas from './SceneCanvas.svelte';
-  import StanceIndicator from './StanceIndicator.svelte';
+  import DialogueView from './DialogueView.svelte';
 
   interface Props {
     userId: string;
@@ -17,102 +11,82 @@
 
   let { userId, sessionId }: Props = $props();
 
-  const audioEngine = getAudioEngine();
-
-  let currentZone = $state<StoaZone>('colonnade');
-  let currentStance = $state<StanceType>('hold');
-  let audioReady = $state(false);
-  let sceneReady = $state(false);
-  let hasInitializedAudio = $state(false);
-
-  async function initializeAudio(): Promise<void> {
-    if (hasInitializedAudio) return;
-    hasInitializedAudio = true;
-    await audioEngine.init();
-    audioEngine.setZone(currentZone);
-    audioEngine.setStance(currentStance);
-    audioEngine.fadeIn(2400);
-    audioReady = true;
-    stoaSessionStore.setAudioInitialized(true);
-  }
-
-  function handleSceneReady(): void {
-    sceneReady = true;
-    stoaSessionStore.setSceneReady(true);
-  }
-
-  function handleStanceChange(event: CustomEvent<{ stance: StanceType }>): void {
-    currentStance = event.detail.stance;
-    stoaSessionStore.setStance(currentStance);
-    audioEngine.setStance(currentStance);
-  }
-
   onMount(() => {
     stoaSessionStore.hydrate();
     if (sessionId && sessionId !== stoaSessionStore.sessionId) {
       stoaSessionStore.setSessionId(sessionId);
     }
-    stoaSessionStore.setZone(currentZone);
-    stoaSessionStore.setStance(currentStance);
-  });
-
-  $effect(() => {
-    stoaSessionStore.setZone(currentZone);
-    if (audioReady) audioEngine.setZone(currentZone);
-  });
-
-  onDestroy(() => {
-    audioEngine.fadeOut(1200);
   });
 </script>
 
-<svelte:window onpointerdown={initializeAudio} />
-
 <div class="stoa-app" data-user={userId}>
-  <SceneCanvas zone={currentZone} on:sceneReady={handleSceneReady} />
-  <DialogueOverlay stance={currentStance} sessionId={stoaSessionStore.sessionId} on:stanceChange={handleStanceChange} />
-  <StanceIndicator stance={currentStance} />
-  <AudioControls {audioReady} />
+  <div class="stoa-shell">
+    <header class="stoa-header">
+      <h1 class="stoa-title">Stoa</h1>
+      <p class="stoa-lead">
+        A text session with the STOA mentor. Describe where you are in your life, your principles, and what
+        you want to practice next. The path is the curriculum.
+      </p>
+      <a class="stoa-journal-link" href="/stoa/journal">Open your STOA journal</a>
+    </header>
 
-  {#if !audioReady}
-    <div class="audio-hint">Tap anywhere to begin soundscape</div>
-  {/if}
-  {#if !sceneReady}
-    <div class="scene-status">Entering the academy...</div>
-  {/if}
+    <DialogueView sessionId={stoaSessionStore.sessionId} />
+  </div>
 </div>
 
 <style>
   .stoa-app {
-    position: relative;
     width: 100%;
     min-height: 100dvh;
     background: #1a1917;
-    overflow: hidden;
+    color: rgba(244, 238, 224, 0.96);
   }
 
-  .audio-hint,
-  .scene-status {
-    position: fixed;
-    left: 50%;
-    transform: translateX(-50%);
-    border: 1px solid rgba(190, 162, 118, 0.3);
-    border-radius: 999px;
-    background: rgba(26, 25, 23, 0.82);
-    color: rgba(239, 229, 208, 0.84);
+  .stoa-shell {
+    max-width: 48rem;
+    margin: 0 auto;
+    padding: 1.5rem 1.25rem 2.5rem;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+  }
+
+  .stoa-header {
+    margin-bottom: 1.25rem;
+  }
+
+  .stoa-title {
+    margin: 0 0 0.5rem;
     font-family: var(--font-ui);
-    font-size: 11px;
-    letter-spacing: 0.06em;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
-    padding: 8px 16px;
-    z-index: 19;
+    color: rgba(206, 193, 172, 0.9);
   }
 
-  .audio-hint {
-    top: 24px;
+  .stoa-lead {
+    margin: 0;
+    font-size: 0.9375rem;
+    line-height: 1.55;
+    color: rgba(210, 200, 182, 0.88);
   }
 
-  .scene-status {
-    bottom: 32px;
+  .stoa-journal-link {
+    display: inline-block;
+    margin-top: 0.65rem;
+    font-family: var(--font-ui);
+    font-size: 0.7rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(200, 175, 130, 0.85);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(180, 150, 100, 0.35);
+  }
+
+  .stoa-journal-link:hover {
+    color: rgba(220, 200, 160, 0.95);
+    border-bottom-color: rgba(200, 170, 120, 0.6);
   }
 </style>

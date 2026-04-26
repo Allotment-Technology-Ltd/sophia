@@ -44,7 +44,7 @@
 </script>
 
 <svelte:head>
-  <title>STOA Immersive | SOPHIA</title>
+  <title>Stoa mentor | SOPHIA</title>
 </svelte:head>
 
 <main class="stoa-page">
@@ -57,10 +57,9 @@
 
 <style>
   .stoa-page {
-    width: 100vw;
+    width: 100%;
     min-height: 100dvh;
     background: #1a1917;
-    overflow: hidden;
   }
 
   .loading-state {

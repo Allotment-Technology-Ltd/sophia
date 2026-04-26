@@ -14,8 +14,6 @@ export interface StoaSessionState {
   stance: StanceType;
   isLoading: boolean;
   isStreaming: boolean;
-  audioInitialized: boolean;
-  sceneReady: boolean;
 }
 
 export interface StoaDialogueTurn {
