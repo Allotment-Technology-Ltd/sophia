@@ -59,7 +59,9 @@ export const handle: Handle = async ({ event, resolve }) => {
     !event.url.pathname.startsWith('/api/health') &&
     !event.url.pathname.startsWith('/api/v1/verify') &&
     !event.url.pathname.startsWith('/api/billing/webhook') &&
-    !event.url.pathname.startsWith('/api/early-access/');
+    !event.url.pathname.startsWith('/api/early-access/') &&
+    /** Machine scheduler: `Authorization: Bearer` is `INGESTION_JOB_TICK_SECRET`, not a Neon JWT (see +server.ts). */
+    !event.url.pathname.startsWith('/api/internal/ingest/jobs/tick');
 
   if (isProtectedApi) {
     const requestId = resolveRequestId(event.request);
