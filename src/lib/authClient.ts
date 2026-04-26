@@ -129,11 +129,31 @@ export function onAuthChange(callback: (user: SophiaAuthUser | null) => void) {
   };
 }
 
+/**
+ * JWT used for `Authorization: Bearer` on our API. Prefer the Neon auth adapter’s
+ * {@link getJWTToken} (same token Better Auth issues for API use); fall back to a forced session fetch
+ * with `access_token` (Supabase-shaped session) when needed.
+ */
 export async function getIdToken(): Promise<string | null> {
   if (!browser) return null;
   const client = await loadNeonAuthClient();
   if (!client) return null;
-  const { data, error } = await client.getSession();
-  if (error || !data.session) return null;
-  return data.session.access_token ?? null;
+  const withJwt = client as { getJWTToken?: () => Promise<string | null> };
+  if (typeof withJwt.getJWTToken === 'function') {
+    const direct = await withJwt.getJWTToken();
+    if (direct) return direct;
+  }
+  const withSession = client as {
+    getSession?: (o?: { forceFetch?: boolean }) => Promise<{
+      data: { session: { access_token?: string | null } | null } | null;
+      error: Error | null;
+    }>;
+  };
+  if (typeof withSession.getSession === 'function') {
+    const { data, error } = await withSession.getSession({ forceFetch: true });
+    if (!error && data?.session) {
+      return data.session.access_token ?? null;
+    }
+  }
+  return null;
 }
