@@ -5,6 +5,7 @@ function minimalPayload(overrides: Partial<IngestRunPayload> = {}): IngestRunPay
 	return {
 		source_url: 'https://example.com/p',
 		source_type: 'institutional',
+		validate: false,
 		model_chain: { ...DEFAULT_MODEL_CHAIN_FULL },
 		...overrides
 	};

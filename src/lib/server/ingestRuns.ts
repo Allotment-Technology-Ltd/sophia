@@ -901,7 +901,7 @@ class IngestRunManager extends EventEmitter {
         : DEFAULT_ADMIN_INGEST_MAX_CONCURRENT;
 
       let acquiredGlobal = false;
-      if (ingestRunUsesRealChildProcessForPayload(claimed.payload)) {
+      if (ingestRunUsesRealChildProcess()) {
         if (isIngestGlobalConcurrencyGateEnabled() && isNeonIngestPersistenceEnabled()) {
           acquiredGlobal = await tryAcquireGlobalIngestSlot(maxConcurrent);
           if (!acquiredGlobal) return;
