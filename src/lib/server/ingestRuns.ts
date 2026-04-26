@@ -650,6 +650,19 @@ function ingestRunUsesRealChildProcess(): boolean {
   return v === '1' || v === 'true' || v === 'yes';
 }
 
+/**
+ * Durable job children always carry `ingestion_job_id`. They must run `fetch-source` + `ingest.ts`, not
+ * the sandbox simulation — otherwise scheduled ticks "complete" with no work (typical on Railway
+ * if `ADMIN_INGEST_RUN_REAL` was never set). Exported for unit tests.
+ */
+export function ingestRunUsesRealChildProcessForPayload(
+  payload: IngestRunPayload | null | undefined
+): boolean {
+  if (ingestRunUsesRealChildProcess()) return true;
+  const jobId = payload?.ingestion_job_id?.trim();
+  return Boolean(jobId);
+}
+
 function neonQueueEnabled(): boolean {
   const raw = (process.env.INGEST_QUEUE_ENABLED ?? '').trim().toLowerCase();
   if (raw === '0' || raw === 'false' || raw === 'no') return false;
@@ -888,7 +901,7 @@ class IngestRunManager extends EventEmitter {
         : DEFAULT_ADMIN_INGEST_MAX_CONCURRENT;
 
       let acquiredGlobal = false;
-      if (ingestRunUsesRealChildProcess()) {
+      if (ingestRunUsesRealChildProcessForPayload(claimed.payload)) {
         if (isIngestGlobalConcurrencyGateEnabled() && isNeonIngestPersistenceEnabled()) {
           acquiredGlobal = await tryAcquireGlobalIngestSlot(maxConcurrent);
           if (!acquiredGlobal) return;
@@ -1064,7 +1077,7 @@ class IngestRunManager extends EventEmitter {
       : DEFAULT_ADMIN_INGEST_MAX_CONCURRENT;
 
     let holdGlobalSlot = false;
-    if (ingestRunUsesRealChildProcess() && !neonQueueEnabled()) {
+    if (ingestRunUsesRealChildProcessForPayload(payload) && !neonQueueEnabled()) {
       if (isIngestGlobalConcurrencyGateEnabled() && isNeonIngestPersistenceEnabled()) {
         const ok = await tryAcquireGlobalIngestSlot(maxConcurrent);
         if (!ok) {
@@ -1243,7 +1256,7 @@ class IngestRunManager extends EventEmitter {
     if (state.status !== 'awaiting_sync') {
       return { ok: false, error: 'Run is not waiting for SurrealDB sync.' };
     }
-    if (ingestRunUsesRealChildProcess()) {
+    if (ingestRunUsesRealChildProcessForPayload(state.payload)) {
       if (!state.sourceFilePath) {
         return { ok: false, error: 'Source file path missing; cannot sync.' };
       }
@@ -1805,7 +1818,7 @@ class IngestRunManager extends EventEmitter {
       this.addLog(runId, 'SurrealDB store is deferred until you press Sync.');
     }
 
-    if (ingestRunUsesRealChildProcess()) {
+    if (ingestRunUsesRealChildProcessForPayload(payload)) {
       this.addLog(
         runId,
         `Running fetch-source + ingest via local tsx (fetch type: ${normalizeSourceTypeForFetch(payload.source_type)}).`
