@@ -1,6 +1,8 @@
 /**
  * Poll Neon for running ingestion jobs and advance them (tick).
- * Run on GCP (Cloud Run job, GCE, etc.) with DATABASE_URL + same env as admin ingest workers.
+ * Run as a long-lived process (Railway second service, GCE, etc.) with DATABASE_URL + the same
+ * env as admin ingest workers. Unattended production on Railway: see docs/sophia/deployment-railway.md
+ * (HTTP tick via INGESTION_JOB_TICK_SECRET, or this script). Legacy: GCP Cloud Run job.
  *
  * Usage: npx tsx --env-file=.env scripts/ingestion-job-poller.ts [--once] [--interval 5]
  */

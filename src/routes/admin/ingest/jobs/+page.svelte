@@ -909,8 +909,9 @@
 			run the same tick as <code class="rounded bg-black/20 px-1 py-0.5 font-mono text-xs">pnpm ingestion:job-poller</code> (can take a while).
 			On a <strong class="font-medium text-sophia-dark-text">job detail</strong> page, loads are fast reads; use
 			<strong class="font-medium text-sophia-dark-text">Advance this job’s queue</strong> there (or the poller) to run a
-			tick. If no admin tab is open, use Cloud Run Job + Scheduler — see
-			<span class="font-mono text-xs">docs/local/operations/ingestion-credits-and-workers.md</span>.
+			tick. If no admin tab is open, run a poller in production: Railway (cron/second service) — see
+			<span class="font-mono text-xs">docs/sophia/deployment-railway.md</span> (section “Durable ingestion jobs”);
+			legacy GCP used Cloud Run Job + Scheduler.
 		</p>
 		<p class="mt-3 text-sm text-sophia-dark-muted">
 			<a class="font-medium text-sophia-dark-text underline underline-offset-2" href="/admin/ingest/operator"
