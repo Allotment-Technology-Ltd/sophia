@@ -1,0 +1,43 @@
+# Durable Neon ingestion + re-embed: advance queues (Option A) without Railway cron.
+# The schedule only runs for workflows on the default branch; merge to main to activate.
+# Configure: docs/sophia/deployment-railway.md
+name: Ingestion job tick
+
+on:
+  schedule:
+    - cron: "*/2 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  post-tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /api/internal/ingest/jobs/tick
+        env:
+          INGESTION_JOB_TICK_URL: ${{ secrets.INGESTION_JOB_TICK_URL }}
+          INGESTION_JOB_TICK_SECRET: ${{ secrets.INGESTION_JOB_TICK_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${INGESTION_JOB_TICK_SECRET:-}" ]; then
+            echo "::error::Repository secret INGESTION_JOB_TICK_SECRET is not set. Add it in Settings → Secrets and variables → Actions (same value as Railway INGESTION_JOB_TICK_SECRET). See docs/sophia/deployment-railway.md."
+            exit 1
+          fi
+          URL="${INGESTION_JOB_TICK_URL:-https://usesophia.app/api/internal/ingest/jobs/tick}"
+          echo "POST $URL"
+          HTTP_CODE=$(
+            curl -sS -o /dev/null -w '%{http_code}' --max-time 120 \
+              -X POST \
+              -H "Authorization: Bearer ${INGESTION_JOB_TICK_SECRET}" \
+              -H "Content-Type: application/json" \
+              -H "Accept: application/json" \
+              --retry 2 --retry-delay 5 \
+              "$URL"
+          )
+          echo "HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != 200 ]; then
+            echo "::error::expected HTTP 200, got $HTTP_CODE (is INGESTION_JOB_TICK_SECRET the same in Railway and GitHub?)"
+            exit 1
+          fi
