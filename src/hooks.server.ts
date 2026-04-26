@@ -12,6 +12,24 @@ function withApiCacheHeaders(event: RequestEvent, response: Response): Response 
   return response;
 }
 
+/**
+ * Admin HTML is dynamic and must not be held by mobile bfcache/CDN. Without this, users can get a
+ * post-deploy shell that still references an older build until the cache is cleared.
+ */
+function withAdminHtmlNoStore(
+  event: RequestEvent,
+  response: Response
+): Response {
+  if (
+    event.request.method === 'GET' &&
+    event.url.pathname.startsWith('/admin') &&
+    (response.headers.get('content-type') ?? '').includes('text/html')
+  ) {
+    response.headers.set('Cache-Control', 'private, no-store, max-age=0, must-revalidate');
+  }
+  return response;
+}
+
 function isBrowserNavigation(event: RequestEvent): boolean {
   const accept = event.request.headers.get('accept') ?? '';
   const mode = event.request.headers.get('sec-fetch-mode') ?? '';
@@ -141,5 +159,5 @@ export const handle: Handle = async ({ event, resolve }) => {
     }
   }
 
-  return withApiCacheHeaders(event, await resolve(event));
+  return withAdminHtmlNoStore(event, withApiCacheHeaders(event, await resolve(event)));
 };
