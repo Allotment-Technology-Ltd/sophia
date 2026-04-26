@@ -163,11 +163,10 @@ jobs:
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
 
-  # Run on every green push to `main` (migrations are idempotent). This must not be gated on the
-  # path filter for `changes.outputs.deploy` alone: a skipped `needs` job (e.g. doc-only) would
-  # otherwise block `deploy-railway` because GitHub skips all dependents. Use `force_app_deploy`
-  # in workflow_dispatch to re-run migrate + deploy without a new commit.
-  deploy-neon-migrate:
+  # Single job: Neon migrate then Railway. Splitting into two `needs` steps meant any skipped or
+  # structurally-broken upstream job could skip `deploy-railway` entirely. One linear job is easier
+  # to reason about: migrate fails → job fails; migrate skipped path doesn’t block `railway up`.
+  deploy-production:
     if: >
       success() &&
       github.ref == 'refs/heads/main' &&
@@ -177,10 +176,15 @@ jobs:
       )
     needs: [changes, security]
     runs-on: ubuntu-latest
+    # Default token only has `contents: read` — the Railway CLI’s Git context needs status write to
+    # use the repo for deploy source (same as typical railway/github-actions patterns).
+    permissions:
+      contents: read
+      statuses: write
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           clean: true
 
       - uses: pnpm/action-setup@v6
@@ -192,7 +196,7 @@ jobs:
           node-version: 20
           cache: pnpm
 
-      - name: Install dependencies (Neon migrate)
+      - name: Install dependencies (migrations)
         run: pnpm install --frozen-lockfile
 
       - name: Run Neon database migrations
@@ -201,30 +205,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${DATABASE_URL:-}" ]; then
-            echo "::error::Missing repository secret DATABASE_URL_PRODUCTION (Neon connection string)."
-            exit 1
+            echo "::warning::Repository secret DATABASE_URL_PRODUCTION is not set; skipping Neon migrate. Railway deploy still runs."
+            exit 0
           fi
           pnpm db:migrate:ci
-
-  deploy-railway:
-    if: >
-      success() &&
-      github.ref == 'refs/heads/main' &&
-      (
-        github.event_name == 'push' ||
-        (github.event_name == 'workflow_dispatch' && inputs.force_app_deploy == true)
-      )
-    needs: [changes, security, deploy-neon-migrate]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          clean: true
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 20
 
       - name: Assert Railway deploy secrets
         env:
@@ -232,9 +216,11 @@ jobs:
           RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
           RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
         run: |
-          test -n "$RAILWAY_TOKEN" || { echo "Missing RAILWAY_TOKEN secret"; exit 1; }
-          test -n "$RAILWAY_PROJECT_ID" || { echo "Missing RAILWAY_PROJECT_ID repository variable"; exit 1; }
-          test -n "$RAILWAY_SERVICE" || { echo "Missing RAILWAY_SERVICE repository variable"; exit 1; }
+          set -euo pipefail
+          test -n "${RAILWAY_TOKEN:-}" || { echo "::error::Missing RAILWAY_TOKEN (GitHub Actions secret)"; exit 1; }
+          test -n "${RAILWAY_PROJECT_ID:-}" || { echo "::error::Missing RAILWAY_PROJECT_ID (repository variable)"; exit 1; }
+          test -n "${RAILWAY_SERVICE:-}" || { echo "::error::Missing RAILWAY_SERVICE (repository variable). Create one at repo Settings → Secrets and variables → Variables."; exit 1; }
+          echo "RAILWAY_PROJECT_ID length OK (${#RAILWAY_PROJECT_ID} chars), service=${RAILWAY_SERVICE}"
 
       - name: Install Railway CLI
         run: npm install --global @railway/cli@4.40.0
@@ -245,15 +231,24 @@ jobs:
           RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
           RAILWAY_SERVICE: ${{ vars.RAILWAY_SERVICE }}
           RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT }}
+          RAILWAY_BUILD_LOGS: "1"
         run: |
           set -euo pipefail
-          ARGS=(
-            --ci
-            --detach
-            --project "$RAILWAY_PROJECT_ID"
-            --service "$RAILWAY_SERVICE"
-          )
+          if ! command -v railway >/dev/null; then
+            echo "::error::railway CLI not on PATH"
+            exit 1
+          fi
+          if [ ! -f Dockerfile ] || [ ! -f package.json ]; then
+            echo "::error::Not at repo root (expected Dockerfile, package.json). pwd=$(pwd)"
+            ls -la
+            exit 1
+          fi
+          echo "RAILWAY_CLI: $(command -v railway) ($(railway --version 2>&1 || true))"
+          echo "RAILWAY_ENVIRONMENT=${RAILWAY_ENVIRONMENT:-<default>}"
+          ARGS=(--ci --detach --path . --project "$RAILWAY_PROJECT_ID" --service "$RAILWAY_SERVICE")
           if [ -n "${RAILWAY_ENVIRONMENT:-}" ]; then
             ARGS+=(--environment "$RAILWAY_ENVIRONMENT")
           fi
+          echo "Running: railway up ${ARGS[*]}"
           railway up "${ARGS[@]}"
+          echo "railway up finished successfully (deployment triggered; --detach = async build)"

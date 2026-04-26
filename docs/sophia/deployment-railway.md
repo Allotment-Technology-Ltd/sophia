@@ -70,15 +70,14 @@ If you are cutting over from previous Cloud Run Secret Manager bindings, migrate
 
 ## 3) GitHub Actions deployment flow
 
-`.github/workflows/deploy.yml` runs on every **`main`** push (and on PRs). For **green** pushes to `main`, the workflow always runs **Neon migrate** (idempotent) and **`railway up`**, not only when certain paths change — so a docs- or test-only change still ships the same commit to Railway if CI passes. The `changes` path filter is still used for **CodeQL** to avoid full analysis on every trivial commit.
+`.github/workflows/deploy.yml` runs on every **`main`** push (and on PRs). After **security** passes, the **`deploy-production`** job (single job, not split across two `needs` so Railway is never stuck behind a missing sibling) runs in order: **Neon migrate** (skips with a warning if `DATABASE_URL_PRODUCTION` is unset) then **`railway up`**. Migrations and deploy are **one linear job** so a skipped or misconfigured `needs` edge case cannot block `railway` alone.
 
 - security + quality checks
-- `pnpm db:migrate:ci` using `DATABASE_URL_PRODUCTION` (GitHub secret)
+- `pnpm db:migrate:ci` using `DATABASE_URL_PRODUCTION` (GitHub secret, optional: omit only if you migrate elsewhere)
 - Railway deploy using pinned Railway CLI (`@railway/cli@4.40.0`) with:
-  - `RAILWAY_TOKEN` (GitHub secret)
-  - `RAILWAY_PROJECT_ID` (repo variable, required)
-  - `RAILWAY_SERVICE` (repo variable, required)
-  - `RAILWAY_ENVIRONMENT` (repo variable, optional)
+  - `RAILWAY_TOKEN` (Actions **secret**)
+  - `RAILWAY_PROJECT_ID`, `RAILWAY_SERVICE` (repository **Variables** — not Environment secrets, unless you duplicate them there; missing vars are the most common “deploy job didn’t start” / instant failure)
+  - `RAILWAY_ENVIRONMENT` (repo variable, optional; maps to `railway up --environment`)
 
 ### If a push to `main` did not reach production (e.g. CI failed on an early PR)
 
