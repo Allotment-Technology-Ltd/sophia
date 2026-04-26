@@ -66,7 +66,6 @@ export async function evaluateReasoning(
   const route = await resolveReasoningModelRoute({
     pass: 'verification',
     depthMode: request.depth ?? 'standard',
-    routeId: process.env.RESTORMEL_VERIFY_ROUTE_ID?.trim() || undefined,
     providerApiKeys: options?.providerApiKeys,
     failureMode: 'error'
   });

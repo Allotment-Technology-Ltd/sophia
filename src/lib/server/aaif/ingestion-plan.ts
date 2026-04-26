@@ -1,6 +1,7 @@
 import type { AAIFLatency, AAIFRequest } from '@restormel/aaif';
 import type { ModelProvider } from '@restormel/contracts/providers';
 import type { RestormelFallbackCandidate } from '../restormel.js';
+import { getAppAiDefaults } from '../appAiDefaults.js';
 import { getStoredRouteIdForIngestionStage } from '../ingestionRouteBindings.js';
 import { EMBEDDING_MODEL, getEmbeddingProvider } from '../embeddings.js';
 import {
@@ -168,7 +169,7 @@ function readPinnedModel(stage: IngestionStage): { provider?: ModelProvider; mod
 }
 
 /**
- * Optional env pins: when set, POST /resolve includes routeId (only that route is considered).
+ * Optional Sophia route bindings: per-stage Neon bindings win, then the app-wide shared fallback.
  * When unset, resolve omits routeId; Restormel picks a published route by workload + stage
  * (dedicated ingestion_<substage> first, then shared ingestion with empty stage). Keys ≥0.2.11.
  */
@@ -177,33 +178,10 @@ async function resolveRouteBindingForPlan(stage: IngestionStage): Promise<{ rout
   if (fromNeon?.trim()) {
     return { routeId: fromNeon.trim() };
   }
-  return stageRouteBindingFromEnv(stage);
-}
-
-function stageRouteBindingFromEnv(stage: IngestionStage): { routeId?: string } {
-  if (stage === 'validation') {
-    const dedicated =
-      process.env.RESTORMEL_INGEST_VALIDATION_ROUTE_ID?.trim() ||
-      process.env.RESTORMEL_VERIFY_ROUTE_ID?.trim();
-    if (dedicated) {
-      return { routeId: dedicated };
-    }
-
-    const shared =
-      process.env.RESTORMEL_INGEST_ROUTE_ID?.trim() ||
-      process.env.RESTORMEL_ANALYSE_ROUTE_ID?.trim();
-    return shared ? { routeId: shared } : {};
-  }
-
-  const dedicated = process.env[`RESTORMEL_INGEST_${stage.toUpperCase()}_ROUTE_ID`]?.trim();
-  if (dedicated) {
-    return { routeId: dedicated };
-  }
-
-  const shared =
-    process.env.RESTORMEL_INGEST_ROUTE_ID?.trim() ||
-    process.env.RESTORMEL_ANALYSE_ROUTE_ID?.trim();
-  return shared ? { routeId: shared } : {};
+  const appDefaults = await getAppAiDefaults();
+  const shared = appDefaults.defaultRestormelSharedRouteId?.trim();
+  if (shared) return { routeId: shared };
+  return {};
 }
 
 function buildStageRestormelContext(options: {

@@ -42,7 +42,6 @@ describe('/api/allowed-models', () => {
     vi.clearAllMocks();
     vi.stubEnv('BYOK_ENABLED_PROVIDERS', 'vertex,anthropic,openai');
     vi.stubEnv('RESTORMEL_ENVIRONMENT_ID', 'production');
-    vi.stubEnv('RESTORMEL_ANALYSE_ROUTE_ID', 'interactive');
     mockLoadByokProviderApiKeys.mockResolvedValue({
       anthropic: 'sk-ant-test',
       openai: 'sk-proj-openai'
@@ -101,7 +100,7 @@ describe('/api/allowed-models', () => {
     expect(body.filtering).toEqual({
       active: false,
       degraded: false,
-      routeId: 'interactive'
+      routeId: null
     });
     expect(body.models).toEqual([
       {
@@ -127,7 +126,7 @@ describe('/api/allowed-models', () => {
     expect(body.filtering).toEqual({
       active: false,
       degraded: false,
-      routeId: 'interactive'
+      routeId: null
     });
     expect(body.models).toHaveLength(2);
     expect(body.error).toBeUndefined();

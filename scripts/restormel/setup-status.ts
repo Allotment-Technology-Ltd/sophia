@@ -48,8 +48,8 @@ function main(): void {
 		envStatus('RESTORMEL_GATEWAY_KEY', true),
 		envStatus('RESTORMEL_PROJECT_ID', true),
 		envStatus('RESTORMEL_ENVIRONMENT_ID', true),
-		envStatus('RESTORMEL_EVALUATE_URL', false),
-		envStatus('RESTORMEL_ANALYSE_ROUTE_ID', false),
+		envStatus('RESTORMEL_KEYS_BASE', true),
+		envStatus('RESTORMEL_EVALUATE_URL', true),
 		envStatus('GITHUB_PAT', false)
 	];
 

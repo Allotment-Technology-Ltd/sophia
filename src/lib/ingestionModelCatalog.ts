@@ -297,6 +297,34 @@ const INGESTION_MODEL_CATALOG_ROWS: CatalogRow[] = [
 		'8k',
 		'Small Gemma instruct for ultra-cheap passes.'
 	],
+	// ─── AiZolo (OpenAI-compatible; Restormel Keys `aizolo` / Gemini carrier ids) ───
+	[
+		'aizolo',
+		'aizolo-gemini-gemini-3-flash-preview',
+		'low',
+		'capable',
+		'fast',
+		'1M',
+		'AiZolo-wrapped Gemini-class flash; common on Keys ingestion routes when labeled `aizolo`.'
+	],
+	[
+		'aizolo',
+		'aizolo-gemini-gemini-2.5-flash-preview-05-20',
+		'low',
+		'capable',
+		'fast',
+		'1M',
+		'Carried Gemini 2.5 flash tier via AiZolo (Keys catalog naming varies by release).'
+	],
+	[
+		'aizolo',
+		'aizolo-anthropic-claude-3-5-sonnet-20241022',
+		'medium',
+		'strong',
+		'balanced',
+		'200k',
+		'Claude class via AiZolo when the workspace exposes a carrier id in this shape.'
+	],
 	// ─── Mistral ─────────────────────────────────────────────────────────
 	[
 		'mistral',

@@ -1,3 +1,4 @@
+import { refreshAppAiDefaultsCacheIfStale } from '$lib/server/appAiDefaults';
 import { hasOwnerRole, syncAuthenticatedUserRole, type UserRoleRecord } from '$lib/server/authRoles';
 import { verifyBearerTokenForApi } from '$lib/server/bearerAuthVerification';
 import { problemJson, resolveRequestId } from '$lib/server/problem';
@@ -11,7 +12,33 @@ function withApiCacheHeaders(event: RequestEvent, response: Response): Response 
   return response;
 }
 
+function isBrowserNavigation(event: RequestEvent): boolean {
+  const accept = event.request.headers.get('accept') ?? '';
+  const mode = event.request.headers.get('sec-fetch-mode') ?? '';
+  return event.request.method === 'GET' && (mode === 'navigate' || accept.includes('text/html'));
+}
+
+function loginRedirectForApiNavigation(event: RequestEvent): Response {
+  const refererRaw = event.request.headers.get('referer');
+  let next = '/home';
+  if (refererRaw) {
+    try {
+      const referer = new URL(refererRaw);
+      if (referer.origin === event.url.origin && !referer.pathname.startsWith('/api/')) {
+        next = `${referer.pathname}${referer.search}`;
+      }
+    } catch {
+      next = '/home';
+    }
+  }
+  const url = new URL('/early-access', event.url);
+  url.searchParams.set('next', next);
+  return withApiCacheHeaders(event, Response.redirect(url, 303));
+}
+
 export const handle: Handle = async ({ event, resolve }) => {
+  await refreshAppAiDefaultsCacheIfStale();
+
   // Only enforce Bearer token auth on protected API routes.
   // Page navigation doesn't send Bearer tokens — auth for pages is handled
   // client-side via onAuthStateChanged in the layout.
@@ -26,6 +53,9 @@ export const handle: Handle = async ({ event, resolve }) => {
     const requestId = resolveRequestId(event.request);
     const authHeader = event.request.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
+      if (isBrowserNavigation(event)) {
+        return loginRedirectForApiNavigation(event);
+      }
       return withApiCacheHeaders(
         event,
         problemJson({

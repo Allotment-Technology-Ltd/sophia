@@ -8,7 +8,6 @@ export async function runDomainAgnosticReasoning(
 ): Promise<void> {
   await runDialecticalEngine(inputText, callbacks, {
     mode: 'agnostic',
-    routeId: process.env.RESTORMEL_VERIFY_ROUTE_ID?.trim() || undefined,
     providerApiKeys: options?.providerApiKeys
   });
 }

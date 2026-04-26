@@ -4403,9 +4403,8 @@ async function main() {
 		console.error(
 			'  INGEST_GROUPING_ADAPTIVE=1 (default)   Mid–Stage 3: shrink batch targets + preempt headroom after truncation / JSON repair / collapse; INGEST_GROUPING_ADAPT_* knobs tune shrink ratio, floors, regroup cap, slow-call timeout growth'
 		);
-		console.error('\nRestormel route env vars (optional):');
-		console.error('  RESTORMEL_INGEST_ROUTE_ID, RESTORMEL_INGEST_VALIDATION_ROUTE_ID');
-		console.error('  RESTORMEL_INGEST_EXTRACTION_ROUTE_ID, RESTORMEL_INGEST_RELATIONS_ROUTE_ID, RESTORMEL_INGEST_GROUPING_ROUTE_ID, RESTORMEL_INGEST_JSON_REPAIR_ROUTE_ID');
+		console.error('\nRestormel route selection:');
+		console.error('  Routes resolve from Restormel workload/stage metadata plus Sophia Neon bindings/defaults.');
 		console.error('\nAdmin Expand pins (optional; set by server when using stage picks):');
 		console.error('  INGEST_PIN_PROVIDER_EXTRACTION, INGEST_PIN_MODEL_EXTRACTION (same for RELATIONS, GROUPING, VALIDATION, JSON_REPAIR)');
 		console.error('  --ingest-pins-json=<base64url JSON>  Preferred when spawned from admin (survives dotenv)');

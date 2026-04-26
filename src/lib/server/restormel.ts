@@ -1,9 +1,3 @@
-import {
-  getRestormelGatewayConnectionSummary,
-  getStoredRestormelGatewayKeyOverride,
-  type RestormelGatewayKeySource
-} from './restormelGatewaySettings.js';
-
 export interface RestormelPolicyViolation {
   policyId?: string;
   policyName?: string;
@@ -251,7 +245,7 @@ function isBareRestormelKeysOrigin(urlLike: string): boolean {
   }
 }
 
-/** Normalize RESTORMEL_KEYS_BASE / RESTORMEL_BASE_URL to the Keys dashboard base (no trailing /api). */
+/** Normalize RESTORMEL_KEYS_BASE to the Keys dashboard base (no trailing /api). */
 export function normalizeRestormelBaseUrl(raw: string): string {
   const trimmed = raw.trim().replace(/\/+$/, '');
   if (!trimmed) return 'https://restormel.dev/keys/dashboard';
@@ -276,22 +270,23 @@ export function normalizeRestormelBaseUrl(raw: string): string {
   return withoutTrailingApi;
 }
 
-export const RESTORMEL_BASE_URL = normalizeRestormelBaseUrl(
-  process.env.RESTORMEL_KEYS_BASE?.trim() ||
-    process.env.RESTORMEL_BASE_URL?.trim() ||
-    'https://restormel.dev/keys/dashboard'
+export const RESTORMEL_KEYS_BASE_URL = normalizeRestormelBaseUrl(
+  process.env.RESTORMEL_KEYS_BASE?.trim() || 'https://restormel.dev'
 );
-export const RESTORMEL_DASHBOARD_API_BASE = `${RESTORMEL_BASE_URL}/api`;
+const DASHBOARD_API_BASE = `${RESTORMEL_KEYS_BASE_URL}/api`;
+const RESTORMEL_EVALUATE_URL =
+  process.env.RESTORMEL_EVALUATE_URL?.trim() ||
+  `${DASHBOARD_API_BASE}/policies/evaluate`;
 export const RESTORMEL_ENVIRONMENT_ID =
   process.env.RESTORMEL_ENVIRONMENT_ID?.trim() || 'production';
-/** Env-only gateway key; effective bearer may come from Neon (`admin_restormel_gateway`) instead. */
+/** Env-only gateway key. */
 const RESTORMEL_GATEWAY_KEY_ENV = process.env.RESTORMEL_GATEWAY_KEY?.trim() || '';
 const RESTORMEL_PROJECT_ID = process.env.RESTORMEL_PROJECT_ID?.trim() || '';
 
 const GATEWAY_BEARER_CACHE_TTL_MS = 30_000;
 let gatewayBearerCache: { token: string; expiresAt: number } | null = null;
 
-/** Call after saving or clearing the DB-stored gateway key so the next Keys request picks up the new bearer. */
+/** Clear cached env bearer after local env changes in dev/HMR. */
 export function invalidateRestormelGatewayKeyCache(): void {
   gatewayBearerCache = null;
 }
@@ -302,11 +297,6 @@ async function resolveEffectiveGatewayBearer(): Promise<string> {
     return gatewayBearerCache.token;
   }
 
-  const fromDb = await getStoredRestormelGatewayKeyOverride();
-  if (fromDb) {
-    gatewayBearerCache = { token: fromDb, expiresAt: now + GATEWAY_BEARER_CACHE_TTL_MS };
-    return fromDb;
-  }
   if (RESTORMEL_GATEWAY_KEY_ENV) {
     gatewayBearerCache = {
       token: RESTORMEL_GATEWAY_KEY_ENV,
@@ -323,21 +313,20 @@ export async function getRestormelIngestWorkerDiagnostics(): Promise<{
   environmentId: string;
   projectIdConfigured: boolean;
   gatewayKeyConfigured: boolean;
-  gatewayKeySource: RestormelGatewayKeySource;
+  gatewayKeySource: 'environment' | 'none';
 }> {
   let keysBaseHost: string | null = null;
   try {
-    keysBaseHost = new URL(RESTORMEL_BASE_URL).host;
+    keysBaseHost = new URL(RESTORMEL_KEYS_BASE_URL).host;
   } catch {
     keysBaseHost = null;
   }
-  const summary = await getRestormelGatewayConnectionSummary(RESTORMEL_GATEWAY_KEY_ENV);
   return {
     keysBaseHost,
     environmentId: RESTORMEL_ENVIRONMENT_ID,
     projectIdConfigured: RESTORMEL_PROJECT_ID.length > 0,
-    gatewayKeyConfigured: summary.configured,
-    gatewayKeySource: summary.source
+    gatewayKeyConfigured: RESTORMEL_GATEWAY_KEY_ENV.length > 0,
+    gatewayKeySource: RESTORMEL_GATEWAY_KEY_ENV ? 'environment' : 'none'
   };
 }
 
@@ -583,7 +572,7 @@ function toDashboardError(
     rawDetail ||
     rawMessage ||
     (isLikelyHtml
-      ? `Upstream returned HTML instead of JSON (status ${status}). Check RESTORMEL_KEYS_BASE / RESTORMEL_BASE_URL and endpoint routing.`
+      ? `Upstream returned HTML instead of JSON (status ${status}). Check RESTORMEL_KEYS_BASE and endpoint routing.`
       : payloadText
         ? payloadText.slice(0, 220)
         : status === 409
@@ -616,7 +605,7 @@ async function requestRestormelWithStatus<T>(
 
   const method = options?.method ?? 'GET';
   const hasBody = options?.body !== undefined;
-  const url = `${RESTORMEL_DASHBOARD_API_BASE}${endpoint}`;
+  const url = `${DASHBOARD_API_BASE}${endpoint}`;
   const res = await fetch(url, {
     method,
     headers: {
@@ -689,17 +678,26 @@ export async function restormelEvaluatePolicies(
     throw new Error('RESTORMEL_PROJECT_ID is not configured');
   }
 
-  return requestRestormel<EvaluateResponse>('/policies/evaluate', {
+  const bearer = await resolveEffectiveGatewayBearer();
+  const res = await fetch(RESTORMEL_EVALUATE_URL, {
     method: 'POST',
-    body: {
+    headers: {
+      Authorization: `Bearer ${bearer}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
       projectId: request.projectId ?? RESTORMEL_PROJECT_ID,
       environmentId: request.environmentId,
       routeId: request.routeId,
       modelId: request.modelId,
       providerType: request.providerType
-    },
-    requireProjectId: false
+    })
   });
+  const payload = await parseRestormelBody(res);
+  if (!res.ok) {
+    throw toDashboardError(RESTORMEL_EVALUATE_URL, res.status, payload);
+  }
+  return payload as EvaluateResponse;
 }
 
 /**
@@ -1201,7 +1199,7 @@ export async function restormelValidateRouteBinding(options: {
     throw new Error('RESTORMEL_PROJECT_ID is not configured');
   }
   return validateRouteBinding({
-    baseUrl: RESTORMEL_BASE_URL,
+    baseUrl: RESTORMEL_KEYS_BASE_URL,
     projectId: RESTORMEL_PROJECT_ID,
     environmentId: RESTORMEL_ENVIRONMENT_ID,
     routeId: options.routeId,

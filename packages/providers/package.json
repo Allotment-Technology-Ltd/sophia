@@ -2,5 +2,11 @@
   "name": "@restormel/providers",
   "version": "0.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@restormel/contracts": "^0.1.1"
+  }
 }

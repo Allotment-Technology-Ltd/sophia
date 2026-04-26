@@ -79,7 +79,6 @@ export const POST: RequestHandler = async ({ request }) => {
   try {
     const response = await executeAAIFRequest(parsed.data, {
       providerApiKeys,
-      routeId: process.env.RESTORMEL_ANALYSE_ROUTE_ID?.trim() || undefined,
       failureMode: 'error'
     });
 

@@ -27,6 +27,7 @@ describe('isRestormelProjectModelPutProvider', () => {
 		expect(isRestormelProjectModelPutProvider('mistral')).toBe(true);
 		expect(isRestormelProjectModelPutProvider('deepseek')).toBe(true);
 		expect(isRestormelProjectModelPutProvider('together')).toBe(true);
+		expect(isRestormelProjectModelPutProvider('aizolo')).toBe(true);
 		expect(isRestormelProjectModelPutProvider('perplexity')).toBe(false);
 	});
 });

@@ -128,6 +128,9 @@ export function inferIngestionEntryFromProviderModel(
 	if (low.includes('gemini') && (low.includes('1m') || low.includes('pro') || low.includes('2.5'))) {
 		contextWindow = '1M';
 	}
+	if (provider.toLowerCase() === 'aizolo' && (low.includes('gemini') || low.includes('flash') || low.includes('pro'))) {
+		contextWindow = '1M';
+	}
 	if (low.includes('claude') || low.includes('gpt-4')) {
 		contextWindow = '200k';
 	}
@@ -219,6 +222,7 @@ export function rowToProviderModel(row: Record<string, unknown>): { provider: st
 		}
 		if (low.startsWith('voyage')) return 'voyage';
 		if (low.startsWith('deepseek')) return 'deepseek';
+		if (low.startsWith('aizolo-') || low === 'aizolo') return 'aizolo';
 		if (
 			low.startsWith('mistral') ||
 			low.startsWith('ministral') ||

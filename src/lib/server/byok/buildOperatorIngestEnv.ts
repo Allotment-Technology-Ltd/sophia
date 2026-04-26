@@ -2,6 +2,7 @@ import {
   REASONING_PROVIDER_PLATFORM_API_KEY_ENV,
   type ReasoningProvider
 } from '@restormel/contracts/providers';
+import { getAppAiDefaults } from '../appAiDefaults.js';
 import { getOperatorByokTargetUid } from './operatorByokTarget';
 import { loadByokProviderApiKeys } from './store';
 
@@ -58,6 +59,11 @@ export async function buildOperatorByokProcessEnv(): Promise<Record<string, stri
       const envName = byokProviderToIngestEnvName(provider);
       if (envName) out[envName] = key.trim();
     }
+  }
+  if (!out.OPENAI_API_KEY?.trim()) {
+    const defaults = await getAppAiDefaults();
+    const neonOpenai = defaults.defaultOpenaiApiKey?.trim();
+    if (neonOpenai) out.OPENAI_API_KEY = neonOpenai;
   }
   applyIngestProviderKeyResolution(out);
   return out;

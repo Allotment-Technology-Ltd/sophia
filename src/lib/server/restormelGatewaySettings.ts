@@ -12,23 +12,71 @@ function fingerprintLast4(key: string): string {
   return t.slice(-4);
 }
 
-/** Decrypted gateway key when a DB row stores one; `null` means use env / no override. */
-export async function getStoredRestormelGatewayKeyOverride(): Promise<string | null> {
-  if (!process.env.DATABASE_URL?.trim()) return null;
+export type RestormelGatewayDbState =
+  | { status: 'unconfigured' }
+  | { status: 'unavailable'; message: string }
+  | { status: 'no_row' }
+  | { status: 'empty_ciphertext' }
+  | { status: 'ok'; key: string }
+  | { status: 'decrypt_failed'; message: string };
+
+/**
+ * Distinguish DB/connection issues (caller may fall back to env) from a row that exists but
+ * cannot be decrypted (env must not silently override a broken stored key).
+ */
+export async function loadRestormelGatewayDatabaseState(): Promise<RestormelGatewayDbState> {
+  if (!process.env.DATABASE_URL?.trim()) return { status: 'unconfigured' };
+
+  let row: typeof adminRestormelGateway.$inferSelect | undefined;
   try {
     const db = getDrizzleDb();
-    const [row] = await db
+    [row] = await db
       .select()
       .from(adminRestormelGateway)
       .where(eq(adminRestormelGateway.id, ROW_ID))
       .limit(1);
-    if (!row?.gatewayKeyEncrypted) return null;
+  } catch (e) {
+    return {
+      status: 'unavailable',
+      message: e instanceof Error ? e.message : String(e)
+    };
+  }
+
+  if (!row?.gatewayKeyEncrypted) return { status: 'no_row' };
+
+  try {
     const plain = await decryptByokSecret(row.gatewayKeyEncrypted as unknown as EncryptedSecret);
     const trimmed = plain.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  } catch {
-    return null;
+    if (trimmed.length === 0) return { status: 'empty_ciphertext' };
+    return { status: 'ok', key: trimmed };
+  } catch (e) {
+    return {
+      status: 'decrypt_failed',
+      message: e instanceof Error ? e.message : String(e)
+    };
   }
+}
+
+/**
+ * Returns the decrypted key when a usable row exists; otherwise `null` for callers that may
+ * fall back to `RESTORMEL_GATEWAY_KEY`. Throws if ciphertext exists but decrypt failed — the
+ * deployment should fix BYOK/encryption (or clear the row), not run with a mismatched env key.
+ */
+export async function getStoredRestormelGatewayKeyOverride(): Promise<string | null> {
+  const state = await loadRestormelGatewayDatabaseState();
+  if (state.status === 'ok') return state.key;
+  if (state.status === 'decrypt_failed' || state.status === 'empty_ciphertext') {
+    const detail =
+      state.status === 'empty_ciphertext'
+        ? 'Stored Restormel gateway key decrypted to an empty value.'
+        : state.message;
+    throw new Error(
+      'Restormel gateway key in Neon (admin_restormel_gateway) is present but not usable. ' +
+        'Check BYOK / `BYOK_ENCRYPTION_KEY` (or local secrets) for this host, re-save the key in admin, or clear the row. ' +
+        `Details: ${detail}`
+    );
+  }
+  return null;
 }
 
 export type RestormelGatewayKeySource = 'database' | 'environment' | 'none';
@@ -41,59 +89,96 @@ export interface RestormelGatewayConnectionSummary {
   configured: boolean;
   /** True when a DB row holds ciphertext (override path active when decrypt succeeds). */
   hasDatabaseRow: boolean;
+  /** Ciphertext is stored but could not be decrypted. Admin Restormel calls will fail until fixed. */
+  storageDecryptFailed: boolean;
+  storageDecryptError: string | null;
+  /** Database was unreachable or the query failed; effective key may come from env only. */
+  databaseReadFailed: boolean;
+  /**
+   * Set when a broken stored key blocks the gateway: `RESTORMEL_GATEWAY_KEY` exists in env but
+   * is not used until storage is fixed or cleared (avoids a silent project/key mismatch).
+   */
+  ignoredEnvironmentKeyLast4: string | null;
 }
 
 export async function getRestormelGatewayConnectionSummary(
   envGatewayKey: string
 ): Promise<RestormelGatewayConnectionSummary> {
   const envTrim = envGatewayKey.trim();
-  let hasDatabaseRow = false;
-  let override: string | null = null;
+  const state = await loadRestormelGatewayDatabaseState();
+  const hasCiphertextRow =
+    state.status === 'ok' ||
+    state.status === 'decrypt_failed' ||
+    state.status === 'empty_ciphertext';
 
-  if (process.env.DATABASE_URL?.trim()) {
-    try {
-      const db = getDrizzleDb();
-      const [row] = await db
-        .select()
-        .from(adminRestormelGateway)
-        .where(eq(adminRestormelGateway.id, ROW_ID))
-        .limit(1);
-      hasDatabaseRow = Boolean(row?.gatewayKeyEncrypted);
-      if (row?.gatewayKeyEncrypted) {
-        try {
-          const plain = await decryptByokSecret(row.gatewayKeyEncrypted as unknown as EncryptedSecret);
-          override = plain.trim() || null;
-        } catch {
-          override = null;
-        }
-      }
-    } catch {
-      hasDatabaseRow = false;
-    }
+  if (state.status === 'unavailable') {
+    return {
+      source: envTrim ? 'environment' : 'none',
+      last4: envTrim ? fingerprintLast4(envTrim) : null,
+      configured: Boolean(envTrim),
+      hasDatabaseRow: false,
+      storageDecryptFailed: false,
+      storageDecryptError: null,
+      databaseReadFailed: true,
+      ignoredEnvironmentKeyLast4: null
+    };
   }
 
-  if (override) {
+  if (state.status === 'ok') {
     return {
       source: 'database',
-      last4: fingerprintLast4(override),
+      last4: fingerprintLast4(state.key),
       configured: true,
-      hasDatabaseRow
+      hasDatabaseRow: true,
+      storageDecryptFailed: false,
+      storageDecryptError: null,
+      databaseReadFailed: false,
+      ignoredEnvironmentKeyLast4: null
     };
   }
-  if (envTrim) {
+
+  if (state.status === 'decrypt_failed' || state.status === 'empty_ciphertext') {
+    const errMsg =
+      state.status === 'decrypt_failed' ? state.message : 'Stored value was empty after decrypt';
     return {
-      source: 'environment',
-      last4: fingerprintLast4(envTrim),
-      configured: true,
-      hasDatabaseRow
+      source: 'none',
+      last4: null,
+      configured: false,
+      hasDatabaseRow: hasCiphertextRow,
+      storageDecryptFailed: true,
+      storageDecryptError: errMsg,
+      databaseReadFailed: false,
+      ignoredEnvironmentKeyLast4: envTrim ? fingerprintLast4(envTrim) : null
     };
   }
-  return {
-    source: 'none',
-    last4: null,
-    configured: false,
-    hasDatabaseRow
-  };
+
+  if (state.status === 'unconfigured' || state.status === 'no_row') {
+    if (envTrim) {
+      return {
+        source: 'environment',
+        last4: fingerprintLast4(envTrim),
+        configured: true,
+        hasDatabaseRow: false,
+        storageDecryptFailed: false,
+        storageDecryptError: null,
+        databaseReadFailed: false,
+        ignoredEnvironmentKeyLast4: null
+      };
+    }
+    return {
+      source: 'none',
+      last4: null,
+      configured: false,
+      hasDatabaseRow: false,
+      storageDecryptFailed: false,
+      storageDecryptError: null,
+      databaseReadFailed: false,
+      ignoredEnvironmentKeyLast4: null
+    };
+  }
+
+  const unhandled: never = state;
+  return unhandled;
 }
 
 export async function upsertRestormelGatewayKey(gatewayKey: string, updatedByUid: string): Promise<void> {

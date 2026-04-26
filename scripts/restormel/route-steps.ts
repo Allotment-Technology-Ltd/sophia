@@ -4,7 +4,7 @@
  * Requires (see .env):
  *   RESTORMEL_GATEWAY_KEY
  *   RESTORMEL_PROJECT_ID
- *   RESTORMEL_KEYS_BASE or RESTORMEL_BASE_URL (optional; defaults to restormel.dev dashboard)
+ *   RESTORMEL_KEYS_BASE (optional; defaults to https://restormel.dev)
  *   RESTORMEL_ENVIRONMENT_ID (optional; default production)
  *
  * Usage:
@@ -37,7 +37,7 @@ Commands:
 
 Environment:
   RESTORMEL_GATEWAY_KEY, RESTORMEL_PROJECT_ID (required)
-  RESTORMEL_KEYS_BASE / RESTORMEL_BASE_URL (optional)
+  RESTORMEL_KEYS_BASE (optional)
 `);
 }
 

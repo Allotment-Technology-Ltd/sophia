@@ -230,7 +230,7 @@
   let catalogTotalRowCount = $state<number | null>(null);
   /** When Keys bindable-model fetch fails, PUT still uses bindable filter; GET omits filter for effectiveOperations. */
   let keysBindableModelsError = $state<string | null>(null);
-  /** Mirrors server env RESTORMEL_PROJECT_MODEL_REGISTRY_BINDINGS — registry rows on project model PUT. */
+  /** Registry rows on project model PUT. */
   let registryProjectModelBindings = $state(false);
 
   const saveDisabled = $derived.by(() => {
@@ -843,13 +843,12 @@
         <p class="mt-2 text-sm text-sophia-dark-muted">
           The table includes Vertex embedding rows from the v5 catalog when Keys omits them from GET /models (for surface
           assignment when those rows appear here).{#if registryProjectModelBindings}
-            This host has <strong class="text-sophia-dark-text">RESTORMEL_PROJECT_MODEL_REGISTRY_BINDINGS</strong> enabled:
-            save syncs ingestion / embedding / ingestion+app rows using Keys
+            Project model sync sends ingestion / embedding / ingestion+app rows using Keys
             <strong class="text-sophia-dark-text">execution</strong> bindings when the pair appears in GET /models (and project
             index), and <strong class="text-sophia-dark-text">registry</strong> bindings for other assigned pairs (e.g. catalog-only
             embeddings).{:else}
             Project model sync sends <strong class="text-sophia-dark-text">non-embedding</strong> chat models only on PUT
-            unless registry bindings are enabled (Keys migration 021 + env).{/if}
+            when registry bindings are unavailable.{/if}
           Canonical provider ids for execution-style rows: openai, anthropic, vertex, openrouter, vercel, portkey, voyage
           (google→vertex). Save still persists surface roles for the full catalog. Rows are sorted
           by provider then model id; use
