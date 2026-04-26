@@ -218,7 +218,7 @@
 
   <section class="rp-sec" aria-labelledby="rp-matrix">
     <h2 id="rp-matrix">Package → use case</h2>
-    <div class="rp-table-wrap" role="region" aria-label="Restormel packages table" tabindex="0">
+    <div class="rp-table-wrap" aria-label="Restormel packages table">
       <table class="rp-table">
         <thead>
           <tr>
