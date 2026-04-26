@@ -114,13 +114,20 @@ Durable **multi-URL** jobs and **re-embed** corpus jobs are advanced in Neon by 
 
 **Pick one of these for production on Railway:**
 
-1. **HTTP tick (lightweight).** Set `INGESTION_JOB_TICK_SECRET` on the app service to a long random value. A scheduler (Railway [cron](https://docs.railway.com/reference/cron-jobs) if available on your plan, or GitHub Actions `on: schedule` + `curl --fail` with `Authorization: Bearer …`) can `POST https://<host>/api/internal/ingest/jobs/tick` on an interval (for example every one to two minutes). That endpoint runs the same ticks as the old poller job. Keep the secret in Railway/Actions secrets only.
+1. **HTTP tick (lightweight, default).** The repo includes `.github/workflows/ingestion-job-tick.yml`, which `POST`s production every two minutes (GitHub’s schedule uses UTC; the workflow must exist on the **default** branch to run on a timer).
+
+   - **Railway (production app):** set `INGESTION_JOB_TICK_SECRET` to a long random value (e.g. `openssl rand -hex 32`); redeploy or restart so the process sees it. This enables `POST /api/internal/ingest/jobs/tick` with `Authorization: Bearer <secret>`.
+   - **GitHub Actions:** in the repository **Settings → Secrets and variables → Actions**, add a secret **`INGESTION_JOB_TICK_SECRET`** with the **same** string as on Railway. Optionally set **`INGESTION_JOB_TICK_URL`** if the tick URL is not `https://usesophia.app/api/internal/ingest/jobs/tick` (staging, preview host, or path).
+   - After a deploy with the tick route, open **Actions → Ingestion job tick → Run workflow** once to confirm HTTP 200. Failures are logged in the run if the secret mismatch or the route is missing.
+   - Alternative schedulers: Railway [cron](https://docs.railway.com/reference/cron-jobs) (if on your plan) or any external `curl` with the same `Authorization` header. Keep the shared secret out of the URL and logs.
 
 2. **Dedicated worker process.** Add a second Railway service using the same image and env as the web app, with start command e.g. `npx --yes tsx scripts/ingestion-job-poller.ts --interval 5` (or use `Dockerfile.ingest-worker` which runs the poller). Size memory for concurrent `ingest.ts` children if the web app also spawns admin runs; in practice a separate worker avoids starving HTTP requests. Copy every secret the poller and ingest children need (same as `scripts/gcp/deploy-sophia-ingestion-poller-job.sh` on GCP: `DATABASE_URL`, Surreal, model keys, Restormel, etc.).
 
 3. **Manual** — Admin can use **Advance all queues** in the jobs UI, but that is not suitable for unattended operation.
 
 Nightly or other batch scripts (for example `scripts/ingest-nightly-links.ts`) are separate: schedule them the same way if you still run those flows.
+
+**Durable job children** are always run with real `fetch-source` + `ingest.ts` (they carry `ingestion_job_id` in the payload) even if `ADMIN_INGEST_RUN_REAL` is unset. For **ad-hoc** admin runs from the ingest console, set `ADMIN_INGEST_RUN_REAL=1` on the Railway service, or the UI will simulate the pipeline (fast fake progress).
 
 ## 8) Google Cloud decommission note
 

@@ -40,6 +40,7 @@ jobs:
               - 'drizzle/**'
               - 'scripts/neon-migrate.ts'
             deploy:
+              - '.github/workflows/ingestion-job-tick.yml'
               - 'src/**'
               - 'scripts/**'
               - 'packages/**'
