@@ -38,7 +38,7 @@ Set these in Railway service variables (Production environment):
 - `SURREAL_DATABASE`
 - `RESTORMEL_GATEWAY_KEY`
 - `RESTORMEL_PROJECT_ID`
-- `RESTORMEL_ENVIRONMENT_ID`
+- `RESTORMEL_ENVIRONMENT_ID` (the **UUID** for the target environment in Restormel Keys — e.g. from the environment details screen — **not** the display name `production` / `staging`)
 - `RESTORMEL_KEYS_BASE`
 - `RESTORMEL_EVALUATE_URL`
 - `ADMIN_UIDS`
