@@ -53,7 +53,9 @@ export async function buildOperatorByokProcessEnv(): Promise<Record<string, stri
   const out: Record<string, string> = {};
   const uid = getOperatorByokTargetUid();
   if (uid) {
-    const keys = await loadByokProviderApiKeys(uid);
+    // Ingestion validates provider reachability at call time. Include pending/invalid operator
+    // keys so a stale validation status does not silently omit required worker env like VOYAGE_API_KEY.
+    const keys = await loadByokProviderApiKeys(uid, { allowPending: true, allowInvalid: true });
     for (const [provider, key] of Object.entries(keys)) {
       if (!key?.trim()) continue;
       const envName = byokProviderToIngestEnvName(provider);

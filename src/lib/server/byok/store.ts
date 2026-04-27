@@ -203,12 +203,15 @@ export async function getByokProviderApiKey(
   return key || null;
 }
 
-export async function loadByokProviderApiKeys(uid: string): Promise<ProviderApiKeys> {
+export async function loadByokProviderApiKeys(
+  uid: string,
+  options?: { allowPending?: boolean; allowInvalid?: boolean }
+): Promise<ProviderApiKeys> {
   const result: ProviderApiKeys = {};
   const keys = await Promise.all(
     getEnabledByokProviders().map(async (provider) => ({
       provider,
-      key: await getByokProviderApiKey(uid, provider)
+      key: await getByokProviderApiKey(uid, provider, options)
     }))
   );
   for (const item of keys) {
