@@ -15,6 +15,7 @@ import {
 } from '@restormel/contracts/providers';
 import { loadServerEnv } from './env';
 import type { ProviderApiKeys } from './byok/types';
+import { normalizeAizoloModelIdForApi } from './aizoloModelIds.js';
 import {
   restormelPostCatalogObservation,
   type RestormelFallbackCandidate,
@@ -694,10 +695,11 @@ function buildOpenAICompatibleRoute(
   apiKey?: string
 ): ReasoningModelRoute {
   const client = getOpenAICompatibleForProvider(provider, apiKey);
+  const apiModelId = provider === 'aizolo' ? normalizeAizoloModelIdForApi(modelId) : modelId;
   const model =
     provider === 'openai'
-      ? client(modelId)
-      : client.chat(modelId as any);
+      ? client(apiModelId)
+      : client.chat(apiModelId as any);
   return {
     model,
     provider,

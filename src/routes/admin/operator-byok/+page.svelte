@@ -21,6 +21,7 @@
     ok?: boolean;
     provider?: string;
     modelId?: string;
+    apiModelId?: string;
     endpoint?: string;
     status?: number;
     rateLimited?: boolean;
@@ -421,6 +422,9 @@
                     >
                       <p>{probe.ok ? 'Probe succeeded' : 'Probe failed'} · HTTP {probe.status ?? '—'}</p>
                       <p class="mt-1 text-sophia-dark-muted">Model: {probe.modelId ?? '—'}</p>
+                      {#if probe.apiModelId && probe.apiModelId !== probe.modelId}
+                        <p class="mt-1 text-sophia-dark-muted">AiZolo API model: {probe.apiModelId}</p>
+                      {/if}
                       <p class="mt-1 break-all text-sophia-dark-muted">Endpoint: {probe.endpoint ?? '—'}</p>
                       {#if probe.rateLimited}
                         <p class="mt-1 text-sophia-dark-muted">Rate limited, but the key/model was accepted.</p>
