@@ -187,6 +187,34 @@ export async function resolveProviderDecision(options: {
   };
   failureMode?: 'degraded_default' | 'error';
 }): Promise<ProviderDecision> {
+  const decisionFromResolveResult = (
+    result: Awaited<ReturnType<typeof restormelResolve>>['data']
+  ): ProviderDecision => {
+    const providerType = normalizeRestormelProvider(result.providerType);
+    if (!providerType) {
+      throw new ProviderResolutionFailure({
+        kind: 'unknown',
+        userMessage: 'AI model routing returned an unsupported provider.',
+        logContext: { providerType: result.providerType }
+      });
+    }
+
+    return {
+      provider: providerType,
+      model: result.modelId ?? options.preferredModel ?? null,
+      source: 'restormel',
+      routeId: result.routeId,
+      explanation: result.explanation,
+      selectedStepId: result.selectedStepId ?? null,
+      selectedOrderIndex: result.selectedOrderIndex ?? null,
+      switchReasonCode: result.switchReasonCode ?? null,
+      estimatedCostUsd: result.estimatedCostUsd ?? null,
+      matchedCriteria: result.matchedCriteria ?? null,
+      fallbackCandidates: result.fallbackCandidates ?? null,
+      stepChain: result.stepChain ?? null
+    };
+  };
+
   if (options.preferredProvider && options.preferredProvider !== 'auto') {
     return {
       provider: options.preferredProvider,
@@ -217,62 +245,44 @@ export async function resolveProviderDecision(options: {
         ...contextWithoutStage
       });
     }
-    const providerType = normalizeRestormelProvider(result.data.providerType);
-    if (!providerType) {
-      throw new ProviderResolutionFailure({
-        kind: 'unknown',
-        userMessage: 'AI model routing returned an unsupported provider.',
-        logContext: { providerType: result.data.providerType }
-      });
-    }
-
-    return {
-      provider: providerType,
-      model: result.data.modelId ?? options.preferredModel ?? null,
-      source: 'restormel',
-      routeId: result.data.routeId,
-      explanation: result.data.explanation,
-      selectedStepId: result.data.selectedStepId ?? null,
-      selectedOrderIndex: result.data.selectedOrderIndex ?? null,
-      switchReasonCode: result.data.switchReasonCode ?? null,
-      estimatedCostUsd: result.data.estimatedCostUsd ?? null,
-      matchedCriteria: result.data.matchedCriteria ?? null,
-      fallbackCandidates: result.data.fallbackCandidates ?? null,
-      stepChain: result.data.stepChain ?? null
-    };
+    return decisionFromResolveResult(result.data);
   } catch (error) {
     if (
       error instanceof RestormelResolveError &&
       error.code === 'no_route' &&
-      !options.routeId &&
-      options.restormelContext?.stage
+      options.restormelContext
     ) {
-      try {
-        const { stage: _stage, ...contextWithoutStage } = options.restormelContext;
-        const retried = await restormelResolve({
+      const retryRequests: ResolveRequest[] = [];
+      if (options.routeId) {
+        retryRequests.push({
           environmentId: RESTORMEL_ENVIRONMENT_ID,
-          routeId: options.routeId,
+          ...options.restormelContext
+        });
+      }
+      if (options.restormelContext.stage) {
+        const { stage: _stage, ...contextWithoutStage } = options.restormelContext;
+        retryRequests.push({
+          environmentId: RESTORMEL_ENVIRONMENT_ID,
           ...contextWithoutStage
         });
-        const providerType = normalizeRestormelProvider(retried.data.providerType);
-        if (providerType) {
-          return {
-            provider: providerType,
-            model: retried.data.modelId ?? options.preferredModel ?? null,
-            source: 'restormel',
-            routeId: retried.data.routeId,
-            explanation: retried.data.explanation,
-            selectedStepId: retried.data.selectedStepId ?? null,
-            selectedOrderIndex: retried.data.selectedOrderIndex ?? null,
-            switchReasonCode: retried.data.switchReasonCode ?? null,
-            estimatedCostUsd: retried.data.estimatedCostUsd ?? null,
-            matchedCriteria: retried.data.matchedCriteria ?? null,
-            fallbackCandidates: retried.data.fallbackCandidates ?? null,
-            stepChain: retried.data.stepChain ?? null
-          };
+      }
+
+      for (const retryRequest of retryRequests) {
+        try {
+          const retried = await restormelResolve(retryRequest);
+          const decision = decisionFromResolveResult(retried.data);
+          if (options.routeId) {
+            console.warn('[restormel] RouteId resolve returned no_route; recovered via ingestion metadata route', {
+              routeId: options.routeId,
+              recoveredRouteId: decision.routeId,
+              workload: retryRequest.workload,
+              stage: retryRequest.stage ?? null
+            });
+          }
+          return decision;
+        } catch {
+          // Preserve original no_route handling below unless a metadata/shared retry succeeds.
         }
-      } catch {
-        // Preserve original no_route handling below.
       }
     }
     const failure =

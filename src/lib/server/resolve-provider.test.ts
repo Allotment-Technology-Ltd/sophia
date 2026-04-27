@@ -232,4 +232,65 @@ describe('resolveProviderDecision', () => {
     expect(result.model).toBe('gemini-3-flash-preview');
     expect(result.routeId).toBe('fallback-shared-route');
   });
+
+  it('recovers from stale routeId no_route via workload/stage metadata', async () => {
+    const restormel = await import('./restormel');
+    const { resolveProviderDecision } = await import('./resolve-provider');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const noRoute = new restormel.RestormelResolveError({
+      status: 404,
+      code: 'no_route',
+      detail: 'No route found for this route id',
+      endpoint: '/projects/project-id/resolve',
+      payload: { error: 'no_route' },
+      userMessage: 'No route found for this route id.',
+      violations: []
+    });
+    const resolveSpy = vi.spyOn(restormel, 'restormelResolve');
+    resolveSpy
+      .mockRejectedValueOnce(noRoute)
+      .mockResolvedValueOnce({
+        data: {
+          contractVersion: '2026-03-26',
+          routeId: 'dedicated-ingestion-relations',
+          providerType: 'google',
+          modelId: 'gemini-3-flash-preview',
+          explanation: 'Matched dedicated ingestion route',
+          stepChain: null
+        }
+      });
+
+    const result = await resolveProviderDecision({
+      routeId: 'stale-neon-binding',
+      restormelContext: {
+        workload: 'ingestion',
+        stage: 'ingestion_relations'
+      },
+      safeDefault: { provider: 'vertex', model: 'gemini-3-flash-preview' }
+    });
+
+    expect(resolveSpy).toHaveBeenCalledTimes(2);
+    expect(resolveSpy.mock.calls[0]?.[0]).toMatchObject({
+      routeId: 'stale-neon-binding',
+      workload: 'ingestion',
+      stage: 'ingestion_relations'
+    });
+    expect(resolveSpy.mock.calls[1]?.[0]).toMatchObject({
+      workload: 'ingestion',
+      stage: 'ingestion_relations'
+    });
+    expect(resolveSpy.mock.calls[1]?.[0]).not.toHaveProperty('routeId');
+    expect(result.source).toBe('restormel');
+    expect(result.provider).toBe('vertex');
+    expect(result.routeId).toBe('dedicated-ingestion-relations');
+    expect(warn).toHaveBeenCalledWith(
+      '[restormel] RouteId resolve returned no_route; recovered via ingestion metadata route',
+      expect.objectContaining({
+        routeId: 'stale-neon-binding',
+        recoveredRouteId: 'dedicated-ingestion-relations',
+        workload: 'ingestion',
+        stage: 'ingestion_relations'
+      })
+    );
+  });
 });
