@@ -126,6 +126,10 @@ import {
 	toSurrealRecordIdStr
 } from '../src/lib/server/surrealRecordSql.js';
 import { createIngestProviderTpmGuard } from './lib/ingestProviderTpm.js';
+import {
+	getIngestModelRetryPolicy,
+	isProviderCapacityExhaustedError
+} from './lib/ingestModelErrorPolicy.js';
 import { paceDeepseekChatCompletion } from './lib/ingestDeepseekRpsPace.js';
 import { paceGroqChatCompletion } from './lib/ingestGroqRpsPace.js';
 import { paceMistralChatCompletion } from './lib/ingestMistralRpsPace.js';
@@ -2864,7 +2868,11 @@ async function callStageModel(params: {
 						throw new Error(`[BUDGET] ${stage} exceeded retry cap (${budget.maxRetries})`);
 					}
 					tracker.retries += 1;
-					const delayMs = 1000 * Math.pow(2, attempt - 1);
+					const retryMessage = lastError ? collectErrorMessageChain(lastError) : '';
+					const delayMs = getIngestModelRetryPolicy(
+						activePlan.provider,
+						retryMessage
+					).backoffMs(attempt);
 					if (activeIngestTiming) {
 						activeIngestTiming.model_retries += 1;
 						activeIngestTiming.retry_backoff_ms_total += delayMs;
@@ -2879,27 +2887,18 @@ async function callStageModel(params: {
 			} catch (error) {
 				lastError = error instanceof Error ? error : new Error(String(error));
 				const msg = collectErrorMessageChain(lastError);
-				const retryable =
-					msg.includes('429') ||
-					msg.includes('529') ||
-					msg.includes('500') ||
-					msg.includes('502') ||
-					msg.includes('503') ||
-					msg.includes('504') ||
-					msg.includes('overloaded') ||
-					msg.includes('timeout') ||
-					msg.includes('aborted') ||
-					lastError.name === 'AbortError' ||
-					msg.includes('prompt_too_long') ||
-					msg.includes('context_length') ||
-					/resource exhausted/i.test(msg) ||
-					/rate limit|quota|too many requests/i.test(msg) ||
-					/\btpm\b|tokens per min|token.?per.?min/i.test(msg);
+				const policy = getIngestModelRetryPolicy(activePlan.provider, msg);
 				console.warn(
 					`  [WARN] ${stage} ${activePlan.provider}:${activePlan.model} failed: ${formatModelCallErrorDetails(error)}`
 				);
+				if (policy.capacityExhausted) {
+					console.warn(
+						`  [CAPACITY] ${stage} ${activePlan.provider}:${activePlan.model} provider capacity exhausted — check account tokens/credits before retrying`
+					);
+					break;
+				}
 				if (isModelUnavailableError(lastError)) break;
-				if (!retryable) break;
+				if (!policy.retryable) break;
 			}
 		}
 
@@ -2967,6 +2966,10 @@ async function callStageModel(params: {
 		return null;
 	}
 
+	function stageFailureIsProviderCapacityExhausted(): boolean {
+		return lastError ? isProviderCapacityExhaustedError(collectErrorMessageChain(lastError)) : false;
+	}
+
 	if (noFallback) {
 		const only = await runInnerRetries(planForNoFallback);
 		if (only !== null) return only;
@@ -3013,6 +3016,12 @@ async function callStageModel(params: {
 		}
 		const t = await runInnerRetries(activePlan);
 		if (t !== null) return t;
+		if (stageFailureIsProviderCapacityExhausted()) {
+			console.warn(
+				`  [CAPACITY] ${stage}: stopping fallback chain after provider capacity exhaustion for ${activePlan.provider}/${activePlan.model}`
+			);
+			break;
+		}
 	}
 
 	const detail =
