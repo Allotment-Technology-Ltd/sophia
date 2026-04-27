@@ -293,4 +293,84 @@ describe('resolveProviderDecision', () => {
       })
     );
   });
+
+  it('logs visible ingestion route inventory when no_route cannot recover', async () => {
+    const restormel = await import('./restormel');
+    const { resolveProviderDecision } = await import('./resolve-provider');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const noRoute = new restormel.RestormelResolveError({
+      status: 404,
+      code: 'no_route',
+      detail: 'No route found for this stage',
+      endpoint: '/projects/project-id/resolve',
+      payload: { error: 'no_route' },
+      userMessage: 'No route found for this stage.',
+      violations: []
+    });
+    vi.spyOn(restormel, 'restormelResolve').mockRejectedValue(noRoute);
+    vi.spyOn(restormel, 'restormelListRoutes').mockResolvedValue({
+      data: [
+        {
+          id: 'route-extract',
+          name: 'Extraction',
+          workload: 'ingestion',
+          stage: 'ingestion_extraction',
+          enabled: true,
+          isPublished: true,
+          version: 2,
+          publishedVersion: 2
+        },
+        {
+          id: 'route-rel-draft',
+          name: 'Relations draft',
+          workload: 'ingestion',
+          stage: 'ingestion_relations',
+          enabled: true,
+          isPublished: true,
+          version: 3,
+          publishedVersion: 2
+        },
+        {
+          id: 'route-shared',
+          name: 'Shared',
+          workload: 'ingestion',
+          stage: null,
+          enabled: false,
+          publishedVersion: 1
+        }
+      ]
+    });
+
+    await resolveProviderDecision({
+      restormelContext: {
+        workload: 'ingestion',
+        stage: 'ingestion_relations'
+      },
+      safeDefault: { provider: 'vertex', model: 'gemini-3-flash-preview' }
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      '[restormel] no_route diagnostics — route inventory visible to Sophia',
+      expect.objectContaining({
+        requestedWorkload: 'ingestion',
+        requestedStage: 'ingestion_relations',
+        listedRouteCount: 3,
+        ingestionRouteCount: 3,
+        stagesSeen: ['(shared)', 'ingestion_extraction', 'ingestion_relations'],
+        stageMatches: [
+          expect.objectContaining({
+            id: 'route-rel-draft',
+            state: 'draft_ahead(version=3,published=2)'
+          })
+        ],
+        sharedMatches: [
+          expect.objectContaining({
+            id: 'route-shared',
+            state: 'disabled'
+          })
+        ]
+      })
+    );
+  });
 });

@@ -4,7 +4,9 @@ import {
   RestormelResolveError,
   type ResolveRequest,
   type RestormelFallbackCandidate,
+  type RestormelRouteRecord,
   type RestormelStepChainEntry,
+  restormelListRoutes,
   restormelResolve
 } from './restormel';
 
@@ -55,6 +57,92 @@ function logRestormelIngestionDegradedHint(
       })}. ` +
       'Sophia: src/lib/server/restormelIngestionRoutes.ts'
   );
+}
+
+function normalizeRouteMeta(value: string | null | undefined): string {
+  return (value ?? '').trim().toLowerCase();
+}
+
+function routePublishState(route: RestormelRouteRecord): string {
+  if (route.enabled === false) return 'disabled';
+  if (route.isPublished === false) return 'unpublished';
+  if (typeof route.publishedVersion === 'number' && route.publishedVersion <= 0) return 'unpublished';
+  if (
+    typeof route.version === 'number' &&
+    typeof route.publishedVersion === 'number' &&
+    route.version !== route.publishedVersion
+  ) {
+    return `draft_ahead(version=${route.version},published=${route.publishedVersion})`;
+  }
+  return 'published';
+}
+
+function summarizeRoutesForNoRoute(
+  routes: RestormelRouteRecord[],
+  context: Omit<ResolveRequest, 'environmentId' | 'routeId'>,
+  requestedRouteId?: string
+): Record<string, unknown> {
+  const requestedStage = normalizeRouteMeta(context.stage);
+  const routeId = requestedRouteId?.trim();
+  const ingestionRoutes = routes.filter((route) => normalizeRouteMeta(route.workload) === 'ingestion');
+  const stageMatches = requestedStage
+    ? ingestionRoutes.filter((route) => normalizeRouteMeta(route.stage) === requestedStage)
+    : [];
+  const sharedMatches = ingestionRoutes.filter((route) => !normalizeRouteMeta(route.stage));
+  const routeIdMatches = routeId ? routes.filter((route) => route.id === routeId) : [];
+  const stagesSeen = Array.from(
+    new Set(ingestionRoutes.map((route) => normalizeRouteMeta(route.stage) || '(shared)'))
+  ).sort();
+
+  const compact = (route: RestormelRouteRecord) => ({
+    id: route.id,
+    name: route.name ?? null,
+    workload: route.workload ?? null,
+    stage: route.stage ?? null,
+    state: routePublishState(route),
+    version: route.version ?? null,
+    publishedVersion: route.publishedVersion ?? null
+  });
+
+  return {
+    environmentId: RESTORMEL_ENVIRONMENT_ID,
+    requestedRouteId: routeId || null,
+    requestedWorkload: context.workload ?? null,
+    requestedStage: context.stage ?? null,
+    listedRouteCount: routes.length,
+    ingestionRouteCount: ingestionRoutes.length,
+    stagesSeen: stagesSeen.slice(0, 20),
+    routeIdMatches: routeIdMatches.slice(0, 5).map(compact),
+    stageMatches: stageMatches.slice(0, 5).map(compact),
+    sharedMatches: sharedMatches.slice(0, 5).map(compact)
+  };
+}
+
+async function logRestormelNoRouteInventory(options: {
+  routeId?: string;
+  restormelContext?: Omit<ResolveRequest, 'environmentId' | 'routeId'>;
+}): Promise<void> {
+  const context = options.restormelContext;
+  if (context?.workload !== 'ingestion') return;
+  try {
+    const { data } = await restormelListRoutes({
+      environmentId: RESTORMEL_ENVIRONMENT_ID,
+      workload: 'ingestion'
+    });
+    const routes = Array.isArray(data) ? data : [];
+    console.warn(
+      '[restormel] no_route diagnostics — route inventory visible to Sophia',
+      summarizeRoutesForNoRoute(routes, context, options.routeId)
+    );
+  } catch (diagnosticError) {
+    console.warn('[restormel] no_route diagnostics failed to list routes', {
+      environmentId: RESTORMEL_ENVIRONMENT_ID,
+      workload: context.workload,
+      stage: context.stage ?? null,
+      routeId: options.routeId ?? null,
+      error: diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)
+    });
+  }
 }
 
 export class ProviderResolutionFailure extends Error {
@@ -284,6 +372,10 @@ export async function resolveProviderDecision(options: {
           // Preserve original no_route handling below unless a metadata/shared retry succeeds.
         }
       }
+      await logRestormelNoRouteInventory({
+        routeId: options.routeId,
+        restormelContext: options.restormelContext
+      });
     }
     const failure =
       error instanceof ProviderResolutionFailure
