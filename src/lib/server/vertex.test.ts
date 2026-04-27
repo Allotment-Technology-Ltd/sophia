@@ -175,6 +175,32 @@ describe('resolveReasoningModelRoute', () => {
     expect(route.modelId).toContain('aizolo');
   });
 
+  it('normalizes Restormel AiZolo carrier ids for Chat Completions API calls', async () => {
+    process.env.AIZOLO_API_KEY = 'aizolo-test-key';
+    mockResolveProviderDecision.mockResolvedValue({
+      provider: 'aizolo',
+      model: 'aizolo-gemini-gemini-3-flash-preview',
+      source: 'restormel',
+      routeId: 'ingestion_extraction',
+      explanation: 'route=ingestion_extraction step=0 provider=aizolo'
+    });
+
+    const { resolveExtractionModelRoute } = await import('./vertex');
+    const route = await resolveExtractionModelRoute({
+      requestedProvider: 'auto',
+      failureMode: 'degraded_default',
+      restormelContext: {
+        workload: 'ingestion',
+        stage: 'ingestion_extraction',
+        task: 'completion'
+      }
+    });
+
+    expect(route.provider).toBe('aizolo');
+    expect(route.modelId).toBe('aizolo-gemini-gemini-3-flash-preview');
+    expect(route.model).toBe('openai-chat:gemini/gemini-3-flash-preview');
+  });
+
   it('still permits OpenAI degraded extraction when EXTRACTION_BASE_URL marks an OpenAI-compatible fine-tune endpoint', async () => {
     delete process.env.GOOGLE_AI_API_KEY;
     process.env.OPENAI_API_KEY = 'sk-openai-test';

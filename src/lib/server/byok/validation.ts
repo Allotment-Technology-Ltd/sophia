@@ -4,6 +4,7 @@ import {
   type ByokProvider,
   type ReasoningProvider
 } from '$lib/types/providers';
+import { normalizeAizoloModelIdForApi } from '$lib/server/aizoloModelIds';
 
 interface ValidationResult {
   ok: boolean;
@@ -13,6 +14,7 @@ interface ValidationResult {
 export interface AizoloModelProbeResult extends ValidationResult {
   provider: 'aizolo';
   modelId: string;
+  apiModelId: string;
   endpoint: string;
   status: number;
   rateLimited?: boolean;
@@ -120,12 +122,14 @@ export async function probeAizoloModelWithApiKey(
 ): Promise<AizoloModelProbeResult> {
   const normalizedKey = apiKey.trim();
   const normalizedModel = modelId.trim();
+  const apiModelId = normalizeAizoloModelIdForApi(normalizedModel);
   const endpoint = getAizoloChatCompletionsUrl();
   if (!normalizedKey) {
     return {
       ok: false,
       provider: 'aizolo',
       modelId: normalizedModel || DEFAULT_AIZOLO_MODEL_PROBE_ID,
+      apiModelId: normalizeAizoloModelIdForApi(normalizedModel || DEFAULT_AIZOLO_MODEL_PROBE_ID),
       endpoint,
       status: 0,
       error: 'empty_api_key'
@@ -136,6 +140,7 @@ export async function probeAizoloModelWithApiKey(
       ok: false,
       provider: 'aizolo',
       modelId: normalizedModel,
+      apiModelId,
       endpoint,
       status: 0,
       error: 'model_id_required'
@@ -149,7 +154,7 @@ export async function probeAizoloModelWithApiKey(
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: normalizedModel,
+      model: apiModelId,
       messages: [{ role: 'user', content: 'Respond with exactly: ok' }],
       max_tokens: 2,
       temperature: 0
@@ -163,6 +168,7 @@ export async function probeAizoloModelWithApiKey(
       ok: true,
       provider: 'aizolo',
       modelId: normalizedModel,
+      apiModelId,
       endpoint,
       status: response.status,
       responsePreview: preview || undefined
@@ -173,6 +179,7 @@ export async function probeAizoloModelWithApiKey(
       ok: true,
       provider: 'aizolo',
       modelId: normalizedModel,
+      apiModelId,
       endpoint,
       status: response.status,
       rateLimited: true,
@@ -184,6 +191,7 @@ export async function probeAizoloModelWithApiKey(
     ok: false,
     provider: 'aizolo',
     modelId: normalizedModel,
+    apiModelId,
     endpoint,
     status: response.status,
     error: `aizolo_model_probe_failed_${response.status}:${preview}`,
