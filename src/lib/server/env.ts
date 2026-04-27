@@ -38,6 +38,40 @@ function mergeGoogleAiApiKeyAliases(): void {
   }
 }
 
+/**
+ * Restormel env vars are required in production, but are easy to misname in Railway.
+ * Accept common aliases so routing doesn't silently fall back to defaults and produce `no_route`.
+ */
+function mergeRestormelEnvAliases(): void {
+  const e = process.env as Record<string, string | undefined>;
+
+  if (!e.RESTORMEL_PROJECT_ID?.trim()) {
+    const from = e.RESTORMEL_PROJECT?.trim() || e.RESTORMEL_PROJECTID?.trim();
+    if (from) e.RESTORMEL_PROJECT_ID = from;
+  }
+
+  if (!e.RESTORMEL_ENVIRONMENT_ID?.trim()) {
+    const from =
+      e.RESTORMEL_ENV_ID?.trim() ||
+      e.RESTORMEL_ENVIRONMENT?.trim() ||
+      e.RESTORMEL_ENVIRONMENTID?.trim();
+    if (from) e.RESTORMEL_ENVIRONMENT_ID = from;
+  }
+
+  if (!e.RESTORMEL_GATEWAY_KEY?.trim()) {
+    const from =
+      e.RESTORMEL_KEYS_GATEWAY_KEY?.trim() ||
+      e.RESTORMEL_GATEWAY_TOKEN?.trim() ||
+      e.RESTORMEL_API_KEY?.trim();
+    if (from) e.RESTORMEL_GATEWAY_KEY = from;
+  }
+
+  if (!e.RESTORMEL_KEYS_BASE?.trim()) {
+    const from = e.RESTORMEL_BASE_URL?.trim() || e.RESTORMEL_KEYS_ORIGIN?.trim();
+    if (from) e.RESTORMEL_KEYS_BASE = from;
+  }
+}
+
 export function loadServerEnv(): void {
   if (loaded) return;
 
@@ -59,6 +93,7 @@ export function loadServerEnv(): void {
   restoreIngestPinEnv(pinSnapshot);
 
   mergeGoogleAiApiKeyAliases();
+  mergeRestormelEnvAliases();
 
   if (
     Object.keys(pinSnapshot).length > 0 &&

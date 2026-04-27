@@ -47,7 +47,12 @@ function logRestormelIngestionDegradedHint(
       `${stageLine} ` +
       'Publish routes (publishedVersion must match version). ' +
       'Verify RESTORMEL_PROJECT_ID, RESTORMEL_ENVIRONMENT_ID, RESTORMEL_GATEWAY_KEY (rk_…). ' +
-      `Resolve detail: kind=${failure.kind} context=${JSON.stringify(failure.logContext)}. ` +
+      `Resolve detail: kind=${failure.kind} context=${JSON.stringify({
+        ...failure.logContext,
+        environmentId: RESTORMEL_ENVIRONMENT_ID,
+        workload: restormelContext.workload,
+        stage: restormelContext.stage
+      })}. ` +
       'Sophia: src/lib/server/restormelIngestionRoutes.ts'
   );
 }
