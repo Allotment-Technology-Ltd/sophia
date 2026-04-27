@@ -62,14 +62,48 @@ describe('classifyResolveFailure', () => {
         code: 'resolve_incomplete',
         detail: 'Step not executable',
         endpoint: '/projects/p/resolve',
-        payload: { error: 'resolve_incomplete', userMessage: 'Fix model on step 0.' },
+        payload: {
+          error: 'resolve_incomplete',
+          userMessage: 'Fix model on step 0.',
+          data: {
+            routeId: 'ingestion-relations',
+            selectedStepId: 'step_aizolo',
+            providerType: 'aizolo',
+            modelId: 'aizolo-gemini-gemini-3-flash-preview',
+            stepChain: [
+              {
+                stepId: 'step_aizolo',
+                orderIndex: 0,
+                providerType: 'aizolo',
+                modelId: 'aizolo-gemini-gemini-3-flash-preview',
+                enabled: true,
+                selected: true,
+                detail: 'Unknown provider/model pair'
+              }
+            ]
+          }
+        },
         userMessage: 'Fix model on step 0.',
         violations: []
       })
     );
     expect(failure.kind).toBe('unknown');
     expect(failure.userMessage).toBe('Fix model on step 0.');
-    expect(failure.logContext).toMatchObject({ code: 'resolve_incomplete', status: 422 });
+    expect(failure.logContext).toMatchObject({
+      code: 'resolve_incomplete',
+      status: 422,
+      routeId: 'ingestion-relations',
+      selectedStepId: 'step_aizolo',
+      providerType: 'aizolo',
+      modelId: 'aizolo-gemini-gemini-3-flash-preview',
+      stepChain: [
+        expect.objectContaining({
+          stepId: 'step_aizolo',
+          providerType: 'aizolo',
+          modelId: 'aizolo-gemini-gemini-3-flash-preview'
+        })
+      ]
+    });
   });
 
   it('classifies route_disabled by JSON error (not generic 403 auth)', () => {
@@ -341,6 +375,20 @@ describe('resolveProviderDecision', () => {
         }
       ]
     });
+    vi.spyOn(restormel, 'restormelListRouteSteps').mockImplementation(async (routeId: string) => ({
+      data:
+        routeId === 'route-rel-draft'
+          ? [
+              {
+                id: 'step-aizolo',
+                orderIndex: 0,
+                enabled: true,
+                providerPreference: 'aizolo',
+                modelId: 'aizolo-gemini-gemini-3-flash-preview'
+              }
+            ]
+          : []
+    }));
 
     await resolveProviderDecision({
       restormelContext: {
@@ -369,7 +417,16 @@ describe('resolveProviderDecision', () => {
             id: 'route-shared',
             state: 'disabled'
           })
-        ]
+        ],
+        stepsByRoute: {
+          'route-rel-draft': [
+            expect.objectContaining({
+              providerPreference: 'aizolo',
+              modelId: 'aizolo-gemini-gemini-3-flash-preview'
+            })
+          ],
+          'route-shared': []
+        }
       })
     );
   });

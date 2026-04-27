@@ -7,6 +7,7 @@ import {
   type RestormelRouteRecord,
   type RestormelStepChainEntry,
   restormelListRoutes,
+  restormelListRouteSteps,
   restormelResolve
 } from './restormel';
 
@@ -33,6 +34,10 @@ export type ResolveFailureKind =
   | 'policy_blocked'
   | 'network_or_auth'
   | 'unknown';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
 
 /** Logged when resolve falls back to Sophia defaults so operators can fix Keys config. */
 function logRestormelIngestionDegradedHint(
@@ -118,6 +123,38 @@ function summarizeRoutesForNoRoute(
   };
 }
 
+function summarizeRouteSteps(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).slice(0, 8).map((step) => ({
+    id: typeof step.id === 'string' ? step.id : null,
+    orderIndex: typeof step.orderIndex === 'number' ? step.orderIndex : null,
+    enabled: step.enabled !== false,
+    providerPreference:
+      typeof step.providerPreference === 'string' ? step.providerPreference : null,
+    providerType: typeof step.providerType === 'string' ? step.providerType : null,
+    modelId: typeof step.modelId === 'string' ? step.modelId : null
+  }));
+}
+
+async function summarizeStepsForRoutes(routes: RestormelRouteRecord[]): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  const seen = new Set<string>();
+  for (const route of routes) {
+    const id = typeof route.id === 'string' ? route.id.trim() : '';
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    try {
+      const { data } = await restormelListRouteSteps(id);
+      out[id] = summarizeRouteSteps(data);
+    } catch (error) {
+      out[id] = {
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+  return out;
+}
+
 async function logRestormelNoRouteInventory(options: {
   routeId?: string;
   restormelContext?: Omit<ResolveRequest, 'environmentId' | 'routeId'>;
@@ -130,9 +167,23 @@ async function logRestormelNoRouteInventory(options: {
       workload: 'ingestion'
     });
     const routes = Array.isArray(data) ? data : [];
+    const requestedStage = normalizeRouteMeta(context.stage);
+    const requestedRouteId = options.routeId?.trim();
+    const relevantRoutes = routes
+      .filter((route) => {
+        const workload = normalizeRouteMeta(route.workload);
+        if (requestedRouteId && route.id === requestedRouteId) return true;
+        if (workload !== 'ingestion') return false;
+        const stage = normalizeRouteMeta(route.stage);
+        return (requestedStage && stage === requestedStage) || !stage;
+      })
+      .slice(0, 8);
     console.warn(
       '[restormel] no_route diagnostics — route inventory visible to Sophia',
-      summarizeRoutesForNoRoute(routes, context, options.routeId)
+      {
+        ...summarizeRoutesForNoRoute(routes, context, options.routeId),
+        stepsByRoute: await summarizeStepsForRoutes(relevantRoutes)
+      }
     );
   } catch (diagnosticError) {
     console.warn('[restormel] no_route diagnostics failed to list routes', {
@@ -143,6 +194,41 @@ async function logRestormelNoRouteInventory(options: {
       error: diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)
     });
   }
+}
+
+function compactResolvePayloadRows(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const rows = value.filter(isRecord).slice(0, 12).map((row) => ({
+    stepId: typeof row.stepId === 'string' ? row.stepId : undefined,
+    orderIndex: typeof row.orderIndex === 'number' ? row.orderIndex : undefined,
+    providerType: typeof row.providerType === 'string' ? row.providerType : undefined,
+    providerPreference:
+      typeof row.providerPreference === 'string' ? row.providerPreference : undefined,
+    modelId: typeof row.modelId === 'string' ? row.modelId : undefined,
+    enabled: typeof row.enabled === 'boolean' ? row.enabled : undefined,
+    selected: typeof row.selected === 'boolean' ? row.selected : undefined,
+    message: typeof row.message === 'string' ? row.message : undefined,
+    detail: typeof row.detail === 'string' ? row.detail : undefined,
+    reason: typeof row.reason === 'string' ? row.reason : undefined
+  }));
+  return rows.length > 0 ? rows : undefined;
+}
+
+function resolveErrorDiagnostics(error: RestormelResolveError): Record<string, unknown> {
+  if (!isRecord(error.payload)) return {};
+  const data = isRecord(error.payload.data) ? error.payload.data : error.payload;
+  const out: Record<string, unknown> = {};
+  for (const key of ['routeId', 'providerType', 'providerPreference', 'modelId', 'selectedStepId']) {
+    const value = data[key];
+    if (typeof value === 'string' && value.trim()) out[key] = value;
+  }
+  const fallbackCandidates = compactResolvePayloadRows(data.fallbackCandidates);
+  if (fallbackCandidates) out.fallbackCandidates = fallbackCandidates;
+  const stepChain = compactResolvePayloadRows(data.stepChain);
+  if (stepChain) out.stepChain = stepChain;
+  const errors = compactResolvePayloadRows(data.errors);
+  if (errors) out.errors = errors;
+  return out;
 }
 
 export class ProviderResolutionFailure extends Error {
@@ -182,6 +268,7 @@ export function classifyResolveFailure(error: unknown): {
   logContext: Record<string, unknown>;
 } {
   if (error instanceof RestormelResolveError) {
+    const details = resolveErrorDiagnostics(error);
     const policyTypes = error.violations
       .map((violation) => violation.type?.trim().toLowerCase())
       .filter((value): value is string => Boolean(value));
@@ -191,28 +278,28 @@ export function classifyResolveFailure(error: unknown): {
       return {
         kind: 'budget_cap',
         userMessage: error.userMessage,
-        logContext: { code: error.code, status: error.status, policyTypes }
+        logContext: { code: error.code, status: error.status, policyTypes, ...details }
       };
     }
     if (error.code === 'no_key_available') {
       return {
         kind: 'no_key_available',
         userMessage: error.userMessage,
-        logContext: { code: error.code, status: error.status }
+        logContext: { code: error.code, status: error.status, ...details }
       };
     }
     if (error.code === 'resolve_incomplete') {
       return {
         kind: 'unknown',
         userMessage: error.userMessage,
-        logContext: { code: error.code, status: error.status }
+        logContext: { code: error.code, status: error.status, ...details }
       };
     }
     if (error.code === 'policy_blocked') {
       return {
         kind: 'policy_blocked',
         userMessage: error.userMessage,
-        logContext: { code: error.code, status: error.status, policyTypes }
+        logContext: { code: error.code, status: error.status, policyTypes, ...details }
       };
     }
     // Restormel Keys control plane: branch on JSON `error`, not only HTTP status (403 can be route_disabled).
@@ -224,27 +311,27 @@ export function classifyResolveFailure(error: unknown): {
       return {
         kind: 'unknown',
         userMessage: error.userMessage,
-        logContext: { code: error.code, status: error.status }
+        logContext: { code: error.code, status: error.status, ...details }
       };
     }
     if (error.code === 'unauthorized' || error.status === 401) {
       return {
         kind: 'network_or_auth',
         userMessage: error.userMessage,
-        logContext: { code: error.code, status: error.status }
+        logContext: { code: error.code, status: error.status, ...details }
       };
     }
     if (error.status === 403) {
       return {
         kind: 'network_or_auth',
         userMessage: error.userMessage,
-        logContext: { code: error.code, status: error.status }
+        logContext: { code: error.code, status: error.status, ...details }
       };
     }
     return {
       kind: 'unknown',
       userMessage: error.userMessage,
-      logContext: { code: error.code, status: error.status }
+      logContext: { code: error.code, status: error.status, ...details }
     };
   }
 
