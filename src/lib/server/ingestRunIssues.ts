@@ -20,6 +20,7 @@ import {
 
 export type IngestIssueKind =
   | 'warning'
+  | 'fatal_error'
   | 'retry'
   | 'json_repair'
   | 'batch_split'
@@ -70,6 +71,16 @@ function inferStageFromLine(line: string): string | null {
   if (selfHeal?.stage) return selfHeal.stage;
 
   const low = line.toLowerCase();
+  const explicitStage = line.match(/\[(extraction|relations|grouping|validation|remediation|json_repair)\]/i);
+  if (explicitStage?.[1]) {
+    const s = explicitStage[1].toLowerCase();
+    if (s === 'extraction') return 'extract';
+    if (s === 'relations') return 'relate';
+    if (s === 'grouping') return 'group';
+    if (s === 'validation') return 'validate';
+    if (s === 'remediation') return 'remediation';
+    if (s === 'json_repair') return 'json_repair';
+  }
   if (/\[resume\]/i.test(line)) {
     if (/mid-?grouping|grouping checkpoint|stage\s*3/i.test(low)) return 'group';
     if (/mid-?embed|embedding checkpoint|stage\s*4/i.test(low)) return 'embed';
@@ -79,6 +90,14 @@ function inferStageFromLine(line: string): string | null {
     if (/store|sync|surreal|stage\s*6/i.test(low)) return 'store';
     return 'resume';
   }
+
+  if (/json[_ -]?repair|repair route/i.test(low)) return 'json_repair';
+  if (/remediat/i.test(low)) return 'remediation';
+  if (/embed|embedding/i.test(low)) return 'embed';
+  if (/validat/i.test(low)) return 'validate';
+  if (/group/i.test(low)) return 'group';
+  if (/relat/i.test(low)) return 'relate';
+  if (/extract/i.test(low)) return 'extract';
 
   const m =
     line.match(/\[ROUTE\]\s+([a-z_]+)/i) ||
@@ -167,6 +186,18 @@ export function classifyIngestLogLine(line: string, seq: number): IngestIssueRec
 
   const stageHint = inferStageFromLine(trimmed);
   const rawLine = truncateLine(trimmed);
+
+  if (/\[(?:FATAL ERROR|ERROR)\]|^Error:/i.test(trimmed)) {
+    return {
+      seq,
+      ts: Date.now(),
+      kind: 'fatal_error',
+      severity: 'high',
+      stageHint,
+      message: summarizeWorkerLineForIssueMessage('Fatal worker error', rawLine),
+      rawLine
+    };
+  }
 
   if (/\[CANCEL\]/i.test(trimmed)) {
     return {
