@@ -39,8 +39,9 @@ export function shouldOmitGenerateTextTemperature(
 		return true;
 	}
 
-	// Vertex / Google AI: Gemini 3 preview models use a reasoning-style surface and reject temperature.
-	if ((prov === 'vertex' || prov === 'google') && /\bgemini-3/i.test(mid)) {
+	// Vertex / Google AI and AiZolo-carried Gemini 3 preview models use a reasoning-style
+	// surface and reject temperature.
+	if ((prov === 'vertex' || prov === 'google' || prov === 'aizolo') && /\bgemini-3/i.test(mid)) {
 		return true;
 	}
 

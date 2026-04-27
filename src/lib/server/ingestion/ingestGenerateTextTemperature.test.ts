@@ -53,4 +53,21 @@ describe('shouldOmitGenerateTextTemperature', () => {
 			false
 		);
 	});
+
+	it('omits for AiZolo Gemini 3 carrier ids normalized to Gemini reasoning models', () => {
+		expect(
+			shouldOmitGenerateTextTemperature(
+				'extraction',
+				'aizolo',
+				'aizolo-gemini-gemini-3-flash-preview',
+				{}
+			)
+		).toBe(true);
+		expect(
+			shouldOmitGenerateTextTemperature('extraction', 'aizolo', 'gemini/gemini-3-flash-preview', {})
+		).toBe(true);
+		expect(
+			shouldOmitGenerateTextTemperature('extraction', 'aizolo', 'aizolo-gemini-gemini-2.5-flash', {})
+		).toBe(false);
+	});
 });
