@@ -771,7 +771,7 @@ function appendProcessOutput(runId: string, chunk: Buffer, manager: IngestRunMan
 
 /** Lines that usually carry the real reason ingest.ts exited 1 (shown on failRun, not only in log scrollback). */
 const INGEST_WORKER_FAILURE_LINE =
-  /\[(FATAL ERROR|ERROR)\]|^Error:|\[extraction\]|\[validation\]|\[relations\]|\[grouping\]|Planned route exhausted|timed out after|BUDGET\]|ECONNRESET|ETIMEDOUT|SyntaxError|TypeError|ReferenceError|not_found_error|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find module/i;
+  /\[(FATAL ERROR|ERROR)\]|^Error:|\[extraction\]|\[validation\]|\[relations\]|\[grouping\]|\[remediation\]|\[json_repair\]|Planned route exhausted|Planned route and fallback chain exhausted|Failed to repair JSON|repair response|timed out after|BUDGET\]|ECONNRESET|ETIMEDOUT|SyntaxError|TypeError|ReferenceError|not_found_error|ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find module/i;
 
 function extractIngestWorkerFailureHint(logLines: string[], maxLen = 900): string {
   const hits: string[] = [];
