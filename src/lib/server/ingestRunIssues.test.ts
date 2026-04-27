@@ -76,6 +76,17 @@ describe('classifyIngestLogLine stage + message enrichment', () => {
 		expect(noCk?.kind).toBe('resume_checkpoint');
 	});
 
+	it('captures fatal remediation/json repair failures as high severity issues', () => {
+		const issue = classifyIngestLogLine(
+			'[FATAL ERROR] [remediation] Planned route and fallback chain exhausted (aizolo:x): JSON repair failed: Bad Request',
+			0
+		);
+		expect(issue?.kind).toBe('fatal_error');
+		expect(issue?.severity).toBe('high');
+		expect(issue?.stageHint).toBe('remediation');
+		expect(issue?.message).toContain('JSON repair failed');
+	});
+
 	it('ignores [SKIP] validation-only no-checkpoint exits', () => {
 		expect(
 			classifyIngestLogLine(
