@@ -138,6 +138,7 @@ describe('validateProviderApiKey', () => {
       ok: true,
       provider: 'aizolo',
       modelId: 'aizolo-gemini-gemini-3-flash-preview',
+      apiModelId: 'gemini/gemini-3-flash-preview',
       endpoint: 'https://chat.aizolo.test/api/v1/chat/completions',
       status: 200
     });
@@ -153,7 +154,7 @@ describe('validateProviderApiKey', () => {
     );
     const init = (fetchMock as any).mock.calls[0]?.[1] as RequestInit | undefined;
     expect(JSON.parse(String(init?.body ?? '{}'))).toMatchObject({
-      model: 'aizolo-gemini-gemini-3-flash-preview',
+      model: 'gemini/gemini-3-flash-preview',
       max_tokens: 2,
       temperature: 0
     });
@@ -173,6 +174,7 @@ describe('validateProviderApiKey', () => {
       ok: false,
       provider: 'aizolo',
       modelId: 'aizolo-gemini-missing-model',
+      apiModelId: 'gemini/missing-model',
       status: 404,
       error: 'aizolo_model_probe_failed_404:unknown model',
       responsePreview: 'unknown model'
