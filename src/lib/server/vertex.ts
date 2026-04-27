@@ -9,6 +9,7 @@ import {
   REASONING_PROVIDER_ORDER,
   REASONING_PROVIDER_PLATFORM_API_KEY_ENV,
   getModelProviderLabel,
+  isReasoningProvider,
   type ModelProvider,
   type ReasoningProvider
 } from '@restormel/contracts/providers';
@@ -25,6 +26,11 @@ import {
   getDegradedPrimaryProviderOverride,
   getNeonDefaultOpenAiApiKeySync
 } from './appAiDefaults.js';
+import {
+  ingestFinetuneLabelerStrictEnabled,
+  isFinetuneSensitiveLlmStage,
+  parseFinetuneLabelerAllowedProviders
+} from '../ingestionFinetuneLabelerPolicy.js';
 
 let anthropicInstance: ReturnType<typeof createAnthropic> | null = null;
 const anthropicByApiKey = new Map<string, ReturnType<typeof createAnthropic>>();
@@ -502,6 +508,54 @@ const VERTEX_DEGRADED_DEEP_MODEL =
   DEFAULT_MODEL_CATALOG.vertex[0] ??
   'gemini-3.1-pro-preview';
 
+type RouteRestormelContext = {
+  workload?: string;
+  stage?: string;
+  task?: string;
+  attempt?: number;
+  estimatedInputTokens?: number;
+  estimatedInputChars?: number;
+  complexity?: string;
+  constraints?: {
+    latency?: string;
+    maxCost?: number;
+  };
+  previousFailure?: {
+    failureKind?: string;
+    providerType?: string;
+    modelId?: string;
+    [key: string]: unknown;
+  };
+};
+
+function normalizeAllowedReasoningProvider(provider: string): ReasoningProvider | null {
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === 'google' || normalized === 'vertex_ai') return 'vertex';
+  return isReasoningProvider(normalized) ? normalized : null;
+}
+
+function finetuneAllowedDegradedProvidersForIngestion(
+  restormelContext?: RouteRestormelContext
+): ReasoningProvider[] | undefined {
+  if (!ingestFinetuneLabelerStrictEnabled(process.env)) return undefined;
+  if (restormelContext?.workload?.trim().toLowerCase() !== 'ingestion') return undefined;
+
+  const rawStage = restormelContext.stage?.trim().toLowerCase() ?? '';
+  const stage = rawStage.startsWith('ingestion_') ? rawStage.slice('ingestion_'.length) : rawStage;
+  if (!isFinetuneSensitiveLlmStage(stage)) return undefined;
+
+  const allowed = new Set<ReasoningProvider>();
+  for (const provider of parseFinetuneLabelerAllowedProviders(process.env)) {
+    const normalized = normalizeAllowedReasoningProvider(provider);
+    if (normalized) allowed.add(normalized);
+  }
+  if ((stage === 'extraction' || stage === 'json_repair') && process.env.EXTRACTION_BASE_URL?.trim()) {
+    allowed.add('openai');
+  }
+
+  return REASONING_PROVIDER_ORDER.filter((provider) => allowed.has(provider));
+}
+
 function uniqueModelIds(values: Array<string | undefined>): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -684,14 +738,17 @@ function buildSafeDefaultDecision(
   type: 'reasoning' | 'extraction',
   depthMode: 'quick' | 'standard' | 'deep',
   pass: RoutingPass,
-  providerApiKeys?: ProviderApiKeys
+  providerApiKeys?: ProviderApiKeys,
+  allowedProviders?: readonly ReasoningProvider[]
 ): { provider: ReasoningProvider; model: string; explanation: string } {
   const primaryOverride = getDegradedPrimaryProviderOverride();
+  const allowed = allowedProviders ? new Set(allowedProviders) : null;
   const providerOrder: ReasoningProvider[] = primaryOverride
     ? [primaryOverride, ...DEGRADED_DEFAULT_PROVIDER_ORDER.filter((p) => p !== primaryOverride)]
     : [...DEGRADED_DEFAULT_PROVIDER_ORDER];
 
   for (const provider of providerOrder) {
+    if (allowed && !allowed.has(provider)) continue;
     if (!hasProviderAccess(provider, providerApiKeys)) continue;
     const extOverride = getDegradedModelOverride('extraction');
     const stdOverride = getDegradedModelOverride('reasoning_standard');
@@ -708,6 +765,13 @@ function buildSafeDefaultDecision(
       explanation: `Restormel resolve was unavailable, so Sophia used the ${provider}/${model} degraded default.`
     };
   }
+  if (allowed) {
+    throw new Error(
+      `No fine-tune-compatible degraded-default provider credentials are configured for ingestion (allowed=${[
+        ...allowed
+      ].join(',')}). Configure one of those providers, publish a Restormel ingestion route that Sophia can execute locally, or temporarily set INGEST_FINETUNE_LABELER_STRICT=0 for local experiments only.`
+    );
+  }
   throw new Error(
     'No AI provider credentials are configured. Set at least one of: GOOGLE_AI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, … (see .env.example).'
   );
@@ -722,33 +786,19 @@ async function resolveRoute(options: {
   providerApiKeys?: ProviderApiKeys;
   routeId?: string;
   failureMode?: 'degraded_default' | 'error';
-  restormelContext?: {
-    workload?: string;
-    stage?: string;
-    task?: string;
-    attempt?: number;
-    estimatedInputTokens?: number;
-    estimatedInputChars?: number;
-    complexity?: string;
-    constraints?: {
-      latency?: string;
-      maxCost?: number;
-    };
-    previousFailure?: {
-      failureKind?: string;
-      providerType?: string;
-      modelId?: string;
-      [key: string]: unknown;
-    };
-  };
+  restormelContext?: RouteRestormelContext;
 }): Promise<ReasoningModelRoute> {
   const depthMode = options.depthMode ?? 'standard';
   const pass = options.pass ?? 'generic';
+  const allowedDegradedProviders = finetuneAllowedDegradedProvidersForIngestion(
+    options.restormelContext
+  );
   const safeDefault = buildSafeDefaultDecision(
     options.type,
     depthMode,
     pass,
-    options.providerApiKeys
+    options.providerApiKeys,
+    allowedDegradedProviders
   );
   const decision = await resolveProviderDecision({
     preferredProvider: options.requestedProvider,
@@ -870,25 +920,7 @@ export async function resolveReasoningModelRoute(options?: {
   providerApiKeys?: ProviderApiKeys;
   routeId?: string;
   failureMode?: 'degraded_default' | 'error';
-  restormelContext?: {
-    workload?: string;
-    stage?: string;
-    task?: string;
-    attempt?: number;
-    estimatedInputTokens?: number;
-    estimatedInputChars?: number;
-    complexity?: string;
-    constraints?: {
-      latency?: string;
-      maxCost?: number;
-    };
-    previousFailure?: {
-      failureKind?: string;
-      providerType?: string;
-      modelId?: string;
-      [key: string]: unknown;
-    };
-  };
+  restormelContext?: RouteRestormelContext;
 }): Promise<ReasoningModelRoute> {
   return resolveRoute({
     type: 'reasoning',
@@ -902,25 +934,7 @@ export async function resolveExtractionModelRoute(options?: {
   providerApiKeys?: ProviderApiKeys;
   routeId?: string;
   failureMode?: 'degraded_default' | 'error';
-  restormelContext?: {
-    workload?: string;
-    stage?: string;
-    task?: string;
-    attempt?: number;
-    estimatedInputTokens?: number;
-    estimatedInputChars?: number;
-    complexity?: string;
-    constraints?: {
-      latency?: string;
-      maxCost?: number;
-    };
-    previousFailure?: {
-      failureKind?: string;
-      providerType?: string;
-      modelId?: string;
-      [key: string]: unknown;
-    };
-  };
+  restormelContext?: RouteRestormelContext;
 }): Promise<ReasoningModelRoute> {
   return resolveRoute({
     type: 'extraction',

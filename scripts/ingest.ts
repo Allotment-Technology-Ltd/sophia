@@ -38,6 +38,7 @@ import {
 	emitIngestTelemetry,
 	runWithIngestTelemetryHeartbeat
 } from '../src/lib/server/ingestion/ingestionTelemetry.js';
+import { shouldFoldSystemPromptIntoUserForProvider } from './lib/ingestOpenAiCompatRoles.js';
 import { buildIngestMetricsAdvisory } from '../src/lib/server/ingestion/ingestRunMetricsAdvisor.js';
 import { shouldOmitGenerateTextTemperature } from '../src/lib/server/ingestion/ingestGenerateTextTemperature.ts';
 import {
@@ -1215,38 +1216,6 @@ function effectiveExtractionParallelConcurrency(extractionPlanProvider: string):
 	if (!isGoogleGenerativePlanProvider(extractionPlanProvider)) return base;
 	const floor = parsePositiveInt(process.env.INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR) ?? 6;
 	return Math.min(12, Math.max(base, floor));
-}
-
-/**
- * Providers routed via `createOpenAI(...).chat(model)` map `system` to role `developer`
- * (AI SDK v2 compatibility). Mistral and several other strict Chat Completions APIs only
- * accept system | user | assistant | tool — folding avoids HTTP 422 on validation/repair.
- */
-const OPENAI_COMPAT_CHAT_PROVIDERS_FOLD_SYSTEM = new Set([
-	'mistral',
-	'groq',
-	'deepseek',
-	'together',
-	'cohere',
-	'openrouter',
-	'perplexity'
-]);
-
-function shouldFoldSystemPromptIntoUserForProvider(provider: string | undefined): boolean {
-	if (!provider) return false;
-	const p = provider.toLowerCase();
-	if (OPENAI_COMPAT_CHAT_PROVIDERS_FOLD_SYSTEM.has(p)) return true;
-	const extractionBase = process.env.EXTRACTION_BASE_URL?.trim().toLowerCase() ?? '';
-	// `buildExtractionOpenAiCompatibleRoute` uses `provider: 'openai'` for Fireworks/Together/etc., or
-	// `provider: 'vertex'` for `generativelanguage.googleapis.com` (Gemini via OpenAI-compatible Chat Completions). Fireworks
-	// deployment templates return 400 ("roles must alternate…") when `system` is sent separately;
-	// Together SFT eval defaults to the same folded shape (see `EXTRACTION_EVAL_FOLD_SYSTEM`).
-	if (p === 'openai' && extractionBase) {
-		if (extractionBase.includes('fireworks.ai') || extractionBase.includes('together.xyz')) {
-			return true;
-		}
-	}
-	return false;
 }
 
 function makeStageBudget(stage: StageKey): StageBudget {

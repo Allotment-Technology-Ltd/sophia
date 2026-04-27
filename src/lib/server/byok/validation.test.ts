@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { validateProviderApiKey } from './validation';
+import { probeAizoloModelWithApiKey, validateProviderApiKey } from './validation';
 
 describe('validateProviderApiKey', () => {
   afterEach(() => {
@@ -122,5 +122,60 @@ describe('validateProviderApiKey', () => {
       expect.any(Object)
     );
     delete process.env.AIZOLO_BASE_URL;
+  });
+
+  it('probes an explicit AiZolo model id via the saved-key chat completions path', async () => {
+    process.env.AIZOLO_BASE_URL = 'https://chat.aizolo.test/api/v1';
+    const fetchMock = vi.fn(async () => new Response('{"choices":[{"message":{"content":"ok"}}]}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await probeAizoloModelWithApiKey(
+      'aizolo_test_key',
+      'aizolo-gemini-gemini-3-flash-preview'
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      provider: 'aizolo',
+      modelId: 'aizolo-gemini-gemini-3-flash-preview',
+      endpoint: 'https://chat.aizolo.test/api/v1/chat/completions',
+      status: 200
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://chat.aizolo.test/api/v1/chat/completions',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer aizolo_test_key',
+          'Content-Type': 'application/json'
+        })
+      })
+    );
+    const init = (fetchMock as any).mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(JSON.parse(String(init?.body ?? '{}'))).toMatchObject({
+      model: 'aizolo-gemini-gemini-3-flash-preview',
+      max_tokens: 2,
+      temperature: 0
+    });
+    delete process.env.AIZOLO_BASE_URL;
+  });
+
+  it('returns AiZolo model probe failure details', async () => {
+    const fetchMock = vi.fn(async () => new Response('unknown model', { status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await probeAizoloModelWithApiKey(
+      'aizolo_test_key',
+      'aizolo-gemini-missing-model'
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      provider: 'aizolo',
+      modelId: 'aizolo-gemini-missing-model',
+      status: 404,
+      error: 'aizolo_model_probe_failed_404:unknown model',
+      responsePreview: 'unknown model'
+    });
   });
 });

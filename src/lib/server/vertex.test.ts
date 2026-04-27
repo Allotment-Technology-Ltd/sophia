@@ -50,8 +50,11 @@ describe('resolveReasoningModelRoute', () => {
     delete process.env.EXTRACTION_MODEL;
     delete process.env.EXTRACTION_API_KEY;
     delete process.env.OPENAI_API_KEY;
+    delete process.env.AIZOLO_API_KEY;
     delete process.env.TOGETHER_API_KEY;
     delete process.env.FIREWORKS_API_KEY;
+    delete process.env.INGEST_FINETUNE_LABELER_STRICT;
+    delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;
   });
 
   it('uses the degraded default when Restormel selects a provider Sophia cannot execute locally', async () => {
@@ -141,6 +144,63 @@ describe('resolveReasoningModelRoute', () => {
         apiKey: 'AIza-test'
       })
     );
+  });
+
+  it('uses a fine-tune-compatible degraded default for strict ingestion stages when OpenAI is also configured', async () => {
+    delete process.env.GOOGLE_AI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-openai-test';
+    process.env.AIZOLO_API_KEY = 'aizolo-test-key';
+    process.env.INGEST_FINETUNE_LABELER_STRICT = '1';
+    mockResolveProviderDecision.mockImplementation(async (options: any) => ({
+      provider: options.safeDefault.provider,
+      model: options.safeDefault.model,
+      source: 'degraded_default',
+      routeId: null,
+      explanation: options.safeDefault.explanation
+    }));
+
+    const { resolveExtractionModelRoute } = await import('./vertex');
+    const route = await resolveExtractionModelRoute({
+      requestedProvider: 'auto',
+      failureMode: 'degraded_default',
+      restormelContext: {
+        workload: 'ingestion',
+        stage: 'ingestion_extraction',
+        task: 'completion'
+      }
+    });
+
+    expect(route.provider).toBe('aizolo');
+    expect(route.routingSource).toBe('degraded_default');
+    expect(route.modelId).toContain('aizolo');
+  });
+
+  it('still permits OpenAI degraded extraction when EXTRACTION_BASE_URL marks an OpenAI-compatible fine-tune endpoint', async () => {
+    delete process.env.GOOGLE_AI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-openai-test';
+    process.env.EXTRACTION_BASE_URL = 'https://api.fireworks.ai/inference/v1';
+    process.env.INGEST_FINETUNE_LABELER_STRICT = '1';
+    mockResolveProviderDecision.mockImplementation(async (options: any) => ({
+      provider: options.safeDefault.provider,
+      model: options.safeDefault.model,
+      source: 'degraded_default',
+      routeId: null,
+      explanation: options.safeDefault.explanation
+    }));
+
+    const { resolveExtractionModelRoute } = await import('./vertex');
+    const route = await resolveExtractionModelRoute({
+      requestedProvider: 'auto',
+      failureMode: 'degraded_default',
+      restormelContext: {
+        workload: 'ingestion',
+        stage: 'ingestion_extraction',
+        task: 'completion'
+      }
+    });
+
+    expect(route.provider).toBe('openai');
+    expect(route.routingSource).toBe('degraded_default');
   });
 
   it('throws when platform vertex is selected but GOOGLE_AI_API_KEY is unset', async () => {

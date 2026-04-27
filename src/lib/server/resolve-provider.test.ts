@@ -62,14 +62,48 @@ describe('classifyResolveFailure', () => {
         code: 'resolve_incomplete',
         detail: 'Step not executable',
         endpoint: '/projects/p/resolve',
-        payload: { error: 'resolve_incomplete', userMessage: 'Fix model on step 0.' },
+        payload: {
+          error: 'resolve_incomplete',
+          userMessage: 'Fix model on step 0.',
+          data: {
+            routeId: 'ingestion-relations',
+            selectedStepId: 'step_aizolo',
+            providerType: 'aizolo',
+            modelId: 'aizolo-gemini-gemini-3-flash-preview',
+            stepChain: [
+              {
+                stepId: 'step_aizolo',
+                orderIndex: 0,
+                providerType: 'aizolo',
+                modelId: 'aizolo-gemini-gemini-3-flash-preview',
+                enabled: true,
+                selected: true,
+                detail: 'Unknown provider/model pair'
+              }
+            ]
+          }
+        },
         userMessage: 'Fix model on step 0.',
         violations: []
       })
     );
     expect(failure.kind).toBe('unknown');
     expect(failure.userMessage).toBe('Fix model on step 0.');
-    expect(failure.logContext).toMatchObject({ code: 'resolve_incomplete', status: 422 });
+    expect(failure.logContext).toMatchObject({
+      code: 'resolve_incomplete',
+      status: 422,
+      routeId: 'ingestion-relations',
+      selectedStepId: 'step_aizolo',
+      providerType: 'aizolo',
+      modelId: 'aizolo-gemini-gemini-3-flash-preview',
+      stepChain: [
+        expect.objectContaining({
+          stepId: 'step_aizolo',
+          providerType: 'aizolo',
+          modelId: 'aizolo-gemini-gemini-3-flash-preview'
+        })
+      ]
+    });
   });
 
   it('classifies route_disabled by JSON error (not generic 403 auth)', () => {
@@ -231,5 +265,169 @@ describe('resolveProviderDecision', () => {
     expect(result.provider).toBe('vertex');
     expect(result.model).toBe('gemini-3-flash-preview');
     expect(result.routeId).toBe('fallback-shared-route');
+  });
+
+  it('recovers from stale routeId no_route via workload/stage metadata', async () => {
+    const restormel = await import('./restormel');
+    const { resolveProviderDecision } = await import('./resolve-provider');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const noRoute = new restormel.RestormelResolveError({
+      status: 404,
+      code: 'no_route',
+      detail: 'No route found for this route id',
+      endpoint: '/projects/project-id/resolve',
+      payload: { error: 'no_route' },
+      userMessage: 'No route found for this route id.',
+      violations: []
+    });
+    const resolveSpy = vi.spyOn(restormel, 'restormelResolve');
+    resolveSpy
+      .mockRejectedValueOnce(noRoute)
+      .mockResolvedValueOnce({
+        data: {
+          contractVersion: '2026-03-26',
+          routeId: 'dedicated-ingestion-relations',
+          providerType: 'google',
+          modelId: 'gemini-3-flash-preview',
+          explanation: 'Matched dedicated ingestion route',
+          stepChain: null
+        }
+      });
+
+    const result = await resolveProviderDecision({
+      routeId: 'stale-neon-binding',
+      restormelContext: {
+        workload: 'ingestion',
+        stage: 'ingestion_relations'
+      },
+      safeDefault: { provider: 'vertex', model: 'gemini-3-flash-preview' }
+    });
+
+    expect(resolveSpy).toHaveBeenCalledTimes(2);
+    expect(resolveSpy.mock.calls[0]?.[0]).toMatchObject({
+      routeId: 'stale-neon-binding',
+      workload: 'ingestion',
+      stage: 'ingestion_relations'
+    });
+    expect(resolveSpy.mock.calls[1]?.[0]).toMatchObject({
+      workload: 'ingestion',
+      stage: 'ingestion_relations'
+    });
+    expect(resolveSpy.mock.calls[1]?.[0]).not.toHaveProperty('routeId');
+    expect(result.source).toBe('restormel');
+    expect(result.provider).toBe('vertex');
+    expect(result.routeId).toBe('dedicated-ingestion-relations');
+    expect(warn).toHaveBeenCalledWith(
+      '[restormel] RouteId resolve returned no_route; recovered via ingestion metadata route',
+      expect.objectContaining({
+        routeId: 'stale-neon-binding',
+        recoveredRouteId: 'dedicated-ingestion-relations',
+        workload: 'ingestion',
+        stage: 'ingestion_relations'
+      })
+    );
+  });
+
+  it('logs visible ingestion route inventory when no_route cannot recover', async () => {
+    const restormel = await import('./restormel');
+    const { resolveProviderDecision } = await import('./resolve-provider');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const noRoute = new restormel.RestormelResolveError({
+      status: 404,
+      code: 'no_route',
+      detail: 'No route found for this stage',
+      endpoint: '/projects/project-id/resolve',
+      payload: { error: 'no_route' },
+      userMessage: 'No route found for this stage.',
+      violations: []
+    });
+    vi.spyOn(restormel, 'restormelResolve').mockRejectedValue(noRoute);
+    vi.spyOn(restormel, 'restormelListRoutes').mockResolvedValue({
+      data: [
+        {
+          id: 'route-extract',
+          name: 'Extraction',
+          workload: 'ingestion',
+          stage: 'ingestion_extraction',
+          enabled: true,
+          isPublished: true,
+          version: 2,
+          publishedVersion: 2
+        },
+        {
+          id: 'route-rel-draft',
+          name: 'Relations draft',
+          workload: 'ingestion',
+          stage: 'ingestion_relations',
+          enabled: true,
+          isPublished: true,
+          version: 3,
+          publishedVersion: 2
+        },
+        {
+          id: 'route-shared',
+          name: 'Shared',
+          workload: 'ingestion',
+          stage: null,
+          enabled: false,
+          publishedVersion: 1
+        }
+      ]
+    });
+    vi.spyOn(restormel, 'restormelListRouteSteps').mockImplementation(async (routeId: string) => ({
+      data:
+        routeId === 'route-rel-draft'
+          ? [
+              {
+                id: 'step-aizolo',
+                orderIndex: 0,
+                enabled: true,
+                providerPreference: 'aizolo',
+                modelId: 'aizolo-gemini-gemini-3-flash-preview'
+              }
+            ]
+          : []
+    }));
+
+    await resolveProviderDecision({
+      restormelContext: {
+        workload: 'ingestion',
+        stage: 'ingestion_relations'
+      },
+      safeDefault: { provider: 'vertex', model: 'gemini-3-flash-preview' }
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      '[restormel] no_route diagnostics — route inventory visible to Sophia',
+      expect.objectContaining({
+        requestedWorkload: 'ingestion',
+        requestedStage: 'ingestion_relations',
+        listedRouteCount: 3,
+        ingestionRouteCount: 3,
+        stagesSeen: ['(shared)', 'ingestion_extraction', 'ingestion_relations'],
+        stageMatches: [
+          expect.objectContaining({
+            id: 'route-rel-draft',
+            state: 'draft_ahead(version=3,published=2)'
+          })
+        ],
+        sharedMatches: [
+          expect.objectContaining({
+            id: 'route-shared',
+            state: 'disabled'
+          })
+        ],
+        stepsByRoute: {
+          'route-rel-draft': [
+            expect.objectContaining({
+              providerPreference: 'aizolo',
+              modelId: 'aizolo-gemini-gemini-3-flash-preview'
+            })
+          ],
+          'route-shared': []
+        }
+      })
+    );
   });
 });

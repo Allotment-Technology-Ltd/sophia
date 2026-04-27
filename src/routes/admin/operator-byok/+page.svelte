@@ -17,6 +17,17 @@
     last_error: string | null;
   }
 
+  interface ModelProbeResult {
+    ok?: boolean;
+    provider?: string;
+    modelId?: string;
+    endpoint?: string;
+    status?: number;
+    rateLimited?: boolean;
+    error?: string;
+    responsePreview?: string;
+  }
+
   const BYOK_PROVIDER_LABELS: Record<ByokProvider, string> = Object.fromEntries(
     BYOK_PROVIDER_ORDER.map((provider) => [provider, PROVIDER_UI_META[provider].label])
   ) as Record<ByokProvider, string>;
@@ -47,6 +58,11 @@
   let byokSaving = $state<Record<ByokProvider, boolean>>(emptyProviderMap(false));
   let byokError = $state('');
   let byokMessage = $state('');
+  let modelProbeInputs = $state<Record<ByokProvider, string>>({
+    ...emptyProviderMap(''),
+    aizolo: 'aizolo-gemini-gemini-3-flash-preview'
+  });
+  let modelProbeResults = $state<Record<ByokProvider, ModelProbeResult | null>>(emptyProviderMap(null));
 
   function formatDate(iso: string | null | undefined): string {
     if (!iso) return '—';
@@ -161,6 +177,33 @@
         : `${BYOK_PROVIDER_LABELS[provider]} validation failed.`;
     } catch (error) {
       byokError = error instanceof Error ? error.message : 'Validation failed.';
+    } finally {
+      setByokSaving(provider, false);
+    }
+  }
+
+  async function probeProviderModel(provider: ByokProvider): Promise<void> {
+    byokError = '';
+    byokMessage = '';
+    modelProbeResults = { ...modelProbeResults, [provider]: null };
+    setByokSaving(provider, true);
+    try {
+      const res = await fetch(`/api/admin/operator-byok/providers/${provider}/model-probe`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(await authHeaders())
+        },
+        body: JSON.stringify({ model_id: modelProbeInputs[provider]?.trim() })
+      });
+      const body = await parseJsonResponse(res);
+      const probe = (body.probe ?? {}) as ModelProbeResult;
+      modelProbeResults = { ...modelProbeResults, [provider]: probe };
+      byokMessage = probe.ok
+        ? `${BYOK_PROVIDER_LABELS[provider]} model probe succeeded for ${probe.modelId ?? 'selected model'}.`
+        : `${BYOK_PROVIDER_LABELS[provider]} model probe failed for ${probe.modelId ?? 'selected model'}.`;
+    } catch (error) {
+      byokError = error instanceof Error ? error.message : 'Model probe failed.';
     } finally {
       setByokSaving(provider, false);
     }
@@ -334,6 +377,64 @@
                   </button>
                 </div>
               </div>
+
+              {#if provider === 'aizolo'}
+                {@const probe = modelProbeResults[provider]}
+                <div class="mt-4 rounded border border-sophia-dark-blue/30 bg-sophia-dark-bg/55 p-3">
+                  <p class="font-mono text-xs uppercase tracking-[0.08em] text-sophia-dark-blue">
+                    Direct AiZolo model probe
+                  </p>
+                  <p class="mt-1 font-mono text-xs leading-relaxed text-sophia-dark-muted">
+                    Uses the saved operator BYOK key from Neon and the configured AiZolo base URL to call
+                    <code class="text-sophia-dark-text">/chat/completions</code> directly. This bypasses Restormel
+                    route matching and verifies the exact model id used in Keys routing.
+                  </p>
+                  <div class="mt-3 flex flex-col gap-2 sm:flex-row">
+                    <input
+                      class="min-h-[44px] min-w-0 flex-1 rounded border border-sophia-dark-border bg-sophia-dark-bg px-4 py-2 font-mono text-sm text-sophia-dark-text"
+                      type="text"
+                      autocomplete="off"
+                      placeholder="aizolo-gemini-gemini-3-flash-preview"
+                      value={modelProbeInputs[provider]}
+                      oninput={(event) => {
+                        modelProbeInputs = {
+                          ...modelProbeInputs,
+                          [provider]: (event.currentTarget as HTMLInputElement).value
+                        };
+                      }}
+                      disabled={byokSaving[provider]}
+                    />
+                    <button
+                      type="button"
+                      class="min-h-[44px] rounded border border-sophia-dark-blue/55 bg-sophia-dark-blue/12 px-4 py-2 font-mono text-xs uppercase tracking-[0.08em] text-sophia-dark-blue hover:bg-sophia-dark-blue/18 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sophia-dark-blue disabled:opacity-50"
+                      onclick={() => void probeProviderModel(provider)}
+                      disabled={byokSaving[provider] || !status.configured}
+                    >
+                      Probe model
+                    </button>
+                  </div>
+                  {#if probe}
+                    <div
+                      class={probe.ok
+                        ? 'mt-3 rounded border border-sophia-dark-sage/40 bg-sophia-dark-sage/10 p-2 font-mono text-xs text-sophia-dark-sage'
+                        : 'mt-3 rounded border border-sophia-dark-copper/50 bg-sophia-dark-copper/10 p-2 font-mono text-xs text-sophia-dark-copper'}
+                    >
+                      <p>{probe.ok ? 'Probe succeeded' : 'Probe failed'} · HTTP {probe.status ?? '—'}</p>
+                      <p class="mt-1 text-sophia-dark-muted">Model: {probe.modelId ?? '—'}</p>
+                      <p class="mt-1 break-all text-sophia-dark-muted">Endpoint: {probe.endpoint ?? '—'}</p>
+                      {#if probe.rateLimited}
+                        <p class="mt-1 text-sophia-dark-muted">Rate limited, but the key/model was accepted.</p>
+                      {/if}
+                      {#if probe.error}
+                        <p class="mt-1 break-words">Error: {probe.error}</p>
+                      {/if}
+                      {#if probe.responsePreview}
+                        <p class="mt-1 break-words text-sophia-dark-muted">Response: {probe.responsePreview}</p>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             </div>
           {/each}
         </div>
