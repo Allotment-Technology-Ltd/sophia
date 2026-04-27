@@ -12,6 +12,18 @@ function withApiCacheHeaders(event: RequestEvent, response: Response): Response 
   return response;
 }
 
+/** Admin HTML must not be cached; mobile bfcache/CDN can otherwise serve an old shell after deploy. */
+function withAdminHtmlNoStore(event: RequestEvent, response: Response): Response {
+  if (
+    event.request.method === 'GET' &&
+    event.url.pathname.startsWith('/admin') &&
+    (response.headers.get('content-type') ?? '').includes('text/html')
+  ) {
+    response.headers.set('Cache-Control', 'private, no-store, max-age=0, must-revalidate');
+  }
+  return response;
+}
+
 function isBrowserNavigation(event: RequestEvent): boolean {
   const accept = event.request.headers.get('accept') ?? '';
   const mode = event.request.headers.get('sec-fetch-mode') ?? '';
@@ -47,7 +59,9 @@ export const handle: Handle = async ({ event, resolve }) => {
     !event.url.pathname.startsWith('/api/health') &&
     !event.url.pathname.startsWith('/api/v1/verify') &&
     !event.url.pathname.startsWith('/api/billing/webhook') &&
-    !event.url.pathname.startsWith('/api/early-access/');
+    !event.url.pathname.startsWith('/api/early-access/') &&
+    /** Machine scheduler: `Authorization: Bearer` is `INGESTION_JOB_TICK_SECRET`, not a Neon JWT (see +server.ts). */
+    !event.url.pathname.startsWith('/api/internal/ingest/jobs/tick');
 
   if (isProtectedApi) {
     const requestId = resolveRequestId(event.request);
@@ -141,5 +155,5 @@ export const handle: Handle = async ({ event, resolve }) => {
     }
   }
 
-  return withApiCacheHeaders(event, await resolve(event));
+  return withAdminHtmlNoStore(event, withApiCacheHeaders(event, await resolve(event)));
 };

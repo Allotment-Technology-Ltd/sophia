@@ -1,10 +1,11 @@
-# Optional standalone poller image. Production uses the main app image + Cloud Run Job
+# Optional standalone poller image. On Railway, run as a second service (same image/env as the app) or
+# use HTTP tick + cron (see docs/sophia/deployment-railway.md). Legacy GCP used Cloud Run Job
 # `sophia-ingestion-job-poller` (scripts/gcp/deploy-sophia-ingestion-poller-job.sh).
 #
 # Build: docker build -f Dockerfile.ingest-worker -t sophia-ingest-worker .
 # Run:  docker run --env-file .env sophia-ingest-worker
 #
-# See docs/operations/ingestion-credits-and-workers.md
+# See docs/sophia/deployment-railway.md
 
 FROM node:22-bookworm-slim
 

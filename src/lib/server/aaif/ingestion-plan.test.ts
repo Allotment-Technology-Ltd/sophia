@@ -33,7 +33,7 @@ vi.mock('$lib/server/appAiDefaults', () => ({
 
 const emptyAppAiDefaults = {
   defaultRestormelSharedRouteId: null as string | null,
-  degradedPrimaryProvider: null as const,
+  degradedPrimaryProvider: null as null,
   degradedReasoningModelStandard: null as string | null,
   degradedReasoningModelDeep: null as string | null,
   degradedExtractionModel: null as string | null,
