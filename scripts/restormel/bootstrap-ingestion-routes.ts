@@ -7,7 +7,7 @@
  *
  * Requires:
  *   RESTORMEL_GATEWAY_KEY, RESTORMEL_PROJECT_ID
- *   RESTORMEL_ENVIRONMENT_ID (default: production)
+ *   RESTORMEL_ENVIRONMENT_ID (Keys environment UUID; optional default in code is legacy for dev only)
  *   RESTORMEL_KEYS_BASE (optional; defaults to https://restormel.dev)
  *
  * **Apply** reads **per-step** model/provider from environment (no hardcoded model ids in the repo):

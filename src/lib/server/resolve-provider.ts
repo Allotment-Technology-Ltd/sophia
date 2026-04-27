@@ -32,6 +32,14 @@ export type ResolveFailureKind =
   | 'network_or_auth'
   | 'unknown';
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isLikelyRestormelKeysEnvironmentId(value: string | undefined): boolean {
+  if (!value?.trim()) return false;
+  return UUID_RE.test(value.trim());
+}
+
 /** Logged when resolve falls back to Sophia defaults so operators can fix Keys config. */
 function logRestormelIngestionDegradedHint(
   failure: { kind: ResolveFailureKind; logContext: Record<string, unknown> },
@@ -42,18 +50,25 @@ function logRestormelIngestionDegradedHint(
   const stageLine = stage
     ? `Dedicated route: stage="${stage}". Or a shared ingestion route with empty stage.`
     : 'Use workload=ingestion and stage=ingestion_<substage> (e.g. ingestion_extraction) or a shared route.';
+  const code =
+    typeof failure.logContext?.code === 'string' ? failure.logContext.code : undefined;
+  const noRoute = code === 'no_route' || code === 'route_unpublished' || code === 'route_disabled';
+  const envHint = !isLikelyRestormelKeysEnvironmentId(RESTORMEL_ENVIRONMENT_ID)
+    ? ` **RESTORMEL_ENVIRONMENT_ID** is set to "${RESTORMEL_ENVIRONMENT_ID}"; Restormel resolve expects the Keys **environment UUID** (dashboard), not a label like "production". A wrong id commonly yields 404 / no_route.`
+    : '';
+  const finetuneHint = noRoute
+    ? ' With `INGEST_FINETUNE_LABELER_STRICT=1` (default), **OpenAI** `degraded_default` models (gpt-4o-mini) are not allowed for extraction; fix Restormel routes/UUID first. Emergency override: `INGEST_FINETUNE_LABELER_STRICT=0` (or add `openai` to `INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS` / set `EXTRACTION_BASE_URL` per docs).'
+    : '';
   console.warn(
     '[restormel] Ingestion routing degraded — operator checklist: ' +
       `${stageLine} ` +
       'Publish routes (publishedVersion must match version). ' +
       'Verify RESTORMEL_PROJECT_ID, RESTORMEL_ENVIRONMENT_ID, RESTORMEL_GATEWAY_KEY (rk_…). ' +
-      `Resolve detail: kind=${failure.kind} context=${JSON.stringify({
-        ...failure.logContext,
-        environmentId: RESTORMEL_ENVIRONMENT_ID,
-        workload: restormelContext.workload,
-        stage: restormelContext.stage
-      })}. ` +
-      'Sophia: src/lib/server/restormelIngestionRoutes.ts'
+      `Resolve detail: kind=${failure.kind} ` +
+      `context=${JSON.stringify({ ...failure.logContext, restormelEnvironmentId: RESTORMEL_ENVIRONMENT_ID, workload: restormelContext?.workload, stage: restormelContext?.stage })}. ` +
+      'Sophia: src/lib/server/restormelIngestionRoutes.ts' +
+      (envHint ? ' ' + envHint : '') +
+      (finetuneHint ? ' ' + finetuneHint : '')
   );
 }
 

@@ -277,6 +277,7 @@ const DASHBOARD_API_BASE = `${RESTORMEL_KEYS_BASE_URL}/api`;
 const RESTORMEL_EVALUATE_URL =
   process.env.RESTORMEL_EVALUATE_URL?.trim() ||
   `${DASHBOARD_API_BASE}/policies/evaluate`;
+/** Restormel resolve/list APIs expect the Keys **environment id** (UUID), not a name like "production". */
 export const RESTORMEL_ENVIRONMENT_ID =
   process.env.RESTORMEL_ENVIRONMENT_ID?.trim() || 'production';
 /** Env-only gateway key. */
