@@ -50,6 +50,8 @@ function mergeRestormelEnvAliases(): void {
     if (from) e.RESTORMEL_PROJECT_ID = from;
   }
 
+  // RESTORMEL_ENVIRONMENT_ID must be the Keys environment UUID (e.g. e20e1b20-98ed-47f0-816c-805d9b128d04),
+  // not a display name like "production". A wrong value causes no_route / 404 on every resolve call.
   if (!e.RESTORMEL_ENVIRONMENT_ID?.trim()) {
     const from =
       e.RESTORMEL_ENV_ID?.trim() ||
