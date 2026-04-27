@@ -916,23 +916,39 @@ export async function tickIngestionJob(jobId: string): Promise<void> {
 		const pool = getNeonPool();
 		const client = await pool.connect();
 		const lockedDb = drizzle(client, { schema: drizzleSchema });
+		let lockAcquired = false;
 		try {
-			await client.query('SELECT pg_advisory_lock($1, hashtext($2::text))', [ADV_LOCK_JOB_TICK, jobId]);
+			const lockResult = await client.query<{ locked: boolean }>(
+				'SELECT pg_try_advisory_lock($1, hashtext($2::text)) AS locked',
+				[ADV_LOCK_JOB_TICK, jobId]
+			);
+			lockAcquired = lockResult.rows[0]?.locked === true;
+			if (!lockAcquired) {
+				console.log(`[ingestion-jobs] tick skipped for ${jobId}: another poller holds the job lock`);
+				return;
+			}
 			await tickIngestionJobUnlocked(jobId, lockedDb);
 		} finally {
-			try {
-				await client.query('SELECT pg_advisory_unlock($1, hashtext($2::text))', [
-					ADV_LOCK_JOB_TICK,
-					jobId
-				]);
-			} catch (e) {
-				console.warn('[ingestion-jobs] pg_advisory_unlock failed:', e);
+			if (lockAcquired) {
+				try {
+					await client.query('SELECT pg_advisory_unlock($1, hashtext($2::text))', [
+						ADV_LOCK_JOB_TICK,
+						jobId
+					]);
+				} catch (e) {
+					console.warn('[ingestion-jobs] pg_advisory_unlock failed:', e);
+				}
 			}
 			client.release();
 		}
 	});
 	tickIngestionJobTailByJobId.set(jobId, run);
 	await run;
+}
+
+/** Test-only helper: clear in-process tick serialization between isolated module tests. */
+export function __resetIngestionJobTickSerializationForTests(): void {
+	tickIngestionJobTailByJobId.clear();
 }
 
 async function tickIngestionJobUnlocked(
