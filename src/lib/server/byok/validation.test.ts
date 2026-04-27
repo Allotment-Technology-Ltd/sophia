@@ -108,4 +108,19 @@ describe('validateProviderApiKey', () => {
 
     expect(result).toEqual({ ok: true });
   });
+
+  it('accepts AiZolo base url set to the full /chat/completions endpoint', async () => {
+    process.env.AIZOLO_BASE_URL = 'https://chat.aizolo.com/api/v1/chat/completions';
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await validateProviderApiKey('aizolo', 'aizolo_test_key');
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://chat.aizolo.com/api/v1/chat/completions',
+      expect.any(Object)
+    );
+    delete process.env.AIZOLO_BASE_URL;
+  });
 });
