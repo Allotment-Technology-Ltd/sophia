@@ -97,7 +97,10 @@ function getAizoloChatCompletionsUrl(): string {
   const fromEnv = envName ? process.env[envName]?.trim() : '';
   const baseUrl =
     fromEnv || REASONING_PROVIDER_DEFAULT_BASE_URL.aizolo || 'https://chat.aizolo.com/api/v1';
-  return `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+  const trimmed = baseUrl.replace(/\/+$/, '');
+  // Accept either the base (`https://…/api/v1`) or the full endpoint (`…/api/v1/chat/completions`).
+  const normalized = trimmed.replace(/\/chat\/completions$/i, '');
+  return `${normalized}/chat/completions`;
 }
 
 async function validateAizolo(apiKey: string): Promise<ValidationResult> {
