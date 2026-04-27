@@ -245,7 +245,7 @@ jobs:
           fi
           echo "RAILWAY_CLI: $(command -v railway) ($(railway --version 2>&1 || true))"
           echo "RAILWAY_ENVIRONMENT=${RAILWAY_ENVIRONMENT:-<default>}"
-          ARGS=(--ci --detach --path . --project "$RAILWAY_PROJECT_ID" --service "$RAILWAY_SERVICE")
+          ARGS=(--ci --detach --path-as-root . --project "$RAILWAY_PROJECT_ID" --service "$RAILWAY_SERVICE")
           if [ -n "${RAILWAY_ENVIRONMENT:-}" ]; then
             ARGS+=(--environment "$RAILWAY_ENVIRONMENT")
           fi
