@@ -252,7 +252,15 @@ jobs:
             ARGS+=(--environment "$RAILWAY_ENVIRONMENT")
           fi
           echo "Running: railway up ${ARGS[*]}"
-          railway up "${ARGS[@]}"
+          # Capture output so we can detect "watch paths" skips.
+          # If Railway is configured with Watch Paths that don't include this repo's change-set,
+          # it may silently skip creating a new deployment even though CI is "green".
+          railway up "${ARGS[@]}" | tee /tmp/railway-up.log
+          if grep -qi "no changes detected in watch paths, build will skip" /tmp/railway-up.log; then
+            echo "::error::Railway skipped the build due to Watch Paths. This can leave production running an older image."
+            echo "::error::Fix: update the Railway service's Watch Paths to include this repo (or disable Watch Paths)."
+            exit 1
+          fi
           echo "railway up finished successfully (deployment completed)"
 
       - name: Post-deploy health check (production)

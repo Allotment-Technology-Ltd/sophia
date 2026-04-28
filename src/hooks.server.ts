@@ -53,6 +53,13 @@ export const handle: Handle = async ({ event, resolve }) => {
   // requested under `/admin/_app/...`, redirect to the correct root asset path.
   // This prevents "green deploy but blank admin UI" scenarios.
   if (event.request.method === 'GET' && event.url.pathname.startsWith('/admin/_app/')) {
+    if (process.env.ADMIN_ASSET_REDIRECT_LOG === '1') {
+      const requestId = resolveRequestId(event.request);
+      console.warn('[admin] asset redirect /admin/_app -> /_app', {
+        requestId,
+        path: event.url.pathname
+      });
+    }
     const url = new URL(event.url);
     url.pathname = url.pathname.replace(/^\/admin/, '');
     return Response.redirect(url, 308);
