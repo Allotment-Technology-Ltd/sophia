@@ -472,7 +472,13 @@
 
   onMount(() => {
     hydratePanelFromUrl();
-    void Promise.all([loadDlq(), loadPromote(), loadEmbeddingOverview(), loadThinkerQueue(), loadOperations()]);
+    void Promise.all([
+      loadDlq(),
+      loadPromote(),
+      panel === 'issues' ? loadEmbeddingOverview() : Promise.resolve(),
+      loadThinkerQueue(),
+      loadOperations()
+    ]);
   });
 </script>
 
