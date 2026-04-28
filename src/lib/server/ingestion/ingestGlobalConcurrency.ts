@@ -1,4 +1,4 @@
-import { getNeonPool } from '$lib/server/db/neon.js';
+import { getNeonPool } from '../db/neon.js';
 
 export type IngestGlobalConcurrencyKey = {
   provider: string;
