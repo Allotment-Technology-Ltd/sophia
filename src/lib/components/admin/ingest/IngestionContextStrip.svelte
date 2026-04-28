@@ -18,7 +18,7 @@
 		{ id: 'sources', label: '2 Sources', href: '/admin/ingest/operator?step=sources' },
 		{ id: 'run', label: '3 Run setup', href: '/admin/ingest/operator?step=review' },
 		{ id: 'monitor', label: '4 Monitor', href: '/admin/ingest/operator/activity' },
-		{ id: 'triage', label: '5 Triage', href: '/admin/ingest/operator/activity?panel=dlq' }
+		{ id: 'triage', label: '5 Triage', href: '/admin/ingest/operator/triage' }
 	];
 </script>
 

@@ -668,6 +668,11 @@ export interface IngestRunState {
   globalConcurrencySlotHeld?: boolean;
   /** Durable payload revision (Neon); incremented when resume merges model_chain / batch_overrides. */
   payloadVersion?: number;
+  /**
+   * Incomplete stdout/stderr fragments from the live child (no trailing newline yet). Flushed on
+   * process close so stage parsing stays aligned with real line boundaries.
+   */
+  childStreamBuffers?: { out: string; err: string };
 }
 
 /** Admin wizard / ingest UI types → `scripts/fetch-source.ts` types. */
@@ -796,9 +801,21 @@ export function getIngestExecutionInfo(): IngestExecutionInfo {
   };
 }
 
-function appendProcessOutput(runId: string, chunk: Buffer, manager: IngestRunManager): void {
-  const text = chunk.toString('utf-8');
-  for (const line of text.split(/\n/)) {
+function appendProcessOutput(
+  runId: string,
+  stream: 'stdout' | 'stderr',
+  chunk: Buffer,
+  manager: IngestRunManager
+): void {
+  const state = manager.getState(runId);
+  if (!state) return;
+  if (!state.childStreamBuffers) state.childStreamBuffers = { out: '', err: '' };
+  const key = stream === 'stdout' ? 'out' : 'err';
+  const combined = state.childStreamBuffers[key] + chunk.toString('utf-8');
+  const parts = combined.split('\n');
+  const remainder = parts.pop() ?? '';
+  state.childStreamBuffers[key] = remainder;
+  for (const line of parts) {
     const trimmed = line.replace(/\r$/, '');
     if (trimmed.length > 0) manager.addLog(runId, trimmed, { fromChildProcess: true });
   }
@@ -911,6 +928,20 @@ class IngestRunManager extends EventEmitter {
     if (!isIngestGlobalConcurrencyGateEnabled()) return;
     s.globalConcurrencySlotHeld = false;
     void releaseGlobalIngestSlot();
+  }
+
+  /** Emit any buffered partial lines before tearing down the child so log-driven stage updates stay in sync. */
+  private flushChildStreamBuffers(runId: string): void {
+    const state = this.runs.get(runId);
+    if (!state?.childStreamBuffers) return;
+    const { out, err } = state.childStreamBuffers;
+    state.childStreamBuffers = undefined;
+    if (out.length > 0) {
+      this.addLog(runId, out.replace(/\r$/, ''), { fromChildProcess: true });
+    }
+    if (err.length > 0) {
+      this.addLog(runId, err.replace(/\r$/, ''), { fromChildProcess: true });
+    }
   }
 
   private startQueuePollingIfEnabled(): void {
@@ -1892,8 +1923,8 @@ class IngestRunManager extends EventEmitter {
       this.scheduleNeonSnapshotPersist(runId);
     }
 
-    fetchChild.stdout.on('data', (chunk: Buffer) => appendProcessOutput(runId, chunk, this));
-    fetchChild.stderr.on('data', (chunk: Buffer) => appendProcessOutput(runId, chunk, this));
+    fetchChild.stdout.on('data', (chunk: Buffer) => appendProcessOutput(runId, 'stdout', chunk, this));
+    fetchChild.stderr.on('data', (chunk: Buffer) => appendProcessOutput(runId, 'stderr', chunk, this));
 
     fetchChild.on('error', (err: Error) => {
       const s = this.runs.get(runId);
@@ -1912,6 +1943,7 @@ class IngestRunManager extends EventEmitter {
     });
 
     fetchChild.on('close', (code: number | null) => {
+      this.flushChildStreamBuffers(runId);
       const s = this.runs.get(runId);
       if (s) {
         s.process = undefined;
@@ -2363,8 +2395,8 @@ class IngestRunManager extends EventEmitter {
       runState.processExitedAt = undefined;
     }
 
-    ingestChild.stdout.on('data', (chunk: Buffer) => appendProcessOutput(runId, chunk, this));
-    ingestChild.stderr.on('data', (chunk: Buffer) => appendProcessOutput(runId, chunk, this));
+    ingestChild.stdout.on('data', (chunk: Buffer) => appendProcessOutput(runId, 'stdout', chunk, this));
+    ingestChild.stderr.on('data', (chunk: Buffer) => appendProcessOutput(runId, 'stderr', chunk, this));
 
     ingestChild.on('error', (err: Error) => {
       const s = this.runs.get(runId);
@@ -2387,6 +2419,7 @@ class IngestRunManager extends EventEmitter {
     });
 
     ingestChild.on('close', (code: number | null, signal?: NodeJS.Signals | null) => {
+      this.flushChildStreamBuffers(runId);
       void this.handleIngestChildProcessClosed({
         runId,
         code,

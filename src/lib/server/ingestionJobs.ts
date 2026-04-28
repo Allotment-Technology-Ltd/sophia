@@ -317,6 +317,13 @@ export async function replayDlqJobItems(itemIds: string[]): Promise<
 		jobIds.add(it.jobId);
 		replayed++;
 	}
+	if (replayed === 0 && ids.length > 0) {
+		return {
+			ok: false,
+			error:
+				'No matching DLQ rows for the selected ids. Items must be status=error with dlq_enqueued_at set (true dead-letter). For other failures use Triage → Restart failed URLs.'
+		};
+	}
 	return { ok: true, replayed, jobIds: [...jobIds] };
 }
 

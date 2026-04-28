@@ -1,6 +1,6 @@
 /**
- * Phase 1 gate: golden + training-acceptable URL lists vs latest completed ingest telemetry
- * (`ingest_runs.report_envelope` merged in dataset coverage).
+ * Reference cohort gate: golden URLs + recent validate-on Neon cohort vs latest completed ingest telemetry
+ * (`ingest_runs.report_envelope` merged in inquiry corpus / dataset coverage).
  */
 
 import { canonicalizeSourceUrl } from '$lib/server/sourceIdentity';
@@ -27,7 +27,7 @@ export type Phase1ReadinessBlock = {
 	golden: Phase1CohortSlice;
 	training: Phase1CohortSlice;
 	union: Phase1CohortSlice;
-	/** True when every URL in the golden ∪ training union is phase2-ready. */
+	/** True when every URL in the golden ∪ reference validate union is answer-ready (full pipeline telemetry). */
 	allUnionUrlsPhase2Ready: boolean;
 	note: string;
 };
@@ -44,6 +44,15 @@ type CoverageRow = Phase1CoverageRow;
 
 type ReadinessClass = 'ready' | 'missing' | 'no_validate' | 'incomplete' | 'skipped_store';
 
+function coerceFiniteNumber(v: unknown): number | null {
+	if (typeof v === 'number' && Number.isFinite(v)) return v;
+	if (typeof v === 'string' && v.trim() !== '') {
+		const n = Number(v);
+		if (Number.isFinite(n)) return n;
+	}
+	return null;
+}
+
 function readStageMs(envelope: Record<string, unknown>): Record<string, number> {
 	const tt = envelope.timingTelemetry;
 	if (!tt || typeof tt !== 'object' || Array.isArray(tt)) return {};
@@ -51,7 +60,8 @@ function readStageMs(envelope: Record<string, unknown>): Record<string, number> 
 	if (!sm || typeof sm !== 'object' || Array.isArray(sm)) return {};
 	const out: Record<string, number> = {};
 	for (const [k, v] of Object.entries(sm)) {
-		if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+		const n = coerceFiniteNumber(v);
+		if (n !== null) out[k] = n;
 	}
 	return out;
 }
@@ -71,13 +81,12 @@ export function classifyPhase1UrlReadiness(envelope: Record<string, unknown> | n
 
 	const stages = readStageMs(envelope);
 	if ((stages.validating ?? 0) <= 0) return 'incomplete';
-	if (!Object.prototype.hasOwnProperty.call(stages, 'remediating')) return 'incomplete';
 
-	const embedWall = typeof tt.embed_wall_ms === 'number' ? tt.embed_wall_ms : 0;
+	const embedWall = coerceFiniteNumber(tt.embed_wall_ms) ?? 0;
 	const embedded = (stages.embedding ?? 0) > 0 || embedWall > 0;
 	if (!embedded) return 'incomplete';
 
-	const storeWall = typeof tt.store_wall_ms === 'number' ? tt.store_wall_ms : 0;
+	const storeWall = coerceFiniteNumber(tt.store_wall_ms) ?? 0;
 	const stored = (stages.storing ?? 0) > 0 || storeWall > 0;
 	if (!stored) return 'incomplete';
 
@@ -186,11 +195,11 @@ export function buildPhase1ReadinessBlock(params: {
 		union.uniqueUrls > 0 && union.phase2ReadyCount === union.uniqueUrls && union.skippedSurrealStore === 0;
 
 	const note =
-		'Phase 2 readiness (per URL, latest deduped complete row): requires `validate: true` on the report envelope, ' +
-		'`timingTelemetry.stage_ms` with validating > 0, a recorded `remediating` key (0 ms is OK), non-zero embedding ' +
-		'(stage_ms.embedding or embed_wall_ms), and non-zero Surreal store (storing or store_wall_ms). ' +
-		'Runs that only skipped Surreal via `skipped_surreal_store_no_graph_changes` count as **not** stored. ' +
-		'Legacy completes without `remediating` in timing are marked incomplete until re-run on a current worker.';
+		'For philosophical Q&A, a source should be retrievable end-to-end: latest deduped complete row must show `validate: true`, ' +
+		'`timingTelemetry.stage_ms.validating` > 0, non-zero embedding (stage_ms.embedding or embed_wall_ms), ' +
+		'and non-zero Surreal store (stage_ms.storing or store_wall_ms) so vectors and graph both exist. ' +
+		'`remediating` in timing is optional when Stage 5b did not run or older workers omitted the key. ' +
+		'Runs that only skipped Surreal via `skipped_surreal_store_no_graph_changes` count as **not** graph-backed for this check.';
 
 	return {
 		goldenFingerprint: params.goldenFingerprint,

@@ -1,6 +1,7 @@
 /**
- * Operator metrics: completed ingests vs SEP topic presets (data/sep-topic-presets.json),
- * training governance, and coarse model-lineage signals from Neon `ingest_runs.report_envelope`.
+ * Inquiry corpus metrics: completed ingests vs SEP topic bundles (data/sep-topic-presets.json),
+ * governance exclusions, and extraction-lineage signals from Neon `ingest_runs.report_envelope`
+ * (used to judge grounding-trusted sources for philosophical Q&A).
  */
 
 import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
@@ -216,10 +217,10 @@ export async function fetchDatasetTopicPresetCoverage(): Promise<DatasetTopicPre
 			sepIngestedOutsidePresets: 0,
 			phase1Readiness: null,
 			phase1ReadinessError:
-				'Neon ingest persistence is off (DATABASE_URL). Phase 1 readiness needs Neon for the training-acceptable cohort query.',
+				'Neon ingest persistence is off (DATABASE_URL). Inquiry corpus metrics need Neon to evaluate the reference validate cohort.',
 			stagingSupervision: null,
 			stagingSupervisionError: null,
-			note: 'Neon ingest persistence is off (DATABASE_URL). Enable Neon to aggregate completed `ingest_runs` and governance rows.'
+			note: 'Neon ingest persistence is off (DATABASE_URL). Enable Neon to aggregate completed `ingest_runs`, governance, and staging used for philosophical inquiry coverage.'
 		};
 	}
 
@@ -412,6 +413,6 @@ export async function fetchDatasetTopicPresetCoverage(): Promise<DatasetTopicPre
 		stagingSupervision,
 		stagingSupervisionError,
 		note:
-			'Training “acceptable” requires: (1) not excluded in Neon `source_training_governance`; (2) no recovery-agent / circuit-open / degraded-route signals in the latest report envelope; (3) verified LLM lineage — `timingTelemetry.stage_models` must list `vertex`, `mistral`, or `google` for extraction, relations, and grouping (and for validation / remediation / json_repair when those keys are present). Missing or incomplete telemetry (including Surreal-only completes) counts as not usable. If telemetry is missing but `modelChain` / `model_chain` labels explicitly reference Anthropic or OpenAI, the source is rejected.'
+			'Grounding-trusted (safe to emphasize in user-facing Q&A) requires: (1) not excluded in Neon `source_training_governance`; (2) no recovery-agent / circuit-open / degraded-route signals in the latest report envelope; (3) extraction lineage we trust for philosophy text — `timingTelemetry.stage_models` must list `vertex`, `mistral`, or `google` for extraction, relations, and grouping (and for validation / remediation / json_repair when those keys are present). Missing or incomplete telemetry (including Surreal-only completes) is treated as not trusted. If telemetry is missing but `modelChain` / `model_chain` labels explicitly reference Anthropic or OpenAI, the source is rejected from the trusted slice.'
 	};
 }

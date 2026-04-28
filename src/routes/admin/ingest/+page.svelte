@@ -476,7 +476,7 @@
             — complete extract-then-promote tails to unblock downstream steps.
           </p>
           <div class="dash-card-actions">
-            <a class="dash-mini" href="/admin/ingest/operator/activity?panel=promote">Open promote queue</a>
+            <a class="dash-mini" href="/admin/ingest/operator/triage?panel=promote">Open promote queue</a>
             <a class="dash-mini" href="/admin/ingest/operator?step=mode">Start extract-then-promote</a>
           </div>
         </section>
@@ -567,26 +567,30 @@
   </div>
 
   <div class="mt-6">
-    <IngestionSectionShell title="Coverage gates (snapshot)" description="High-level readiness signals.">
+    <IngestionSectionShell
+      title="Inquiry corpus (snapshot)"
+      description="Scale of philosophy sources and the grounding-trusted slice used for safe Q&A—not model-training KPIs."
+    >
       {#if loading}
         <p class="dash-muted">Loading…</p>
       {:else if coverage?.totals}
         <div class="dash-kpis">
           <div class="dash-kpi">
-            <p class="dash-kpi-k">Unique sources</p>
+            <p class="dash-kpi-k">Sources in corpus</p>
             <p class="dash-kpi-v">{n(coverage.totals.uniqueSourcesCompleted)}</p>
           </div>
           <div class="dash-kpi">
-            <p class="dash-kpi-k">Training acceptable</p>
+            <p class="dash-kpi-k">Grounding-trusted</p>
             <p class="dash-kpi-v">{n(coverage.totals.trainingAcceptableCount)}</p>
           </div>
           <div class="dash-kpi">
-            <p class="dash-kpi-k">Excluded</p>
+            <p class="dash-kpi-k">Needs review</p>
             <p class="dash-kpi-v">{n(coverage.totals.trainingNotAcceptableCount)}</p>
           </div>
         </div>
         <p class="dash-muted mt-3">
-          Generated {coverage.generatedAt ?? '—'}. <a class="dash-link" href="/admin/metrics/dataset-coverage">Open full report</a>.
+          Updated {coverage.generatedAt ?? '—'}. <a class="dash-link" href="/admin/ingest/operator/activity?panel=coverage">Open Inquiry corpus</a>
+          or <a class="dash-link" href="/admin/metrics/dataset-coverage">metrics JSON</a>.
         </p>
       {:else}
         <p class="dash-muted">{coverage?.error ?? 'No coverage data.'}</p>

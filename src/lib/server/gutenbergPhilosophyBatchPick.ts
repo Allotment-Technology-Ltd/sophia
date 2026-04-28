@@ -2,9 +2,16 @@
  * Pick Project Gutenberg book URLs likely to be philosophy.
  *
  * Uses the public Gutendex index to find candidate books, then filters on subject/bookshelf
- * tags containing "Philosophy" or adjacent signals.
+ * tags containing "Philosophy" or adjacent signals. Optional `domain` narrows Gutendex search
+ * and keyword matching (see `gutenbergPhilosophyDomains.ts`).
  */
 
+import {
+	type GutenbergPhilosophyDomainId,
+	DEFAULT_GUTENBERG_PHILOSOPHY_DOMAIN,
+	getGutenbergPhilosophyDomainSpec,
+	isGutenbergPhilosophyDomainId
+} from '$lib/admin/gutenbergPhilosophyDomains';
 import { query } from '$lib/server/db';
 import { getDrizzleDb } from '$lib/server/db/neon';
 import { ingestRuns, ingestionJobItems } from '$lib/server/db/schema';
@@ -36,14 +43,56 @@ function normalizeTagList(v: unknown): string[] {
 function hasPhilosophySignal(book: GutendexBook): boolean {
 	const tags = [
 		...normalizeTagList(book.subjects),
-		...normalizeTagList(book.bookshelves)
+		...normalizeTagList(book.bookshelves),
+		...(book.title ? [book.title] : [])
 	].map((s) => s.toLowerCase());
 
-	if (tags.some((t) => t.includes('philosophy'))) return true;
+	if (tags.some((t) => t.includes('philosophy') || t.includes('philosophical'))) return true;
 	// Nearby shelves/subjects that are typically philosophical works in Gutenberg metadata.
-	const adjacent = ['ethics', 'metaphysics', 'epistemology', 'logic', 'stoicism', 'skepticism'];
+	const adjacent = [
+		'ethics',
+		'metaphysics',
+		'metaphys',
+		'epistemology',
+		'logic',
+		'stoicism',
+		'skepticism'
+	];
 	if (tags.some((t) => adjacent.some((k) => t.includes(k)))) return true;
 	return false;
+}
+
+function bookMetadataBlob(book: GutendexBook): string {
+	return [
+		book.title ?? '',
+		...normalizeTagList(book.subjects),
+		...normalizeTagList(book.bookshelves)
+	]
+		.join(' ')
+		.toLowerCase();
+}
+
+/** Exported for unit tests. */
+export function bookMatchesPhilosophyDomain(
+	book: GutendexBook,
+	domain: GutenbergPhilosophyDomainId
+): boolean {
+	if (!hasPlainTextFormat(book)) return false;
+	if (domain === DEFAULT_GUTENBERG_PHILOSOPHY_DOMAIN) {
+		return hasPhilosophySignal(book);
+	}
+	const spec = getGutenbergPhilosophyDomainSpec(domain);
+	const blob = bookMetadataBlob(book);
+	const domainHit =
+		spec.domainKeywords.length > 0 &&
+		spec.domainKeywords.some((k) => blob.includes(k.toLowerCase()));
+	const philosophyish = hasPhilosophySignal(book) || blob.includes('philosoph');
+	return domainHit && philosophyish;
+}
+
+function gutendexFirstPageUrl(search: string): string {
+	const params = new URLSearchParams({ languages: 'en', search: search.trim() || 'philosophy' });
+	return `https://gutendex.com/books/?${params.toString()}`;
 }
 
 function hasPlainTextFormat(book: GutendexBook): boolean {
@@ -126,11 +175,14 @@ async function fetchGutendex(url: string): Promise<GutendexPage> {
 export type PickGutenbergUrlsArgs = {
 	limit: number;
 	excludeIngested: boolean;
+	/** Narrow retrieval to a philosophical domain (Gutendex search + keyword filter). */
+	domain?: GutenbergPhilosophyDomainId;
 };
 
 export type PickGutenbergUrlsResult = {
 	urls: string[];
 	stats: {
+		domain: GutenbergPhilosophyDomainId;
 		fetchedBooks: number;
 		keptPhilosophy: number;
 		excludedIngested: number;
@@ -142,6 +194,9 @@ export async function pickGutenbergPhilosophyUrlsForBatch(
 	args: PickGutenbergUrlsArgs
 ): Promise<PickGutenbergUrlsResult> {
 	const limit = Math.max(1, Math.min(200, Math.trunc(args.limit) || 10));
+	const domain: GutenbergPhilosophyDomainId =
+		args.domain && isGutenbergPhilosophyDomainId(args.domain) ? args.domain : DEFAULT_GUTENBERG_PHILOSOPHY_DOMAIN;
+	const domainSpec = getGutenbergPhilosophyDomainSpec(domain);
 	if (
 		args.excludeIngested &&
 		!isNeonIngestPersistenceEnabled() &&
@@ -159,9 +214,8 @@ export async function pickGutenbergPhilosophyUrlsForBatch(
 	let fetchedBooks = 0;
 
 	// Fetch multiple pages until we have enough candidates (cap pages to avoid over-fetch).
-	let nextUrl: string | null =
-		'https://gutendex.com/books/?languages=en&search=philosophy';
-	for (let page = 0; page < 6 && nextUrl && candidates.length < limit * 4; page++) {
+	let nextUrl: string | null = gutendexFirstPageUrl(domainSpec.gutendexSearch);
+	for (let page = 0; page < 8 && nextUrl && candidates.length < limit * 4; page++) {
 		const body = await fetchGutendex(nextUrl);
 		const results = Array.isArray(body.results) ? body.results : [];
 		for (const book of results) {
@@ -169,8 +223,7 @@ export async function pickGutenbergPhilosophyUrlsForBatch(
 			if (seen.has(book.id)) continue;
 			seen.add(book.id);
 			fetchedBooks += 1;
-			if (!hasPlainTextFormat(book)) continue;
-			if (!hasPhilosophySignal(book)) continue;
+			if (!bookMatchesPhilosophyDomain(book, domain)) continue;
 			candidates.push(book);
 		}
 		nextUrl = typeof body.next === 'string' ? body.next : null;
@@ -197,6 +250,7 @@ export async function pickGutenbergPhilosophyUrlsForBatch(
 	return {
 		urls,
 		stats: {
+			domain,
 			fetchedBooks,
 			keptPhilosophy: candidates.length,
 			excludedIngested,
