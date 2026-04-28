@@ -372,8 +372,14 @@ export async function planIngestionStage(
 
   if (stage === 'extraction') {
     const extractionOverride = buildExtractionOpenAiCompatibleRoute();
-    /** Restormel-bound extraction (Neon or env route id) must not be bypassed by EXTRACTION_BASE_URL FT. */
-    if (extractionOverride && !routeIdForResolve) {
+    /**
+     * Restormel-bound extraction (Neon or env route id) must not be bypassed by EXTRACTION_BASE_URL FT
+     * unless the worker explicitly opts in (bulk extraction / stop-after-extraction window).
+     */
+    const forceOverride =
+      (process.env.INGEST_FORCE_EXTRACTION_OPENAI_COMPAT ?? '').trim() === '1' ||
+      (process.env.INGEST_FORCE_EXTRACTION_OPENAI_COMPAT ?? '').trim().toLowerCase() === 'true';
+    if (extractionOverride && (!routeIdForResolve || forceOverride)) {
       const usage = estimateStageUsage(stage, context);
       return {
         stage,
@@ -394,7 +400,9 @@ export async function planIngestionStage(
         fallbackCandidates: extractionOverride.resolvedFallbackCandidates ?? null,
         routingReason:
           extractionOverride.resolvedExplanation ??
-          'OpenAI-compatible extraction endpoint (EXTRACTION_BASE_URL).',
+          (forceOverride
+            ? 'Bulk extraction override: OpenAI-compatible extraction endpoint (EXTRACTION_BASE_URL + EXTRACTION_MODEL) forced even with a bound Restormel route.'
+            : 'OpenAI-compatible extraction endpoint (EXTRACTION_BASE_URL).'),
         route: extractionOverride
       };
     }

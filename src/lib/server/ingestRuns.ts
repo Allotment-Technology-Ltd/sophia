@@ -2161,6 +2161,13 @@ class IngestRunManager extends EventEmitter {
     let stopBeforeStore = forSync ? false : ingestOptInStopBeforeStore(payload);
     const stopAfterExtraction = forSync ? false : ingestOptInStopAfterExtraction(payload);
     if (stopAfterExtraction) stopBeforeStore = false;
+    /**
+     * Bulk extraction window: force OpenAI-compatible extraction override (Fireworks deployment) for Stage 1
+     * even if the environment has a bound Restormel ingestion route id.
+     *
+     * Scope: extraction-only runs only, so promote/resume continues with normal routing for relations → store.
+     */
+    batchEnvOverrides.INGEST_FORCE_EXTRACTION_OPENAI_COMPAT = stopAfterExtraction ? '1' : '0';
     const orchestrationEnv = isNeonIngestPersistenceEnabled()
       ? { INGEST_ORCHESTRATION_RUN_ID: runId }
       : {};

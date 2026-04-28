@@ -4,12 +4,14 @@ const {
   mockResolveExtractionModelRoute,
   mockResolveReasoningModelRoute,
   mockBuildExtractionOpenAiCompatibleRoute,
-  mockGetAppAiDefaults
+  mockGetAppAiDefaults,
+  mockGetStoredRouteIdForIngestionStage
 } = vi.hoisted(() => ({
   mockResolveExtractionModelRoute: vi.fn(),
   mockResolveReasoningModelRoute: vi.fn(),
   mockBuildExtractionOpenAiCompatibleRoute: vi.fn(),
-  mockGetAppAiDefaults: vi.fn()
+  mockGetAppAiDefaults: vi.fn(),
+  mockGetStoredRouteIdForIngestionStage: vi.fn()
 }));
 
 vi.mock('$lib/server/embeddings', () => ({
@@ -24,7 +26,7 @@ vi.mock('$lib/server/vertex', () => ({
 }));
 
 vi.mock('$lib/server/ingestionRouteBindings', () => ({
-  getStoredRouteIdForIngestionStage: vi.fn().mockResolvedValue(undefined)
+  getStoredRouteIdForIngestionStage: mockGetStoredRouteIdForIngestionStage
 }));
 
 vi.mock('$lib/server/appAiDefaults', () => ({
@@ -47,9 +49,11 @@ describe('planIngestionStage', () => {
     vi.clearAllMocks();
     mockBuildExtractionOpenAiCompatibleRoute.mockReturnValue(null);
     mockGetAppAiDefaults.mockResolvedValue({ ...emptyAppAiDefaults });
+    mockGetStoredRouteIdForIngestionStage.mockResolvedValue(undefined);
     delete process.env.INGEST_JSON_REPAIR_USE_EXTRACTION_ENDPOINT;
     delete process.env.INGEST_PIN_PROVIDER_JSON_REPAIR;
     delete process.env.INGEST_PIN_MODEL_JSON_REPAIR;
+    delete process.env.INGEST_FORCE_EXTRACTION_OPENAI_COMPAT;
   });
 
   it('uses EXTRACTION_* OpenAI-compatible route when buildExtractionOpenAiCompatibleRoute returns a route', async () => {
@@ -76,6 +80,32 @@ describe('planIngestionStage', () => {
     expect(plan.model).toBe('accounts/demo/models/extract-ft');
     expect(plan.routingSource).toBe('requested');
     expect(plan.routingReason).toContain('OpenAI-compatible');
+  });
+
+  it('forces EXTRACTION_* OpenAI-compatible route even with a bound route when INGEST_FORCE_EXTRACTION_OPENAI_COMPAT=1', async () => {
+    process.env.INGEST_FORCE_EXTRACTION_OPENAI_COMPAT = '1';
+    mockGetStoredRouteIdForIngestionStage.mockResolvedValue('bound-route-id');
+    mockBuildExtractionOpenAiCompatibleRoute.mockReturnValue({
+      model: Symbol('ft-model'),
+      provider: 'openai',
+      modelId: 'accounts/demo/deployments/extract-ft',
+      credentialSource: 'byok',
+      supportsGrounding: false,
+      routingSource: 'requested',
+      resolvedExplanation: 'OpenAI-compatible ingestion extraction (test).'
+    });
+
+    const { planIngestionStage } = await import('./ingestion-plan');
+    const plan = await planIngestionStage('extraction', {
+      sourceTitle: 'Test',
+      sourceType: 'sep_entry',
+      estimatedTokens: 2_000,
+      preferredProvider: 'auto'
+    });
+
+    expect(mockResolveExtractionModelRoute).not.toHaveBeenCalled();
+    expect(plan.provider).toBe('openai');
+    expect(plan.model).toBe('accounts/demo/deployments/extract-ft');
   });
 
   it('uses EXTRACTION_* OpenAI-compatible route for json_repair when enabled (default)', async () => {
