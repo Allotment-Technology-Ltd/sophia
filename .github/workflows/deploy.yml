@@ -245,10 +245,29 @@ jobs:
           fi
           echo "RAILWAY_CLI: $(command -v railway) ($(railway --version 2>&1 || true))"
           echo "RAILWAY_ENVIRONMENT=${RAILWAY_ENVIRONMENT:-<default>}"
-          ARGS=(--ci --detach --path-as-root . --project "$RAILWAY_PROJECT_ID" --service "$RAILWAY_SERVICE")
+          # Important: do NOT use --detach. If we detach, the GitHub job can succeed while the Railway build/deploy
+          # fails asynchronously, forcing manual redeploy after the pipeline completes.
+          ARGS=(--ci --path-as-root . --project "$RAILWAY_PROJECT_ID" --service "$RAILWAY_SERVICE")
           if [ -n "${RAILWAY_ENVIRONMENT:-}" ]; then
             ARGS+=(--environment "$RAILWAY_ENVIRONMENT")
           fi
           echo "Running: railway up ${ARGS[*]}"
           railway up "${ARGS[@]}"
-          echo "railway up finished successfully (deployment triggered; --detach = async build)"
+          echo "railway up finished successfully (deployment completed)"
+
+      - name: Post-deploy health check (production)
+        env:
+          HEALTH_URL: "https://usesophia.app/api/health"
+        run: |
+          set -euo pipefail
+          echo "Checking health: ${HEALTH_URL}"
+          for i in $(seq 1 24); do
+            if curl -fsS --max-time 10 "${HEALTH_URL}" >/dev/null; then
+              echo "Health OK"
+              exit 0
+            fi
+            echo "Health not ready (attempt ${i}/24); waiting 10s…"
+            sleep 10
+          done
+          echo "::error::Health check failed after deploy"
+          exit 1
