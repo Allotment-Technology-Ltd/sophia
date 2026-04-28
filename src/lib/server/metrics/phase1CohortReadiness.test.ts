@@ -37,7 +37,7 @@ describe('classifyPhase1UrlReadiness', () => {
 		).toBe('skipped_store');
 	});
 
-	it('requires remediating key in stage_ms', () => {
+	it('allows missing remediating in stage_ms when validate / embed / store are evidenced', () => {
 		expect(
 			classifyPhase1UrlReadiness({
 				validate: true,
@@ -45,6 +45,18 @@ describe('classifyPhase1UrlReadiness', () => {
 					stage_ms: { validating: 100, embedding: 50, storing: 20 }
 				}
 			})
-		).toBe('incomplete');
+		).toBe('ready');
+	});
+
+	it('coerces numeric strings in stage_ms', () => {
+		const env = {
+			validate: true,
+			timingTelemetry: {
+				stage_ms: { validating: '10', embedding: '5', storing: '2' },
+				embed_wall_ms: 0,
+				store_wall_ms: 0
+			}
+		} as Record<string, unknown>;
+		expect(classifyPhase1UrlReadiness(env)).toBe('ready');
 	});
 });

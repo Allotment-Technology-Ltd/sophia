@@ -176,6 +176,24 @@ function toIso(value: Timestamp | null | undefined): string | null {
   return value?.toDate?.()?.toISOString() ?? null;
 }
 
+/** Firestore/Neon docs must store `status`, but legacy or partial rows may omit it — avoid defaulting to `failed`. */
+function coerceAdminOperationStatus(data: Partial<AdminOperationDoc> | undefined): AdminOperationStatus {
+  const raw = data?.status;
+  if (typeof raw === 'string' && (ADMIN_OPERATION_STATUSES as readonly string[]).includes(raw)) {
+    return raw as AdminOperationStatus;
+  }
+  if (data?.completed_at && data?.cancelled_at) {
+    return 'cancelled';
+  }
+  if (data?.completed_at) {
+    return data?.last_error ? 'failed' : 'succeeded';
+  }
+  if (data?.started_at) {
+    return 'running';
+  }
+  return 'queued';
+}
+
 function serializeOperation(
   id: string,
   data: Partial<AdminOperationDoc> | undefined
@@ -183,7 +201,7 @@ function serializeOperation(
   return {
     id,
     kind: (data?.kind as AdminOperationKind) ?? 'validate',
-    status: (data?.status as AdminOperationStatus) ?? 'failed',
+    status: coerceAdminOperationStatus(data),
     payload: (data?.payload as Record<string, unknown>) ?? {},
     requested_by_uid: data?.requested_by_uid ?? 'unknown',
     requested_by_email: data?.requested_by_email ?? null,

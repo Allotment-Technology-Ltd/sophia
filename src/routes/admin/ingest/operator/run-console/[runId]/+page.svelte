@@ -2,6 +2,10 @@
   import { page } from '$app/state';
   import { authorizedFetchJson } from '$lib/authorizedFetchJson';
   import IngestionSettingsShell from '$lib/components/admin/ingest/IngestionSettingsShell.svelte';
+  import {
+    INGEST_PIPELINE_DISPLAY_ORDER,
+    INGEST_STAGE_LABELS
+  } from '$lib/admin/ingest/pipelinePresentModel';
 
   type StageState = { status: string; summary?: string };
   type StagesMap = Record<string, StageState>;
@@ -54,29 +58,14 @@
     validate: boolean;
   };
 
-  const PIPELINE_ORDER = [
-    'fetch',
-    'extract',
-    'relate',
-    'group',
-    'embed',
-    'validate',
-    'remediation',
-    'store'
-  ] as const;
-
-  const STAGE_LABELS: Record<string, string> = {
-    fetch: 'Fetch & parse',
-    extract: 'Extract',
-    relate: 'Relate',
-    group: 'Group',
-    embed: 'Embed',
-    validate: 'Validate',
-    remediation: 'Remediate',
-    store: 'Store'
-  };
-
   const runId = $derived((page.params.runId ?? '').trim());
+
+  const pipelineActivityDownloadHref = $derived(
+    runId ? `/api/admin/ingest/run/${encodeURIComponent(runId)}/pipeline-activity` : '#'
+  );
+  const pipelineActivityDownloadFilename = $derived(
+    runId ? `sophia-pipeline-activity-${runId}.json` : 'sophia-pipeline-activity.json'
+  );
 
   let busy = $state(false);
   let err = $state('');
@@ -86,10 +75,12 @@
   let sidebarReport = $state<RunReportEnvelope | null>(null);
 
   let since = $state(0);
-  let pollMs = $state(2500);
+  let pollMs = $state(2000);
   let liveUpdates = $state(true);
   let logsFilter = $state<'all' | 'errors'>('all');
   let logSearch = $state('');
+  /** Recovery panel in bento strip; collapsed by default to keep pipeline high on the page. */
+  let recoveryExpanded = $state(false);
 
   function formatWhenMs(ms: number | null | undefined): string {
     if (!ms || !Number.isFinite(ms)) return '—';
@@ -123,13 +114,23 @@
     return 'rc-tile rc-tile--idle';
   }
 
-  function statusHeroClass(status: string | undefined): string {
+  function stageBadgeClass(status: string | undefined): string {
+    const s = (status ?? 'idle').toLowerCase();
+    if (s === 'done') return 'rc-tile__badge rc-tile__badge--done';
+    if (s === 'running') return 'rc-tile__badge rc-tile__badge--running';
+    if (s === 'error') return 'rc-tile__badge rc-tile__badge--error';
+    if (s === 'skipped') return 'rc-tile__badge rc-tile__badge--skipped';
+    return 'rc-tile__badge rc-tile__badge--idle';
+  }
+
+  /** Compact status strip in bento (mirrors former hero tones). */
+  function stripToneClass(status: string | undefined): string {
     const s = (status ?? '').toLowerCase();
-    if (s === 'error' || s === 'failed') return 'rc-hero rc-hero--err';
-    if (s === 'running' || s === 'queued') return 'rc-hero rc-hero--run';
-    if (s === 'done') return 'rc-hero rc-hero--ok';
-    if (s === 'awaiting_sync' || s === 'awaiting_promote') return 'rc-hero rc-hero--wait';
-    return 'rc-hero';
+    if (s === 'error' || s === 'failed') return 'rc-strip-tile rc-strip-tile--err';
+    if (s === 'running' || s === 'queued') return 'rc-strip-tile rc-strip-tile--run';
+    if (s === 'done') return 'rc-strip-tile rc-strip-tile--ok';
+    if (s === 'awaiting_sync' || s === 'awaiting_promote') return 'rc-strip-tile rc-strip-tile--wait';
+    return 'rc-strip-tile';
   }
 
   function telemetryCostSnippet(tt: unknown): string | null {
@@ -273,6 +274,16 @@
     void navigator.clipboard.writeText(runId);
   }
 
+  /** Poll faster while a worker is active so stage tiles track log-driven activity without multi-second lag. */
+  const liveStatus = $derived(live?.status ?? '');
+  const liveProcessAlive = $derived(live?.processAlive === true);
+  const activeRunPollMs = $derived.by(() => {
+    const base = Math.max(800, Math.min(8000, Math.trunc(pollMs) || 2000));
+    const active =
+      liveProcessAlive || liveStatus === 'running' || liveStatus === 'queued';
+    return active ? Math.min(800, Math.max(450, Math.floor(base * 0.38))) : base;
+  });
+
   $effect(() => {
     void page.params.runId;
     since = 0;
@@ -280,14 +291,15 @@
     report = null;
     sidebarReport = null;
     err = '';
+    recoveryExpanded = false;
     void loadLive(false);
   });
 
   $effect(() => {
     if (!runId) return;
-    const ms = Math.max(1200, Math.min(8000, Math.trunc(pollMs) || 2500));
+    if (!liveUpdates) return;
+    const ms = activeRunPollMs;
     const t = setInterval(() => {
-      if (!liveUpdates) return;
       void loadLive(true);
     }, ms);
     return () => clearInterval(t);
@@ -313,26 +325,7 @@
           <button type="button" class="rc-icon-btn" title="Copy run id" onclick={copyRunId}>Copy</button>
         </p>
         {#if live}
-          <div class={statusHeroClass(live.status)}>
-            <div class="rc-hero__row">
-              <span class="rc-hero__status">{live.status}</span>
-              {#if live.currentStageKey}
-                <span class="rc-hero__stage"
-                  >Current stage: <strong class="font-mono">{live.currentStageKey}</strong></span
-                >
-              {/if}
-            </div>
-            {#if live.currentAction}
-              <p class="rc-hero__action">{live.currentAction}</p>
-            {/if}
-            <p class="rc-hero__sub">
-              Idle <span class="font-mono">{formatDurationMs(live.idleForMs)}</span> · Process
-              <span class="font-mono">{live.processAlive ? 'alive' : 'stopped'}</span>
-              {#if live.processId}
-                · pid <span class="font-mono">{live.processId}</span>
-              {/if}
-            </p>
-          </div>
+          <!-- Status lives in bento strip so pipeline starts higher -->
         {:else if report}
           <div class="rc-hero rc-hero--snap">
             <div class="rc-hero__row">
@@ -356,7 +349,20 @@
         <button type="button" class="op-btn op-btn-link" disabled={busy} onclick={() => void loadLive(false)}>
           {busy ? 'Loading…' : 'Refresh'}
         </button>
-        <button type="button" class="op-btn op-btn-link" onclick={exportPipelineActivityJson}>Export JSON</button>
+        {#if live}
+          <a
+            class="op-btn op-btn-link"
+            href={pipelineActivityDownloadHref}
+            download={pipelineActivityDownloadFilename}
+            title="Full pipeline activity from this server (stages, logs, issues)"
+          >
+            Download pipeline JSON
+          </a>
+        {:else}
+          <button type="button" class="op-btn op-btn-link" onclick={exportPipelineActivityJson}>
+            {report ? 'Download snapshot JSON' : 'Download JSON'}
+          </button>
+        {/if}
         <a class="op-btn op-btn-link" href="/admin/ingest/operator/activity?panel=runs&q={encodeURIComponent(runId)}"
           >Monitoring</a
         >
@@ -368,65 +374,124 @@
     {/if}
 
     {#if live}
-      <section class="rc-recovery" aria-labelledby="rc-recovery-h">
-        <h2 id="rc-recovery-h" class="rc-h2">Resume from failure</h2>
-        <p class="rc-recovery__lead">
-          If the worker exited (OOM, rate limit, deploy), fix the cause then resume from the last Neon checkpoint. Use
-          <strong>Respawn</strong> when this instance lost the child process but the run should continue.
-        </p>
-        {#if live.error}
-          <div class="rc-fatal" role="alert">
-            <p class="rc-fatal__label">Last error</p>
-            <pre class="rc-fatal__text">{live.error}</pre>
-          </div>
-        {/if}
-        <div class="rc-recovery__btns">
-          <button type="button" class="rc-btn rc-btn--primary" disabled={!live.resumable} onclick={() => void resumeRun(false)}>
-            Resume from failure
-          </button>
-          <button
-            type="button"
-            class="rc-btn"
-            disabled={!live.resumable}
-            onclick={() => void resumeRun(true)}
-            title="Respawn worker from checkpoint (stale worker recovery)"
-          >
-            Respawn stale worker
-          </button>
-          <button type="button" class="rc-btn rc-btn--danger" disabled={!live.processAlive} onclick={() => void cancelRun()}>
-            Cancel run
-          </button>
-          <button type="button" class="rc-btn" disabled={!live.awaitingSync} onclick={() => void startSyncToSurreal()}>
-            Sync to Surreal
-          </button>
-        </div>
-        <div class="rc-poll">
-          <label class="op-muted" for="pollMs">Poll interval (ms)</label>
-          <input id="pollMs" class="op-select" type="number" min="1200" max="8000" bind:value={pollMs} />
-        </div>
-      </section>
-
-      <div class="rc-layout">
-        <div class="rc-main">
-          <section class="rc-card" aria-labelledby="rc-pipeline-h">
-            <h2 id="rc-pipeline-h" class="rc-h2">Pipeline progress</h2>
-            <p class="rc-muted">Stage tiles reflect the ingest worker state machine (fetch → … → store).</p>
-            <div class="rc-grid">
-              {#each PIPELINE_ORDER as key (key)}
-                {#if live.stages && live.stages[key]}
-                  {@const st = live.stages[key]}
-                  <div class={stageTileClass(st.status)}>
-                    <div class="rc-tile__label">{STAGE_LABELS[key] ?? key}</div>
-                    <div class="rc-tile__status font-mono text-xs uppercase">{st.status}</div>
-                    {#if st.summary}
-                      <p class="rc-tile__sum">{st.summary}</p>
+      <div class="rc-bento">
+        <div class="rc-bento__pipeline">
+          <section class="rc-card rc-card--pipeline" aria-labelledby="rc-pipeline-h">
+            <div class="rc-card-head rc-card-head--stack">
+              <h2 id="rc-pipeline-h" class="rc-h2">Pipeline</h2>
+              <a
+                class="op-btn op-btn-link rc-card-head__action"
+                href={pipelineActivityDownloadHref}
+                download={pipelineActivityDownloadFilename}
+                title="Download stages, log buffer, and issues as JSON (this server)"
+              >
+                Download JSON
+              </a>
+            </div>
+            <p class="rc-muted rc-muted--tight">
+              <strong>fetch → store</strong> top to bottom. Summaries wrap; use the page scroll if the list is long.
+            </p>
+            <div class="rc-pipeline-track">
+              <div class="rc-pipeline rc-pipeline--vertical" role="list" aria-label="Pipeline stages in execution order">
+                {#each INGEST_PIPELINE_DISPLAY_ORDER as key, stageIndex (key)}
+                  {#if live.stages && live.stages[key]}
+                    {@const st = live.stages[key]}
+                    {#if stageIndex > 0}
+                      <span class="rc-pipeline__link rc-pipeline__link--v" aria-hidden="true">
+                        <span class="rc-pipeline__link-line rc-pipeline__link-line--v"></span>
+                      </span>
                     {/if}
-                  </div>
-                {/if}
-              {/each}
+                    <div class="rc-pipeline__slot rc-pipeline__slot--vertical" role="listitem">
+                      <div
+                        class={stageTileClass(st.status)}
+                        class:rc-tile--focus={live.currentStageKey === key}
+                      >
+                        <div class="rc-tile__head">
+                          <span class="rc-tile__idx">{stageIndex + 1}</span>
+                          <span class="rc-tile__label">{INGEST_STAGE_LABELS[key] ?? key}</span>
+                        </div>
+                        <div class="rc-tile__statusrow">
+                          <span class={stageBadgeClass(st.status)}>{st.status}</span>
+                        </div>
+                        {#if st.summary}
+                          <p class="rc-tile__sum">{st.summary}</p>
+                        {/if}
+                      </div>
+                    </div>
+                  {/if}
+                {/each}
+              </div>
             </div>
           </section>
+        </div>
 
+        <div class="rc-bento__strip">
+          <div class={stripToneClass(live.status)}>
+            <div class="rc-strip-tile__row">
+              <span class="rc-strip-tile__status">{live.status}</span>
+              {#if live.currentStageKey}
+                <span class="rc-strip-tile__stage"
+                  >Stage <strong class="font-mono">{live.currentStageKey}</strong></span
+                >
+              {/if}
+            </div>
+            {#if live.currentAction}
+              <p class="rc-strip-tile__action">{live.currentAction}</p>
+            {/if}
+            <p class="rc-strip-tile__meta">
+              Idle <span class="font-mono">{formatDurationMs(live.idleForMs)}</span> · Process
+              <span class="font-mono">{live.processAlive ? 'alive' : 'stopped'}</span>
+              {#if live.processId}
+                · pid <span class="font-mono">{live.processId}</span>
+              {/if}
+            </p>
+          </div>
+
+          <details class="rc-bento-recovery" bind:open={recoveryExpanded} aria-labelledby="rc-recovery-summary">
+            <summary class="rc-bento-recovery__summary" id="rc-recovery-summary">
+              <span class="rc-bento-recovery__summary-title">Recovery & controls</span>
+              <span class="rc-bento-recovery__summary-hint">Resume, respawn, cancel, sync, poll…</span>
+            </summary>
+            <div class="rc-bento-recovery__body">
+              <p class="rc-recovery__lead rc-recovery__lead--compact">
+                If the worker exited (OOM, rate limit, deploy), fix the cause then resume from the last Neon checkpoint.
+                Use <strong>Respawn</strong> when this instance lost the child process but the run should continue.
+              </p>
+              {#if live.error}
+                <div class="rc-fatal" role="alert">
+                  <p class="rc-fatal__label">Last error</p>
+                  <pre class="rc-fatal__text">{live.error}</pre>
+                </div>
+              {/if}
+              <div class="rc-recovery__btns">
+                <button type="button" class="rc-btn rc-btn--primary" disabled={!live.resumable} onclick={() => void resumeRun(false)}>
+                  Resume from failure
+                </button>
+                <button
+                  type="button"
+                  class="rc-btn"
+                  disabled={!live.resumable}
+                  onclick={() => void resumeRun(true)}
+                  title="Respawn worker from checkpoint (stale worker recovery)"
+                >
+                  Respawn stale worker
+                </button>
+                <button type="button" class="rc-btn rc-btn--danger" disabled={!live.processAlive} onclick={() => void cancelRun()}>
+                  Cancel run
+                </button>
+                <button type="button" class="rc-btn" disabled={!live.awaitingSync} onclick={() => void startSyncToSurreal()}>
+                  Sync to Surreal
+                </button>
+              </div>
+              <div class="rc-poll">
+                <label class="op-muted" for="pollMs">Poll interval (ms)</label>
+                <input id="pollMs" class="op-select" type="number" min="1200" max="8000" bind:value={pollMs} />
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <div class="rc-bento__main">
           <section class="rc-card" aria-labelledby="rc-active-h">
             <h2 id="rc-active-h" class="rc-h2">Active stage</h2>
             {#if live.currentAction}
@@ -467,7 +532,7 @@
           </section>
         </div>
 
-        <aside class="rc-side">
+        <aside class="rc-bento__side">
           <div class="rc-card">
             <h3 class="rc-h3">Cost & telemetry</h3>
             {#if telemetryCostSnippet(sidebarReport?.timingTelemetry ?? null)}
@@ -569,8 +634,8 @@
     gap: 1rem;
     justify-content: space-between;
     align-items: flex-start;
-    margin-bottom: 1.25rem;
-    padding-bottom: 1rem;
+    margin-bottom: 0.85rem;
+    padding-bottom: 0.85rem;
     border-bottom: 1px solid color-mix(in srgb, var(--color-border) 85%, transparent);
   }
   .rc-run-id {
@@ -658,6 +723,31 @@
     cursor: pointer;
     margin-right: 0.5rem;
   }
+  .rc-card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem 1rem;
+    margin-bottom: 0.35rem;
+  }
+  .rc-card-head .rc-h2 {
+    margin: 0;
+  }
+  .rc-card-head__action {
+    margin-bottom: 0 !important;
+    flex-shrink: 0;
+  }
+  .rc-card-head--stack {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+  }
+  .rc-muted--tight {
+    margin: 0 0 0.5rem !important;
+    font-size: 0.8rem;
+    max-width: none;
+  }
   .rc-h2 {
     margin: 0 0 0.35rem;
     font-size: 1.05rem;
@@ -677,13 +767,6 @@
     line-height: 1.45;
     opacity: 0.88;
     max-width: 50rem;
-  }
-  .rc-recovery {
-    margin-bottom: 1.25rem;
-    padding: 1.1rem 1.2rem;
-    border-radius: 12px;
-    border: 1px solid color-mix(in srgb, var(--color-sage) 35%, var(--color-border));
-    background: color-mix(in srgb, var(--color-sage) 6%, var(--color-surface));
   }
   .rc-recovery__lead {
     margin: 0 0 1rem;
@@ -748,17 +831,155 @@
     font-size: 0.8rem;
     line-height: 1.4;
   }
-  .rc-layout {
+  /* Bento: pipeline column spans rows; strip spans top of cols 2–3; main + side share row 2 */
+  .rc-bento {
     display: grid;
-    grid-template-columns: 1fr min(340px, 32vw);
-    gap: 1.25rem;
+    gap: 1rem;
+    grid-template-columns: minmax(220px, min(26vw, 280px)) minmax(0, 1fr) minmax(240px, min(32vw, 300px));
+    grid-template-rows: auto 1fr;
     align-items: start;
   }
-  @media (max-width: 1024px) {
-    .rc-layout {
-      grid-template-columns: 1fr;
+  .rc-bento__pipeline {
+    grid-column: 1;
+    grid-row: 1 / -1;
+    min-width: 0;
+  }
+  .rc-bento__strip {
+    grid-column: 2 / -1;
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    min-width: 0;
+  }
+  .rc-bento__main {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+  }
+  .rc-bento__side {
+    grid-column: 3;
+    grid-row: 2;
+    min-width: 0;
+  }
+  @media (min-width: 1101px) {
+    .rc-bento__pipeline {
+      position: sticky;
+      top: 0.65rem;
+      align-self: start;
     }
   }
+  @media (max-width: 1100px) {
+    .rc-bento {
+      display: flex;
+      flex-direction: column;
+    }
+    .rc-bento__strip {
+      order: 1;
+    }
+    .rc-bento__pipeline {
+      order: 2;
+      position: static;
+      max-height: none;
+    }
+    .rc-bento__main {
+      order: 3;
+    }
+    .rc-bento__side {
+      order: 4;
+      width: 100%;
+    }
+  }
+
+  .rc-strip-tile {
+    border-radius: 12px;
+    padding: 0.55rem 0.85rem;
+    border: 1px solid var(--color-border);
+    background: color-mix(in srgb, var(--color-surface) 92%, black);
+  }
+  .rc-strip-tile--run {
+    border-color: color-mix(in srgb, #3b82f6 45%, var(--color-border));
+    background: color-mix(in srgb, #3b82f6 11%, var(--color-surface));
+  }
+  .rc-strip-tile--ok {
+    border-color: color-mix(in srgb, var(--color-sage) 48%, var(--color-border));
+  }
+  .rc-strip-tile--err {
+    border-color: color-mix(in srgb, #f87171 45%, var(--color-border));
+    background: color-mix(in srgb, #ef4444 9%, var(--color-surface));
+  }
+  .rc-strip-tile--wait {
+    border-color: color-mix(in srgb, #eab308 38%, var(--color-border));
+    background: color-mix(in srgb, #eab308 7%, var(--color-surface));
+  }
+  .rc-strip-tile__row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    align-items: baseline;
+  }
+  .rc-strip-tile__status {
+    font-size: 1rem;
+    font-weight: 600;
+    font-family: var(--font-serif, ui-serif, Georgia, serif);
+    text-transform: capitalize;
+  }
+  .rc-strip-tile__stage {
+    font-size: 0.82rem;
+    opacity: 0.92;
+  }
+  .rc-strip-tile__action {
+    margin: 0.35rem 0 0;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+  .rc-strip-tile__meta {
+    margin: 0.35rem 0 0;
+    font-size: 0.74rem;
+    opacity: 0.82;
+  }
+
+  .rc-bento-recovery {
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--color-sage) 32%, var(--color-border));
+    background: color-mix(in srgb, var(--color-sage) 5%, var(--color-surface));
+    overflow: hidden;
+  }
+  .rc-bento-recovery__summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 0.5rem 0.85rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.35rem 1rem;
+  }
+  .rc-bento-recovery__summary::-webkit-details-marker {
+    display: none;
+  }
+  .rc-bento-recovery__summary-title {
+    font-weight: 650;
+    font-size: 0.88rem;
+  }
+  .rc-bento-recovery__summary-hint {
+    font-size: 0.76rem;
+    opacity: 0.75;
+  }
+  .rc-bento-recovery__body {
+    padding: 0 0.85rem 0.85rem;
+    border-top: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent);
+  }
+  .rc-recovery__lead--compact {
+    margin: 0 0 0.65rem;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    max-width: none;
+  }
+
   .rc-card {
     border-radius: 12px;
     border: 1px solid var(--color-border);
@@ -769,54 +990,220 @@
   .rc-snapshot {
     margin-top: 0.5rem;
   }
-  .rc-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 0.6rem;
+  .rc-pipeline-track {
+    position: relative;
+    margin-top: 0.35rem;
+    padding: 0.55rem 0.45rem 0.65rem;
+    border-radius: 14px;
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-surface) 92%, black 8%) 0%,
+      color-mix(in srgb, black 18%, var(--color-surface)) 100%
+    );
+    border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, white 6%, transparent);
+    overflow: visible;
+  }
+  .rc-pipeline.rc-pipeline--vertical {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    width: 100%;
+    min-width: 0;
+    padding: 0.15rem 0.1rem;
+    margin: 0;
+  }
+  .rc-pipeline__link--v {
+    display: flex;
+    justify-content: center;
+    align-items: stretch;
+    width: 100%;
+    flex: 0 0 auto;
+    padding: 1px 0 3px;
+    min-height: 14px;
+  }
+  .rc-pipeline__link-line--v {
+    position: relative;
+    width: 3px;
+    height: 14px;
+    min-height: 14px;
+    border-radius: 3px;
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-border) 50%, transparent),
+      color-mix(in srgb, var(--color-sage) 42%, var(--color-border) 58%)
+    );
+    opacity: 0.95;
+  }
+  .rc-pipeline__link-line--v::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: -5px;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 6px 5px 0 5px;
+    border-color: color-mix(in srgb, var(--color-sage) 48%, var(--color-border)) transparent transparent transparent;
+  }
+  .rc-pipeline__slot--vertical {
+    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    display: flex;
   }
   .rc-tile {
-    border-radius: 10px;
-    padding: 0.65rem 0.7rem;
+    width: 100%;
+    min-width: 0;
+    border-radius: 12px;
+    padding: 0.55rem 0.6rem 0.6rem;
     border: 1px solid var(--color-border);
-    background: color-mix(in srgb, black 12%, var(--color-surface));
+    background: color-mix(in srgb, black 16%, var(--color-surface));
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    transition:
+      border-color 0.2s ease,
+      box-shadow 0.2s ease;
   }
   .rc-tile--done {
-    border-color: color-mix(in srgb, var(--color-sage) 45%, var(--color-border));
+    border-color: color-mix(in srgb, var(--color-sage) 48%, var(--color-border));
+    background: color-mix(in srgb, var(--color-sage) 10%, var(--color-surface));
   }
   .rc-tile--run {
-    border-color: color-mix(in srgb, #3b82f6 50%, var(--color-border));
-    box-shadow: 0 0 0 1px color-mix(in srgb, #3b82f6 25%, transparent);
+    border-color: color-mix(in srgb, #3b82f6 55%, var(--color-border));
+    animation: rc-tile-run-glow 2.8s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .rc-tile--run {
+      animation: none;
+      box-shadow: 0 0 0 1px color-mix(in srgb, #3b82f6 25%, transparent);
+    }
+  }
+  @keyframes rc-tile-run-glow {
+    0%,
+    100% {
+      box-shadow:
+        0 0 0 1px color-mix(in srgb, #3b82f6 22%, transparent),
+        0 2px 12px color-mix(in srgb, #3b82f6 8%, transparent);
+    }
+    50% {
+      box-shadow:
+        0 0 0 2px color-mix(in srgb, #3b82f6 32%, transparent),
+        0 4px 22px color-mix(in srgb, #3b82f6 14%, transparent);
+    }
   }
   .rc-tile--err {
     border-color: color-mix(in srgb, #f87171 55%, var(--color-border));
-    background: color-mix(in srgb, #ef4444 10%, var(--color-surface));
+    background: color-mix(in srgb, #ef4444 14%, var(--color-surface));
   }
   .rc-tile--skip {
-    opacity: 0.55;
+    opacity: 0.58;
   }
   .rc-tile--idle {
-    opacity: 0.75;
+    opacity: 0.82;
+  }
+  .rc-tile--focus {
+    outline: 2px solid color-mix(in srgb, var(--color-blue) 55%, transparent);
+    outline-offset: 2px;
+  }
+  .rc-tile__head {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+    margin-bottom: 0.4rem;
+    min-width: 0;
+  }
+  .rc-tile__idx {
+    flex-shrink: 0;
+    width: 1.35rem;
+    height: 1.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.68rem;
+    font-weight: 700;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--color-border) 55%, transparent);
+    color: var(--color-text);
+    line-height: 1;
+  }
+  .rc-tile--run .rc-tile__idx {
+    background: color-mix(in srgb, #3b82f6 42%, var(--color-surface));
+    color: #f8fafc;
+    border: 1px solid color-mix(in srgb, #60a5fa 40%, transparent);
   }
   .rc-tile__label {
-    font-size: 0.78rem;
-    font-weight: 600;
-    margin-bottom: 0.2rem;
+    font-size: 0.74rem;
+    font-weight: 650;
+    line-height: 1.28;
+    font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    color: var(--color-text);
+    min-width: 0;
   }
-  .rc-tile__status {
-    opacity: 0.9;
-    margin-bottom: 0.25rem;
+  .rc-tile__statusrow {
+    margin-bottom: 0.15rem;
+  }
+  .rc-tile__badge {
+    display: inline-block;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.6rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.22rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--color-border) 85%, transparent);
+    line-height: 1.2;
+  }
+  .rc-tile__badge--idle {
+    opacity: 0.88;
+    background: color-mix(in srgb, var(--color-surface) 80%, black 20%);
+  }
+  .rc-tile__badge--running {
+    background: color-mix(in srgb, #3b82f6 26%, var(--color-surface));
+    border-color: color-mix(in srgb, #3b82f6 50%, var(--color-border));
+    color: #e0f2fe;
+  }
+  .rc-tile__badge--done {
+    background: color-mix(in srgb, var(--color-sage) 22%, var(--color-surface));
+    border-color: color-mix(in srgb, var(--color-sage) 45%, var(--color-border));
+  }
+  .rc-tile__badge--error {
+    background: color-mix(in srgb, #ef4444 22%, var(--color-surface));
+    border-color: color-mix(in srgb, #f87171 50%, var(--color-border));
+    color: #fecaca;
+  }
+  .rc-tile__badge--skipped {
+    opacity: 0.75;
+    background: color-mix(in srgb, var(--color-surface) 70%, black 30%);
   }
   .rc-tile__sum {
-    margin: 0;
-    font-size: 0.72rem;
-    line-height: 1.35;
-    opacity: 0.85;
+    margin: 0.35rem 0 0;
+    padding-top: 0.35rem;
+    border-top: 1px solid color-mix(in srgb, var(--color-border) 45%, transparent);
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.66rem;
+    line-height: 1.45;
+    opacity: 0.9;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    hyphens: auto;
+    min-width: 0;
   }
   .rc-active__text {
     margin: 0;
     font-size: 0.92rem;
     line-height: 1.5;
-    max-width: 48rem;
+    max-width: none;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
   .rc-logs-head {
     display: flex;

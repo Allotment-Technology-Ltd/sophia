@@ -14,9 +14,14 @@ export const GET: RequestHandler = async ({ locals, request }) => {
 	try {
 		assertAdminAccess(locals);
 		const targetDim = getEmbeddingDimensions();
+		/** Default 30s; cap 180s — Surreal Cloud aggregate queries often exceed a few seconds. */
+		const INVENTORY_TIMEOUT_MAX_MS = 180_000;
 		const timeoutMs = Math.max(
 			1000,
-			Math.min(30_000, Math.trunc(Number(process.env.ADMIN_REEMBED_INVENTORY_TIMEOUT_MS ?? '6500')) || 6500)
+			Math.min(
+				INVENTORY_TIMEOUT_MAX_MS,
+				Math.trunc(Number(process.env.ADMIN_REEMBED_INVENTORY_TIMEOUT_MS ?? '30000')) || 30_000
+			)
 		);
 		const perSourceLimit = Math.max(
 			0,
@@ -33,7 +38,15 @@ export const GET: RequestHandler = async ({ locals, request }) => {
 				? getReembedCorpusInventoryWithDiagnostics(targetDim, { perSourceLimit, cacheTtlMs })
 				: getReembedCorpusInventory(targetDim, { perSourceLimit, cacheTtlMs })),
 			new Promise<never>((_, reject) =>
-				setTimeout(() => reject(new Error(`Inventory timed out after ${timeoutMs}ms`)), timeoutMs)
+				setTimeout(
+					() =>
+						reject(
+							new Error(
+								`Inventory timed out after ${timeoutMs}ms — increase ADMIN_REEMBED_INVENTORY_TIMEOUT_MS (max ${INVENTORY_TIMEOUT_MAX_MS}) if Surreal is slow.`
+							)
+						),
+					timeoutMs
+				)
 			)
 		]);
 		const payload =

@@ -15,6 +15,17 @@
     operatorPhasePinsToModelChain,
     operatorPhasePinsToWorkerExtras
   } from '$lib/ingestion/operatorPhasePins';
+  import {
+    DEFAULT_GUTENBERG_PHILOSOPHY_DOMAIN,
+    GUTENBERG_PHILOSOPHY_DOMAINS,
+    type GutenbergPhilosophyDomainId,
+    isGutenbergPhilosophyDomainId
+  } from '$lib/admin/gutenbergPhilosophyDomains';
+  import {
+    GATE_BOOTSTRAP_QUERY_FLAG,
+    GATE_BOOTSTRAP_STORAGE_KEY,
+    type OperatorGateBootstrapV1
+  } from '$lib/ingestion/operatorGateBootstrap';
 
   type WizardStepId = 'configure' | 'sources' | 'mode' | 'review' | 'monitor' | 'continue';
   let step = $state<WizardStepId>('configure');
@@ -44,6 +55,7 @@
   let sourceCatalog = $state<SourceCatalogId>('sep');
   let gutenbergIdsInput = $state('2680\n45109');
   let gutenbergSuggestLimit = $state<string | number>(10);
+  let gutenbergDomain = $state<GutenbergPhilosophyDomainId>(DEFAULT_GUTENBERG_PHILOSOPHY_DOMAIN);
   let gutenbergExcludeIngested = $state(true);
   let gutenbergSuggestBusy = $state(false);
   let gutenbergSuggestMsg = $state('');
@@ -175,6 +187,9 @@
       if (typeof p.gutenbergExcludeIngested === 'boolean') {
         gutenbergExcludeIngested = p.gutenbergExcludeIngested;
       }
+      if (typeof p.gutenbergDomain === 'string' && isGutenbergPhilosophyDomainId(p.gutenbergDomain)) {
+        gutenbergDomain = p.gutenbergDomain;
+      }
     } catch {
       /* ignore */
     }
@@ -219,10 +234,10 @@
           extractionPinnedProviderModel,
           preferTogetherForDurableJobs,
           preferTogetherModelId,
-          applyOperatorPhaseModelPins
-					,
+          applyOperatorPhaseModelPins,
           gutenbergSuggestLimit,
-          gutenbergExcludeIngested
+          gutenbergExcludeIngested,
+          gutenbergDomain
         })
       );
     } catch {
@@ -260,6 +275,48 @@
     const next = new URL(window.location.href);
     next.searchParams.delete('prefillUrl');
     void goto(`${next.pathname}${next.search}`, { replaceState: true, noScroll: true });
+  }
+
+  function hydrateCatalogFromQuery(): void {
+    const c = page.url.searchParams.get('catalog')?.trim().toLowerCase();
+    if (c === 'sep' || c === 'gutenberg') sourceCatalog = c;
+  }
+
+  function hydrateGateBootstrapFromSession(): void {
+    if (typeof window === 'undefined') return;
+    const flag = page.url.searchParams.get(GATE_BOOTSTRAP_QUERY_FLAG);
+    if (flag !== '1') return;
+    const raw = sessionStorage.getItem(GATE_BOOTSTRAP_STORAGE_KEY);
+    if (!raw) {
+      submitMsg =
+        'No saved gate bootstrap found — use “Open Operator with settings” from Inquiry corpus suggested actions.';
+      const next = new URL(window.location.href);
+      next.searchParams.delete(GATE_BOOTSTRAP_QUERY_FLAG);
+      void goto(`${next.pathname}${next.search}`, { replaceState: true, noScroll: true });
+      return;
+    }
+    let data: OperatorGateBootstrapV1;
+    try {
+      data = JSON.parse(raw) as OperatorGateBootstrapV1;
+      if (data.v !== 1 || !Array.isArray(data.urls)) return;
+    } catch {
+      return;
+    }
+    if (data.urls.length) urlsInput = data.urls.join('\n');
+    validateLlm = data.validateLlm;
+    jobValidationTailOnly = data.jobValidationTailOnly;
+    mergeIntoRunningJob = data.mergeIntoRunningJob;
+    jobForceReingest = data.jobForceReingest;
+    if (data.notes?.trim()) notes = data.notes;
+    if (data.sourceCatalog === 'sep' || data.sourceCatalog === 'gutenberg') sourceCatalog = data.sourceCatalog;
+    sessionStorage.removeItem(GATE_BOOTSTRAP_STORAGE_KEY);
+    step = 'sources';
+    const next = new URL(window.location.href);
+    next.searchParams.set('step', 'sources');
+    next.searchParams.delete(GATE_BOOTSTRAP_QUERY_FLAG);
+    void goto(`${next.pathname}${next.search}`, { replaceState: true, noScroll: true });
+    submitMsg =
+      'Loaded suggested job settings from the Inquiry corpus gate. Review Sources and Mode before starting.';
   }
 
   const urlCount = $derived(parseUrls(urlsInput).length);
@@ -688,13 +745,21 @@
       const n = Math.max(1, Math.min(200, Math.trunc(Number(gutenbergSuggestLimit)) || 10));
       params.set('limit', String(n));
       params.set('excludeIngested', gutenbergExcludeIngested ? '1' : '0');
+      params.set('domain', gutenbergDomain);
       const body = await authorizedFetchJson<Record<string, unknown>>(`/api/admin/ingest/gutenberg-suggest?${params.toString()}`);
       const urls = Array.isArray(body?.urls) ? (body.urls as string[]) : [];
       urlsInput = urls.join('\n');
-      const stats = body?.stats as { fetchedBooks?: number; keptPhilosophy?: number; excludedIngested?: number; returned?: number } | undefined;
+      const stats = body?.stats as {
+        domain?: string;
+        fetchedBooks?: number;
+        keptPhilosophy?: number;
+        excludedIngested?: number;
+        returned?: number;
+      } | undefined;
+      const domainLabel = GUTENBERG_PHILOSOPHY_DOMAINS.find((d) => d.id === stats?.domain)?.label ?? gutenbergDomain;
       gutenbergSuggestMsg = urls.length === 0
-        ? 'No philosophy-tagged Gutenberg books returned.'
-        : `Placed ${urls.length} URL(s). Fetched ${stats?.fetchedBooks ?? '—'} · kept philosophy ${stats?.keptPhilosophy ?? '—'} · skipped ingested ${stats?.excludedIngested ?? 0}.`;
+        ? `No Gutenberg books matched domain “${domainLabel}”. Try another domain or disable exclude.`
+        : `Placed ${urls.length} URL(s) · ${domainLabel}. Fetched ${stats?.fetchedBooks ?? '—'} · kept after filter ${stats?.keptPhilosophy ?? '—'} · skipped ingested ${stats?.excludedIngested ?? 0}.`;
     } catch (e) {
       gutenbergSuggestMsg = e instanceof Error ? e.message : 'Failed to suggest Gutenberg URLs.';
     } finally {
@@ -759,6 +824,8 @@
     hydrateStepFromUrl();
     hydrateWorkspaceSettings();
     prefillUrlFromQueryParam();
+    hydrateCatalogFromQuery();
+    hydrateGateBootstrapFromSession();
     void loadMission();
     void loadSepPresets();
     // Lightweight polling only while Mission Control is visible.
@@ -778,7 +845,10 @@
       validateLlm +
       mergeIntoRunningJob +
       jobValidationTailOnly +
-      runMode
+      runMode +
+      Number(gutenbergSuggestLimit) +
+      (gutenbergExcludeIngested ? 1 : 0) +
+      gutenbergDomain.length
     );
     persistWorkspaceSettings();
   });
@@ -993,7 +1063,15 @@
                 <p class="op-muted" style="margin:0 0 10px;">
                   <strong>Philosophy-only retrieval</strong>
                 </p>
-                <div class="op-row" style="margin-top: 0;">
+                <div class="op-row" style="margin-top: 0; flex-wrap: wrap;">
+                  <label class="op-label">
+                    Philosophical domain
+                    <select class="op-select" bind:value={gutenbergDomain} title="Gutendex search + metadata filter for this area">
+                      {#each GUTENBERG_PHILOSOPHY_DOMAINS as d (d.id)}
+                        <option value={d.id} title={d.description}>{d.label}</option>
+                      {/each}
+                    </select>
+                  </label>
                   <label class="op-label">
                     Suggest count
                     <input class="op-input" type="number" min="1" max="200" bind:value={gutenbergSuggestLimit} />
@@ -1007,9 +1085,9 @@
                     class="op-btn op-btn-primary"
                     disabled={gutenbergSuggestBusy}
                     onclick={() => void fillUrlsFromGutenbergPhilosophy()}
-                    title="Fetch Gutenberg candidates tagged with Philosophy (Gutendex), then fill the URL list"
+                    title="Fetch English Gutenberg candidates from Gutendex for the selected domain, then fill the URL list"
                   >
-                    {gutenbergSuggestBusy ? 'Retrieving…' : 'Retrieve philosophy Gutenberg sources'}
+                    {gutenbergSuggestBusy ? 'Retrieving…' : 'Retrieve Gutenberg sources'}
                   </button>
                 </div>
                 {#if gutenbergSuggestMsg}
@@ -1275,8 +1353,8 @@
           </p>
           <div class="op-actions">
             <a class="op-btn op-btn-link" href="/admin/ingest/operator/activity">Open Monitoring</a>
-            <a class="op-btn op-btn-link" href="/admin/ingest/operator/activity?panel=dlq">Open DLQ</a>
-            <a class="op-btn op-btn-link" href="/admin/ingest/operator/activity?panel=promote">Open promote queue</a>
+            <a class="op-btn op-btn-link" href="/admin/ingest/operator/triage?panel=dlq">Open DLQ</a>
+            <a class="op-btn op-btn-link" href="/admin/ingest/operator/triage?panel=promote">Open promote queue</a>
             <button type="button" class="op-btn" onclick={() => setStep('continue')}>Go to promote</button>
           </div>
 
@@ -1318,7 +1396,7 @@
                 <ul class="op-list">
                   {#each awaitingNeon.slice(0, 10) as r (r.id)}
                     <li class="op-li">
-                      <button type="button" class="op-li-link" onclick={() => (window.location.href = `/admin/ingest/operator/activity?panel=promote&q=${encodeURIComponent(r.id)}`)}>
+                      <button type="button" class="op-li-link" onclick={() => (window.location.href = `/admin/ingest/operator/triage?panel=promote&q=${encodeURIComponent(r.id)}`)}>
                         {r.id.slice(0, 10)}…
                       </button>
                       <span class="op-li-url">{r.sourceUrl}</span>
@@ -1339,7 +1417,7 @@
                 <strong class="op-mono">{dlqItems.length}</strong> item(s) currently in DLQ.
               </p>
               <div class="op-actions">
-                <a class="op-btn op-btn-link" href="/admin/ingest/operator/activity?panel=dlq">Open DLQ</a>
+                <a class="op-btn op-btn-link" href="/admin/ingest/operator/triage?panel=dlq">Open DLQ</a>
               </div>
               {#if dlqMsg}
                 <p class="op-msg" role="status">{dlqMsg}</p>

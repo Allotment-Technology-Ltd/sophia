@@ -26,6 +26,11 @@ import {
 	extractLexicalTerms,
 	fuseHybridCandidates
 } from './hybridCandidateGeneration';
+import {
+	IDEAL_RETRIEVAL_ORIGIN_FRACTIONS,
+	isRetrievalKgBalanceEnabled,
+	originBucketForRetrievalBalance
+} from './knowledgeGraphRetrievalBalance';
 import { constructSeedSet, type SeedBalanceStats } from './seedSetConstructor';
 
 /** SurrealDB KNN: `<|k,ef|>` — ef tunes HNSW/ANN search breadth (see Surreal vector docs). */
@@ -573,6 +578,8 @@ export async function retrieveContext(
 			review_state?: string;
 			section_context: string | null;
 			source_id: string;
+			source_url?: string | null;
+			source_source_type?: string | null;
 			source_title: string;
 			source_author: string[];
 		};
@@ -618,6 +625,8 @@ export async function retrieveContext(
 			review_state,
 			section_context,
 			source.id AS source_id,
+			source.url AS source_url,
+			source.source_type AS source_source_type,
 			source.title AS source_title,
 			source.author AS source_author`;
 
@@ -758,10 +767,26 @@ export async function retrieveContext(
 			};
 		}
 
-		const seedSet = constructSeedSet({
+		const domainsInPool = new Set<string>();
+		for (const s of vettedSeedPool) {
+			domainsInPool.add(String(s.domain ?? 'unknown'));
+		}
+
+		const seedSet = constructSeedSet<SeedRow>({
 			candidates: vettedSeedPool,
 			topK,
-			queryEmbedding
+			queryEmbedding,
+			...(isRetrievalKgBalanceEnabled()
+				? {
+						kgBalance: {
+							idealOrigin: IDEAL_RETRIEVAL_ORIGIN_FRACTIONS,
+							domainsInPool,
+							getOrigin: (c) =>
+								originBucketForRetrievalBalance(c.source_url ?? null, c.source_source_type ?? null),
+							getDomainKey: (c) => String(c.domain ?? 'unknown')
+						}
+					}
+				: {})
 		});
 		seedClaims = seedSet.seeds;
 

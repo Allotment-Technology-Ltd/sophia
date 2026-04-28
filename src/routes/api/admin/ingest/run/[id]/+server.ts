@@ -16,16 +16,30 @@ export const GET: RequestHandler = async ({ locals, params }) => {
     return json({ error: 'Run not found' }, { status: 404 });
   }
 
+  const processAlive = Boolean(
+    state.process &&
+      typeof state.process.exitCode !== 'number' &&
+      !state.process.killed
+  );
+
   return json({
     id: state.id,
     status: state.status,
+    awaitingSync: state.status === 'awaiting_sync',
+    awaitingPromote: state.status === 'awaiting_promote',
     stages: state.stages,
     logLines: state.logLines,
     issues: state.issues,
     issueCount: state.issues.length,
     error: state.error,
+    currentStageKey: state.currentStageKey ?? null,
+    currentAction: state.currentAction ?? null,
+    lastFailureStageKey: state.lastFailureStageKey ?? null,
+    resumable: state.resumable === true,
+    validate: state.payload.validate === true,
     createdAt: state.createdAt,
     completedAt: state.completedAt,
-    excludeFromBatchSuggest: state.excludeFromBatchSuggest === true
+    excludeFromBatchSuggest: state.excludeFromBatchSuggest === true,
+    processAlive
   });
 };
