@@ -36,7 +36,7 @@ async function dimBuckets(): Promise<EmbeddingDimBucket[]> {
 		`SELECT array::len(embedding) AS dim, count() AS count
      FROM claim
      WHERE embedding IS NOT NONE
-     GROUP BY array::len(embedding)`
+     GROUP BY dim`
 	);
 	const list = Array.isArray(rows) ? rows : [];
 	return list

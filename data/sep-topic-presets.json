@@ -72,6 +72,30 @@
       ]
     },
     {
+      "id": "stoicism",
+      "label": "Stoicism",
+      "slugContainsAny": [
+        "stoicism",
+        "stoic",
+        "epictetus",
+        "marcus-aurelius",
+        "seneca"
+      ]
+    },
+    {
+      "id": "existentialism",
+      "label": "Existentialism",
+      "slugContainsAny": [
+        "existentialism",
+        "existential",
+        "kierkegaard",
+        "sartre",
+        "camus",
+        "heidegger",
+        "nietzsche"
+      ]
+    },
+    {
       "id": "philosophy_of_mind",
       "label": "Philosophy of mind",
       "slugContainsAny": [

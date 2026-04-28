@@ -1,11 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { assertAdminAccess } from '$lib/server/adminAccess';
-import {
-	createIngestionJob,
-	listRecentIngestionJobs,
-	tickAllRunningIngestionJobs
-} from '$lib/server/ingestionJobs';
+import { createIngestionJob, listRecentIngestionJobs } from '$lib/server/ingestionJobs';
 import { isNeonIngestPersistenceEnabled } from '$lib/server/neon/datastore';
 import { MAX_DURABLE_INGEST_JOB_CONCURRENCY } from '$lib/ingestionJobConcurrency';
 
@@ -16,17 +12,8 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 			return json({ error: 'Neon ingest persistence is not enabled (DATABASE_URL + config).' }, { status: 503 });
 		}
 		const limit = Math.max(1, Math.min(100, Number.parseInt(url.searchParams.get('limit') ?? '40', 10) || 40));
-		/** Global tick can take minutes with many jobs and blocks this response — list UI uses tick=0 by default. */
-		const runTick = ['1', 'true', 'yes'].includes((url.searchParams.get('tick') ?? '').trim().toLowerCase());
-		let globalTickJobsProcessed: number | undefined;
-		if (runTick) {
-			globalTickJobsProcessed = await tickAllRunningIngestionJobs();
-		}
 		const jobs = await listRecentIngestionJobs(limit);
-		return json({
-			jobs,
-			...(runTick ? { globalTickJobsProcessed } : {})
-		});
+		return json({ jobs });
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Failed to list jobs';
 		return json({ error: message }, { status: 500 });

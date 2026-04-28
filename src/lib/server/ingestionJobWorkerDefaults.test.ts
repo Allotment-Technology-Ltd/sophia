@@ -12,12 +12,18 @@ describe('sanitizeIngestionJobWorkerDefaults', () => {
       extractionConcurrency: 4,
       passageInsertConcurrency: 10,
       claimInsertConcurrency: 16,
-      remediationMaxClaims: 20
+      remediationMaxClaims: 20,
+      globalMaxConcurrentTogether: 2,
+      globalMaxConcurrentVoyage: 1,
+      relateStoreConcurrency: 4
     });
     expect(o?.extractionConcurrency).toBe(4);
     expect(o?.passageInsertConcurrency).toBe(10);
     expect(o?.claimInsertConcurrency).toBe(16);
     expect(o?.remediationMaxClaims).toBe(20);
+    expect(o?.globalMaxConcurrentTogether).toBe(2);
+    expect(o?.globalMaxConcurrentVoyage).toBe(1);
+    expect(o?.relateStoreConcurrency).toBe(4);
   });
 
   it('drops out-of-range values', () => {

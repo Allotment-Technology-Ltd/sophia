@@ -11,6 +11,7 @@ import {
 } from '../src/lib/server/ingestion/stages/relations-helpers.js';
 import {
 	analyzeGroupingReferenceHealth,
+	analyzeGroupingDegeneration,
 	buildGroupingBatches,
 	mergeGroupingOutputs,
 	normalizeGroupingPayload
@@ -47,6 +48,17 @@ type StageUsageTracker = {
 	startUsd: number;
 	retries: number;
 };
+
+function summarizeGroupingRoles(arguments_: GroupingOutput): Record<string, number> {
+	const counts: Record<string, number> = {};
+	for (const arg of arguments_) {
+		for (const c of arg.claims) {
+			const role = (c as { role?: string }).role ?? 'key_premise';
+			counts[role] = (counts[role] ?? 0) + 1;
+		}
+	}
+	return counts;
+}
 
 function estimateTokens(text: string): number {
 	return Math.ceil(text.split(/\s+/).length * 1.3);
@@ -244,8 +256,12 @@ export async function rerunRelationsAndGroupingForRemediation(opts: {
 			`  [INFO] [REMEDIATION RERUN] Grouping batch target capped: ${groupingCap.requested.toLocaleString()} → ${groupingCap.value.toLocaleString()}`
 		);
 	}
+	// Remediation reruns can balloon prompt size (claims+relations JSON). Keep grouping batches small so:
+	// - Together stays well under context limits
+	// - outputs don't truncate at max output tokens
+	const remediationGroupingTarget = Math.min(grpTarget, 2_000);
 
-	let groupingBatches = buildGroupingBatches(allClaims, relations, grpTarget);
+	let groupingBatches = buildGroupingBatches(allClaims, relations, remediationGroupingTarget);
 	console.log(`  [REMEDIATION RERUN] Grouping: ${groupingBatches.length} batch(es)`);
 
 	const groupingPlanningContext: IngestionPlanningContext = {
@@ -261,15 +277,31 @@ export async function rerunRelationsAndGroupingForRemediation(opts: {
 		const claimsJson = JSON.stringify(batch.claims, null, 2);
 		const relationsJson = JSON.stringify(batch.relations, null, 2);
 		const grpUserMsg = GROUPING_USER(claimsJson, relationsJson);
-		const grpRawResponse = await callStageModel({
-			stage: 'grouping',
-			plan: groupingPlan,
-			budget: groupingBudget,
-			tracker: groupingTracker,
-			systemPrompt: GROUPING_SYSTEM,
-			userMessage: grpUserMsg,
-			planningContext: groupingPlanningContext
-		});
+		let grpRawResponse: string;
+		try {
+			grpRawResponse = await callStageModel({
+				stage: 'grouping',
+				plan: groupingPlan,
+				budget: groupingBudget,
+				tracker: groupingTracker,
+				systemPrompt: GROUPING_SYSTEM,
+				userMessage: grpUserMsg,
+				// Keep output conservative; batching keeps prompts small enough to avoid truncation.
+				maxTokens: 8192,
+				planningContext: groupingPlanningContext
+			});
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			if (/truncat|max_tokens/i.test(msg)) {
+				const halves = splitGroupingBatchInHalf(batch);
+				if (halves) {
+					console.warn(`  [REMEDIATION RERUN] [SPLIT] Grouping batch truncated — splitting`);
+					groupingBatches.splice(batchIndex, 1, halves[0], halves[1]);
+					continue;
+				}
+			}
+			throw err;
+		}
 		saveGroupingDebugRaw(slug, batchIndex, grpRawResponse);
 		logStageCost('Grouping (remediation rerun)', groupingTracker, groupingPlan);
 
@@ -301,6 +333,21 @@ export async function rerunRelationsAndGroupingForRemediation(opts: {
 			}
 		}
 
+		const degeneration = analyzeGroupingDegeneration(batchArguments, {
+			maxClaimRefsPerArgument: 30,
+			requireSingleConclusion: true
+		});
+		if (degeneration.degenerate) {
+			const halves = splitGroupingBatchInHalf(batch);
+			if (halves) {
+				console.warn(
+					`  [REMEDIATION RERUN] [SPLIT] Grouping batch looks degenerate — ${degeneration.reasons.join('; ')}`
+				);
+				groupingBatches.splice(batchIndex, 1, halves[0], halves[1]);
+				continue;
+			}
+		}
+
 		groupedOutputs.push(batchArguments);
 		batchIndex += 1;
 	}
@@ -312,6 +359,13 @@ export async function rerunRelationsAndGroupingForRemediation(opts: {
 			`[REMEDIATION RERUN] Grouping claim references collapsed (unique positions: ${groupingHealth.uniquePositions}).`
 		);
 	}
+	const roleCounts = summarizeGroupingRoles(arguments_);
+	console.log(
+		`  [REMEDIATION RERUN] Grouping roles: ${Object.entries(roleCounts)
+			.sort((a, b) => b[1] - a[1])
+			.map(([k, v]) => `${k}=${v}`)
+			.join(' ')}`
+	);
 
 	return { relations, arguments_ };
 }

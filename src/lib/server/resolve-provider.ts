@@ -53,6 +53,22 @@ function logRestormelIngestionDegradedHint(
   restormelContext?: Omit<ResolveRequest, 'environmentId' | 'routeId'>
 ): void {
   if (restormelContext?.workload !== 'ingestion') return;
+  const suppress = ['1', 'true', 'yes'].includes(
+    (process.env.INGEST_SUPPRESS_RESTORMEL_DEGRADED_WARNINGS ?? '').trim().toLowerCase()
+  );
+  const togetherFirst = ['1', 'true', 'yes'].includes(
+    (process.env.INGEST_PREFER_TOGETHER ?? '').trim().toLowerCase()
+  );
+  // When operators intentionally run Together-first (bypassing Restormel), the repeated per-stage
+  // degradation hints are noisy. Log at most once per stage per process (or never if suppressed).
+  if (suppress) return;
+  const stageKey = String(restormelContext.stage ?? '');
+  if (togetherFirst) {
+    const cacheKey = `__restormel_ingest_degraded_once__${stageKey}`;
+    const g = globalThis as unknown as Record<string, unknown>;
+    if (g[cacheKey]) return;
+    g[cacheKey] = true;
+  }
   const stage = restormelContext.stage?.trim();
   const stageLine = stage
     ? `Dedicated route: stage="${stage}". Or a shared ingestion route with empty stage.`
@@ -491,14 +507,43 @@ export async function resolveProviderDecision(options: {
       ? console.error
       : console.warn;
 
-    if (failure.kind === 'budget_cap') {
-      logger('[restormel] Usage policy blocked model routing; evaluating degraded fallback', failure.logContext);
-    } else if (failure.kind === 'no_key_available') {
-      logger('[restormel] No provider key available for Restormel route; evaluating degraded fallback', failure.logContext);
-    } else if (failure.kind === 'policy_blocked') {
-      logger('[restormel] Policy blocked all Restormel route steps; evaluating degraded fallback', failure.logContext);
-    } else {
-      logger('[restormel] Resolve failed before a safe route was selected', failure.logContext);
+    const suppressDegradedWarnings = ['1', 'true', 'yes'].includes(
+      (process.env.INGEST_SUPPRESS_RESTORMEL_DEGRADED_WARNINGS ?? '').trim().toLowerCase()
+    );
+    const togetherFirst = ['1', 'true', 'yes'].includes(
+      (process.env.INGEST_PREFER_TOGETHER ?? '').trim().toLowerCase()
+    );
+    const stageKey = options.restormelContext?.stage?.trim() ?? '';
+    const shouldLogResolveFailure = (() => {
+      if (suppressDegradedWarnings) return false;
+      if (!togetherFirst) return true;
+      // In Together-first mode, Restormel resolve failure logs are expected noise; emit once per stage.
+      const cacheKey = `__restormel_resolve_failed_once__${stageKey}`;
+      const g = globalThis as unknown as Record<string, unknown>;
+      if (g[cacheKey]) return false;
+      g[cacheKey] = true;
+      return true;
+    })();
+
+    if (shouldLogResolveFailure) {
+      if (failure.kind === 'budget_cap') {
+        logger(
+          '[restormel] Usage policy blocked model routing; evaluating degraded fallback',
+          failure.logContext
+        );
+      } else if (failure.kind === 'no_key_available') {
+        logger(
+          '[restormel] No provider key available for Restormel route; evaluating degraded fallback',
+          failure.logContext
+        );
+      } else if (failure.kind === 'policy_blocked') {
+        logger(
+          '[restormel] Policy blocked all Restormel route steps; evaluating degraded fallback',
+          failure.logContext
+        );
+      } else {
+        logger('[restormel] Resolve failed before a safe route was selected', failure.logContext);
+      }
     }
 
     if (options.failureMode !== 'error' && options.safeDefault) {

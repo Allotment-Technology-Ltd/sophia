@@ -17,6 +17,91 @@ function parseHtmlDocument(html: string) {
 const VALID_SOURCE_TYPES = ['sep_entry', 'iep_entry', 'book', 'paper', 'institutional'];
 const DATA_SOURCES_DIR = './data/sources';
 
+function isProbablyHtml(payload: string): boolean {
+	const head = payload.slice(0, 2000).toLowerCase();
+	return head.includes('<html') || head.includes('<body') || head.includes('<!doctype') || head.includes('<pre');
+}
+
+function tryExtractProjectGutenbergId(url: URL): string | null {
+	const host = url.hostname.toLowerCase();
+	if (host !== 'www.gutenberg.org' && host !== 'gutenberg.org') return null;
+
+	const p = url.pathname;
+	// /ebooks/2680
+	const ebooks = p.match(/\/ebooks\/(\d+)(?:\/|$)/i);
+	if (ebooks?.[1]) return ebooks[1];
+	// /files/5682/5682-h/5682-h.htm or /files/2680/2680-0.txt
+	const files = p.match(/\/files\/(\d+)(?:\/|$)/i);
+	if (files?.[1]) return files[1];
+	// /cache/epub/2680/pg2680.txt
+	const epub = p.match(/\/cache\/epub\/(\d+)(?:\/|$)/i);
+	if (epub?.[1]) return epub[1];
+
+	return null;
+}
+
+function projectGutenbergPlainTextUrl(id: string): string {
+	const n = id.trim();
+	return `https://www.gutenberg.org/cache/epub/${encodeURIComponent(n)}/pg${encodeURIComponent(n)}.txt`;
+}
+
+function normalizeNewlines(text: string): string {
+	return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function stripGutenbergBoilerplate(raw: string): string {
+	const text = normalizeNewlines(raw);
+
+	// Prefer strong START/END markers.
+	const startMarkers: RegExp[] = [
+		/\*\*\*\s*start of (?:this|the) project gutenberg ebook[\s\S]*?\*\*\*/i,
+		/\*\*\*\s*start of (?:this|the) project gutenberg e(?:book|text)[\s\S]*?\*\*\*/i,
+		/\*\*\*\s*start[\s\S]*?project gutenberg[\s\S]*?\*\*\*/i
+	];
+	const endMarkers: RegExp[] = [
+		/\*\*\*\s*end of (?:this|the) project gutenberg ebook[\s\S]*?\*\*\*/i,
+		/\*\*\*\s*end of (?:this|the) project gutenberg e(?:book|text)[\s\S]*?\*\*\*/i,
+		/\*\*\*\s*end[\s\S]*?project gutenberg[\s\S]*?\*\*\*/i
+	];
+
+	let startIdx = -1;
+	let startLen = 0;
+	for (const re of startMarkers) {
+		const m = text.match(re);
+		if (m?.index != null) {
+			startIdx = m.index;
+			startLen = m[0].length;
+			break;
+		}
+	}
+
+	let endIdx = -1;
+	for (const re of endMarkers) {
+		const m = text.match(re);
+		if (m?.index != null) {
+			endIdx = m.index;
+			break;
+		}
+	}
+
+	let body = text;
+	if (startIdx >= 0 && endIdx > startIdx) {
+		body = text.slice(startIdx + startLen, endIdx);
+	}
+
+	// Secondary license footer patterns (when END marker missing).
+	const licenseCut = body.search(/\n\s*(?:end of project gutenberg|start:\s*full license|full project gutenberg license)\b/i);
+	if (licenseCut > 0) body = body.slice(0, licenseCut);
+
+	// Common top boilerplate lines.
+	body = body
+		.replace(/^\s*the project gutenberg e(?:book|text) of[^\n]*\n+/i, '')
+		.replace(/^\s*produced by[^\n]*\n+/gim, '')
+		.replace(/^\s*\[.*?ebook\s+#?\d+.*?\]\s*\n+/gim, '');
+
+	return body.trim();
+}
+
 /** Raw HTML cache: keyed by canonical URL hash; default off (set FETCH_SOURCE_CACHE=1). Respects TTL; reuse reduces flaky HTTP on retry/re-ingest. */
 const FETCH_SOURCE_CACHE_ENABLED =
 	(process.env.FETCH_SOURCE_CACHE ?? '').trim() === '1' ||
@@ -117,7 +202,7 @@ async function fetchUrl(url: string, options?: { cacheKey?: string }): Promise<s
 	const headers: Record<string, string> = {
 		'User-Agent':
 			'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-		Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+		Accept: 'text/plain,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 		'Accept-Language': 'en-US,en;q=0.9'
 	};
 
@@ -330,24 +415,38 @@ function extractIepEntry(html: string): { text: string; title: string; author: s
 /**
  * Extract Project Gutenberg text
  */
-function extractGutenbergText(html: string): { text: string; title: string; author: string[] } {
-	// Project Gutenberg texts have START and END markers
-	const startMatch = html.match(/\*\*\*\s*START.+?\*\*\*/s);
-	const endMatch = html.match(/\*\*\*\s*END.+?\*\*\*/s);
+function extractGutenbergText(payload: string): { text: string; title: string; author: string[] } {
+	let raw = payload;
 
-	let text = html;
-	if (startMatch && endMatch) {
-		text = html.substring(startMatch.index! + startMatch[0].length, endMatch.index);
+	// Some Gutenberg URLs are HTML pages; try to extract text from <pre> first, otherwise fall back to DOM text.
+	if (isProbablyHtml(raw)) {
+		const root = parseHtmlDocument(raw);
+		const pre = root.querySelector('pre');
+		if (pre?.text?.trim()) {
+			raw = pre.text;
+		} else {
+			const body = root.querySelector('body') ?? root;
+			raw = body.text;
+		}
 	}
 
-	// Try to extract title and author from Project Gutenberg header
-	const titleMatch = html.match(/^Title:\s*(.+?)$/m);
-	const authorMatch = html.match(/^Author:\s*(.+?)$/m);
+	const normalized = normalizeNewlines(raw);
 
-	const title = titleMatch ? titleMatch[1].trim() : 'Unknown Title';
-	const author = authorMatch ? [authorMatch[1].trim()] : [];
+	// Title/author best-effort: plain-text header lines or the common “eBook of …, by …” preamble.
+	const titleMatch = normalized.match(/^Title:\s*(.+?)$/m);
+	const authorMatch = normalized.match(/^Author:\s*(.+?)$/m);
 
-	return { text: text.trim(), title, author };
+	let title = titleMatch ? titleMatch[1].trim() : '';
+	let author: string[] = authorMatch ? [authorMatch[1].trim()] : [];
+	if (!title) {
+		const m = normalized.match(/\bProject Gutenberg e(?:Book|text)\s+of\s+(.+?)(?:,?\s+by\s+(.+?))?\s*(?:\r?\n|$)/i);
+		if (m?.[1]) title = m[1].trim();
+		if (author.length === 0 && m?.[2]) author = [m[2].trim()];
+	}
+
+	const text = stripGutenbergBoilerplate(normalized);
+
+	return { text, title: title || 'Unknown Title', author };
 }
 
 /**
@@ -475,12 +574,32 @@ async function main() {
 		}
 
 		// Fetch the URL (optional disk cache by canonical hash — polite reuse on retry/re-ingest)
-		const html = await fetchUrl(sourceIdentity.canonicalUrl, {
-			cacheKey: sourceIdentity.canonicalUrlHash
-		});
+		let fetched = '';
+		if (sourceType === 'book') {
+			const parsedUrl = new URL(sourceIdentity.canonicalUrl);
+			const pgId = tryExtractProjectGutenbergId(parsedUrl);
+			if (pgId) {
+				const plain = projectGutenbergPlainTextUrl(pgId);
+				try {
+					console.log(`[FETCH] Gutenberg: preferring plain text ${plain}`);
+					fetched = await fetchUrl(plain, { cacheKey: `${sourceIdentity.canonicalUrlHash}-pg${pgId}` });
+				} catch (e) {
+					console.warn(
+						`[FETCH] Gutenberg plain-text fetch failed; falling back to canonical URL. Reason: ${
+							e instanceof Error ? e.message : String(e)
+						}`
+					);
+				}
+			}
+		}
+		if (!fetched) {
+			fetched = await fetchUrl(sourceIdentity.canonicalUrl, {
+				cacheKey: sourceIdentity.canonicalUrlHash
+			});
+		}
 
 		// Clean and extract
-		const { text, title, author } = cleanSourceText(html, sourceType);
+		const { text, title, author } = cleanSourceText(fetched, sourceType);
 
 		// Calculate metrics
 		const wordCount = text.trim().split(/\s+/).length;

@@ -43,7 +43,11 @@
     { "url": "https://plato.stanford.edu/entries/information/", "source_type": "sep_entry", "why": "Abstract/concrete information concepts — subtle definitional claims." },
     { "url": "https://plato.stanford.edu/entries/reference/", "source_type": "sep_entry", "why": "Philosophy of language on reference; self-referential examples — edge cases for spans." },
     { "url": "https://plato.stanford.edu/entries/schopenhauer/", "source_type": "sep_entry", "why": "Systematic aesthetics + metaphysics — long compound sentences." },
-    { "url": "https://plato.stanford.edu/entries/locke-personal-identity/", "source_type": "sep_entry", "why": "Focused deep dive — tests whether shorter entries still hit json_repair / split paths." }
+    { "url": "https://plato.stanford.edu/entries/locke-personal-identity/", "source_type": "sep_entry", "why": "Focused deep dive — tests whether shorter entries still hit json_repair / split paths." },
+
+    { "url": "https://www.gutenberg.org/ebooks/2680", "source_type": "book", "why": "Gutenberg pilot (plain-text canonicalization). Tests hard-wrapped book structure + heading segmentation." },
+    { "url": "https://www.gutenberg.org/ebooks/45109", "source_type": "book", "why": "Gutenberg pilot (shorter). Tests header/footer trimming + passage_id grounding strictness." },
+    { "url": "https://www.gutenberg.org/files/5682/5682-h/5682-h.htm", "source_type": "book", "why": "Gutenberg pilot (HTML URL shape). Ensures fetch prefers pg.txt and cleaning stays robust." }
   ],
   "web_article_placeholders": {
     "note": "Add 5–10 institutional web_article URLs that already completed with validate:true in Neon; keep stable for A/B.",

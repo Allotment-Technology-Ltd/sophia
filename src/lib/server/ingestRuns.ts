@@ -196,6 +196,13 @@ export interface IngestRunPayload {
      */
     extractionOpenAiCompatibleBaseUrl?: string;
     extractionOpenAiCompatibleModel?: string;
+
+    /** Cross-process LLM concurrency cap for Together (`INGEST_GLOBAL_MAX_CONCURRENT_TOGETHER`). */
+    globalMaxConcurrentTogether?: number;
+    /** Cross-process embedding concurrency cap for Voyage (`INGEST_GLOBAL_MAX_CONCURRENT_VOYAGE`). */
+    globalMaxConcurrentVoyage?: number;
+    /** Stage 6 relation record write concurrency (`INGEST_RELATE_STORE_CONCURRENCY`). */
+    relateStoreConcurrency?: number;
   };
   model_chain: {
     extract: string;
@@ -229,6 +236,9 @@ export interface IngestRunPayload {
 /** Defaults merged into ingest.ts child env when the host has not set these variables (durable runs). */
 const DEFAULT_INGEST_OMIT_LLM_TEMPERATURE_STAGES = 'extraction,json_repair';
 const DEFAULT_INGEST_EXTRACTION_BATCH_TOKEN_FRACTION = '0.58';
+const DEFAULT_INGEST_GLOBAL_MAX_CONCURRENT_TOGETHER = '2';
+const DEFAULT_INGEST_GLOBAL_MAX_CONCURRENT_VOYAGE = '1';
+const DEFAULT_INGEST_RELATE_STORE_CONCURRENCY = '4';
 
 function ingestChildPipelineDefaultsIfUnset(): Record<string, string> {
 	const out: Record<string, string> = {};
@@ -237,6 +247,16 @@ function ingestChildPipelineDefaultsIfUnset(): Record<string, string> {
 	}
 	if (!(process.env.INGEST_EXTRACTION_BATCH_TOKEN_FRACTION ?? '').trim()) {
 		out.INGEST_EXTRACTION_BATCH_TOKEN_FRACTION = DEFAULT_INGEST_EXTRACTION_BATCH_TOKEN_FRACTION;
+	}
+	// Conservative defaults for production durable ingestion: safe with ~3 concurrent book ingests.
+	if (!(process.env.INGEST_GLOBAL_MAX_CONCURRENT_TOGETHER ?? '').trim()) {
+		out.INGEST_GLOBAL_MAX_CONCURRENT_TOGETHER = DEFAULT_INGEST_GLOBAL_MAX_CONCURRENT_TOGETHER;
+	}
+	if (!(process.env.INGEST_GLOBAL_MAX_CONCURRENT_VOYAGE ?? '').trim()) {
+		out.INGEST_GLOBAL_MAX_CONCURRENT_VOYAGE = DEFAULT_INGEST_GLOBAL_MAX_CONCURRENT_VOYAGE;
+	}
+	if (!(process.env.INGEST_RELATE_STORE_CONCURRENCY ?? '').trim()) {
+		out.INGEST_RELATE_STORE_CONCURRENCY = DEFAULT_INGEST_RELATE_STORE_CONCURRENCY;
 	}
 	return out;
 }
@@ -311,7 +331,10 @@ function batchOverridesToEnv(
     groupingAutoTune,
     relationsAutoTune,
     extractionOpenAiCompatibleBaseUrl,
-    extractionOpenAiCompatibleModel
+    extractionOpenAiCompatibleModel,
+    globalMaxConcurrentTogether,
+    globalMaxConcurrentVoyage,
+    relateStoreConcurrency
   } = overrides;
 
   const asPositiveInt = (v: unknown): number | null => {
@@ -333,6 +356,9 @@ function batchOverridesToEnv(
   const extractConc = asPositiveInt(extractionConcurrency);
   const passageConc = asPositiveInt(passageInsertConcurrency);
   const claimConc = asPositiveInt(claimInsertConcurrency);
+  const gTogether = asPositiveInt(globalMaxConcurrentTogether);
+  const gVoyage = asPositiveInt(globalMaxConcurrentVoyage);
+  const relateConc = asPositiveInt(relateStoreConcurrency);
 
   if (extraction != null) out.INGEST_EXTRACTION_MAX_TOKENS_PER_SECTION = String(extraction);
   if (grouping != null) out.GROUPING_ANTHROPIC_BATCH_TARGET_TOKENS = String(grouping);
@@ -347,6 +373,15 @@ function batchOverridesToEnv(
   }
   if (claimConc != null) {
     out.INGEST_CLAIM_INSERT_CONCURRENCY = String(Math.max(1, Math.min(24, claimConc)));
+  }
+  if (gTogether != null) {
+    out.INGEST_GLOBAL_MAX_CONCURRENT_TOGETHER = String(Math.max(1, Math.min(16, gTogether)));
+  }
+  if (gVoyage != null) {
+    out.INGEST_GLOBAL_MAX_CONCURRENT_VOYAGE = String(Math.max(1, Math.min(16, gVoyage)));
+  }
+  if (relateConc != null) {
+    out.INGEST_RELATE_STORE_CONCURRENCY = String(Math.max(1, Math.min(32, relateConc)));
   }
   if (typeof watchdogPhaseIdleJson === 'string') {
     const t = watchdogPhaseIdleJson.trim();
