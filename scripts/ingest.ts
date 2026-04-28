@@ -167,6 +167,7 @@ import {
 } from '../src/lib/server/prompts/grouping.js';
 import {
 	analyzeGroupingReferenceHealth,
+	analyzeGroupingDegeneration,
 	describePreGroupingGraphLint,
 	filterGroupingOutputToKnownClaimPositions,
 	normalizeGroupingPayload
@@ -178,6 +179,14 @@ import {
 	groupingBatchPreemptReason,
 	resolveGroupingPreemptMaxClaimsPerBatch
 } from '../src/lib/server/ingestion/groupingPreemptLimits.js';
+import {
+	acquireIngestGlobalSlot,
+	formatIngestGlobalConcurrencySummaryLines
+} from '../src/lib/server/ingestion/ingestGlobalConcurrency.js';
+import {
+	ingestGlobalConcurrencyEnabled,
+	ingestGlobalMaxConcurrentForProvider
+} from '../src/lib/server/ingestion/ingestGlobalConcurrency.js';
 import { normalizeExtractionPayload } from '../src/lib/server/ingestion/stages/extraction-helpers.js';
 import {
 	summarizeRemediationRevalidationDiff,
@@ -484,6 +493,8 @@ const INGEST_EMBEDDING_IGNORE_LEGACY_CORPUS_DIM = (() => {
 })();
 const INGEST_SAVE_GROUPING_RAW =
 	(process.env.INGEST_SAVE_GROUPING_RAW || 'false').toLowerCase() === 'true';
+const INGEST_SAVE_EXTRACTION_RAW =
+	(process.env.INGEST_SAVE_EXTRACTION_RAW || 'false').toLowerCase() === 'true';
 
 /**
  * When true with `--validate`, skip Surreal Stage 6 if remediation dropped no edges, changed no claim text,
@@ -560,6 +571,17 @@ function estimateCostUsd(): string {
 
 function estimateUsageCostUsd(modelId: string, inputTokens: number, outputTokens: number): number {
 	return estimateIngestLlmUsageUsd(modelId, inputTokens, outputTokens);
+}
+
+function summarizeGroupingRoles(arguments_: GroupingOutput): Record<string, number> {
+	const counts: Record<string, number> = {};
+	for (const arg of arguments_) {
+		for (const c of arg.claims) {
+			const role = (c as { role?: string }).role ?? 'key_premise';
+			counts[role] = (counts[role] ?? 0) + 1;
+		}
+	}
+	return counts;
 }
 
 function trackReasoningCost(modelId: string, inputTokens: number, outputTokens: number): number {
@@ -985,6 +1007,10 @@ function logIngestTimingSummary(): void {
 	activeIngestTiming.vertex_embed_chars = costs.vertexChars;
 	const payload: IngestTimingPayload = { ...activeIngestTiming, total_wall_ms: totalWallMs };
 	logIngestTimingHumanBlock(payload, totalWallMs);
+	const globalLines = formatIngestGlobalConcurrencySummaryLines();
+	if (globalLines.length > 0) {
+		console.log(globalLines.join('\n'));
+	}
 	console.log(`[INGEST_TIMING] ${JSON.stringify(payload)}`);
 	const metricsAdvisory = buildIngestMetricsAdvisory(payload as unknown as Record<string, unknown>, {});
 	console.log(`[INGEST_METRICS_ADVISORY] ${JSON.stringify(metricsAdvisory)}`);
@@ -1190,9 +1216,17 @@ function parseIngestProvider(value: string | undefined): IngestProvider {
 	return 'auto';
 }
 
-function validationRouteRequiresVertexProject(validationPlan: { provider: string; route?: { provider?: string } }): boolean {
+function validationRouteRequiresVertexProject(validationPlan: {
+	provider: string;
+	route?: { provider?: string };
+}): boolean {
 	const p = (validationPlan.route?.provider ?? validationPlan.provider).trim().toLowerCase();
-	return p === 'vertex' || p === 'google';
+	// Sophia can run Gemini via:
+	// - Vertex project auth (GOOGLE_VERTEX_PROJECT / GCP_PROJECT_ID), or
+	// - Google AI Studio key (GOOGLE_AI_API_KEY), which does not require a GCP project id.
+	if (p !== 'vertex' && p !== 'google') return false;
+	if (process.env.GOOGLE_AI_API_KEY?.trim()) return false;
+	return true;
 }
 
 function parsePositiveInt(value: string | undefined): number | undefined {
@@ -1215,7 +1249,14 @@ function effectiveExtractionParallelConcurrency(extractionPlanProvider: string):
 	if (!isGoogleGenerativeThroughputEnabled()) return base;
 	if (!isGoogleGenerativePlanProvider(extractionPlanProvider)) return base;
 	const floor = parsePositiveInt(process.env.INGEST_GOOGLE_EXTRACTION_CONCURRENCY_FLOOR) ?? 6;
-	return Math.min(12, Math.max(base, floor));
+	const desired = Math.min(12, Math.max(base, floor));
+	// If cross-process global concurrency is enabled, cap local per-process parallelism so a single
+	// worker doesn't self-stall waiting for its own global slots.
+	if (ingestGlobalConcurrencyEnabled()) {
+		const globalCap = ingestGlobalMaxConcurrentForProvider(extractionPlanProvider);
+		if (Number.isFinite(globalCap) && globalCap > 0) return Math.max(1, Math.min(desired, globalCap));
+	}
+	return desired;
 }
 
 function makeStageBudget(stage: StageKey): StageBudget {
@@ -1325,15 +1366,21 @@ function resolveIngestExtractionBatchTokenLimit(sectionTokenLimit: number, sourc
 	const fracRaw = (process.env.INGEST_EXTRACTION_BATCH_TOKEN_FRACTION ?? '').trim();
 	const sepDefaultOff =
 		(process.env.INGEST_EXTRACTION_DISABLE_SEP_DEFAULT_SMALL_BATCH ?? '').trim() === '1';
+	const normalizedSourceType = sourceType.trim().toLowerCase();
 	const useSepDefault =
 		!fracRaw &&
 		cap === undefined &&
 		!sepDefaultOff &&
-		sourceType.trim().toLowerCase() === 'sep_entry';
+		normalizedSourceType === 'sep_entry';
+	const useBookDefault =
+		!fracRaw && cap === undefined && normalizedSourceType === 'book';
 
 	let limit = sectionTokenLimit;
 	if (useSepDefault) {
 		limit = Math.max(400, Math.floor(sectionTokenLimit * 0.58));
+	} else if (useBookDefault) {
+		// Books (Gutenberg) routinely under-recall when packed too densely; default smaller batches.
+		limit = Math.max(400, Math.floor(sectionTokenLimit * 0.45));
 	} else if (fracRaw) {
 		const f = Number(fracRaw);
 		if (Number.isFinite(f) && f > 0 && f <= 1) {
@@ -2660,8 +2707,26 @@ async function callStageModel(params: {
 			const callStarted = Date.now();
 			const routingProvider = activePlan.route.provider ?? activePlan.provider;
 			const foldSystem = shouldFoldSystemPromptIntoUserForProvider(routingProvider);
+			// Some providers hard-limit (input + output) tokens. Together enforces this strictly and
+			// returns 422 if `inputs` + `max_new_tokens` exceeds the model ceiling.
+			let effectiveMaxTokens = maxTokens;
+			if (routingProvider.trim().toLowerCase() === 'together') {
+				const TOGETHER_INPUT_OUTPUT_LIMIT = 131_073;
+				const promptTokens = foldSystem
+					? estimateTokens(systemPrompt) + estimateTokens(userMessage)
+					: estimateTokens(systemPrompt) + estimateTokens(userMessage);
+				// Keep a small headroom for tokenization variance / system wrappers.
+				const headroom = 1_024;
+				const allowed = TOGETHER_INPUT_OUTPUT_LIMIT - promptTokens - headroom;
+				if (allowed <= 0) {
+					throw new Error(
+						`Prompt too large for Together context window (est prompt=${promptTokens.toLocaleString()} tokens, limit=${TOGETHER_INPUT_OUTPUT_LIMIT.toLocaleString()}). Split the batch or reduce included context.`
+					);
+				}
+				effectiveMaxTokens = Math.min(effectiveMaxTokens, Math.max(256, allowed));
+			}
 			const estTpmTokens =
-				estimateTokens(systemPrompt) + estimateTokens(userMessage) + maxTokens;
+				estimateTokens(systemPrompt) + estimateTokens(userMessage) + effectiveMaxTokens;
 			await ingestTpmGuard.waitForBudget(routingProvider, estTpmTokens);
 			if (routingProvider.trim().toLowerCase() === 'mistral') {
 				await paceMistralChatCompletion(activePlan.model);
@@ -2672,6 +2737,13 @@ async function callStageModel(params: {
 			if (routingProvider.trim().toLowerCase() === 'groq') {
 				await paceGroqChatCompletion(activePlan.model);
 			}
+
+			// Cross-process concurrency gate (shared via Postgres advisory locks).
+			// Prevents multiple simultaneous ingestion runs from stampeding the same provider+stage.
+			const globalSlot = await acquireIngestGlobalSlot({
+				provider: routingProvider,
+				stage
+			});
 			emitIngestTelemetry({
 				event: 'model_call_start',
 				stage,
@@ -2692,13 +2764,13 @@ async function callStageModel(params: {
 								content: `${systemPrompt}\n\n${userMessage}`
 							}
 						],
-						maxOutputTokens: maxTokens
+						maxOutputTokens: effectiveMaxTokens
 					}
 				: {
 						model: activePlan.route.model,
 						system: systemPrompt,
 						messages: [{ role: 'user' as const, content: userMessage }],
-						maxOutputTokens: maxTokens
+						maxOutputTokens: effectiveMaxTokens
 					};
 			const textGenParams = omitTemperature
 				? textGenBase
@@ -2853,6 +2925,7 @@ async function callStageModel(params: {
 				}
 				throw e;
 			} finally {
+				await globalSlot.release();
 				if (abortTimer !== undefined) clearTimeout(abortTimer);
 			}
 		}
@@ -2864,7 +2937,10 @@ async function callStageModel(params: {
 						throw new Error(`[BUDGET] ${stage} exceeded retry cap (${budget.maxRetries})`);
 					}
 					tracker.retries += 1;
-					const delayMs = 1000 * Math.pow(2, attempt - 1);
+					const baseDelayMs = 1500 * Math.pow(2, attempt - 1);
+					const spread = Math.max(250, Math.floor(baseDelayMs * 0.35));
+					const delayMs =
+						Math.trunc(baseDelayMs - Math.floor(spread / 2) + Math.random() * (spread + 1));
 					if (activeIngestTiming) {
 						activeIngestTiming.model_retries += 1;
 						activeIngestTiming.retry_backoff_ms_total += delayMs;
@@ -3316,6 +3392,31 @@ async function savePartialResults(slug: string, results: PartialResults) {
 	fs.writeFileSync(tmpPath, JSON.stringify(withSnapshot, null, 2), 'utf-8');
 	fs.renameSync(tmpPath, partialPath);
 	console.log(`  [SAVE] Partial results saved to: ${partialPath}`);
+}
+
+function saveExtractionDebugRaw(args: {
+	slug: string;
+	batchIndex: number;
+	renderedBatch: string;
+	rawResponse: string;
+}): void {
+	if (!INGEST_SAVE_EXTRACTION_RAW) return;
+	if (!fs.existsSync(INGESTED_DIR)) {
+		fs.mkdirSync(INGESTED_DIR, { recursive: true });
+	}
+	const safeSlug = args.slug.replace(/[^a-zA-Z0-9-_]/g, '_');
+	const base = path.join(INGESTED_DIR, `${safeSlug}-extraction-batch-${args.batchIndex + 1}`);
+	try {
+		fs.writeFileSync(`${base}.prompt.txt`, args.renderedBatch, 'utf-8');
+		fs.writeFileSync(`${base}.raw.txt`, args.rawResponse, 'utf-8');
+		console.log(`  [DEBUG] Saved extraction raw batch ${args.batchIndex + 1} to ${base}.{prompt,raw}.txt`);
+	} catch (e) {
+		console.warn(
+			`  [WARN] Failed to write extraction debug files for batch ${args.batchIndex + 1}: ${
+				e instanceof Error ? e.message : String(e)
+			}`
+		);
+	}
 }
 
 function saveGroupingDebugRaw(slug: string, batchIndex: number, rawResponse: string): void {
@@ -4364,6 +4465,10 @@ async function main() {
 	// Pipeline mode: exit after stages 1-4 so the batch can start the next source's
 	// Claude extraction while Gemini validation runs for this source in a separate process.
 	const stopAfterEmbedding = args.includes('--stop-after-embedding');
+	/** Exit after Stage 2 (relations) checkpoints; skip grouping onward. Local debugging. */
+	const stopAfterRelations = args.includes('--stop-after-relations');
+	/** Exit after Stage 3 (grouping) checkpoints; skip embedding/validation. Local debugging. */
+	const stopAfterGrouping = args.includes('--stop-after-grouping');
 	// Admin UI: exit after Stage 5 so the operator explicitly resumes for Stage 6 (SurrealDB store).
 	const stopBeforeStore = args.includes('--stop-before-store');
 	/** Exit after Stage 1 (claim extraction) checkpoints; skip relations onward. Local / FT debugging. */
@@ -4412,6 +4517,12 @@ async function main() {
 		console.error('  --force-stage <stage>   Re-run from this stage onwards, ignoring saved progress');
 		console.error(`                          Valid stages: ${STAGES_ORDER.join(', ')}`);
 		console.error('  --stop-before-store     Exit after validation; re-run the same source to execute Stage 6 (store)');
+		console.error(
+			'  --stop-after-relations  Exit after Stage 2 (relations) checkpoints; skip grouping/embedding/validation. If Stage 2 was already done this run, flag is ignored with a warning.'
+		);
+		console.error(
+			'  --stop-after-grouping   Exit after Stage 3 (grouping) checkpoints; skip embedding/validation. If Stage 3 was already done this run, flag is ignored with a warning.'
+		);
 		console.error(
 			'  --stop-after-extraction Exit after Stage 1 (claims checkpointed); skip relations/embedding/validation. If Stage 1 was already done this run, flag is ignored with a warning. With INGEST_ORCHESTRATION_RUN_ID + DATABASE_URL, Surreal is skipped like --stop-before-store.'
 		);
@@ -4923,6 +5034,24 @@ async function main() {
 
 				let batchQueue: PassageRecord[][] = extractionBatches.map((batch) => [...batch]);
 				let batchLabel = 0;
+				const sparseSplitSeen = new Set<string>();
+				const sparseRerunRatioRaw = (process.env.INGEST_EXTRACTION_SPARSE_RERUN_MIN_RATIO ?? '').trim();
+				const sparseRerunRatio = Number.isFinite(Number(sparseRerunRatioRaw))
+					? Number(sparseRerunRatioRaw)
+					: 0.25;
+				const sparseRerunEnabled =
+					(process.env.INGEST_EXTRACTION_SPARSE_RERUN_ENABLED ?? '').trim() === '1' ||
+					(process.env.INGEST_EXTRACTION_SPARSE_RERUN_ENABLED ?? '').trim().toLowerCase() === 'true' ||
+					sourceMeta.source_type.trim().toLowerCase() === 'book';
+
+				const assertPassageIdsAreValid = (claims: ExtractionOutput, batch: PassageRecord[]) => {
+					const valid = new Set(batch.map((p) => p.id));
+					let bad = 0;
+					for (const c of claims) {
+						if (typeof c.passage_id !== 'string' || !valid.has(c.passage_id)) bad += 1;
+					}
+					return { ok: bad === 0, bad };
+				};
 
 				if (partial.extraction_progress?.claims_so_far.length > 0) {
 					if (Array.isArray(partial.extraction_progress.remaining_batches)) {
@@ -5034,18 +5163,54 @@ async function main() {
 							throw apiError;
 						}
 						logStageCost('Extraction', extractionTracker, extractionPlan);
+						saveExtractionDebugRaw({
+							slug,
+							batchIndex: batchLabel - 1,
+							renderedBatch,
+							rawResponse
+						});
 
 						try {
 							const parsed = parseExtractionJsonFromModelResponse(rawResponse);
 							const validated = ExtractionOutputSchema.parse(
 								normalizeExtractionPayload(parsed, domainOverride)
 							);
+							const pidCheck = assertPassageIdsAreValid(validated, batch);
+							if (!pidCheck.ok) {
+								throw new Error(
+									`[EXTRACTION_CONTRACT] ${pidCheck.bad}/${validated.length} claim(s) have missing/invalid passage_id for this batch`
+								);
+							}
 							const offsetClaims = attachPassageMetadataToClaims(
 								validated,
 								batch,
 								allClaims.length,
 								sourceMeta
 							);
+
+							// Sparse extraction quality gate: split and retry (or allow downstream fallbacks) instead
+							// of checkpointing systematically under-recalled batches.
+							if (
+								sparseRerunEnabled &&
+								batch.length > 1 &&
+								validated.length / batch.length < sparseRerunRatio
+							) {
+								const key = batch.map((p) => p.id).join('|');
+								if (!sparseSplitSeen.has(key)) {
+									const halves = replaceExtractionBatchWithSplitHalves(batch);
+									if (halves) {
+										sparseSplitSeen.add(key);
+										if (activeIngestTiming) activeIngestTiming.batch_splits += 1;
+										batchQueue.splice(i, 1, halves[0]!, halves[1]!);
+										const passagesInQueue = batchQueue.reduce((sum, b) => sum + b.length, 0);
+										console.warn(
+											`  [SPLIT] Batch ${batchLabel} sparse (${validated.length} claim(s) / ${batch.length} passage(s)) — splitting into 2 smaller passage batches (queue now ${batchQueue.length} batch(es), ${passagesInQueue} passage(s) in queue)`
+										);
+										batchLabel--;
+										return 'split';
+									}
+								}
+							}
 
 							allClaims.push(...offsetClaims);
 							console.log(
@@ -5085,6 +5250,7 @@ async function main() {
 
 							let fixedResponse: string;
 							try {
+								if (activeIngestTiming) activeIngestTiming.json_repair_invocations += 1;
 								fixedResponse = await fixJsonWithModel(
 									jsonRepairPlan,
 									jsonRepairBudget,
@@ -5129,6 +5295,12 @@ async function main() {
 								const fixedValidated = ExtractionOutputSchema.parse(
 									normalizeExtractionPayload(fixedParsed, domainOverride)
 								);
+								const pidCheck = assertPassageIdsAreValid(fixedValidated, batch);
+								if (!pidCheck.ok) {
+									throw new Error(
+										`[EXTRACTION_CONTRACT] ${pidCheck.bad}/${fixedValidated.length} claim(s) have missing/invalid passage_id for this batch (after repair)`
+									);
+								}
 								const fixedClaims = attachPassageMetadataToClaims(
 									fixedValidated,
 									batch,
@@ -5623,6 +5795,17 @@ async function main() {
 			relations = partial.relations;
 		}
 
+		if (stopAfterRelations) {
+			console.log('\n  [LOCAL] --stop-after-relations: Stage 2 complete; checkpoints saved. Exiting before Stage 3 (grouping).');
+			console.log(
+				`  [LOCAL] claims=${allClaims.length} relations=${relations.length}. Continue: same command without this flag, or --force-stage grouping.`
+			);
+			await savePartialResults(slug, partial);
+			await closeSurrealIfOpen(db);
+			logIngestTimingSummary();
+			process.exit(0);
+		}
+
 			const planPostRelStart = Date.now();
 			[groupingPlan, validationPlan] = await Promise.all([
 				planIngestionStage('grouping', {
@@ -5912,6 +6095,44 @@ async function main() {
 						}
 					}
 
+					const degeneration = analyzeGroupingDegeneration(batchArguments, {
+						maxClaimRefsPerArgument: 30,
+						requireSingleConclusion: true
+					});
+					if (degeneration.degenerate) {
+						const halves = splitGroupingBatchInHalf(batch);
+						if (halves) {
+							console.warn(
+								`  [SPLIT] Grouping batch ${batchIndex + 1} looks degenerate — ${degeneration.reasons.join('; ')}`
+							);
+							if (
+								groupingAdaptive &&
+								groupingAdaptive.regroupEvents < groupingAdaptiveMaxRegroups()
+							) {
+								groupingAdaptive.collapseSplits += 1;
+								tightenGroupingAdaptiveAfterStress(groupingAdaptive, 'reference_collapse');
+								groupingBatches = rebuildPendingGroupingBatches({
+									allClaims,
+									relations,
+									groupingBatches,
+									fromBatchIndex: batchIndex,
+									groupingPlan,
+									groupingMaxOut,
+									adaptive: groupingAdaptive
+								});
+							} else {
+								groupingBatches.splice(batchIndex, 1, halves[0], halves[1]);
+							}
+							partial.grouping_progress = {
+								grouped_outputs_so_far: groupedOutputs,
+								next_batch_index: batchIndex,
+								total_batches: groupingBatches.length
+							};
+							await savePartialResults(slug, partial);
+							continue;
+						}
+					}
+
 					groupedOutputs.push(batchArguments);
 					partial.grouping_progress = {
 						grouped_outputs_so_far: groupedOutputs,
@@ -5927,6 +6148,13 @@ async function main() {
 				const groupingHealth = analyzeGroupingReferenceHealth(arguments_);
 				console.log(
 					`  [CHECK] Grouping refs: ${groupingHealth.totalReferences} refs across ${groupingHealth.uniquePositions} unique claim positions`
+				);
+				const roleCounts = summarizeGroupingRoles(arguments_);
+				console.log(
+					`  [CHECK] Grouping roles: ${Object.entries(roleCounts)
+						.sort((a, b) => b[1] - a[1])
+						.map(([k, v]) => `${k}=${v}`)
+						.join(' ')}`
 				);
 				if (groupingHealth.collapsed) {
 					const collapseMessage =
@@ -5961,6 +6189,18 @@ async function main() {
 			}
 			arguments_ = partial.arguments;
 			}
+
+		if (stopAfterGrouping) {
+			console.log('\n  [LOCAL] --stop-after-grouping: Stage 3 complete; checkpoints saved. Exiting before Stage 4 (embedding).');
+			console.log(
+				`  [LOCAL] claims=${allClaims.length} relations=${relations.length} arguments=${arguments_.length}. Continue: same command without this flag, or --force-stage embedding.`
+			);
+			await savePartialResults(slug, partial);
+			await closeSurrealIfOpen(db);
+			logIngestTimingSummary();
+			process.exit(0);
+		}
+
 			validationPlan = await planIngestionStage('validation', {
 				...basePlanningContext,
 				claimCount: allClaims.length,
@@ -6119,7 +6359,9 @@ async function main() {
 		let postValidationGraphEvaluatedForStoreSkip = false;
 		let postValidationGraphMutatedForStoreSkip = false;
 
-		if (shouldRunStage('validating', resumeFromStage)) {
+		// Force-stage validating should *always* rerun Stage 5, even if the resume checkpoint is later
+		// (e.g. ingestion_log ahead of disk partial, or a prior run marked stage_completed beyond validation).
+		if (shouldRunStage('validating', resumeFromStage) || forceStage === 'validating') {
 			const stageValStart = Date.now();
 			if (shouldValidate) {
 				await updateIngestionLog(db, sourceMeta.url, { status: 'validating' });
@@ -6300,7 +6542,8 @@ async function main() {
 		// ═══════════════════════════════════════════════════════════════
 		// STAGE 5b: REMEDIATION (optional — between validation and store)
 		// ═══════════════════════════════════════════════════════════════
-		if (shouldRunStage('remediating', resumeFromStage)) {
+		// Force-stage remediating should *always* rerun Stage 5b, even if resume checkpoint is later.
+		if (shouldRunStage('remediating', resumeFromStage) || forceStage === 'remediating') {
 			const stageRemStart = Date.now();
 			postValidationGraphEvaluatedForStoreSkip = true;
 			const policy = parseRemediationPolicyJson(process.env.INGEST_REMEDIATION_POLICY_JSON);
@@ -7203,109 +7446,121 @@ async function main() {
 					return false;
 				}
 
-				try {
-					let relQuery = `RELATE $from->${rel.relation_type}->$to`;
-					const assignments = [
-						'relation_confidence = $relation_confidence',
-						'evidence_passages = $evidence_passages',
-						'relation_inference_mode = $relation_inference_mode',
-						'verification_state = $verification_state',
-						'review_state = $review_state',
-						'extractor_version = $extractor_version'
-					];
-					const vars: Record<string, unknown> = {
-						from: fromId,
-						to: toId,
-						relation_confidence: rel.relation_confidence,
-						evidence_passages: rel.evidence_passage_ids
-							.map((passageId) => passageRecordIdMap.get(passageId))
-							.filter((value): value is string => Boolean(value)),
-						relation_inference_mode: rel.relation_inference_mode,
-						verification_state: rel.verification_state,
-						review_state: rel.review_state,
-						extractor_version: rel.extractor_version
-					};
+				let relQuery = `RELATE $from->${rel.relation_type}->$to`;
+				const assignments = [
+					'relation_confidence = $relation_confidence',
+					'evidence_passages = $evidence_passages',
+					'relation_inference_mode = $relation_inference_mode',
+					'verification_state = $verification_state',
+					'review_state = $review_state',
+					'extractor_version = $extractor_version'
+				];
+				const vars: Record<string, unknown> = {
+					from: fromId,
+					to: toId,
+					relation_confidence: rel.relation_confidence,
+					evidence_passages: rel.evidence_passage_ids
+						.map((passageId) => passageRecordIdMap.get(passageId))
+						.filter((value): value is string => Boolean(value)),
+					relation_inference_mode: rel.relation_inference_mode,
+					verification_state: rel.verification_state,
+					review_state: rel.review_state,
+					extractor_version: rel.extractor_version
+				};
 
-					switch (rel.relation_type) {
-						case 'supports':
-						case 'contradicts': {
-							assignments.unshift('strength = $strength');
-							if (rel.note) assignments.push('note = $note');
-							vars.strength = rel.strength;
-							if (rel.note) vars.note = rel.note;
-							break;
-						}
-						case 'depends_on': {
-							const necessityMap: Record<string, string> = {
-								strong: 'essential',
-								moderate: 'supporting',
-								weak: 'contextual'
-							};
-							assignments.unshift('necessity = $necessity');
-							vars.necessity = necessityMap[rel.strength] || 'supporting';
-							break;
-						}
-						case 'responds_to': {
-							const responseMap: Record<string, string> = {
-								strong: 'direct_rebuttal',
-								moderate: 'undermining',
-								weak: 'concession'
-							};
-							assignments.unshift('response_type = $response_type');
-							vars.response_type = responseMap[rel.strength] || 'refinement';
-							break;
-						}
-						case 'refines': {
-							const refinementMap: Record<string, string> = {
-								strong: 'strengthens',
-								moderate: 'clarifies',
-								weak: 'qualifies'
-							};
-							assignments.unshift('refinement_type = $refinement_type');
-							vars.refinement_type = refinementMap[rel.strength] || 'clarifies';
-							break;
-						}
-						case 'exemplifies': {
-							if (rel.note) {
-								assignments.push('note = $note');
-								vars.note = rel.note;
-							}
-							break;
-						}
-						case 'defines': {
-							if (rel.note) {
-								assignments.push('note = $note');
-								vars.note = rel.note;
-							}
-							break;
-						}
-						case 'qualifies': {
-							const qualificationMap: Record<string, string> = {
-								strong: 'restrictive',
-								moderate: 'conditional',
-								weak: 'clarifying'
-							};
-							assignments.unshift('qualification_type = $qualification_type');
-							vars.qualification_type = qualificationMap[rel.strength] || 'conditional';
-							if (rel.note) {
-								assignments.push('note = $note');
-								vars.note = rel.note;
-							}
-							break;
-						}
-						default:
-							break;
+				switch (rel.relation_type) {
+					case 'supports':
+					case 'contradicts': {
+						assignments.unshift('strength = $strength');
+						if (rel.note) assignments.push('note = $note');
+						vars.strength = rel.strength;
+						if (rel.note) vars.note = rel.note;
+						break;
 					}
-
-					relQuery += ` SET ${assignments.join(', ')}`;
-					await db.query(relQuery, vars);
-					return true;
-				} catch (error) {
-					console.warn(
-						`  [SKIP] Failed to create relation ${rel.relation_type}: ${error instanceof Error ? error.message : String(error)}`
-					);
-					return false;
+					case 'depends_on': {
+						const necessityMap: Record<string, string> = {
+							strong: 'essential',
+							moderate: 'supporting',
+							weak: 'contextual'
+						};
+						assignments.unshift('necessity = $necessity');
+						vars.necessity = necessityMap[rel.strength] || 'supporting';
+						break;
+					}
+					case 'responds_to': {
+						const responseMap: Record<string, string> = {
+							strong: 'direct_rebuttal',
+							moderate: 'undermining',
+							weak: 'concession'
+						};
+						assignments.unshift('response_type = $response_type');
+						vars.response_type = responseMap[rel.strength] || 'refinement';
+						break;
+					}
+					case 'refines': {
+						const refinementMap: Record<string, string> = {
+							strong: 'strengthens',
+							moderate: 'clarifies',
+							weak: 'qualifies'
+						};
+						assignments.unshift('refinement_type = $refinement_type');
+						vars.refinement_type = refinementMap[rel.strength] || 'clarifies';
+						break;
+					}
+					case 'exemplifies': {
+						if (rel.note) {
+							assignments.push('note = $note');
+							vars.note = rel.note;
+						}
+						break;
+					}
+					case 'defines': {
+						if (rel.note) {
+							assignments.push('note = $note');
+							vars.note = rel.note;
+						}
+						break;
+					}
+					case 'qualifies': {
+						const qualificationMap: Record<string, string> = {
+							strong: 'restrictive',
+							moderate: 'conditional',
+							weak: 'clarifying'
+						};
+						assignments.unshift('qualification_type = $qualification_type');
+						vars.qualification_type = qualificationMap[rel.strength] || 'conditional';
+						if (rel.note) {
+							assignments.push('note = $note');
+							vars.note = rel.note;
+						}
+						break;
+					}
+					default:
+						break;
 				}
+
+				relQuery += ` SET ${assignments.join(', ')}`;
+				const maxAttempts = 3;
+				for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+					try {
+						await db.query(relQuery, vars);
+						return true;
+					} catch (error) {
+						const msg = error instanceof Error ? error.message : String(error);
+						if (attempt >= maxAttempts) {
+							console.warn(`  [RELATE_FAIL] ${rel.relation_type} attempt=${attempt}/${maxAttempts}: ${msg}`);
+							return false;
+						}
+						const base = 250 * Math.pow(2, attempt - 1);
+						const spread = Math.max(50, Math.floor(base * 0.35));
+						const delayMs = Math.trunc(base - Math.floor(spread / 2) + Math.random() * (spread + 1));
+						console.warn(
+							`  [RELATE_RETRY] ${rel.relation_type} attempt=${attempt}/${maxAttempts} backoff=${delayMs}ms: ${msg}`
+						);
+						await sleep(delayMs);
+					}
+				}
+				return false;
 			}
 
 			for (let ri = 0; ri < relations.length; ri += RELATE_STORE_CONCURRENCY) {
@@ -7325,6 +7580,12 @@ async function main() {
 			console.log(
 				`  [STORE_TIMING] relation records wall=${relationRecordsWallMs}ms (concurrency=${RELATE_STORE_CONCURRENCY}, attempted=${relations.length}, created=${relationsCreated})`
 			);
+			const relationFailures = relations.length - relationsCreated;
+			if (relationFailures > 0) {
+				throw new Error(
+					`[STORE] Failed to create ${relationFailures}/${relations.length} relation records. Re-run to re-store (Stage 6 is idempotent with cleanup).`
+				);
+			}
 			console.log(`  [OK] Created ${relationsCreated} relation records`);
 
 				// 6f. Create argument records and part_of relations

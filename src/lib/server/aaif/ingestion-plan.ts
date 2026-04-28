@@ -34,6 +34,23 @@ export interface IngestionPlanningContext {
   preferredProvider?: IngestProviderPreference;
 }
 
+function preferTogetherStage(stage: IngestionStage): boolean {
+  const raw = (process.env.INGEST_PREFER_TOGETHER ?? '').trim().toLowerCase();
+  if (!(raw === '1' || raw === 'true' || raw === 'yes')) return false;
+  // Keep validation and embedding on their existing stacks (trust + cost controls).
+  if (stage === 'validation' || stage === 'embedding') return false;
+  return true;
+}
+
+function readTogetherPreferredModel(stage: Exclude<IngestionStage, 'embedding'>): { provider?: ModelProvider; modelId?: string } {
+  const rawModel = (process.env.INGEST_TOGETHER_MODEL ?? '').trim();
+  // Default matches the current degraded-default used when Restormel cannot resolve.
+  const modelId = rawModel || 'meta-llama/Llama-3.3-70B-Instruct-Turbo';
+  const provider = 'together' as ModelProvider;
+  // Allow per-stage override via existing pin envs (higher priority than this convenience).
+  return { provider, modelId };
+}
+
 export interface IngestionStagePlan {
   stage: IngestionStage;
   request: AAIFRequest;
@@ -164,7 +181,12 @@ function readEnvPinnedModel(
  */
 function readPinnedModel(stage: IngestionStage): { provider?: ModelProvider; modelId?: string } {
   if (stage === 'embedding') return {};
-  return readEnvPinnedModel(stage as Exclude<IngestionStage, 'embedding'>);
+  const envPinned = readEnvPinnedModel(stage as Exclude<IngestionStage, 'embedding'>);
+  if (envPinned.provider && envPinned.modelId) return envPinned;
+  if (preferTogetherStage(stage)) {
+    return readTogetherPreferredModel(stage as Exclude<IngestionStage, 'embedding'>);
+  }
+  return {};
 }
 
 /**
@@ -444,8 +466,36 @@ export async function planIngestionStage(
   }
 
   const pin = readPinnedModel(stage);
-  const requestedProvider = (pin.provider ?? context.preferredProvider ?? 'auto') as ModelProvider;
-  const requestedModelId = pin.modelId;
+  const preferIndependentValidation = !['0', 'false', 'no'].includes(
+    (process.env.INGEST_VALIDATION_PREFER_INDEPENDENT ?? '1').trim().toLowerCase()
+  );
+  // `loadServerEnv` aliases GEMINI_API_KEY -> GOOGLE_AI_API_KEY for local/prod consistency.
+  // In Sophia's provider catalog, Gemini via AI Studio key is treated as `vertex` provider access.
+  const hasGoogleAiKey = Boolean((process.env.GOOGLE_AI_API_KEY ?? '').trim());
+  const hasVertexProject = Boolean(
+    (process.env.GOOGLE_VERTEX_PROJECT ?? process.env.GCP_PROJECT_ID ?? '').trim()
+  );
+
+  // Keep Stage 5 "cross-model" by default: if Vertex is available and there are no explicit pins,
+  // prefer Gemini for validation so we do not validate with the same model family as extraction.
+  const requestedProvider =
+    stage === 'validation' &&
+    preferIndependentValidation &&
+    (hasGoogleAiKey || hasVertexProject) &&
+    !pin.provider &&
+    !pin.modelId &&
+    (context.preferredProvider == null || String(context.preferredProvider).trim().toLowerCase() === 'auto')
+      ? ('vertex' as ModelProvider)
+      : ((pin.provider ?? context.preferredProvider ?? 'auto') as ModelProvider);
+
+  const requestedModelId =
+    stage === 'validation' &&
+    preferIndependentValidation &&
+    (hasGoogleAiKey || hasVertexProject) &&
+    !pin.provider &&
+    !pin.modelId
+      ? (process.env.INGEST_VALIDATION_GOOGLE_MODEL?.trim() || 'gemini-3-flash-preview')
+      : pin.modelId;
   const routeIdForLog = routeIdForResolve ? '(bound)' : '(none)';
   if (process.env.INGEST_LOG_PINS === '1' || process.env.INGEST_LOG_PINS === 'true') {
     console.log(

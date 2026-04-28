@@ -6,10 +6,9 @@
   <h2 id="op-src-setup-h" class="op-panel-title">Sources</h2>
   <p class="op-panel-lead">
     Paste canonical URLs (one per line), or use
-    <a class="op-link" href="/admin/ingest/jobs">Durable ingestion jobs</a>
-    for SEP topic presets, trimming, and “exclude already ingested”. To attach to an in-memory worker by run id (logs, cancel,
-    resume), use the
-    <a class="op-link" href="/admin/ingest/run-console">live run console</a>.
+    <a class="op-link" href="/admin/ingest/operator?step=sources">the wizard Sources step</a>
+    for SEP topic presets, trimming, and “exclude already ingested”. For promote, DLQ triage, and forensics, use
+    <a class="op-link" href="/admin/ingest/operator/activity">Monitoring</a>.
   </p>
   <slot />
 </section>

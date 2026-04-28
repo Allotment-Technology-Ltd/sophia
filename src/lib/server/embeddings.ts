@@ -15,6 +15,7 @@ import { GoogleAuth } from 'google-auth-library';
 
 import { loadServerEnv } from './env';
 import { isGoogleGenerativeThroughputEnabled } from './googleGenerativeIngestThroughput.js';
+import { acquireIngestGlobalSlot } from './ingestion/ingestGlobalConcurrency.js';
 
 type EmbeddingTaskType = 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY';
 
@@ -301,13 +302,17 @@ export async function embedText(text: string): Promise<number[]> {
 		const provider = resolveProvider();
 		console.log(`[EMBED] Embedding document text via ${provider.name}...`);
 
-		const embeddings = await provider.embed([text], 'RETRIEVAL_DOCUMENT');
+		const slot = await acquireIngestGlobalSlot({ provider: provider.name, stage: 'embedding' });
+		try {
+			const embeddings = await provider.embed([text], 'RETRIEVAL_DOCUMENT');
+			console.log(
+				`[EMBED] Embedded 1 text (session total: ${totalTokensUsed} tokens)`
+			);
+			return embeddings[0];
+		} finally {
+			await slot.release();
+		}
 
-		console.log(
-			`[EMBED] Embedded 1 text (session total: ${totalTokensUsed} tokens)`
-		);
-
-		return embeddings[0];
 	} catch (error) {
 		console.error('[EMBED] Error embedding text:', error);
 		throw new Error(
@@ -364,7 +369,12 @@ export async function embedTexts(
 			let lastError: unknown = null;
 			for (let attempt = 1; attempt <= EMBED_MAX_RETRIES; attempt++) {
 				try {
-					batchEmbeddings = await provider.embed(batch, 'RETRIEVAL_DOCUMENT', sessionToken);
+					const slot = await acquireIngestGlobalSlot({ provider: provider.name, stage: 'embedding' });
+					try {
+						batchEmbeddings = await provider.embed(batch, 'RETRIEVAL_DOCUMENT', sessionToken);
+					} finally {
+						await slot.release();
+					}
 					break;
 				} catch (error) {
 					lastError = error;
@@ -431,13 +441,17 @@ export async function embedQuery(text: string): Promise<number[]> {
 		const provider = resolveProvider();
 		console.log(`[EMBED] Embedding query via ${provider.name} (${provider.queryModel})...`);
 
-		const embeddings = await provider.embed([text], 'RETRIEVAL_QUERY');
+		const slot = await acquireIngestGlobalSlot({ provider: provider.name, stage: 'embedding' });
+		try {
+			const embeddings = await provider.embed([text], 'RETRIEVAL_QUERY');
+			console.log(
+				`[EMBED] Query embedded (session total: ${totalTokensUsed} tokens)`
+			);
+			return embeddings[0];
+		} finally {
+			await slot.release();
+		}
 
-		console.log(
-			`[EMBED] Query embedded (session total: ${totalTokensUsed} tokens)`
-		);
-
-		return embeddings[0];
 	} catch (error) {
 		console.error('[EMBED] Error embedding query:', error);
 		throw new Error(

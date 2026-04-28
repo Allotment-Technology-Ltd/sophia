@@ -20,8 +20,8 @@ describe('Vertex Gemini 3 supplement', () => {
 
 	it('resolves vertex-prefixed ref', () => {
 		const r = getIngestLlmUsdPerMillion('vertex/gemini-3.1-pro-preview');
-		expect(r?.inputPerMillion).toBe(2);
-		expect(r?.outputPerMillion).toBe(12);
+		expect(r?.inputPerMillion).toBe(1.25);
+		expect(r?.outputPerMillion).toBe(5);
 	});
 
 	it('estimates non-zero USD for flash usage', () => {

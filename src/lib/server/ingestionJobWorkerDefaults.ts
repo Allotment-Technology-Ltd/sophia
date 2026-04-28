@@ -59,6 +59,15 @@ export function sanitizeIngestionJobWorkerDefaults(raw: unknown): BO | undefined
   const claimConc = asInt(o.claimInsertConcurrency);
   if (claimConc != null && claimConc >= 1 && claimConc <= 24) out.claimInsertConcurrency = claimConc;
 
+  const gTogether = asInt(o.globalMaxConcurrentTogether);
+  if (gTogether != null && gTogether >= 1 && gTogether <= 16) out.globalMaxConcurrentTogether = gTogether;
+
+  const gVoyage = asInt(o.globalMaxConcurrentVoyage);
+  if (gVoyage != null && gVoyage >= 1 && gVoyage <= 16) out.globalMaxConcurrentVoyage = gVoyage;
+
+  const relateConc = asInt(o.relateStoreConcurrency);
+  if (relateConc != null && relateConc >= 1 && relateConc <= 32) out.relateStoreConcurrency = relateConc;
+
   const remMax = asInt(o.remediationMaxClaims);
   if (remMax != null && remMax >= 1 && remMax <= 200) out.remediationMaxClaims = remMax;
 

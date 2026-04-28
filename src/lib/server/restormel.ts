@@ -372,16 +372,17 @@ function parseStepChain(value: unknown): RestormelStepChainEntry[] | null {
 }
 
 /** Expected `contractVersion` on resolve/simulate success (Keys dashboard API). */
-export const RESTORMEL_RESOLVE_SIMULATE_CONTRACT_VERSION = '2026-03-26';
+export const RESTORMEL_RESOLVE_SIMULATE_CONTRACT_VERSIONS = ['2026-03-26', '2026-04-16'] as const;
 
 function warnIfUnexpectedResolveContract(contractVersion: string | null | undefined): void {
-  if (!contractVersion || contractVersion === RESTORMEL_RESOLVE_SIMULATE_CONTRACT_VERSION) return;
+  if (!contractVersion) return;
+  if ((RESTORMEL_RESOLVE_SIMULATE_CONTRACT_VERSIONS as readonly string[]).includes(contractVersion)) return;
   if (process.env.NODE_ENV === 'test') return;
   console.warn(
     '[restormel] Unexpected resolve/simulate contractVersion:',
     contractVersion,
     'expected',
-    RESTORMEL_RESOLVE_SIMULATE_CONTRACT_VERSION,
+    RESTORMEL_RESOLVE_SIMULATE_CONTRACT_VERSIONS.join(' or '),
     '— upgrade @restormel/keys or confirm dashboard release notes.'
   );
 }

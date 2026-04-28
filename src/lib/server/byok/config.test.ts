@@ -23,6 +23,7 @@ describe('byok rollout config', () => {
       'together',
       'openrouter',
       'perplexity',
+      'aizolo',
       'cohere',
       'voyage'
     ]);
@@ -36,7 +37,8 @@ describe('byok rollout config', () => {
       'together',
       'cohere',
       'openrouter',
-      'perplexity'
+      'perplexity',
+      'aizolo'
     ]);
   });
 
@@ -52,6 +54,7 @@ describe('byok rollout config', () => {
       'together',
       'openrouter',
       'perplexity',
+      'aizolo',
       'cohere',
       'voyage'
     ]);
@@ -65,7 +68,8 @@ describe('byok rollout config', () => {
       'together',
       'cohere',
       'openrouter',
-      'perplexity'
+      'perplexity',
+      'aizolo'
     ]);
     expect(isByokProviderEnabled('openai')).toBe(true);
     expect(isReasoningProviderEnabled('openai')).toBe(true);

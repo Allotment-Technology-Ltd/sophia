@@ -32,6 +32,66 @@ function looksLikeHeading(text: string): boolean {
 	);
 }
 
+function splitIntoBlocksByLines(text: string): TextBlock[] {
+	const blocks: TextBlock[] = [];
+	const src = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+	const lines = src.split('\n');
+
+	let offset = 0;
+	let currentText = '';
+	let currentStart = -1;
+
+	const flush = () => {
+		const trimmed = currentText.trim();
+		if (trimmed) {
+			const leading = currentText.indexOf(trimmed);
+			const start = currentStart + Math.max(0, leading);
+			const end = start + trimmed.length - 1;
+			blocks.push({ text: trimmed, start, end, isHeading: looksLikeHeading(trimmed) });
+		}
+		currentText = '';
+		currentStart = -1;
+	};
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i] ?? '';
+		const rawLine = line;
+		const trimmedLine = rawLine.trim();
+		const lineStart = offset;
+		const lineLen = rawLine.length;
+		const nextOffset = offset + lineLen + 1; // + newline
+
+		// Blank line: paragraph boundary.
+		if (!trimmedLine) {
+			flush();
+			offset = nextOffset;
+			continue;
+		}
+
+		// Headings: treat as boundaries even if the source has hard wraps and no blank lines.
+		// Keep heading itself as its own block so downstream `section_title` is stable.
+		const headingCandidate = trimmedLine.length <= 140 ? trimmedLine : '';
+		if (headingCandidate && looksLikeHeading(headingCandidate)) {
+			flush();
+			blocks.push({
+				text: headingCandidate,
+				start: lineStart + rawLine.indexOf(headingCandidate),
+				end: lineStart + rawLine.indexOf(headingCandidate) + headingCandidate.length - 1,
+				isHeading: true
+			});
+			offset = nextOffset;
+			continue;
+		}
+
+		if (currentStart < 0) currentStart = lineStart;
+		currentText += (currentText ? '\n' : '') + rawLine;
+		offset = nextOffset;
+	}
+
+	flush();
+	return blocks;
+}
+
 function splitIntoBlocks(text: string): TextBlock[] {
 	const blocks: TextBlock[] = [];
 	const regex = /\n\s*\n/g;
@@ -65,6 +125,14 @@ function splitIntoBlocks(text: string): TextBlock[] {
 			end: endOffset,
 			isHeading: looksLikeHeading(trimmed)
 		});
+	}
+
+	// Gutenberg-style books are often “hard-wrapped”: few/no blank lines means everything collapses
+	// into one huge block. Fall back to a line-based splitter that preserves original offsets.
+	if (blocks.length <= 1 && text.includes('\n')) {
+		const byLines = splitIntoBlocksByLines(text);
+		// Only use the fallback when it actually creates boundaries (otherwise keep the simpler path).
+		if (byLines.length > blocks.length) return byLines;
 	}
 
 	return blocks;

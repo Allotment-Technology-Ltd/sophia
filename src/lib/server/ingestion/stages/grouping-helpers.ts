@@ -277,3 +277,47 @@ export function analyzeGroupingReferenceHealth(arguments_: GroupingOutput): {
 		collapsed
 	};
 }
+
+export function analyzeGroupingDegeneration(
+	arguments_: GroupingOutput,
+	options?: {
+		/** Hard cap to prevent "everything is an objection" / giant argument blobs. */
+		maxClaimRefsPerArgument?: number;
+		/** If true, require exactly one conclusion per argument when refs are non-trivial. */
+		requireSingleConclusion?: boolean;
+	}
+): { degenerate: boolean; reasons: string[] } {
+	const maxClaimRefsPerArgument = Math.max(6, options?.maxClaimRefsPerArgument ?? 30);
+	const requireSingleConclusion = options?.requireSingleConclusion ?? true;
+	const reasons: string[] = [];
+
+	for (const arg of arguments_) {
+		const refs = Array.isArray(arg.claims) ? arg.claims : [];
+		if (refs.length > maxClaimRefsPerArgument) {
+			reasons.push(
+				`argument "${arg.name}" has ${refs.length} claim refs (cap ${maxClaimRefsPerArgument})`
+			);
+		}
+
+		const byRole = new Map<string, number>();
+		for (const r of refs) {
+			const role = (r as { role?: string }).role ?? 'key_premise';
+			byRole.set(role, (byRole.get(role) ?? 0) + 1);
+		}
+		const conclusions = byRole.get('conclusion') ?? 0;
+		if (requireSingleConclusion && refs.length >= 3 && conclusions !== 1) {
+			reasons.push(
+				`argument "${arg.name}" has conclusion_count=${conclusions} (expected exactly 1)`
+			);
+		}
+
+		const objections = byRole.get('objection') ?? 0;
+		if (refs.length >= 12 && objections / refs.length >= 0.8) {
+			reasons.push(
+				`argument "${arg.name}" is objection-heavy (${objections}/${refs.length} objections)`
+			);
+		}
+	}
+
+	return { degenerate: reasons.length > 0, reasons };
+}

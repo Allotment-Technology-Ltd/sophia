@@ -320,6 +320,39 @@ export async function replayDlqJobItems(itemIds: string[]): Promise<
 	return { ok: true, replayed, jobIds: [...jobIds] };
 }
 
+export async function removeDlqJobItems(itemIds: string[]): Promise<
+	{ ok: true; removed: number; jobIds: string[] } | { ok: false; error: string }
+> {
+	if (!isNeonIngestPersistenceEnabled()) return { ok: false, error: 'Neon ingest persistence is not enabled.' };
+	const ids = [...new Set(itemIds.map((x) => x.trim()).filter(Boolean))];
+	if (ids.length === 0) return { ok: false, error: 'No item ids provided.' };
+	const db = getDrizzleDb();
+	let removed = 0;
+	const jobIds = new Set<string>();
+	for (const id of ids) {
+		const [it] = await db.select().from(ingestionJobItems).where(eq(ingestionJobItems.id, id)).limit(1);
+		// Removal: only rows currently in DLQ (error + dlqEnqueuedAt set).
+		if (!it || it.status !== 'error' || it.dlqEnqueuedAt == null) continue;
+		await db
+			.update(ingestionJobItems)
+			.set({
+				status: 'cancelled',
+				dlqEnqueuedAt: null,
+				lastFailureKind: null,
+				failureClass: null,
+				updatedAt: new Date()
+			})
+			.where(eq(ingestionJobItems.id, id));
+		await appendIngestionJobEvent(it.jobId, 'item_removed_from_dlq', {
+			itemId: id,
+			url: it.url
+		});
+		jobIds.add(it.jobId);
+		removed++;
+	}
+	return { ok: true, removed, jobIds: [...jobIds] };
+}
+
 function getDlqAutoReplayDelayMs(): number {
 	const r = parseInt(process.env.INGEST_DLQ_AUTO_REPLAY_DELAY_MS ?? '0', 10);
 	return Number.isFinite(r) && r >= 60_000 ? Math.min(r, 86_400_000) : 0;

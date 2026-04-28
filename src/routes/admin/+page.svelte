@@ -1,45 +1,17 @@
 <script lang="ts">
   const destinations = [
     {
-      href: '/admin/ingest/operator',
+      href: '/admin/ingest',
       title: 'Ingestion',
       description:
-        'Operator hub: staged bulk extraction (Fireworks + promote), resume from Neon, durable multi-URL jobs, activity, and links to the batch job form. This is the primary ingestion entry.',
+        'Unified ingestion dashboard: key KPIs, runbooks, AI insights, and deep links into the wizard + monitoring surfaces.',
       emphasis: true
-    },
-    {
-      href: '/admin/metrics/dataset-coverage',
-      title: 'Dataset coverage',
-      description:
-        'SEP topic preset counts versus the 10-per-preset goal, training governance vs model-lineage acceptability, and where completed sources came from (SEP, Gutenberg, IEP, …).',
-      emphasis: false
-    },
-    {
-      href: '/admin/issue-resolution',
-      title: 'Issue resolution',
-      description:
-        'Embedding corpus maintenance (inventory, re-embed job, poller-driven progress) and quarantined claim triage with passage-bounded remediation. Legacy /admin/quarantine redirects here.',
-      emphasis: false
-    },
-    {
-      href: '/admin/operator-byok',
-      title: 'Operator BYOK',
-      description:
-        'Govern operational provider keys on the OWNER_UIDS target: status, save, validate, and revoke. Used as fallback when tenant keys are empty (see effective-key resolver).',
-      emphasis: false
     },
     {
       href: '/admin/model-availability',
       title: 'Model availability',
       description:
         'Choose which Restormel catalog models are available for ingestion (operations) versus user inquiries; syncs the project model index on save. Embeddings stay operations-only.',
-      emphasis: false
-    },
-    {
-      href: '/admin/thinker-links',
-      title: 'Thinker link review',
-      description:
-        'Review unresolved author names from thinker import, resolve to Wikidata QIDs, and backfill thinker→authored→source links via an operator queue.',
       emphasis: false
     },
     {

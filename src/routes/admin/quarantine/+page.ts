@@ -2,5 +2,5 @@ import { redirect } from '@sveltejs/kit';
 import type { PageLoad } from './$types';
 
 export const load: PageLoad = () => {
-	throw redirect(302, '/admin/issue-resolution?tab=quarantine');
+	throw redirect(302, '/admin/ingest/operator/activity?panel=issues');
 };
