@@ -4,8 +4,9 @@
  *
  * Default is **strict** with an allowlist so Restormel resolve, catalog routing JSON, or
  * historical pins cannot silently reintroduce disallowed vendors (e.g. OpenAI/Anthropic) on
- * sensitive surfaces. **Vertex + Mistral + DeepSeek + Groq + AiZolo** are allowed by default (canonical extraction is
- * Gemini-on-Vertex first; other vendors provide cross-vendor fallbacks and json_repair).
+ * sensitive surfaces. **Vertex + Together + Mistral + DeepSeek + Groq + AiZolo** are allowed by default (canonical extraction is
+ * Gemini-on-Vertex first; Together is the preferred non-Vertex primary for books in operator workflows; other vendors provide
+ * cross-vendor fallbacks and json_repair).
  * Operators must ensure each provider’s terms allow their intended use (e.g. fine-tuning / training).
  * Override with `INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS`. Disable locally with
  * `INGEST_FINETUNE_LABELER_STRICT=0`.
@@ -36,12 +37,12 @@ export function ingestFinetuneLabelerStrictEnabled(env: NodeJS.ProcessEnv = proc
 
 /**
  * When strict mode is on, only these providers may appear in the effective model chain for
- * {@link FINETUNE_SENSITIVE_LLM_STAGES}. Default: `mistral`, `vertex`, `deepseek`, `groq`, `aizolo`
+ * {@link FINETUNE_SENSITIVE_LLM_STAGES}. Default: `together`, `mistral`, `vertex`, `deepseek`, `groq`, `aizolo`
  * (AiZolo is OpenAI-compatible; Restormel Keys routes often label Gemini tiers as `aizolo`).
  */
 export function parseFinetuneLabelerAllowedProviders(env: NodeJS.ProcessEnv = process.env): string[] {
 	const raw = env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS?.trim();
-	if (!raw) return ['mistral', 'vertex', 'deepseek', 'groq', 'aizolo'];
+	if (!raw) return ['together', 'mistral', 'vertex', 'deepseek', 'groq', 'aizolo'];
 	return raw
 		.split(/[,|]/)
 		.map((s) => s.trim().toLowerCase())
