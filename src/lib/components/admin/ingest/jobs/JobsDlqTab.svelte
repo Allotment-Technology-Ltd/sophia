@@ -35,12 +35,14 @@
 
 <section
 	id="dead-letter"
-	class="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5"
+	class="dlq-shell rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5"
 	aria-labelledby="dlq-heading"
 >
-	<h2 id="dlq-heading" class="font-serif text-lg text-sophia-dark-text">Dead letter queue</h2>
-	<p class="mt-2 text-sm text-sophia-dark-muted">
-		URLs that hit <span class="font-mono text-xs">INGEST_JOB_ITEM_MAX_ATTEMPTS</span> without a successful run.
+	<h2 id="dlq-heading" class="font-serif text-lg font-medium text-sophia-dark-text">Dead letter queue</h2>
+	<p class="mt-2 max-w-3xl text-sm leading-relaxed text-sophia-dark-text/88">
+		Rows that exhausted retries (<span class="font-mono text-xs">INGEST_JOB_ITEM_MAX_ATTEMPTS</span>). Use
+		<strong class="font-medium">Replay</strong> to re-queue. If failures never reached DLQ, use
+		<strong class="font-medium">Recover failed URLs</strong> above.
 	</p>
 	{#if dlqMessage}
 		<p class="mt-3 text-sm text-amber-100" role="status">{dlqMessage}</p>
@@ -48,8 +50,8 @@
 	<div class="mt-4 flex flex-wrap gap-3">
 		<button
 			type="button"
-			class="inline-flex min-h-[44px] items-center rounded-lg border border-[color-mix(in_srgb,var(--color-sage)_40%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-sage)_12%,var(--color-surface))] px-5 py-3 font-mono text-sm font-medium text-sophia-dark-text transition hover:border-[var(--color-sage)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:cursor-not-allowed disabled:opacity-50"
-			disabled={dlqReplayBusy || neonDisabled}
+			class="inline-flex min-h-[44px] items-center rounded-lg border border-[color-mix(in_srgb,var(--color-sage)_45%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-sage)_18%,var(--color-surface))] px-5 py-3 text-sm font-semibold text-sophia-dark-text shadow-sm transition hover:border-[var(--color-sage)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-blue)] disabled:cursor-not-allowed disabled:opacity-50"
+			disabled={dlqReplayBusy || neonDisabled || selectedCount === 0}
 			onclick={() => {
 				if (confirm('Replay selected DLQ items? This will re-queue work and may restart runs.')) {
 					void onReplaySelected();
@@ -104,10 +106,10 @@
 	{:else if dlqItems.length === 0}
 		<p class="mt-4 text-sm text-sophia-dark-muted">No dead-letter rows (or none stamped yet).</p>
 	{:else}
-		<div class="mt-4 overflow-x-auto">
-			<table class="w-full min-w-[800px] border-collapse text-left text-sm">
+		<div class="mt-4 overflow-x-auto rounded-lg border border-[var(--color-border)]/80">
+			<table class="dlq-table w-full min-w-[800px] border-collapse text-left text-sm">
 				<thead>
-					<tr class="border-b border-[var(--color-border)] font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-dim">
+					<tr class="border-b border-[var(--color-border)] bg-black/20 font-mono text-xs uppercase tracking-[0.1em] text-sophia-dark-dim">
 						<th class="py-3 pr-2"></th>
 						<th class="py-3 pr-3">Job</th>
 						<th class="py-3 pr-3">URL</th>
@@ -120,7 +122,7 @@
 				</thead>
 				<tbody>
 					{#each dlqItems as r (r.itemId)}
-						<tr class="border-b border-[var(--color-border)]/60 align-top">
+						<tr class="dlq-row border-b border-[var(--color-border)]/50 align-top">
 							<td class="py-3 pr-2">
 								<input
 									type="checkbox"
@@ -131,7 +133,7 @@
 							</td>
 							<td class="py-3 pr-3 font-mono text-xs">
 								<a
-									href="/admin/ingest/operator/activity?panel=jobs&q={encodeURIComponent(r.jobId)}"
+									href="/admin/ingest/operator/triage?panel=dlq&jobId={encodeURIComponent(r.jobId)}"
 									class="text-sophia-dark-sage underline-offset-2 hover:underline"
 								>
 									{r.jobId.slice(0, 24)}…
@@ -153,3 +155,8 @@
 	{/if}
 </section>
 
+<style>
+	.dlq-row:hover {
+		background: color-mix(in srgb, var(--color-sage) 6%, transparent);
+	}
+</style>

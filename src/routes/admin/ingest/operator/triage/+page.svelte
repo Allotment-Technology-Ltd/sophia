@@ -6,14 +6,19 @@
   import IngestionSettingsShell from '$lib/components/admin/ingest/IngestionSettingsShell.svelte';
   import IngestionSectionShell from '$lib/components/admin/ingest/IngestionSectionShell.svelte';
   import JobsDlqTab, { type DlqRow } from '$lib/components/admin/ingest/jobs/JobsDlqTab.svelte';
+  import JobsDurableRecoveryCard from '$lib/components/admin/ingest/jobs/JobsDurableRecoveryCard.svelte';
 
   type PanelId = 'dlq' | 'promote' | 'issues' | 'thinker' | 'ops' | 'cleanup';
   let panel = $state<PanelId>('dlq');
+  /** Prefilled from `?jobId=` when opening Monitoring → Recover links. */
+  let recoveryJobId = $state('');
 
   function hydratePanelFromUrl(): void {
     const p = page.url.searchParams.get('panel');
     if (p === 'dlq' || p === 'promote' || p === 'issues' || p === 'thinker' || p === 'ops' || p === 'cleanup')
       panel = p;
+    const jid = page.url.searchParams.get('jobId')?.trim();
+    if (jid) recoveryJobId = jid;
   }
 
   function applyParams(next: Partial<Record<'panel', string>>): void {
@@ -490,7 +495,7 @@
   kicker="Admin"
   activeNav="triage"
   title="Triage"
-  lead="Action-focused work: promote backlog, DLQ replay/remove/export, and operator operations."
+  lead="Action-focused work: restart or resume failed durable jobs, DLQ replay, promote backlog, and operator operations."
 >
   <div class="op-panel mb-4">
     <div class="op-actions" style="align-items:flex-end">
@@ -553,7 +558,7 @@
         <span class="op-kpi-pill">Attention</span>
       </div>
       <div class="op-kpi-v">{kpiOpsNeedsAttention}</div>
-      <div class="op-kpi-sub">Operations queue + logs</div>
+      <div class="op-kpi-sub">Restart/resume jobs + audit log</div>
     </button>
   </div>
 
@@ -712,6 +717,15 @@
       {/if}
     </IngestionSectionShell>
   {:else if panel === 'ops'}
+    <div class="mb-6">
+      <JobsDurableRecoveryCard
+        bind:jobId={recoveryJobId}
+        onAfterAction={async () => {
+          await tickDurableJobs();
+          await loadOperations();
+        }}
+      />
+    </div>
     <IngestionSectionShell title="Admin operations" description="Queued/running/failed operator operations (audit log).">
       <div class="op-actions">
         <label class="op-muted" for="opsLimit">Limit</label>
@@ -798,6 +812,15 @@
       </div>
     </IngestionSectionShell>
   {:else}
+    <div class="mb-6">
+      <JobsDurableRecoveryCard
+        bind:jobId={recoveryJobId}
+        onAfterAction={async () => {
+          await loadDlq();
+          await tickDurableJobs();
+        }}
+      />
+    </div>
     <JobsDlqTab
       neonDisabled={false}
       {dlqItems}

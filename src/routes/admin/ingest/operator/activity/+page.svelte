@@ -1043,7 +1043,7 @@
     {:else}
       <table class="op-table">
         <thead>
-          <tr><th>Job</th><th>Status</th><th>Summary</th></tr>
+          <tr><th>Job</th><th>Status</th><th>Summary</th><th class="op-actions-col">Recover</th></tr>
         </thead>
         <tbody>
           {#each jobs as j (j.id)}
@@ -1055,6 +1055,16 @@
               </td>
               <td>{j.status}</td>
               <td class="op-mono sm">{JSON.stringify(j.summary ?? {})}</td>
+              <td class="op-actions-col">
+                <a
+                  class="op-a"
+                  style="font-size: 0.85rem"
+                  href="/admin/ingest/operator/triage?panel=ops&jobId={encodeURIComponent(j.id)}"
+                  title="Open Triage with this job id for restart / resume"
+                >
+                  Recover
+                </a>
+              </td>
             </tr>
           {/each}
         </tbody>
