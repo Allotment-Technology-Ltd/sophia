@@ -652,7 +652,6 @@
   void loadDlq();
   void loadCoverage();
   void loadThinkerQueue();
-  void loadEmbeddingOverview();
 
   $effect(() => {
     // Keep the picker in sync as URL params change.

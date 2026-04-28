@@ -23,9 +23,10 @@ describe('ingestionFinetuneLabelerPolicy', () => {
 		expect(ingestFinetuneLabelerStrictEnabled(process.env)).toBe(false);
 	});
 
-	it('defaults allowed providers to mistral, vertex, deepseek, groq, and aizolo', () => {
+	it('defaults allowed providers to together, mistral, vertex, deepseek, groq, and aizolo', () => {
 		delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;
 		expect(parseFinetuneLabelerAllowedProviders(process.env)).toEqual([
+			'together',
 			'mistral',
 			'vertex',
 			'deepseek',
@@ -48,18 +49,21 @@ describe('ingestionFinetuneLabelerPolicy', () => {
 		process.env.INGEST_FINETUNE_LABELER_STRICT = '1';
 		delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;
 		const tiers = [
+			{ provider: 'together', modelId: 'meta-llama/Llama-3.3-70B' },
 			{ provider: 'openai', modelId: 'gpt-4o-mini' },
 			{ provider: 'mistral', modelId: 'mistral-large-latest' }
 		];
 		expect(filterModelTiersForFinetunePolicy('extraction', tiers, process.env)).toEqual([
+			{ provider: 'together', modelId: 'meta-llama/Llama-3.3-70B' },
 			{ provider: 'mistral', modelId: 'mistral-large-latest' }
 		]);
 	});
 
-	it('keeps vertex, deepseek, mistral, groq, and aizolo on relations when strict with defaults', () => {
+	it('keeps together, vertex, deepseek, mistral, groq, and aizolo on relations when strict with defaults', () => {
 		process.env.INGEST_FINETUNE_LABELER_STRICT = '1';
 		delete process.env.INGEST_FINETUNE_LABELER_ALLOWED_PROVIDERS;
 		const tiers = [
+			{ provider: 'together', modelId: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
 			{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 			{ provider: 'deepseek', modelId: 'deepseek-chat' },
 			{ provider: 'mistral', modelId: 'mistral-medium-latest' },
@@ -68,6 +72,7 @@ describe('ingestionFinetuneLabelerPolicy', () => {
 			{ provider: 'openai', modelId: 'gpt-4o-mini' }
 		];
 		expect(filterModelTiersForFinetunePolicy('relations', tiers, process.env)).toEqual([
+			{ provider: 'together', modelId: 'meta-llama/Llama-3.3-70B-Instruct-Turbo' },
 			{ provider: 'vertex', modelId: 'gemini-3-flash-preview' },
 			{ provider: 'deepseek', modelId: 'deepseek-chat' },
 			{ provider: 'mistral', modelId: 'mistral-medium-latest' },

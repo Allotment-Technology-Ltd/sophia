@@ -49,6 +49,15 @@ function loginRedirectForApiNavigation(event: RequestEvent): Response {
 }
 
 export const handle: Handle = async ({ event, resolve }) => {
+  // Defensive asset rewrite: if a proxy or misconfigured base path causes SvelteKit assets to be
+  // requested under `/admin/_app/...`, redirect to the correct root asset path.
+  // This prevents "green deploy but blank admin UI" scenarios.
+  if (event.request.method === 'GET' && event.url.pathname.startsWith('/admin/_app/')) {
+    const url = new URL(event.url);
+    url.pathname = url.pathname.replace(/^\/admin/, '');
+    return Response.redirect(url, 308);
+  }
+
   await refreshAppAiDefaultsCacheIfStale();
 
   // Only enforce Bearer token auth on protected API routes.
