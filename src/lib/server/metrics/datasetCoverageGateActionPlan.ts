@@ -11,7 +11,9 @@ function inferCatalogFromUrls(urls: string[]): 'sep' | 'gutenberg' | undefined {
 		try {
 			const h = new URL(x.trim()).hostname.toLowerCase();
 			if (h === 'gutenberg.org' || h.endsWith('.gutenberg.org')) return 'gutenberg';
-			if (h.includes('stanford.edu') && h.includes('plato')) return 'sep';
+			const isStanfordHost = h === 'stanford.edu' || h.endsWith('.stanford.edu');
+			const hasPlatoLabel = h === 'plato.stanford.edu' || h.startsWith('plato.') || h.includes('.plato.');
+			if (isStanfordHost && hasPlatoLabel) return 'sep';
 			if (h === 'iep.utm.edu' || h.endsWith('.iep.utm.edu')) return 'sep';
 		} catch {
 			/* skip */
